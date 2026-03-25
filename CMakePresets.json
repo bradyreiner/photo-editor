@@ -1,0 +1,112 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20",
+        "PHOTO_EDITOR_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "dev-macos-debug",
+      "inherits": "base",
+      "displayName": "macOS Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "dev-windows-debug",
+      "inherits": "base",
+      "displayName": "Windows Debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "release-macos",
+      "inherits": "base",
+      "displayName": "macOS Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      }
+    },
+    {
+      "name": "release-windows",
+      "inherits": "base",
+      "displayName": "Windows Release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "ci-headless",
+      "inherits": "base",
+      "displayName": "CI Headless",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "PHOTO_EDITOR_BUILD_DESKTOP": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "build-dev-macos-debug",
+      "configurePreset": "dev-macos-debug"
+    },
+    {
+      "name": "build-dev-windows-debug",
+      "configurePreset": "dev-windows-debug"
+    },
+    {
+      "name": "build-release-macos",
+      "configurePreset": "release-macos"
+    },
+    {
+      "name": "build-release-windows",
+      "configurePreset": "release-windows"
+    },
+    {
+      "name": "build-ci-headless",
+      "configurePreset": "ci-headless"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "test-ci-headless",
+      "configurePreset": "ci-headless",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

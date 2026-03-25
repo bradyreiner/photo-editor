@@ -1,0 +1,59 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DESKTOP: "OFF"
+        CMAKE_BUILD_TYPE: RelWithDebInfo
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    command: ["/bin/bash"]
+    environment:
+      PHOTO_EDITOR_DATABASE_URL: postgresql://photo_editor:photo_editor@postgres:5432/photo_editor
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  desktop-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_DESKTOP: "ON"
+        CMAKE_BUILD_TYPE: RelWithDebInfo
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    stdin_open: true
+    tty: true
+    command: ["/bin/bash"]
+    environment:
+      PHOTO_EDITOR_DATABASE_URL: postgresql://photo_editor:photo_editor@postgres:5432/photo_editor
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: photo_editor
+      POSTGRES_USER: photo_editor
+      POSTGRES_PASSWORD: photo_editor
+    ports:
+      - "${PHOTO_EDITOR_POSTGRES_HOST_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docs/postgres-schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photo_editor -d photo_editor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:

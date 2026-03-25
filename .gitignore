@@ -1,0 +1,13 @@
+build/
+.DS_Store
+*.user
+*.swp
+*.swo
+
+# Rust
+rust/target/
+
+# macOS / Windows packaging outputs
+*.dmg
+*.zip
+*.msi

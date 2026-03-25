@@ -1,0 +1,299 @@
+use std::collections::hash_map::DefaultHasher;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::hash::{Hash, Hasher};
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+use exif::{In, Reader, Tag, Value};
+use time::{Month, OffsetDateTime};
+use walkdir::WalkDir;
+
+use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
+
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "3fr", "arw", "cr2", "cr3", "dng", "erf", "iiq", "jpeg", "jpg", "kdc", "mef", "mos", "nef",
+    "nrw", "orf", "pef", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "x3f",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRequest {
+    pub drive_id: String,
+    pub drive_name: String,
+    pub mount_path: PathBuf,
+    pub import_mode: ImportMode,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportSummary {
+    pub drive: DriveRecord,
+    pub assets: Vec<CatalogAssetRecord>,
+    pub skipped_unsupported: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtractedMetadata {
+    pub capture_year: u16,
+    pub capture_month: u8,
+    pub capture_day: u8,
+    pub camera_make: String,
+    pub camera_model: String,
+    pub lens_model: String,
+    pub iso: Option<i32>,
+    pub shutter_speed: String,
+    pub aperture: Option<f64>,
+}
+
+impl Default for ExtractedMetadata {
+    fn default() -> Self {
+        Self {
+            capture_year: 0,
+            capture_month: 0,
+            capture_day: 0,
+            camera_make: String::new(),
+            camera_model: String::new(),
+            lens_model: String::new(),
+            iso: None,
+            shutter_speed: String::new(),
+            aperture: None,
+        }
+    }
+}
+
+pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
+    let mut assets = Vec::new();
+    let mut skipped_unsupported = 0_usize;
+
+    for entry in WalkDir::new(&request.mount_path) {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => return Err(std::io::Error::other(error)),
+        };
+
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        if !is_supported_photo_path(path) {
+            skipped_unsupported += 1;
+            continue;
+        }
+
+        let metadata = extract_metadata(path).unwrap_or_else(|_| fallback_metadata(path));
+        let relative_path = match path.strip_prefix(&request.mount_path) {
+            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+            Err(_) => path.to_string_lossy().into_owned(),
+        };
+
+        assets.push(CatalogAssetRecord {
+            asset_id: stable_asset_id(&request.drive_id, &relative_path),
+            capture_year: metadata.capture_year,
+            capture_month: metadata.capture_month,
+            capture_day: metadata.capture_day,
+            camera_make: metadata.camera_make,
+            camera_model: metadata.camera_model,
+            lens_model: metadata.lens_model,
+            iso: metadata.iso,
+            shutter_speed: metadata.shutter_speed,
+            aperture: metadata.aperture,
+            import_mode: request.import_mode.clone(),
+            location: AssetLocation {
+                drive_id: request.drive_id.clone(),
+                root_path: request.mount_path.to_string_lossy().into_owned(),
+                relative_path,
+                online: true,
+            },
+        });
+    }
+
+    let drive = DriveRecord {
+        drive_id: request.drive_id.clone(),
+        display_name: request.drive_name.clone(),
+        mount_path: request.mount_path.to_string_lossy().into_owned(),
+        online: true,
+    };
+
+    Ok(ImportSummary {
+        drive,
+        assets,
+        skipped_unsupported,
+    })
+}
+
+pub fn is_supported_photo_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .map(|extension| {
+            let lowercase = extension.to_ascii_lowercase();
+            SUPPORTED_EXTENSIONS.contains(&lowercase.as_str())
+        })
+        .unwrap_or(false)
+}
+
+pub fn extract_metadata(path: &Path) -> std::io::Result<ExtractedMetadata> {
+    let file = File::open(path)?;
+    let mut reader = BufReader::new(file);
+    let exif = Reader::new()
+        .read_from_container(&mut reader)
+        .map_err(std::io::Error::other)?;
+
+    let mut metadata = ExtractedMetadata::default();
+
+    if let Some(date) = field_string(&exif, Tag::DateTimeOriginal)
+        .or_else(|| field_string(&exif, Tag::DateTimeDigitized))
+        .or_else(|| field_string(&exif, Tag::DateTime))
+    {
+        if let Some((year, month, day)) = parse_exif_date(&date) {
+            metadata.capture_year = year;
+            metadata.capture_month = month;
+            metadata.capture_day = day;
+        }
+    }
+
+    metadata.camera_make = field_string(&exif, Tag::Make).unwrap_or_default();
+    metadata.camera_model = field_string(&exif, Tag::Model).unwrap_or_default();
+    metadata.lens_model = field_string(&exif, Tag::LensModel)
+        .or_else(|| field_string(&exif, Tag::LensSpecification))
+        .unwrap_or_default();
+    metadata.iso = field_unsigned_i32(&exif, Tag::PhotographicSensitivity)
+        .or_else(|| field_unsigned_i32(&exif, Tag::ISOSpeed));
+    metadata.shutter_speed = field_string(&exif, Tag::ExposureTime).unwrap_or_default();
+    metadata.aperture = field_rational_f64(&exif, Tag::FNumber);
+
+    if metadata.capture_year == 0 {
+        return Ok(fallback_metadata(path));
+    }
+
+    Ok(metadata)
+}
+
+pub fn fallback_metadata(path: &Path) -> ExtractedMetadata {
+    let mut metadata = ExtractedMetadata::default();
+
+    if let Ok(file_metadata) = std::fs::metadata(path) {
+        if let Ok(system_time) = file_metadata.modified().or_else(|_| file_metadata.created()) {
+            if let Some((year, month, day)) = system_time_to_ymd(system_time) {
+                metadata.capture_year = year;
+                metadata.capture_month = month;
+                metadata.capture_day = day;
+            }
+        }
+    }
+
+    metadata
+}
+
+fn field_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
+    exif.get_field(tag, In::PRIMARY)
+        .map(|field| field.display_value().with_unit(exif).to_string())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn field_unsigned_i32(exif: &exif::Exif, tag: Tag) -> Option<i32> {
+    exif.get_field(tag, In::PRIMARY).and_then(|field| match &field.value {
+        Value::Byte(values) => values.first().map(|value| i32::from(*value)),
+        Value::Short(values) => values.first().map(|value| i32::from(*value)),
+        Value::Long(values) => values.first().and_then(|value| i32::try_from(*value).ok()),
+        _ => None,
+    })
+}
+
+fn field_rational_f64(exif: &exif::Exif, tag: Tag) -> Option<f64> {
+    exif.get_field(tag, In::PRIMARY).and_then(|field| match &field.value {
+        Value::Rational(values) => values.first().and_then(|value| {
+            if value.denom == 0 {
+                None
+            } else {
+                Some(f64::from(value.num) / f64::from(value.denom))
+            }
+        }),
+        _ => None,
+    })
+}
+
+fn parse_exif_date(value: &str) -> Option<(u16, u8, u8)> {
+    let mut parts = value.split_whitespace();
+    let date = parts.next()?;
+    let mut date_parts = date.split(':');
+
+    let year = date_parts.next()?.parse::<u16>().ok()?;
+    let month = date_parts.next()?.parse::<u8>().ok()?;
+    let day = date_parts.next()?.parse::<u8>().ok()?;
+
+    Some((year, month, day))
+}
+
+fn stable_asset_id(drive_id: &str, relative_path: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    drive_id.hash(&mut hasher);
+    relative_path.hash(&mut hasher);
+    format!("asset-{:016x}", hasher.finish())
+}
+
+fn system_time_to_ymd(system_time: SystemTime) -> Option<(u16, u8, u8)> {
+    let datetime = OffsetDateTime::from(system_time);
+    let year = u16::try_from(datetime.year()).ok()?;
+    let month = month_to_u8(datetime.month());
+    let day = datetime.day();
+
+    Some((year, month, day))
+}
+
+fn month_to_u8(month: Month) -> u8 {
+    match month {
+        Month::January => 1,
+        Month::February => 2,
+        Month::March => 3,
+        Month::April => 4,
+        Month::May => 5,
+        Month::June => 6,
+        Month::July => 7,
+        Month::August => 8,
+        Month::September => 9,
+        Month::October => 10,
+        Month::November => 11,
+        Month::December => 12,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn supported_extensions_include_raw_and_jpeg() {
+        assert!(is_supported_photo_path(Path::new("frame.CR3")));
+        assert!(is_supported_photo_path(Path::new("frame.jpg")));
+        assert!(!is_supported_photo_path(Path::new("notes.txt")));
+    }
+
+    #[test]
+    fn discover_assets_builds_relative_records() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("shoot");
+        fs::create_dir_all(root.join("day-1")).expect("create dir should succeed");
+        fs::write(root.join("day-1").join("image001.CR3"), b"not-a-real-raw")
+            .expect("write should succeed");
+        fs::write(root.join("day-1").join("notes.txt"), b"skip me").expect("write should succeed");
+
+        let request = ImportRequest {
+            drive_id: "drive-main".to_string(),
+            drive_name: "Main".to_string(),
+            mount_path: root.clone(),
+            import_mode: ImportMode::Referenced,
+        };
+
+        let summary = discover_assets(&request).expect("discovery should succeed");
+        assert_eq!(summary.assets.len(), 1);
+        assert_eq!(summary.skipped_unsupported, 1);
+        assert_eq!(summary.assets[0].location.relative_path, "day-1/image001.CR3");
+        assert_eq!(summary.assets[0].location.drive_id, "drive-main");
+    }
+}
