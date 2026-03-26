@@ -17,6 +17,7 @@ struct MaskDefinition final {
 };
 
 struct EditRecipe final {
+  int recipe_version = 2;
   std::string asset_id;
   std::vector<AdjustmentBlock> global_adjustments;
   std::vector<MaskDefinition> mask_stack;

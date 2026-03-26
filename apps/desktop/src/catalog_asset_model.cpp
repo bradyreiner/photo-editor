@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
@@ -17,15 +18,175 @@
 #include <QLocale>
 #include <QProcessEnvironment>
 #include <QSaveFile>
+#include <QStorageInfo>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QUuid>
 #include <QUrl>
+#include <QVariantMap>
 
 namespace photo_editor::desktop {
 
 namespace {
 
 constexpr int kThumbnailEdge = 640;
+
+const QStringList& supported_import_extensions() {
+  static const QStringList kExtensions = {
+      QStringLiteral("3fr"),
+      QStringLiteral("arw"),
+      QStringLiteral("avif"),
+      QStringLiteral("bmp"),
+      QStringLiteral("cr2"),
+      QStringLiteral("cr3"),
+      QStringLiteral("dng"),
+      QStringLiteral("erf"),
+      QStringLiteral("gif"),
+      QStringLiteral("heic"),
+      QStringLiteral("heif"),
+      QStringLiteral("iiq"),
+      QStringLiteral("jpeg"),
+      QStringLiteral("jpg"),
+      QStringLiteral("kdc"),
+      QStringLiteral("mef"),
+      QStringLiteral("mos"),
+      QStringLiteral("nef"),
+      QStringLiteral("nrw"),
+      QStringLiteral("orf"),
+      QStringLiteral("pef"),
+      QStringLiteral("png"),
+      QStringLiteral("raf"),
+      QStringLiteral("raw"),
+      QStringLiteral("rw2"),
+      QStringLiteral("sr2"),
+      QStringLiteral("srf"),
+      QStringLiteral("tif"),
+      QStringLiteral("tiff"),
+      QStringLiteral("webp"),
+      QStringLiteral("x3f"),
+  };
+  return kExtensions;
+}
+
+QStringList supported_import_name_filters() {
+  QStringList filters;
+  filters.reserve(supported_import_extensions().size());
+  for (const auto& extension : supported_import_extensions()) {
+    filters.push_back(QStringLiteral("*.%1").arg(extension));
+  }
+  return filters;
+}
+
+QString normalize_local_path(const QString& path) {
+  const auto trimmed = path.trimmed();
+  if (trimmed.isEmpty()) {
+    return {};
+  }
+
+  return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
+}
+
+bool has_supported_import_extension(const QString& file_path) {
+  const auto suffix = QFileInfo(file_path).suffix().toLower();
+  return supported_import_extensions().contains(suffix);
+}
+
+QString source_label_for_path(const QString& path, const QString& fallback) {
+  const QFileInfo info(path);
+  if (!info.fileName().isEmpty()) {
+    return info.fileName();
+  }
+  return fallback;
+}
+
+QVariantList build_import_sources() {
+  QVariantList sources;
+  QSet<QString> seen_paths;
+
+  const auto append_source =
+      [&sources, &seen_paths](
+          const QString& label,
+          const QString& path,
+          const QString& kind,
+          const QString& subtitle) {
+        const auto normalized_path = normalize_local_path(path);
+        if (normalized_path.isEmpty() || seen_paths.contains(normalized_path)) {
+          return;
+        }
+
+        seen_paths.insert(normalized_path);
+
+        QVariantMap source;
+        source.insert(QStringLiteral("label"), label);
+        source.insert(QStringLiteral("path"), normalized_path);
+        source.insert(QStringLiteral("url"), QUrl::fromLocalFile(normalized_path).toString());
+        source.insert(QStringLiteral("kind"), kind);
+        source.insert(QStringLiteral("subtitle"), subtitle);
+        sources.push_back(source);
+      };
+
+  append_source(QStringLiteral("Home"), QDir::homePath(), QStringLiteral("home"), QStringLiteral("User home"));
+
+  const auto desktop_locations = QStandardPaths::standardLocations(QStandardPaths::DesktopLocation);
+  if (!desktop_locations.isEmpty()) {
+    append_source(
+        QStringLiteral("Desktop"),
+        desktop_locations.first(),
+        QStringLiteral("desktop"),
+        QStringLiteral("Quick access"));
+  }
+
+  const auto picture_locations = QStandardPaths::standardLocations(QStandardPaths::PicturesLocation);
+  if (!picture_locations.isEmpty()) {
+    append_source(
+        QStringLiteral("Pictures"),
+        picture_locations.first(),
+        QStringLiteral("pictures"),
+        QStringLiteral("Photo library"));
+  }
+
+  const auto download_locations = QStandardPaths::standardLocations(QStandardPaths::DownloadLocation);
+  if (!download_locations.isEmpty()) {
+    append_source(
+        QStringLiteral("Downloads"),
+        download_locations.first(),
+        QStringLiteral("downloads"),
+        QStringLiteral("Recent files"));
+  }
+
+  for (const auto& storage : QStorageInfo::mountedVolumes()) {
+    if (!storage.isValid() || !storage.isReady()) {
+      continue;
+    }
+
+    const auto root_path = normalize_local_path(storage.rootPath());
+    if (root_path.isEmpty()) {
+      continue;
+    }
+
+    auto label = storage.displayName().trimmed();
+    if (label.isEmpty()) {
+      label = source_label_for_path(root_path, root_path == QStringLiteral("/") ? QStringLiteral("Filesystem") : root_path);
+    }
+
+    const auto kind =
+        root_path.startsWith(QStringLiteral("/Volumes/")) ? QStringLiteral("volume") : QStringLiteral("drive");
+    auto subtitle = QString::fromUtf8(storage.fileSystemType()).trimmed();
+    if (subtitle.isEmpty()) {
+      subtitle = root_path == QStringLiteral("/") ? QStringLiteral("System root") : QStringLiteral("Mounted storage");
+    }
+
+    append_source(label, root_path, kind, subtitle);
+  }
+
+  append_source(
+      QStringLiteral("Filesystem"),
+      QStringLiteral("/"),
+      QStringLiteral("system"),
+      QStringLiteral("Browse all mounted paths"));
+
+  return sources;
+}
 
 QString format_date(const QDate& date, const QString& fallback) {
   if (!date.isValid()) {
@@ -215,6 +376,29 @@ QString derive_drive_name(const QString& folder_path) {
   return folder_path;
 }
 
+QStringList collect_importable_file_paths(const QString& root_path) {
+  QStringList file_paths;
+  const auto normalized_root = normalize_local_path(root_path);
+  if (normalized_root.isEmpty()) {
+    return file_paths;
+  }
+
+  QDirIterator iterator(
+      normalized_root,
+      QDir::Files | QDir::NoDotAndDotDot,
+      QDirIterator::Subdirectories);
+
+  while (iterator.hasNext()) {
+    const auto file_path = normalize_local_path(iterator.next());
+    if (!has_supported_import_extension(file_path)) {
+      continue;
+    }
+    file_paths.push_back(file_path);
+  }
+
+  return file_paths;
+}
+
 QString project_summary_for_names(const QStringList& project_names) {
   if (project_names.isEmpty()) {
     return QStringLiteral("No projects");
@@ -263,6 +447,7 @@ QVector<CatalogAssetItem> parse_assets(const QJsonArray& asset_array) {
 
 CatalogAssetModel::CatalogAssetModel(QObject* parent) : QAbstractListModel(parent) {
   loadProjects();
+  rebuildImportSources();
 
   snapshot_process_.setProcessChannelMode(QProcess::MergedChannels);
   connect(
@@ -362,6 +547,10 @@ int CatalogAssetModel::assetCount() const { return static_cast<int>(assets_.size
 int CatalogAssetModel::totalAssetCount() const { return static_cast<int>(all_assets_.size()); }
 
 int CatalogAssetModel::driveCount() const { return drive_count_; }
+
+QVariantList CatalogAssetModel::importSources() const { return import_sources_; }
+
+QStringList CatalogAssetModel::importFileNameFilters() const { return supported_import_name_filters(); }
 
 int CatalogAssetModel::selectedIndex() const { return selected_index_; }
 
@@ -468,6 +657,8 @@ void CatalogAssetModel::refresh() {
   snapshot_process_.start(snapshotProgram(), snapshotArguments());
 }
 
+void CatalogAssetModel::refreshImportSources() { rebuildImportSources(); }
+
 void CatalogAssetModel::importFolder() {
   if (busy()) {
     return;
@@ -483,31 +674,122 @@ void CatalogAssetModel::importFolder() {
     return;
   }
 
-  startImport(folder_path);
+  startImport(normalize_local_path(folder_path), {}, {});
 }
 
 void CatalogAssetModel::importFolderPath(const QString& folder_path) {
-  if (busy()) {
-    return;
-  }
-
   const auto normalized_path = folder_path.trimmed();
   if (normalized_path.isEmpty()) {
     return;
   }
 
-  startImport(normalized_path);
+  startImport(normalize_local_path(normalized_path), {}, {});
 }
 
 void CatalogAssetModel::startImport(const QString& folder_path) {
+  startImport(folder_path, {}, {});
+}
+
+void CatalogAssetModel::importSelection(
+    const QString& source_root_path,
+    const QStringList& file_paths,
+    const QString& project_name) {
+  if (busy()) {
+    return;
+  }
+
+  const auto normalized_root = normalize_local_path(source_root_path);
+  if (normalized_root.isEmpty()) {
+    return;
+  }
+
+  QStringList normalized_file_paths;
+  QSet<QString> seen_paths;
+  const auto normalized_root_prefix = normalized_root.endsWith(QDir::separator())
+                                          ? normalized_root
+                                          : normalized_root + QDir::separator();
+
+  for (const auto& file_path : file_paths) {
+    const auto normalized_file_path = normalize_local_path(file_path);
+    if (normalized_file_path.isEmpty() || seen_paths.contains(normalized_file_path)) {
+      continue;
+    }
+
+    const auto within_root =
+        normalized_file_path == normalized_root || normalized_file_path.startsWith(normalized_root_prefix);
+    if (!within_root || !QFileInfo(normalized_file_path).isFile() || !has_supported_import_extension(normalized_file_path)) {
+      continue;
+    }
+
+    seen_paths.insert(normalized_file_path);
+    normalized_file_paths.push_back(normalized_file_path);
+  }
+
+  startImport(normalized_root, normalized_file_paths, project_name);
+}
+
+void CatalogAssetModel::startImport(
+    const QString& folder_path,
+    const QStringList& selected_file_paths,
+    const QString& project_name) {
+  if (busy()) {
+    return;
+  }
+
+  const auto normalized_path = normalize_local_path(folder_path);
+  if (normalized_path.isEmpty() || !QFileInfo(normalized_path).exists()) {
+    setErrorMessage(QStringLiteral("The selected import source is unavailable."));
+    setStatus(QStringLiteral("Import failed"));
+    return;
+  }
+
+  if (!import_selection_manifest_path_.isEmpty()) {
+    QFile::remove(import_selection_manifest_path_);
+    import_selection_manifest_path_.clear();
+  }
+
+  if (!selected_file_paths.isEmpty()) {
+    auto temp_root = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
+    if (temp_root.isEmpty()) {
+      temp_root = QDir::tempPath();
+    }
+
+    const auto manifest_path = QDir(temp_root).filePath(
+        QStringLiteral("photo-editor-import-%1.txt")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces)));
+
+    QFile manifest_file(manifest_path);
+    if (!manifest_file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+      setErrorMessage(QStringLiteral("Unable to stage the selected photos for import."));
+      setStatus(QStringLiteral("Import failed"));
+      return;
+    }
+
+    for (const auto& file_path : selected_file_paths) {
+      manifest_file.write(file_path.toUtf8());
+      manifest_file.write("\n");
+    }
+    manifest_file.close();
+    import_selection_manifest_path_ = manifest_path;
+  }
+
+  const auto normalized_project_name = normalizedProjectName(project_name);
+  pending_import_project_name_ = normalized_project_name;
+  pending_import_file_paths_ =
+      normalized_project_name.isEmpty()
+          ? QStringList{}
+          : (selected_file_paths.isEmpty() ? collect_importable_file_paths(normalized_path) : selected_file_paths);
+
   setImporting(true);
   setErrorMessage({});
-  setStatus(QStringLiteral("Importing folder into catalog..."));
+  setStatus(selected_file_paths.isEmpty()
+                ? QStringLiteral("Importing source into catalog...")
+                : QStringLiteral("Importing selected photos into catalog..."));
 
   import_process_.setWorkingDirectory(QDir::currentPath());
   auto environment = QProcessEnvironment::systemEnvironment();
   import_process_.setProcessEnvironment(environment);
-  import_process_.start(importProgram(), importArguments(folder_path));
+  import_process_.start(importProgram(), importArguments(normalized_path));
 }
 
 void CatalogAssetModel::selectIndex(int index) { setSelectedIndexInternal(index); }
@@ -577,25 +859,12 @@ void CatalogAssetModel::addAssetToProject(const QString& asset_id, const QString
     return;
   }
 
-  auto* project = findProject(trimmed_name);
-  if (project == nullptr) {
-    ProjectRecord new_project;
-    new_project.name = trimmed_name;
-    new_project.created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-    projects_.push_back(new_project);
-    emit projectNamesChanged();
-    project = &projects_.last();
-  }
-
-  if (project->asset_ids.contains(asset_id)) {
+  if (assetInProject(asset_id, trimmed_name)) {
     setStatus(QStringLiteral("Asset is already in '%1'.").arg(trimmed_name));
     return;
   }
 
-  project->asset_ids.insert(asset_id);
-  saveProjects();
-  rebuildProjectMetadata();
-  applyFilters(asset_id);
+  addAssetsToProject({asset_id}, trimmed_name);
   setStatus(QStringLiteral("Added photo to '%1'.").arg(trimmed_name));
 }
 
@@ -677,8 +946,11 @@ void CatalogAssetModel::setCaptureYearFilter(const QString& capture_year_filter)
 
 void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStatus exit_status) {
   setLoading(false);
+  rebuildImportSources();
 
   if (exit_status != QProcess::NormalExit || exit_code != 0) {
+    pending_import_file_paths_.clear();
+    pending_import_project_name_.clear();
     setErrorMessage(QString::fromUtf8(snapshot_process_.readAllStandardOutput()).trimmed());
     setStatus(QStringLiteral("Catalog unavailable"));
     updateAssets({});
@@ -688,6 +960,8 @@ void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStat
 
   const auto payload = QJsonDocument::fromJson(snapshot_process_.readAllStandardOutput());
   if (!payload.isObject()) {
+    pending_import_file_paths_.clear();
+    pending_import_project_name_.clear();
     setErrorMessage(QStringLiteral("Catalog snapshot output was not valid JSON."));
     setStatus(QStringLiteral("Catalog unavailable"));
     updateAssets({});
@@ -699,12 +973,20 @@ void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStat
   updateAssets(parse_assets(root.value("assets").toArray()));
   setDriveCount(static_cast<int>(root.value("drives").toArray().size()));
   setStatus(QStringLiteral("Loaded %1 photos across %2 drives.").arg(all_assets_.size()).arg(drive_count_));
+  finalizePendingImportProjectAssignment();
 }
 
 void CatalogAssetModel::handleImportFinished(int exit_code, QProcess::ExitStatus exit_status) {
   setImporting(false);
 
+  if (!import_selection_manifest_path_.isEmpty()) {
+    QFile::remove(import_selection_manifest_path_);
+    import_selection_manifest_path_.clear();
+  }
+
   if (exit_status != QProcess::NormalExit || exit_code != 0) {
+    pending_import_file_paths_.clear();
+    pending_import_project_name_.clear();
     setErrorMessage(QString::fromUtf8(import_process_.readAllStandardOutput()).trimmed());
     setStatus(QStringLiteral("Import failed"));
     return;
@@ -759,6 +1041,16 @@ void CatalogAssetModel::setDriveCount(int drive_count) {
 
   drive_count_ = drive_count;
   emit driveCountChanged();
+}
+
+void CatalogAssetModel::rebuildImportSources() {
+  const auto next_sources = build_import_sources();
+  if (import_sources_ == next_sources) {
+    return;
+  }
+
+  import_sources_ = next_sources;
+  emit importSourcesChanged();
 }
 
 void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
@@ -951,6 +1243,80 @@ void CatalogAssetModel::saveProjects() const {
   file.commit();
 }
 
+void CatalogAssetModel::addAssetsToProject(
+    const QStringList& asset_ids,
+    const QString& project_name) {
+  const auto trimmed_name = normalizedProjectName(project_name);
+  if (trimmed_name.isEmpty() || asset_ids.isEmpty()) {
+    return;
+  }
+
+  auto* project = findProject(trimmed_name);
+  auto created_project = false;
+  if (project == nullptr) {
+    ProjectRecord new_project;
+    new_project.name = trimmed_name;
+    new_project.created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    projects_.push_back(new_project);
+    project = &projects_.last();
+    created_project = true;
+  }
+
+  auto added_any = false;
+  for (const auto& asset_id : asset_ids) {
+    if (asset_id.isEmpty() || project->asset_ids.contains(asset_id)) {
+      continue;
+    }
+
+    project->asset_ids.insert(asset_id);
+    added_any = true;
+  }
+
+  if (!created_project && !added_any) {
+    return;
+  }
+
+  saveProjects();
+  if (created_project) {
+    emit projectNamesChanged();
+  }
+  rebuildProjectMetadata();
+  applyFilters(selectedAssetId());
+}
+
+void CatalogAssetModel::finalizePendingImportProjectAssignment() {
+  const auto project_name = normalizedProjectName(pending_import_project_name_);
+  const auto pending_file_paths = pending_import_file_paths_;
+  pending_import_project_name_.clear();
+  pending_import_file_paths_.clear();
+
+  if (project_name.isEmpty() || pending_file_paths.isEmpty()) {
+    return;
+  }
+
+  QSet<QString> file_path_set;
+  for (const auto& file_path : pending_file_paths) {
+    file_path_set.insert(normalize_local_path(file_path));
+  }
+
+  QStringList imported_asset_ids;
+  imported_asset_ids.reserve(file_path_set.size());
+  for (const auto& item : all_assets_) {
+    if (!file_path_set.contains(normalize_local_path(item.file_path))) {
+      continue;
+    }
+    imported_asset_ids.push_back(item.asset_id);
+  }
+
+  if (imported_asset_ids.isEmpty()) {
+    setStatus(QStringLiteral("Import completed, but no assets were assigned to '%1'.").arg(project_name));
+    return;
+  }
+
+  addAssetsToProject(imported_asset_ids, project_name);
+  setStatus(QStringLiteral("Imported %1 photos into '%2'.").arg(imported_asset_ids.size()).arg(project_name));
+}
+
 QString CatalogAssetModel::projectsFilePath() const {
   auto data_root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
   if (data_root.isEmpty()) {
@@ -1089,25 +1455,32 @@ QStringList CatalogAssetModel::importArguments(const QString& folder_path) const
   const auto drive_name = derive_drive_name(folder_path);
   const auto import_mode = QStringLiteral("referenced");
 
+  QStringList arguments;
   if (useBuiltImportBinary()) {
-    return {folder_path, drive_id, drive_name, import_mode};
+    arguments = {folder_path, drive_id, drive_name, import_mode};
+  } else {
+    arguments = {
+        QStringLiteral("run"),
+        QStringLiteral("--quiet"),
+        QStringLiteral("--manifest-path"),
+        QStringLiteral("rust/Cargo.toml"),
+        QStringLiteral("-p"),
+        QStringLiteral("photo-catalog"),
+        QStringLiteral("--bin"),
+        QStringLiteral("import_catalog"),
+        QStringLiteral("--"),
+        folder_path,
+        drive_id,
+        drive_name,
+        import_mode,
+    };
   }
 
-  return {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("import_catalog"),
-      QStringLiteral("--"),
-      folder_path,
-      drive_id,
-      drive_name,
-      import_mode,
-  };
+  if (!import_selection_manifest_path_.isEmpty()) {
+    arguments.push_back(import_selection_manifest_path_);
+  }
+
+  return arguments;
 }
 
 bool CatalogAssetModel::useBuiltSnapshotBinary() const {

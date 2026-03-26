@@ -1,5 +1,6 @@
 add_library(photo_engine
   src/catalog/asset_location.cpp
+  src/pipeline/color_adjustments.cpp
   src/pipeline/edit_recipe.cpp
   src/pipeline/render_graph.cpp
 )

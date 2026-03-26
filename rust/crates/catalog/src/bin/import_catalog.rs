@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::PathBuf;
 
 use photo_catalog::{
@@ -17,12 +18,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let drive_id = arguments[2].clone();
     let drive_name = arguments[3].clone();
     let import_mode = parse_import_mode(arguments.get(4).map(String::as_str));
+    let selected_paths = load_selected_paths(arguments.get(5).map(String::as_str))?;
 
     let request = ImportRequest {
         drive_id,
         drive_name,
         mount_path,
         import_mode,
+        selected_paths,
     };
 
     let summary = discover_assets(&request)?;
@@ -50,6 +53,20 @@ fn parse_import_mode(value: Option<&str>) -> ImportMode {
 
 fn print_usage(program_name: &str) {
     eprintln!(
-        "Usage: {program_name} <mount_path> <drive_id> <drive_name> [referenced|managed]"
+        "Usage: {program_name} <mount_path> <drive_id> <drive_name> [referenced|managed] [selection_manifest]"
     );
+}
+
+fn load_selected_paths(path: Option<&str>) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+
+    let contents = fs::read_to_string(path)?;
+    Ok(contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(PathBuf::from)
+        .collect())
 }

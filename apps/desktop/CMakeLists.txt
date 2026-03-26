@@ -29,6 +29,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/ToneTextField.qml
     qml/workspaces/EditView.qml
     qml/workspaces/ExportView.qml
+    qml/workspaces/ImportView.qml
     qml/workspaces/LibraryView.qml
     qml/workspaces/MaskView.qml
 )

@@ -284,6 +284,8 @@ class EditorPreviewController final : public QObject {
   QProcess persist_process_;
   int preview_revision_ = 0;
   int render_generation_ = 0;
+  int last_interactive_preview_generation_ = 0;
+  int last_full_preview_generation_ = 0;
 };
 
 }  // namespace photo_editor::desktop

@@ -7,6 +7,7 @@
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QVariantList>
 #include <QVector>
 
 namespace photo_editor::desktop {
@@ -46,6 +47,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(int assetCount READ assetCount NOTIFY assetCountChanged)
   Q_PROPERTY(int totalAssetCount READ totalAssetCount NOTIFY totalAssetCountChanged)
   Q_PROPERTY(int driveCount READ driveCount NOTIFY driveCountChanged)
+  Q_PROPERTY(QVariantList importSources READ importSources NOTIFY importSourcesChanged)
+  Q_PROPERTY(QStringList importFileNameFilters READ importFileNameFilters CONSTANT)
   Q_PROPERTY(int selectedIndex READ selectedIndex NOTIFY selectedIndexChanged)
   Q_PROPERTY(QString selectedAssetId READ selectedAssetId NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedCameraLabel READ selectedCameraLabel NOTIFY selectedAssetChanged)
@@ -95,6 +98,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] int assetCount() const;
   [[nodiscard]] int totalAssetCount() const;
   [[nodiscard]] int driveCount() const;
+  [[nodiscard]] QVariantList importSources() const;
+  [[nodiscard]] QStringList importFileNameFilters() const;
   [[nodiscard]] int selectedIndex() const;
   [[nodiscard]] QString selectedAssetId() const;
   [[nodiscard]] QString selectedCameraLabel() const;
@@ -113,8 +118,13 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString captureYearFilter() const;
 
   Q_INVOKABLE void refresh();
+  Q_INVOKABLE void refreshImportSources();
   Q_INVOKABLE void importFolder();
   Q_INVOKABLE void importFolderPath(const QString& folder_path);
+  Q_INVOKABLE void importSelection(
+      const QString& source_root_path,
+      const QStringList& file_paths,
+      const QString& project_name);
   Q_INVOKABLE void selectIndex(int index);
   Q_INVOKABLE QString pickFolder(const QString& title = QStringLiteral("Browse Photo Folder")) const;
   Q_INVOKABLE QString localPathForUrl(const QString& url) const;
@@ -137,6 +147,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void assetCountChanged();
   void totalAssetCountChanged();
   void driveCountChanged();
+  void importSourcesChanged();
   void selectedIndexChanged();
   void selectedAssetChanged();
   void projectNamesChanged();
@@ -156,11 +167,18 @@ class CatalogAssetModel final : public QAbstractListModel {
   void updateAssets(const QVector<CatalogAssetItem>& items);
   void setSelectedIndexInternal(int index);
   void startImport(const QString& folder_path);
+  void startImport(
+      const QString& folder_path,
+      const QStringList& selected_file_paths,
+      const QString& project_name);
   void applyFilters(const QString& preferred_asset_id = {});
+  void rebuildImportSources();
   void rebuildProjectMetadata();
   void rebuildCaptureYears();
   void loadProjects();
   void saveProjects() const;
+  void addAssetsToProject(const QStringList& asset_ids, const QString& project_name);
+  void finalizePendingImportProjectAssignment();
   [[nodiscard]] QString projectsFilePath() const;
   [[nodiscard]] ProjectRecord* findProject(const QString& project_name);
   [[nodiscard]] const ProjectRecord* findProject(const QString& project_name) const;
@@ -182,6 +200,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   QVector<CatalogAssetItem> assets_;
   QVector<ProjectRecord> projects_;
   QStringList capture_years_;
+  QVariantList import_sources_;
   QProcess snapshot_process_;
   QProcess import_process_;
   QString status_ = QStringLiteral("Idle");
@@ -193,6 +212,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   QString project_filter_ = QStringLiteral("all");
   QString import_date_filter_ = QStringLiteral("all");
   QString capture_year_filter_ = QStringLiteral("all");
+  QString import_selection_manifest_path_;
+  QStringList pending_import_file_paths_;
+  QString pending_import_project_name_;
 };
 
 }  // namespace photo_editor::desktop

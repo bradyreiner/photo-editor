@@ -1,11 +1,13 @@
 #include "editor_preview_controller.h"
 
+#include "photo_editor/pipeline/color_adjustments.h"
+
 #include <QtMath>
 #include <QtConcurrent>
 
-#include <array>
 #include <cmath>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -14,6 +16,8 @@
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QProcess>
 #include <QRect>
 #include <QStandardPaths>
@@ -27,6 +31,26 @@ namespace photo_editor::desktop {
 namespace {
 
 constexpr int kInteractivePreviewEdge = 960;
+constexpr int kFullRenderDebounceMs = 420;
+constexpr int kMaxCachedDecodedImages = 4;
+
+struct DecodedImageCache final {
+  QMutex mutex;
+  QHash<QString, QImage> images;
+};
+
+DecodedImageCache& decoded_image_cache() {
+  static DecodedImageCache cache;
+  return cache;
+}
+
+QString decoded_image_cache_key(const QFileInfo& file_info, int max_edge) {
+  return QStringLiteral("%1|%2|%3|%4")
+      .arg(file_info.absoluteFilePath())
+      .arg(max_edge)
+      .arg(file_info.size())
+      .arg(file_info.lastModified(QTimeZone::UTC).toMSecsSinceEpoch());
+}
 
 QString preview_cache_root() {
   const auto cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
@@ -78,269 +102,44 @@ double clamp_unit(double value) {
   return qBound(0.0, value, 1.0);
 }
 
-struct LinearPixel final {
-  double red = 0.0;
-  double green = 0.0;
-  double blue = 0.0;
-  double alpha = 1.0;
-};
-
-double srgb_to_linear(double value) {
-  const auto clamped = clamp_unit(value);
-  if (clamped <= 0.04045) {
-    return clamped / 12.92;
-  }
-
-  return qPow((clamped + 0.055) / 1.055, 2.4);
-}
-
-double linear_to_srgb(double value) {
-  const auto clamped = clamp_unit(value);
-  if (clamped <= 0.0031308) {
-    return clamped * 12.92;
-  }
-
-  return 1.055 * qPow(clamped, 1.0 / 2.4) - 0.055;
-}
-
-double luminance_for_pixel(const LinearPixel& pixel) {
-  return (pixel.red * 0.2126) + (pixel.green * 0.7152) + (pixel.blue * 0.0722);
-}
-
-LinearPixel scale_pixel_to_luminance(const LinearPixel& pixel, double target_luminance) {
-  const auto clamped_target = clamp_unit(target_luminance);
-  const auto current_luminance = luminance_for_pixel(pixel);
-  if (current_luminance <= 1e-6) {
-    return LinearPixel{
-        .red = clamped_target,
-        .green = clamped_target,
-        .blue = clamped_target,
-        .alpha = pixel.alpha,
-    };
-  }
-
-  const auto scale = clamped_target / current_luminance;
-  return LinearPixel{
-      .red = qMax(0.0, pixel.red * scale),
-      .green = qMax(0.0, pixel.green * scale),
-      .blue = qMax(0.0, pixel.blue * scale),
-      .alpha = pixel.alpha,
+photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& state) {
+  return photo_editor::pipeline::ColorAdjustmentState{
+      .exposure = state.exposure,
+      .contrast = state.contrast,
+      .highlights = state.highlights,
+      .shadows = state.shadows,
+      .whites = state.whites,
+      .blacks = state.blacks,
+      .temperature = state.temperature,
+      .tint = state.tint,
+      .texture = state.texture,
+      .clarity = state.clarity,
+      .dehaze = state.dehaze,
+      .vibrance = state.vibrance,
+      .saturation = state.saturation,
+      .curve_shadows = state.curve_shadows,
+      .curve_darks = state.curve_darks,
+      .curve_lights = state.curve_lights,
+      .curve_highlights = state.curve_highlights,
+      .color_mixer_channel = state.hsl_channel.toStdString(),
+      .hue_adjustment = state.hue_adjustment,
+      .saturation_adjustment = state.saturation_adjustment,
+      .luminance_adjustment = state.luminance_adjustment,
+      .linear_mask_enabled = state.linear_mask_enabled,
+      .linear_mask_exposure = state.linear_mask_exposure,
+      .linear_mask_temperature = state.linear_mask_temperature,
+      .linear_mask_feather = state.linear_mask_feather,
+      .linear_mask_position = state.linear_mask_position,
+      .linear_mask_rotation = state.linear_mask_rotation,
   };
 }
 
-double smoothstep(double edge0, double edge1, double x) {
-  if (qFuzzyCompare(edge0, edge1)) {
-    return x < edge0 ? 0.0 : 1.0;
-  }
+double srgb_to_linear(double value) { return photo_editor::pipeline::srgb_to_linear(value); }
 
-  const auto t = clamp_unit((x - edge0) / (edge1 - edge0));
-  return t * t * (3.0 - 2.0 * t);
-}
-
-double bell_weight(double value, double center, double radius) {
-  if (radius <= 0.0) {
-    return 0.0;
-  }
-
-  const auto distance = qAbs(value - center) / radius;
-  if (distance >= 1.0) {
-    return 0.0;
-  }
-
-  const auto t = 1.0 - distance;
-  return t * t * (3.0 - 2.0 * t);
-}
-
-double apply_sigmoid_contrast(double value, double amount) {
-  const auto clamped = clamp_unit(value);
-  if (qFuzzyIsNull(amount) || clamped <= 1e-6 || clamped >= 1.0 - 1e-6) {
-    return clamped;
-  }
-
-  const auto slope = qBound(0.35, 1.0 + amount * 1.8, 2.8);
-  const auto logit = std::log(clamped / (1.0 - clamped));
-  return clamp_unit(1.0 / (1.0 + std::exp(-logit * slope)));
-}
-
-double apply_shadow_adjustment(double value, double amount) {
-  const auto mask = 1.0 - smoothstep(0.12, 0.62, value);
-  if (amount >= 0.0) {
-    return clamp_unit(value + amount * mask * (1.0 - value) * 0.72);
-  }
-
-  return clamp_unit(value + amount * mask * (0.35 + value) * 0.58);
-}
-
-double apply_highlight_adjustment(double value, double amount) {
-  const auto mask = smoothstep(0.38, 0.92, value);
-  if (amount >= 0.0) {
-    return clamp_unit(value + amount * mask * (1.0 - value) * 0.62);
-  }
-
-  return clamp_unit(value + amount * mask * (0.35 + value) * 0.5);
-}
-
-double apply_white_adjustment(double value, double amount) {
-  const auto mask = smoothstep(0.72, 1.0, value);
-  if (amount >= 0.0) {
-    return clamp_unit(value + amount * mask * (1.0 - value) * 0.95);
-  }
-
-  return clamp_unit(value + amount * mask * value * 0.82);
-}
-
-double apply_black_adjustment(double value, double amount) {
-  const auto mask = 1.0 - smoothstep(0.0, 0.28, value);
-  if (amount >= 0.0) {
-    return clamp_unit(value + amount * mask * (1.0 - value) * 0.38);
-  }
-
-  return clamp_unit(value + amount * mask * (0.45 + value) * 0.9);
-}
-
-std::array<QPointF, 6> tone_curve_control_points(const EditState& state) {
-  const auto point = [](double x, double delta) {
-    return QPointF{x, clamp_unit(x + (delta / 100.0) * 0.34)};
-  };
-
-  return {
-      QPointF{0.0, 0.0},
-      point(0.20, state.curve_shadows),
-      point(0.40, state.curve_darks),
-      point(0.65, state.curve_lights),
-      point(0.85, state.curve_highlights),
-      QPointF{1.0, 1.0},
-  };
-}
-
-double evaluate_tone_curve(double value, const EditState& state) {
-  const auto points = tone_curve_control_points(state);
-  const auto clamped_value = clamp_unit(value);
-
-  for (std::size_t index = 1; index < points.size(); ++index) {
-    if (clamped_value > points[index].x() && index + 1 < points.size()) {
-      continue;
-    }
-
-    const auto start = points[index - 1];
-    const auto end = points[index];
-    const auto span = qMax(1e-6, end.x() - start.x());
-    const auto t = clamp_unit((clamped_value - start.x()) / span);
-    return clamp_unit(start.y() + (end.y() - start.y()) * t);
-  }
-
-  return clamped_value;
-}
-
-double apply_global_tone(double value, const EditState& state) {
-  auto adjusted = clamp_unit(value);
-  adjusted = apply_sigmoid_contrast(adjusted, state.contrast / 100.0);
-  adjusted = apply_shadow_adjustment(adjusted, state.shadows / 100.0);
-  adjusted = apply_highlight_adjustment(adjusted, state.highlights / 100.0);
-  adjusted = apply_white_adjustment(adjusted, state.whites / 100.0);
-  adjusted = apply_black_adjustment(adjusted, state.blacks / 100.0);
-  return evaluate_tone_curve(adjusted, state);
-}
-
-std::array<double, 3> white_balance_multipliers(double temperature, double tint) {
-  const auto normalized_temperature = clamp_signed_percent(temperature) / 100.0;
-  const auto normalized_tint = clamp_signed_percent(tint) / 100.0;
-  const auto red = qPow(2.0, normalized_temperature * 0.42 + normalized_tint * 0.08);
-  const auto green = qPow(2.0, -normalized_tint * 0.24);
-  const auto blue = qPow(2.0, -normalized_temperature * 0.42 + normalized_tint * 0.08);
-  const auto normalization = (red * 0.2126) + (green * 0.7152) + (blue * 0.0722);
-  if (normalization <= 1e-6) {
-    return {1.0, 1.0, 1.0};
-  }
-
-  return {red / normalization, green / normalization, blue / normalization};
-}
-
-std::vector<float> box_blur(const std::vector<float>& input, int width, int height, int radius) {
-  if (radius <= 0 || input.empty()) {
-    return input;
-  }
-
-  const auto kernel_width = radius * 2 + 1;
-  std::vector<float> horizontal(input.size(), 0.0F);
-  std::vector<float> output(input.size(), 0.0F);
-
-  for (int y = 0; y < height; ++y) {
-    double sum = 0.0;
-    for (int sample = -radius; sample <= radius; ++sample) {
-      const auto clamped_x = qBound(0, sample, width - 1);
-      sum += input[static_cast<std::size_t>(y * width + clamped_x)];
-    }
-
-    for (int x = 0; x < width; ++x) {
-      horizontal[static_cast<std::size_t>(y * width + x)] = static_cast<float>(sum / kernel_width);
-      const auto remove_x = qBound(0, x - radius, width - 1);
-      const auto add_x = qBound(0, x + radius + 1, width - 1);
-      sum += input[static_cast<std::size_t>(y * width + add_x)] -
-             input[static_cast<std::size_t>(y * width + remove_x)];
-    }
-  }
-
-  for (int x = 0; x < width; ++x) {
-    double sum = 0.0;
-    for (int sample = -radius; sample <= radius; ++sample) {
-      const auto clamped_y = qBound(0, sample, height - 1);
-      sum += horizontal[static_cast<std::size_t>(clamped_y * width + x)];
-    }
-
-    for (int y = 0; y < height; ++y) {
-      output[static_cast<std::size_t>(y * width + x)] = static_cast<float>(sum / kernel_width);
-      const auto remove_y = qBound(0, y - radius, height - 1);
-      const auto add_y = qBound(0, y + radius + 1, height - 1);
-      sum += horizontal[static_cast<std::size_t>(add_y * width + x)] -
-             horizontal[static_cast<std::size_t>(remove_y * width + x)];
-    }
-  }
-
-  return output;
-}
+double linear_to_srgb(double value) { return photo_editor::pipeline::linear_to_srgb(value); }
 
 double channel_weight_for_selection(double hue, const QString& hsl_channel) {
-  if (hue < 0.0) {
-    return 0.0;
-  }
-
-  struct Region final {
-    const char* name;
-    double center;
-    double inner_width;
-    double outer_width;
-  };
-
-  static constexpr Region kRegions[] = {
-      {"Reds", 0.0, 0.05, 0.10},
-      {"Oranges", 0.09, 0.04, 0.09},
-      {"Yellows", 0.15, 0.04, 0.08},
-      {"Greens", 0.32, 0.10, 0.18},
-      {"Aquas", 0.50, 0.06, 0.10},
-      {"Blues", 0.64, 0.08, 0.13},
-      {"Purples", 0.78, 0.06, 0.10},
-      {"Magentas", 0.88, 0.05, 0.10},
-  };
-
-  for (const auto& region : kRegions) {
-    if (hsl_channel != QLatin1String(region.name)) {
-      continue;
-    }
-
-    auto distance = qAbs(hue - region.center);
-    distance = qMin(distance, 1.0 - distance);
-    if (distance <= region.inner_width) {
-      return 1.0;
-    }
-    if (distance >= region.outer_width) {
-      return 0.0;
-    }
-
-    return 1.0 - smoothstep(region.inner_width, region.outer_width, distance);
-  }
-
-  return 0.0;
+  return photo_editor::pipeline::channel_weight_for_selection(hue, hsl_channel.toStdString());
 }
 
 double crop_aspect_ratio(const QString& preset) {
@@ -422,6 +221,18 @@ bool decode_source_image(const QString& file_path, QImage* image, int max_edge) 
     return false;
   }
 
+  const auto should_cache = max_edge > 0;
+  const auto cache_key = should_cache ? decoded_image_cache_key(source_info, max_edge) : QString{};
+  if (should_cache) {
+    auto& cache = decoded_image_cache();
+    QMutexLocker locker(&cache.mutex);
+    const auto cached = cache.images.constFind(cache_key);
+    if (cached != cache.images.cend()) {
+      *image = cached.value();
+      return !image->isNull();
+    }
+  }
+
   QImageReader reader(file_path);
   if (!reader.canRead()) {
     return false;
@@ -435,6 +246,14 @@ bool decode_source_image(const QString& file_path, QImage* image, int max_edge) 
   }
 
   *image = reader.read().convertToFormat(QImage::Format_ARGB32);
+  if (should_cache && !image->isNull()) {
+    auto& cache = decoded_image_cache();
+    QMutexLocker locker(&cache.mutex);
+    if (cache.images.size() >= kMaxCachedDecodedImages) {
+      cache.images.clear();
+    }
+    cache.images.insert(cache_key, *image);
+  }
   return !image->isNull();
 }
 
@@ -443,130 +262,29 @@ QImage apply_crop(const QImage& image, const EditState& state) {
 }
 
 void apply_color_adjustments(QImage* image, const EditState& state) {
-  const auto exposure_gain = qPow(2.0, state.exposure);
-  const auto white_balance = white_balance_multipliers(state.temperature, state.tint);
-  const auto texture_strength = state.texture / 100.0;
-  const auto clarity_strength = state.clarity / 100.0;
-  const auto dehaze_strength = state.dehaze / 100.0;
-  const auto vibrance_strength = state.vibrance / 100.0;
-  const auto saturation_strength = state.saturation / 100.0;
-  const auto gradient_radians = qDegreesToRadians(state.linear_mask_rotation);
-  const auto gradient_cosine = qCos(gradient_radians);
-  const auto gradient_sine = qSin(gradient_radians);
-  const auto gradient_feather = qMax(0.05, state.linear_mask_feather);
   const auto width = image->width();
   const auto height = image->height();
-  std::vector<LinearPixel> pixels(static_cast<std::size_t>(width * height));
+  std::vector<photo_editor::pipeline::ColorPixel> pixels(static_cast<std::size_t>(width * height));
 
   for (int y = 0; y < height; ++y) {
     const auto* scanline = reinterpret_cast<const QRgb*>(image->constScanLine(y));
     for (int x = 0; x < width; ++x) {
       const QColor color = QColor::fromRgb(scanline[x]);
-      auto pixel = LinearPixel{
-          .red = srgb_to_linear(color.redF()) * exposure_gain * white_balance[0],
-          .green = srgb_to_linear(color.greenF()) * exposure_gain * white_balance[1],
-          .blue = srgb_to_linear(color.blueF()) * exposure_gain * white_balance[2],
+      pixels[static_cast<std::size_t>(y * width + x)] = photo_editor::pipeline::ColorPixel{
+          .red = srgb_to_linear(color.redF()),
+          .green = srgb_to_linear(color.greenF()),
+          .blue = srgb_to_linear(color.blueF()),
           .alpha = color.alphaF(),
       };
-      pixel = scale_pixel_to_luminance(pixel, apply_global_tone(luminance_for_pixel(pixel), state));
-      pixels[static_cast<std::size_t>(y * width + x)] = pixel;
     }
   }
 
-  if (!qFuzzyIsNull(texture_strength) || !qFuzzyIsNull(clarity_strength) || !qFuzzyIsNull(dehaze_strength)) {
-    std::vector<float> luminance_buffer(static_cast<std::size_t>(width * height), 0.0F);
-    for (std::size_t index = 0; index < pixels.size(); ++index) {
-      luminance_buffer[index] = static_cast<float>(luminance_for_pixel(pixels[index]));
-    }
+  photo_editor::pipeline::apply_color_adjustments(&pixels, width, height, to_pipeline_state(state));
 
-    const auto texture_blur = box_blur(luminance_buffer, width, height, 2);
-    const auto clarity_blur = box_blur(luminance_buffer, width, height, 8);
-    const auto haze_blur = box_blur(luminance_buffer, width, height, 20);
-
-    for (std::size_t index = 0; index < pixels.size(); ++index) {
-      const auto luminance = static_cast<double>(luminance_buffer[index]);
-      const auto midtone_weight = bell_weight(luminance, 0.5, 0.42);
-      auto target_luminance = luminance;
-      target_luminance += texture_strength *
-                          static_cast<double>(luminance_buffer[index] - texture_blur[index]) *
-                          (0.5 + midtone_weight) * 1.15;
-      target_luminance += clarity_strength *
-                          static_cast<double>(luminance_buffer[index] - clarity_blur[index]) *
-                          midtone_weight * 1.55;
-      target_luminance += dehaze_strength *
-                          static_cast<double>(luminance_buffer[index] - haze_blur[index]) * 1.8;
-      pixels[index] = scale_pixel_to_luminance(pixels[index], target_luminance);
-    }
-  }
-
-  for (std::size_t index = 0; index < pixels.size(); ++index) {
-    auto& pixel = pixels[index];
-    QColor adjusted;
-    adjusted.setRgbF(
-        static_cast<float>(linear_to_srgb(pixel.red)),
-        static_cast<float>(linear_to_srgb(pixel.green)),
-        static_cast<float>(linear_to_srgb(pixel.blue)),
-        static_cast<float>(clamp_unit(pixel.alpha)));
-
-    float hue = 0.0F;
-    float saturation = 0.0F;
-    float lightness = 0.0F;
-    float alpha = 0.0F;
-    adjusted.getHslF(&hue, &saturation, &lightness, &alpha);
-
-    const auto current_saturation = static_cast<double>(saturation);
-    const auto chroma_protection = 0.65 + 0.35 * (1.0 - qAbs(static_cast<double>(lightness) * 2.0 - 1.0));
-    saturation = static_cast<float>(
-        clamp_unit(current_saturation * (1.0 + saturation_strength * 0.85) +
-                   vibrance_strength * (1.0 - current_saturation) * chroma_protection * 0.8 +
-                   qMax(0.0, dehaze_strength) * (1.0 - current_saturation) * 0.12));
-
-    const auto channel_weight = channel_weight_for_selection(static_cast<double>(hue), state.hsl_channel);
-    if (channel_weight > 0.0) {
-      auto adjusted_hue = static_cast<double>(hue) + channel_weight * (state.hue_adjustment / 100.0) * 0.12;
-      if (adjusted_hue > 1.0) {
-        adjusted_hue -= 1.0;
-      } else if (adjusted_hue < 0.0) {
-        adjusted_hue += 1.0;
-      }
-      hue = static_cast<float>(adjusted_hue);
-      saturation = static_cast<float>(
-          clamp_unit(static_cast<double>(saturation) + channel_weight * (state.saturation_adjustment / 100.0) * 0.45));
-      lightness = static_cast<float>(
-          clamp_unit(static_cast<double>(lightness) + channel_weight * (state.luminance_adjustment / 100.0) * 0.25));
-    }
-
-    adjusted.setHslF(hue, saturation, lightness, alpha);
-    pixel.red = srgb_to_linear(adjusted.redF());
-    pixel.green = srgb_to_linear(adjusted.greenF());
-    pixel.blue = srgb_to_linear(adjusted.blueF());
-    pixel.alpha = adjusted.alphaF();
-  }
-
-  const auto local_white_balance = white_balance_multipliers(state.linear_mask_temperature, 0.0);
   for (int y = 0; y < height; ++y) {
     auto* scanline = reinterpret_cast<QRgb*>(image->scanLine(y));
     for (int x = 0; x < width; ++x) {
       auto& pixel = pixels[static_cast<std::size_t>(y * width + x)];
-
-      if (state.linear_mask_enabled) {
-        const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
-        const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
-        const auto axis_coordinate =
-            ((normalized_x - 0.5) * gradient_cosine + (normalized_y - 0.5) * gradient_sine) + 0.5;
-        const auto mask_weight = clamp_unit(((state.linear_mask_position - axis_coordinate) / gradient_feather) + 0.5);
-
-        if (mask_weight > 0.0) {
-          const auto local_exposure_gain = qPow(2.0, state.linear_mask_exposure * mask_weight);
-          pixel.red *= 1.0 + (local_white_balance[0] - 1.0) * mask_weight;
-          pixel.green *= 1.0 + (local_white_balance[1] - 1.0) * mask_weight;
-          pixel.blue *= 1.0 + (local_white_balance[2] - 1.0) * mask_weight;
-          pixel.red *= local_exposure_gain;
-          pixel.green *= local_exposure_gain;
-          pixel.blue *= local_exposure_gain;
-        }
-      }
-
       scanline[x] = qRgba(
           clamp_channel(linear_to_srgb(pixel.red) * 255.0),
           clamp_channel(linear_to_srgb(pixel.green) * 255.0),
@@ -577,8 +295,9 @@ void apply_color_adjustments(QImage* image, const EditState& state) {
 }
 
 QString cache_path_for_selection(const QString& file_path, const EditState& state, bool edited, bool full_resolution) {
-  const auto fingerprint = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15|%16|%17|%18")
+  const auto fingerprint = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15|%16|%17|%18|%19")
                                .arg(file_path)
+                               .arg(QStringLiteral("pipeline-v2"))
                                .arg(edited ? QStringLiteral("edited") : QStringLiteral("reference"))
                                .arg(full_resolution ? QStringLiteral("full") : QStringLiteral("interactive"))
                                .arg(state.exposure, 0, 'f', 2)
@@ -676,7 +395,7 @@ EditorPreviewController::EditorPreviewController(QObject* parent) : QObject(pare
   connect(&interactive_render_timer_, &QTimer::timeout, this, [this]() { renderPreviewStage(false); });
 
   full_render_timer_.setSingleShot(true);
-  full_render_timer_.setInterval(140);
+  full_render_timer_.setInterval(kFullRenderDebounceMs);
   connect(&full_render_timer_, &QTimer::timeout, this, [this]() { renderPreviewStage(true); });
 
   connect(&interactive_render_watcher_, &QFutureWatcher<RenderResult>::finished, this, [this]() {
@@ -1216,6 +935,14 @@ void EditorPreviewController::renderPreviewStage(bool full_resolution) {
   auto& pending_request = full_resolution ? pending_full_request_ : pending_interactive_request_;
   auto& pending = full_resolution ? full_request_pending_ : interactive_request_pending_;
 
+  if (full_resolution &&
+      (interactive_render_timer_.isActive() || interactive_render_watcher_.isRunning() || interactive_request_pending_)) {
+    pending_request = request;
+    pending = true;
+    updateProcessingState();
+    return;
+  }
+
   if (watcher.isRunning()) {
     pending_request = request;
     pending = true;
@@ -1229,18 +956,31 @@ void EditorPreviewController::renderPreviewStage(bool full_resolution) {
 void EditorPreviewController::handleRenderFinished(bool full_resolution) {
   auto& watcher = full_resolution ? full_render_watcher_ : interactive_render_watcher_;
   const auto result = watcher.result();
+  const auto can_apply_result = [&]() {
+    if (full_resolution) {
+      return result.generation == render_generation_ && result.generation >= last_full_preview_generation_;
+    }
+    return result.generation >= last_interactive_preview_generation_;
+  }();
 
-  if (result.generation == render_generation_) {
+  if (can_apply_result) {
     if (!result.success) {
-      preview_source_ = fallback_thumbnail_source_;
-      reference_preview_source_ = compare_mode_ ? fallback_thumbnail_source_ : QString();
-      setStatus(result.status);
+      if (result.generation == render_generation_) {
+        preview_source_ = fallback_thumbnail_source_;
+        reference_preview_source_ = compare_mode_ ? fallback_thumbnail_source_ : QString();
+        setStatus(result.status);
+      }
     } else {
       ++preview_revision_;
       preview_source_ = with_preview_revision(result.preview_source, preview_revision_);
       reference_preview_source_ =
           with_preview_revision(result.reference_preview_source, preview_revision_);
       setStatus(result.status);
+      if (full_resolution) {
+        last_full_preview_generation_ = result.generation;
+      } else {
+        last_interactive_preview_generation_ = result.generation;
+      }
     }
     refreshDebugInfo();
     emit previewChanged();
@@ -1251,6 +991,12 @@ void EditorPreviewController::handleRenderFinished(bool full_resolution) {
   if (pending) {
     pending = false;
     startRenderStage(full_resolution, pending_request);
+    return;
+  }
+
+  if (!full_resolution && full_request_pending_ && !full_render_watcher_.isRunning()) {
+    full_request_pending_ = false;
+    startRenderStage(true, pending_full_request_);
     return;
   }
 
@@ -1458,6 +1204,7 @@ EditState EditorPreviewController::stateFromRecipeJson(const QString& recipe_jso
 
 QString EditorPreviewController::recipeJsonForState(const EditState& state) const {
   QJsonObject object;
+  object.insert(QStringLiteral("recipeVersion"), 2);
   object.insert(QStringLiteral("exposure"), state.exposure);
   object.insert(QStringLiteral("contrast"), state.contrast);
   object.insert(QStringLiteral("highlights"), state.highlights);

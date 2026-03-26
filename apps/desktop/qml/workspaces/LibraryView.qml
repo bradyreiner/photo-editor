@@ -221,13 +221,6 @@ Rectangle {
                                 spacing: 8
 
                                 ActionButton {
-                                    text: catalogAssets.importing ? "Importing..." : "Import From Finder"
-                                    tone: "primary"
-                                    enabled: !catalogAssets.busy
-                                    onClicked: root.chooseImportFolder()
-                                }
-
-                                ActionButton {
                                     text: catalogAssets.loading ? "Refreshing..." : "Reload"
                                     enabled: !catalogAssets.busy
                                     onClicked: catalogAssets.refresh()
@@ -402,7 +395,7 @@ Rectangle {
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: catalogAssets.totalAssetCount === 0
-                                      ? "Use Import From Finder to bring a folder into the gallery."
+                                      ? "Use the Import workspace to bring photos in from folders, SD cards, and drives."
                                       : "Try changing the imported date, capture date, or project filter."
                                 color: "#85909a"
                                 font.family: "Avenir Next"

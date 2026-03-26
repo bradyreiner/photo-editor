@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
@@ -13,8 +14,9 @@ use walkdir::WalkDir;
 use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "3fr", "arw", "cr2", "cr3", "dng", "erf", "iiq", "jpeg", "jpg", "kdc", "mef", "mos", "nef",
-    "nrw", "orf", "pef", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "x3f",
+    "3fr", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "gif", "heic", "heif", "iiq",
+    "jpeg", "jpg", "kdc", "mef", "mos", "nef", "nrw", "orf", "pef", "png", "raf", "raw", "rw2",
+    "sr2", "srf", "tif", "tiff", "webp", "x3f",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +25,7 @@ pub struct ImportRequest {
     pub drive_name: String,
     pub mount_path: PathBuf,
     pub import_mode: ImportMode,
+    pub selected_paths: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -65,23 +68,13 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
     let mut assets = Vec::new();
     let mut skipped_unsupported = 0_usize;
 
-    for entry in WalkDir::new(&request.mount_path) {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => return Err(std::io::Error::other(error)),
-        };
-
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        let path = entry.path();
-        if !is_supported_photo_path(path) {
+    for path in candidate_file_paths(request)? {
+        if !is_supported_photo_path(&path) {
             skipped_unsupported += 1;
             continue;
         }
 
-        let metadata = extract_metadata(path).unwrap_or_else(|_| fallback_metadata(path));
+        let metadata = extract_metadata(&path).unwrap_or_else(|_| fallback_metadata(&path));
         let relative_path = match path.strip_prefix(&request.mount_path) {
             Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
             Err(_) => path.to_string_lossy().into_owned(),
@@ -120,6 +113,59 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
         assets,
         skipped_unsupported,
     })
+}
+
+fn candidate_file_paths(request: &ImportRequest) -> std::io::Result<Vec<PathBuf>> {
+    if request.selected_paths.is_empty() {
+        let mut paths = Vec::new();
+        for entry in WalkDir::new(&request.mount_path) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) => return Err(std::io::Error::other(error)),
+            };
+
+            if entry.file_type().is_file() {
+                paths.push(entry.into_path());
+            }
+        }
+        return Ok(paths);
+    }
+
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for selected_path in &request.selected_paths {
+        let absolute_path = if selected_path.is_absolute() {
+            selected_path.clone()
+        } else {
+            request.mount_path.join(selected_path)
+        };
+
+        if absolute_path.is_dir() {
+            for entry in WalkDir::new(&absolute_path) {
+                let entry = match entry {
+                    Ok(entry) => entry,
+                    Err(error) => return Err(std::io::Error::other(error)),
+                };
+
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+
+                let path = entry.into_path();
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+            continue;
+        }
+
+        if absolute_path.is_file() && seen.insert(absolute_path.clone()) {
+            paths.push(absolute_path);
+        }
+    }
+
+    Ok(paths)
 }
 
 pub fn is_supported_photo_path(path: &Path) -> bool {
@@ -288,6 +334,7 @@ mod tests {
             drive_name: "Main".to_string(),
             mount_path: root.clone(),
             import_mode: ImportMode::Referenced,
+            selected_paths: Vec::new(),
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
@@ -295,5 +342,27 @@ mod tests {
         assert_eq!(summary.skipped_unsupported, 1);
         assert_eq!(summary.assets[0].location.relative_path, "day-1/image001.CR3");
         assert_eq!(summary.assets[0].location.drive_id, "drive-main");
+    }
+
+    #[test]
+    fn discover_assets_can_limit_import_to_selected_files() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        fs::create_dir_all(root.join("set-a")).expect("create dir should succeed");
+        fs::create_dir_all(root.join("set-b")).expect("create dir should succeed");
+        fs::write(root.join("set-a").join("keep.NEF"), b"raw-a").expect("write should succeed");
+        fs::write(root.join("set-b").join("skip.NEF"), b"raw-b").expect("write should succeed");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root.clone(),
+            import_mode: ImportMode::Referenced,
+            selected_paths: vec![root.join("set-a").join("keep.NEF")],
+        };
+
+        let summary = discover_assets(&request).expect("discovery should succeed");
+        assert_eq!(summary.assets.len(), 1);
+        assert_eq!(summary.assets[0].location.relative_path, "set-a/keep.NEF");
     }
 }
