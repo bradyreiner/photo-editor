@@ -8,18 +8,37 @@ Button {
     property bool active: false
     property color accent: "#c99a52"
 
-    implicitHeight: 34
-    implicitWidth: Math.max(92, contentLabel.implicitWidth + 22)
-    font.family: "Avenir Next"
+    Theme { id: theme }
+
+    implicitHeight: 32
+    implicitWidth: Math.max(88, contentLabel.implicitWidth + 24)
+    font.family: theme.fontUi
     font.pixelSize: 11
+    hoverEnabled: true
 
     background: Rectangle {
-        radius: 7
-        color: root.down ? (root.tone === "primary" ? "#b98947" : "#23262a") : root.active ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.16) : root.hovered ? "#202429" : (root.tone === "primary" ? "#c99a52" : "#14191e")
+        radius: theme.radius8
+        border.width: 1
+        border.color: !root.enabled
+                      ? theme.lineSoft
+                      : root.tone === "primary"
+                        ? theme.alpha(root.accent, root.hovered ? 0.42 : 0.28)
+                        : root.active
+                          ? theme.alpha(root.accent, 0.34)
+                          : (root.hovered ? theme.lineStrong : theme.lineSoft)
+        color: !root.enabled
+               ? theme.ink900
+               : root.down
+                 ? (root.tone === "primary" ? theme.alpha(root.accent, 0.82) : theme.ink750)
+                 : root.tone === "primary"
+                   ? (root.hovered ? theme.accentWarm400 : root.accent)
+                   : root.active
+                     ? theme.alpha(root.accent, 0.14)
+                     : (root.hovered ? theme.ink800 : theme.ink850)
 
         Behavior on color {
             ColorAnimation {
-                duration: 120
+                duration: theme.durationFast
             }
         }
     }
@@ -27,12 +46,13 @@ Button {
     contentItem: Text {
         id: contentLabel
         text: root.text
-        color: root.tone === "primary" ? "#111317" : (root.enabled ? "#eef1f4" : "#78808a")
+        color: root.tone === "primary" ? theme.ink950 : (root.enabled ? theme.textStrong : theme.textFaint)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         font.family: root.font.family
         font.pixelSize: root.font.pixelSize
         font.weight: Font.Medium
+        font.letterSpacing: 0.2
         elide: Text.ElideRight
     }
 }

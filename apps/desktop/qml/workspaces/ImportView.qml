@@ -46,6 +46,16 @@ Rectangle {
         return parts.length > 0 ? parts[parts.length - 1] : filePath
     }
 
+    function isVideoFile(filePath) {
+        const lower = filePath.toLowerCase()
+        return lower.endsWith(".mp4")
+                || lower.endsWith(".mov")
+                || lower.endsWith(".m4v")
+                || lower.endsWith(".mpeg")
+                || lower.endsWith(".mpg")
+                || lower.endsWith(".webm")
+    }
+
     function parentPathForFile(filePath) {
         const lastSlash = filePath.lastIndexOf("/")
         if (lastSlash <= 0)
@@ -496,6 +506,7 @@ Rectangle {
                                     readonly property string delegateFilePath: filePath
                                     readonly property string delegateFileName: fileName
                                     readonly property string delegateFileUrl: fileUrl
+                                    readonly property bool delegateIsVideo: root.isVideoFile(filePath)
                                     readonly property bool selected: !!root.selectedPathsByFile[filePath]
                                     readonly property string delegateExtension: {
                                         const parts = delegateFileName.split(".")
@@ -524,21 +535,21 @@ Rectangle {
                                             Image {
                                                 id: previewImage
                                                 anchors.fill: parent
-                                                source: delegateFileUrl
+                                                source: delegateIsVideo ? "" : delegateFileUrl
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
                                                 cache: false
-                                                visible: status === Image.Ready
+                                                visible: !delegateIsVideo && status === Image.Ready
                                             }
 
                                             Column {
                                                 anchors.centerIn: parent
-                                                visible: previewImage.status !== Image.Ready
+                                                visible: delegateIsVideo || previewImage.status !== Image.Ready
                                                 spacing: 6
 
                                                 Label {
                                                     anchors.horizontalCenter: parent.horizontalCenter
-                                                    text: delegateExtension
+                                                    text: delegateIsVideo ? "VIDEO" : delegateExtension
                                                     color: "#f1d5a6"
                                                     font.family: "Menlo"
                                                     font.pixelSize: 16
@@ -547,7 +558,7 @@ Rectangle {
 
                                                 Label {
                                                     anchors.horizontalCenter: parent.horizontalCenter
-                                                    text: "Preview unavailable"
+                                                    text: delegateIsVideo ? delegateExtension + " clip" : "Preview unavailable"
                                                     color: "#90a0ac"
                                                     font.family: "Avenir Next"
                                                     font.pixelSize: 10
@@ -610,7 +621,7 @@ Rectangle {
 
                                 Label {
                                     anchors.horizontalCenter: parent.horizontalCenter
-                                    text: "No supported photos here."
+                                    text: "No supported media here."
                                     color: "#d7dde3"
                                     font.family: "Avenir Next"
                                     font.pixelSize: 18
@@ -786,7 +797,7 @@ Rectangle {
 
                             Label {
                                 visible: root.selectedFileCount === 0
-                                text: "Selected photos will appear here. Assigned project membership is optional."
+                                text: "Selected photos and videos will appear here. Assigned project membership is optional."
                                 color: "#85909a"
                                 font.family: "Avenir Next"
                                 font.pixelSize: 12

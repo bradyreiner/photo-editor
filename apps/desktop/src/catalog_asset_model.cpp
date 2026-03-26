@@ -1,6 +1,9 @@
 #include "catalog_asset_model.h"
 
+#include "timeline_asset_store.h"
+
 #include <algorithm>
+#include <cmath>
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -30,6 +33,18 @@ namespace photo_editor::desktop {
 namespace {
 
 constexpr int kThumbnailEdge = 640;
+
+const QStringList& supported_video_extensions() {
+  static const QStringList kExtensions = {
+      QStringLiteral("m4v"),
+      QStringLiteral("mov"),
+      QStringLiteral("mp4"),
+      QStringLiteral("mpeg"),
+      QStringLiteral("mpg"),
+      QStringLiteral("webm"),
+  };
+  return kExtensions;
+}
 
 const QStringList& supported_import_extensions() {
   static const QStringList kExtensions = {
@@ -62,7 +77,13 @@ const QStringList& supported_import_extensions() {
       QStringLiteral("srf"),
       QStringLiteral("tif"),
       QStringLiteral("tiff"),
+      QStringLiteral("m4v"),
+      QStringLiteral("mov"),
+      QStringLiteral("mp4"),
+      QStringLiteral("mpeg"),
+      QStringLiteral("mpg"),
       QStringLiteral("webp"),
+      QStringLiteral("webm"),
       QStringLiteral("x3f"),
   };
   return kExtensions;
@@ -296,6 +317,12 @@ bool preview_supported(const QString& file_path) {
   return QImageReader::supportedImageFormats().contains(suffix);
 }
 
+QString media_type_for_path(const QString& file_path) {
+  return supported_video_extensions().contains(QFileInfo(file_path).suffix().toLower())
+      ? QStringLiteral("video")
+      : QStringLiteral("photo");
+}
+
 QString thumbnail_cache_root() {
   const auto cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
   if (cache_root.isEmpty()) {
@@ -309,6 +336,55 @@ QString thumbnail_cache_path_for_file(const QString& file_path) {
   const auto hash =
       QCryptographicHash::hash(file_path.toUtf8(), QCryptographicHash::Sha1).toHex();
   return QDir(thumbnail_cache_root()).filePath(QStringLiteral("%1.jpg").arg(QString::fromLatin1(hash)));
+}
+
+double probe_video_duration_seconds(const QString& file_path) {
+  const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
+  if (ffprobe.isEmpty()) {
+    return 0.0;
+  }
+
+  QProcess process;
+  process.start(
+      ffprobe,
+      {
+          QStringLiteral("-v"),
+          QStringLiteral("error"),
+          QStringLiteral("-show_entries"),
+          QStringLiteral("format=duration"),
+          QStringLiteral("-of"),
+          QStringLiteral("default=noprint_wrappers=1:nokey=1"),
+          file_path,
+      });
+  if (!process.waitForFinished(5000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    return 0.0;
+  }
+
+  bool okay = false;
+  const auto seconds = QString::fromUtf8(process.readAllStandardOutput()).trimmed().toDouble(&okay);
+  return okay ? qMax(0.0, seconds) : 0.0;
+}
+
+QString format_duration_text(double seconds) {
+  if (seconds <= 0.0) {
+    return {};
+  }
+
+  const auto rounded = qMax(0, static_cast<int>(std::round(seconds)));
+  const auto hours = rounded / 3600;
+  const auto minutes = (rounded % 3600) / 60;
+  const auto remaining_seconds = rounded % 60;
+
+  if (hours > 0) {
+    return QStringLiteral("%1:%2:%3")
+        .arg(hours)
+        .arg(minutes, 2, 10, QLatin1Char('0'))
+        .arg(remaining_seconds, 2, 10, QLatin1Char('0'));
+  }
+
+  return QStringLiteral("%1:%2")
+      .arg(minutes)
+      .arg(remaining_seconds, 2, 10, QLatin1Char('0'));
 }
 
 QString ensure_thumbnail(const QString& file_path) {
@@ -358,8 +434,101 @@ QString ensure_thumbnail(const QString& file_path) {
   return QUrl::fromLocalFile(cache_path).toString();
 }
 
+QString ensure_video_poster(const QString& file_path) {
+  const QFileInfo source_info(file_path);
+  if (!source_info.exists() || !source_info.isReadable()) {
+    return {};
+  }
+
+  const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
+  if (ffmpeg.isEmpty()) {
+    return {};
+  }
+
+  const auto cache_path = thumbnail_cache_path_for_file(QStringLiteral("video-v2:%1").arg(file_path));
+  const QFileInfo cache_info(cache_path);
+  if (cache_info.exists() && cache_info.lastModified() >= source_info.lastModified()) {
+    return QUrl::fromLocalFile(cache_path).toString();
+  }
+
+  QDir().mkpath(thumbnail_cache_root());
+
+  QProcess process;
+  process.start(
+      ffmpeg,
+      {
+          QStringLiteral("-y"),
+          QStringLiteral("-ss"),
+          QStringLiteral("0.250"),
+          QStringLiteral("-i"),
+          file_path,
+          QStringLiteral("-frames:v"),
+          QStringLiteral("1"),
+          QStringLiteral("-vf"),
+          QStringLiteral("scale=%1:%1:force_original_aspect_ratio=decrease").arg(kThumbnailEdge),
+          cache_path,
+      });
+  if (!process.waitForFinished(10000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    return {};
+  }
+
+  return QFileInfo::exists(cache_path) ? QUrl::fromLocalFile(cache_path).toString() : QString{};
+}
+
 QString thumbnail_source_for_path(const QString& file_path) {
-  return ensure_thumbnail(file_path);
+  return media_type_for_path(file_path) == QStringLiteral("video") ? ensure_video_poster(file_path)
+                                                                   : ensure_thumbnail(file_path);
+}
+
+QDateTime parse_iso_datetime(const QString& value) {
+  auto parsed = QDateTime::fromString(value, Qt::ISODateWithMs);
+  if (!parsed.isValid()) {
+    parsed = QDateTime::fromString(value, Qt::ISODate);
+  }
+  if (parsed.isValid() && (parsed.timeSpec() == Qt::UTC || parsed.timeSpec() == Qt::OffsetFromUTC)) {
+    parsed = parsed.toLocalTime();
+  }
+  return parsed;
+}
+
+QVector<CatalogAssetItem> load_timeline_asset_items() {
+  QVector<CatalogAssetItem> items;
+  const auto records = loadTimelineAssetRecords();
+  items.reserve(records.size());
+
+  for (const auto& record : records) {
+    if (record.timeline_id.isEmpty()) {
+      continue;
+    }
+
+    CatalogAssetItem item;
+    item.asset_id = record.asset_id.isEmpty() ? QStringLiteral("timeline:%1").arg(record.timeline_id) : record.asset_id;
+    item.camera_label = record.name.isEmpty() ? QStringLiteral("Untitled timeline") : record.name;
+    item.capture_date = QStringLiteral("Timeline");
+    item.lens_model = QStringLiteral("Saved timeline");
+    item.location_path = record.document_path;
+    item.file_path = record.render_path;
+    item.drive_id = QStringLiteral("timeline-library");
+    item.import_mode = QStringLiteral("timeline");
+    item.imported_at_value = parse_iso_datetime(record.updated_at);
+    item.imported_at = format_datetime(item.imported_at_value, QStringLiteral("Unknown save time"));
+    item.project_summary = QStringLiteral("No projects");
+    item.media_type = QStringLiteral("timeline");
+    item.duration_text = format_duration_text(record.duration_seconds);
+    item.duration_seconds = record.duration_seconds;
+    item.timeline_document_path = record.document_path;
+    item.online = QFileInfo(record.document_path).exists() && QFileInfo(record.render_path).exists();
+
+    if (!record.poster_path.isEmpty() && QFileInfo::exists(record.poster_path)) {
+      item.thumbnail_source = QUrl::fromLocalFile(record.poster_path).toString();
+    } else if (!record.render_path.isEmpty()) {
+      item.thumbnail_source = ensure_video_poster(record.render_path);
+    }
+
+    items.push_back(item);
+  }
+
+  return items;
 }
 
 QString derive_drive_id(const QString& folder_path) {
@@ -426,6 +595,15 @@ QVector<CatalogAssetItem> parse_assets(const QJsonArray& asset_array) {
     item.lens_model = asset.value("lens_model").toString().trimmed();
     item.location_path = format_location_path(asset);
     item.file_path = filesystem_path(asset);
+    item.media_type = media_type_for_path(item.file_path);
+    if (item.media_type == QStringLiteral("video")) {
+      item.camera_label = QFileInfo(item.file_path).completeBaseName();
+      item.duration_seconds = probe_video_duration_seconds(item.file_path);
+      item.duration_text = format_duration_text(item.duration_seconds);
+      if (item.lens_model.isEmpty()) {
+        item.lens_model = QStringLiteral("Video clip");
+      }
+    }
     item.thumbnail_source = thumbnail_source_for_path(item.file_path);
     item.imported_at_value = parse_imported_at(asset);
     item.imported_at = format_datetime(item.imported_at_value, QStringLiteral("Unknown import time"));
@@ -506,6 +684,12 @@ QVariant CatalogAssetModel::data(const QModelIndex& index, int role) const {
       return item.project_names;
     case ProjectSummaryRole:
       return item.project_summary;
+    case MediaTypeRole:
+      return item.media_type;
+    case DurationTextRole:
+      return item.duration_text;
+    case TimelineDocumentPathRole:
+      return item.timeline_document_path;
     case OnlineRole:
       return item.online;
     default:
@@ -528,6 +712,9 @@ QHash<int, QByteArray> CatalogAssetModel::roleNames() const {
       {ImportedAtRole, "importedAt"},
       {ProjectNamesRole, "projectNames"},
       {ProjectSummaryRole, "projectSummary"},
+      {MediaTypeRole, "mediaType"},
+      {DurationTextRole, "durationText"},
+      {TimelineDocumentPathRole, "timelineDocumentPath"},
       {OnlineRole, "online"},
   };
 }
@@ -624,6 +811,27 @@ QString CatalogAssetModel::selectedProjectSummary() const {
   return QStringLiteral("No projects");
 }
 
+QString CatalogAssetModel::selectedMediaType() const {
+  if (const auto* item = selectedItem()) {
+    return item->media_type;
+  }
+  return {};
+}
+
+QString CatalogAssetModel::selectedDurationText() const {
+  if (const auto* item = selectedItem()) {
+    return item->duration_text;
+  }
+  return {};
+}
+
+QString CatalogAssetModel::selectedTimelineDocumentPath() const {
+  if (const auto* item = selectedItem()) {
+    return item->timeline_document_path;
+  }
+  return {};
+}
+
 QStringList CatalogAssetModel::projectNames() const {
   QStringList names;
   names.reserve(projects_.size());
@@ -640,6 +848,8 @@ QString CatalogAssetModel::projectFilter() const { return project_filter_; }
 QString CatalogAssetModel::importDateFilter() const { return import_date_filter_; }
 
 QString CatalogAssetModel::captureYearFilter() const { return capture_year_filter_; }
+
+QString CatalogAssetModel::mediaTypeFilter() const { return media_type_filter_; }
 
 void CatalogAssetModel::refresh() {
   if (snapshot_process_.state() != QProcess::NotRunning) {
@@ -666,7 +876,7 @@ void CatalogAssetModel::importFolder() {
 
   const auto folder_path = QFileDialog::getExistingDirectory(
       nullptr,
-      QStringLiteral("Import Photo Folder"),
+      QStringLiteral("Import Media Folder"),
       QDir::homePath(),
       QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
 
@@ -797,7 +1007,7 @@ void CatalogAssetModel::selectIndex(int index) { setSelectedIndexInternal(index)
 QString CatalogAssetModel::pickFolder(const QString& title) const {
   const auto folder_path = QFileDialog::getExistingDirectory(
       nullptr,
-      title.isEmpty() ? QStringLiteral("Browse Photo Folder") : title,
+      title.isEmpty() ? QStringLiteral("Browse Media Folder") : title,
       QDir::homePath(),
       QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
 
@@ -944,6 +1154,22 @@ void CatalogAssetModel::setCaptureYearFilter(const QString& capture_year_filter)
   applyFilters(preferred_asset_id);
 }
 
+void CatalogAssetModel::setMediaTypeFilter(const QString& media_type_filter) {
+  auto next_filter = media_type_filter.trimmed().toLower();
+  if (next_filter.isEmpty()) {
+    next_filter = QStringLiteral("all");
+  }
+
+  if (media_type_filter_ == next_filter) {
+    return;
+  }
+
+  const auto preferred_asset_id = selectedAssetId();
+  media_type_filter_ = next_filter;
+  emit filtersChanged();
+  applyFilters(preferred_asset_id);
+}
+
 void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStatus exit_status) {
   setLoading(false);
   rebuildImportSources();
@@ -972,7 +1198,7 @@ void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStat
   const auto root = payload.object();
   updateAssets(parse_assets(root.value("assets").toArray()));
   setDriveCount(static_cast<int>(root.value("drives").toArray().size()));
-  setStatus(QStringLiteral("Loaded %1 photos across %2 drives.").arg(all_assets_.size()).arg(drive_count_));
+  setStatus(QStringLiteral("Loaded %1 assets across %2 drives.").arg(all_assets_.size()).arg(drive_count_));
   finalizePendingImportProjectAssignment();
 }
 
@@ -1058,6 +1284,7 @@ void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
   const auto previous_total_count = all_assets_.size();
 
   all_assets_ = items;
+  loadTimelineAssets();
   rebuildProjectMetadata();
   rebuildCaptureYears();
 
@@ -1089,7 +1316,8 @@ void CatalogAssetModel::applyFilters(const QString& preferred_asset_id) {
   filtered_assets.reserve(all_assets_.size());
 
   for (const auto& item : all_assets_) {
-    if (!matchesProjectFilter(item) || !matchesImportDateFilter(item) || !matchesCaptureYearFilter(item)) {
+    if (!matchesProjectFilter(item) || !matchesImportDateFilter(item) || !matchesCaptureYearFilter(item) ||
+        !matchesMediaTypeFilter(item)) {
       continue;
     }
     filtered_assets.push_back(item);
@@ -1150,6 +1378,9 @@ void CatalogAssetModel::rebuildProjectMetadata() {
 void CatalogAssetModel::rebuildCaptureYears() {
   QStringList years;
   for (const auto& item : all_assets_) {
+    if (item.media_type == QStringLiteral("timeline")) {
+      continue;
+    }
     if (!item.capture_date_value.isValid()) {
       continue;
     }
@@ -1171,6 +1402,13 @@ void CatalogAssetModel::rebuildCaptureYears() {
 
   capture_years_ = years;
   emit captureYearsChanged();
+}
+
+void CatalogAssetModel::loadTimelineAssets() {
+  const auto timeline_items = load_timeline_asset_items();
+  for (const auto& item : timeline_items) {
+    all_assets_.push_back(item);
+  }
 }
 
 void CatalogAssetModel::loadProjects() {
@@ -1314,7 +1552,7 @@ void CatalogAssetModel::finalizePendingImportProjectAssignment() {
   }
 
   addAssetsToProject(imported_asset_ids, project_name);
-  setStatus(QStringLiteral("Imported %1 photos into '%2'.").arg(imported_asset_ids.size()).arg(project_name));
+  setStatus(QStringLiteral("Imported %1 assets into '%2'.").arg(imported_asset_ids.size()).arg(project_name));
 }
 
 QString CatalogAssetModel::projectsFilePath() const {
@@ -1406,6 +1644,26 @@ bool CatalogAssetModel::matchesProjectFilter(const CatalogAssetItem& item) const
   }
 
   return item.project_names.contains(project_filter_, Qt::CaseInsensitive);
+}
+
+bool CatalogAssetModel::matchesMediaTypeFilter(const CatalogAssetItem& item) const {
+  if (media_type_filter_ == QStringLiteral("all")) {
+    return true;
+  }
+
+  if (media_type_filter_ == QStringLiteral("photos")) {
+    return item.media_type == QStringLiteral("photo");
+  }
+
+  if (media_type_filter_ == QStringLiteral("videos")) {
+    return item.media_type == QStringLiteral("video");
+  }
+
+  if (media_type_filter_ == QStringLiteral("timelines")) {
+    return item.media_type == QStringLiteral("timeline");
+  }
+
+  return true;
 }
 
 const CatalogAssetItem* CatalogAssetModel::selectedItem() const {

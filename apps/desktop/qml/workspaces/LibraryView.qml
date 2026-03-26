@@ -8,7 +8,9 @@ Rectangle {
     id: root
     color: "transparent"
 
-    signal assetActivated()
+    Theme { id: theme }
+
+    signal assetActivated(string destination)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
 
     property string projectTarget: ""
@@ -19,6 +21,8 @@ Rectangle {
 
     readonly property var importFilterValues: ["all", "today", "7d", "30d", "year"]
     readonly property var importFilterLabels: ["All Imports", "Today", "Last 7 Days", "Recent", "This Year"]
+    readonly property var mediaFilterValues: ["all", "photos", "videos", "timelines"]
+    readonly property var mediaFilterLabels: ["All Media", "Photos", "Videos", "Timelines"]
     readonly property var captureFilterValues: {
         const values = ["all", "unknown"]
         for (let i = 0; i < catalogAssets.captureYears.length; ++i)
@@ -57,16 +61,19 @@ Rectangle {
             parts.push(captureFilterLabels[indexForValue(captureFilterValues, catalogAssets.captureYearFilter)])
         if (catalogAssets.projectFilter !== "all")
             parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)])
-        return parts.length > 0 ? parts.join("  •  ") : "Showing all imported photos"
+        if (catalogAssets.mediaTypeFilter !== "all")
+            parts.push(mediaFilterLabels[indexForValue(mediaFilterValues, catalogAssets.mediaTypeFilter)])
+        return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets"
     }
 
-    function selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson) {
+    function selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType) {
         catalogAssets.selectIndex(index)
-        editorPreview.loadAsset(assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson)
+        if (mediaType === "photo")
+            editorPreview.loadAsset(assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson)
     }
 
     function chooseImportFolder() {
-        const folderUrl = catalogAssets.pickFolder("Browse Photo Folder")
+        const folderUrl = catalogAssets.pickFolder("Browse Media Folder")
         if (folderUrl.length === 0)
             return
 
@@ -99,6 +106,7 @@ Rectangle {
         catalogAssets.importDateFilter = "all"
         catalogAssets.captureYearFilter = "all"
         catalogAssets.projectFilter = "all"
+        catalogAssets.mediaTypeFilter = "all"
     }
 
     function syncProjectTarget() {
@@ -153,33 +161,33 @@ Rectangle {
         showDotAndDotDot: false
         sortField: FolderListModel.Name
         sortCaseSensitive: false
-        nameFilters: ["*.jpg", "*.jpeg", "*.png", "*.heic", "*.webp", "*.bmp", "*.tif", "*.tiff"]
+        nameFilters: catalogAssets.importFileNameFilters
     }
 
     RowLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: 8
 
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 18
-            color: "#14191d"
+            radius: theme.radius12
+            color: theme.ink850
             border.width: 1
-            border.color: "#242c34"
+            border.color: theme.alpha(theme.lineSoft, 0.24)
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 10
+                anchors.margins: 10
+                spacing: 8
 
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 148
-                    radius: 16
-                    color: "#11161b"
+                    radius: theme.radius12
+                    color: theme.alpha(theme.ink900, 0.78)
                     border.width: 1
-                    border.color: "#273038"
+                    border.color: theme.alpha(theme.lineSoft, 0.2)
 
                     ColumnLayout {
                         anchors.fill: parent
@@ -203,7 +211,7 @@ Rectangle {
                                 }
 
                                 Label {
-                                    text: catalogAssets.assetCount + " visible  •  " + catalogAssets.totalAssetCount + " imported  •  " + catalogAssets.driveCount + " drives"
+                                    text: catalogAssets.assetCount + " visible  •  " + catalogAssets.totalAssetCount + " imported assets  •  " + catalogAssets.driveCount + " drives"
                                     color: "#c1cad2"
                                     font.family: "Avenir Next"
                                     font.pixelSize: 12
@@ -211,8 +219,8 @@ Rectangle {
 
                                 Label {
                                     text: root.activeFilterSummary()
-                                    color: "#f0d2a0"
-                                    font.family: "Menlo"
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
                                     font.pixelSize: 10
                                 }
                             }
@@ -231,6 +239,7 @@ Rectangle {
                                     enabled: catalogAssets.importDateFilter !== "all"
                                              || catalogAssets.captureYearFilter !== "all"
                                              || catalogAssets.projectFilter !== "all"
+                                             || catalogAssets.mediaTypeFilter !== "all"
                                     onClicked: root.clearFilters()
                                 }
                             }
@@ -285,6 +294,21 @@ Rectangle {
                                 onActivated: catalogAssets.projectFilter = root.projectFilterValues[currentIndex]
                             }
 
+                            Label {
+                                text: "Media"
+                                color: "#7f8a94"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 10
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            ToneComboBox {
+                                Layout.preferredWidth: 160
+                                model: root.mediaFilterLabels
+                                currentIndex: root.indexForValue(root.mediaFilterValues, catalogAssets.mediaTypeFilter)
+                                onActivated: catalogAssets.mediaTypeFilter = root.mediaFilterValues[currentIndex]
+                            }
+
                             Item { Layout.fillWidth: true }
 
                             Label {
@@ -331,6 +355,8 @@ Rectangle {
                                     required property string assetId
                                     required property string captureDate
                                     required property string cameraLabel
+                                    required property string mediaType
+                                    required property string durationText
                                     required property string lensModel
                                     required property string locationPath
                                     required property string filePath
@@ -360,12 +386,52 @@ Rectangle {
                                             sourceSize.width: width
                                         }
 
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.top: parent.top
+                                            anchors.margins: 8
+                                            radius: 8
+                                            color: "#11161bcc"
+                                            visible: mediaType !== "photo"
+                                            implicitWidth: mediaBadge.implicitWidth + 14
+                                            implicitHeight: 22
+
+                                            Label {
+                                                id: mediaBadge
+                                                anchors.centerIn: parent
+                                                text: mediaType === "timeline" ? "Timeline" : "Video"
+                                                color: "#f3f5f7"
+                                                font.family: "Menlo"
+                                                font.pixelSize: 9
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            anchors.margins: 8
+                                            radius: 8
+                                            color: "#11161bcc"
+                                            visible: durationText.length > 0
+                                            implicitWidth: durationBadge.implicitWidth + 14
+                                            implicitHeight: 22
+
+                                            Label {
+                                                id: durationBadge
+                                                anchors.centerIn: parent
+                                                text: durationText
+                                                color: "#f3f5f7"
+                                                font.family: "Menlo"
+                                                font.pixelSize: 9
+                                            }
+                                        }
+
                                         MouseArea {
                                             anchors.fill: parent
-                                            onClicked: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson)
+                                            onClicked: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
                                             onDoubleClicked: {
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson)
-                                                root.assetActivated()
+                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
+                                                root.assetActivated(mediaType === "photo" ? "edit" : "timeline")
                                             }
                                         }
                                     }
@@ -385,7 +451,7 @@ Rectangle {
 
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                text: catalogAssets.totalAssetCount === 0 ? "No imported photos yet." : "No photos match the current filters."
+                                text: catalogAssets.totalAssetCount === 0 ? "No imported media yet." : "No assets match the current filters."
                                 color: "#d7dde3"
                                 font.family: "Avenir Next"
                                 font.pixelSize: 18
@@ -395,8 +461,8 @@ Rectangle {
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: catalogAssets.totalAssetCount === 0
-                                      ? "Use the Import workspace to bring photos in from folders, SD cards, and drives."
-                                      : "Try changing the imported date, capture date, or project filter."
+                                      ? "Switch to Import to bring photos and videos in from folders, cards, and drives."
+                                      : "Try changing the media, imported date, capture date, or project filter."
                                 color: "#85909a"
                                 font.family: "Avenir Next"
                                 font.pixelSize: 12
@@ -436,7 +502,7 @@ Rectangle {
                                     Label {
                                         text: root.localFolderPath.length > 0
                                               ? root.localFolderPath
-                                              : "Choose a folder, preview the photos, then import it."
+                                              : "Choose a folder, preview the media, then import it."
                                         color: "#b3bdc7"
                                         font.family: "Avenir Next"
                                         font.pixelSize: 12
@@ -573,17 +639,17 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: 290
+            Layout.preferredWidth: 264
             Layout.fillHeight: true
-            radius: 18
-            color: "#14191d"
+            radius: theme.radius12
+            color: theme.ink850
             border.width: 1
-            border.color: "#242c34"
+            border.color: theme.alpha(theme.lineSoft, 0.24)
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
+                anchors.margins: 12
+                spacing: 10
 
                 Label {
                     text: "Selection"
@@ -596,8 +662,8 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 170
-                    radius: 12
-                    color: "#10151a"
+                    radius: theme.radius8
+                    color: theme.ink900
                     clip: true
 
                     Image {
@@ -611,7 +677,7 @@ Rectangle {
                 }
 
                 Label {
-                    text: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "No photo selected"
+                    text: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "No asset selected"
                     color: "#f2f5f7"
                     font.family: "Avenir Next"
                     font.pixelSize: 18
@@ -621,7 +687,13 @@ Rectangle {
                 }
 
                 Label {
-                    text: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Choose a photo from the grid."
+                    text: catalogAssets.selectedCaptureDate.length > 0
+                          ? catalogAssets.selectedCaptureDate
+                          : catalogAssets.selectedMediaType === "timeline"
+                            ? "Saved timeline asset."
+                            : catalogAssets.selectedMediaType === "video"
+                              ? "Video clip selected from the gallery."
+                              : "Choose an asset from the grid."
                     color: "#9ca6af"
                     font.family: "Avenir Next"
                     font.pixelSize: 12
@@ -629,10 +701,21 @@ Rectangle {
                 }
 
                 Label {
-                    text: catalogAssets.selectedImportedAt.length > 0 ? "Imported " + catalogAssets.selectedImportedAt : ""
+                    text: catalogAssets.selectedDurationText
                     visible: text.length > 0
-                    color: "#d6c08f"
-                    font.family: "Menlo"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    Layout.fillWidth: true
+                }
+
+                Label {
+                    text: catalogAssets.selectedImportedAt.length > 0
+                          ? (catalogAssets.selectedMediaType === "timeline" ? "Saved " : "Imported ") + catalogAssets.selectedImportedAt
+                          : ""
+                    visible: text.length > 0
+                    color: theme.textMuted
+                    font.family: theme.fontMono
                     font.pixelSize: 10
                     Layout.fillWidth: true
                 }
@@ -701,9 +784,9 @@ Rectangle {
 
                 ActionButton {
                     Layout.fillWidth: true
-                    text: "Open in Edit"
+                    text: catalogAssets.selectedMediaType === "photo" ? "Open in Edit" : "Open in Timeline"
                     enabled: catalogAssets.selectedAssetId.length > 0
-                    onClicked: root.assetActivated()
+                    onClicked: root.assetActivated(catalogAssets.selectedMediaType === "photo" ? "edit" : "timeline")
                 }
             }
         }

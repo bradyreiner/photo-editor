@@ -9,10 +9,14 @@ Rectangle {
     property bool selected: false
     signal clicked
 
+    Theme { id: theme }
+
     implicitWidth: Math.max(76, labelText.implicitWidth + 30)
     implicitHeight: 32
-    radius: 7
-    color: root.selected ? Qt.rgba(root.swatch.r, root.swatch.g, root.swatch.b, 0.18) : "#14191e"
+    radius: theme.radius8
+    color: root.selected ? theme.alpha(root.swatch, 0.18) : theme.ink900
+    border.width: 1
+    border.color: root.selected ? theme.alpha(root.swatch, 0.26) : theme.lineSoft
 
     Row {
         anchors.centerIn: parent
@@ -28,8 +32,8 @@ Rectangle {
         Label {
             id: labelText
             text: root.label
-            color: root.selected ? "#f1f5f7" : "#cfd6dd"
-            font.family: "Avenir Next"
+            color: root.selected ? theme.textStrong : theme.textMain
+            font.family: theme.fontUi
             font.pixelSize: 10
             font.weight: Font.Medium
         }

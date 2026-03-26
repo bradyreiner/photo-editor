@@ -20,9 +20,11 @@ Item {
     signal valueDragged(real value)
     signal resetRequested()
 
+    Theme { id: theme }
+
     onTrackColorsChanged: trackCanvas.requestPaint()
 
-    implicitHeight: 50
+    implicitHeight: 60
 
     TapHandler {
         acceptedButtons: Qt.LeftButton
@@ -30,17 +32,26 @@ Item {
         onDoubleTapped: root.resetRequested()
     }
 
+    Rectangle {
+        anchors.fill: parent
+        radius: theme.radius8
+        color: control.pressed ? theme.ink750 : theme.ink900
+        border.width: 1
+        border.color: control.pressed ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.lineSoft, 0.18)
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: 6
+        anchors.margins: 10
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
 
             Label {
                 text: root.label
-                color: "#dbe2e9"
-                font.family: "Avenir Next"
+                color: theme.textMain
+                font.family: theme.fontUi
                 font.pixelSize: 11
                 font.weight: Font.Medium
             }
@@ -51,7 +62,9 @@ Item {
 
             Rectangle {
                 radius: 6
-                color: "#171c21"
+                color: control.pressed ? theme.alpha(root.accent, 0.16) : theme.ink850
+                border.width: 1
+                border.color: control.pressed ? theme.alpha(root.accent, 0.14) : theme.alpha(theme.lineSoft, 0.16)
                 implicitWidth: Math.max(48, valueLabel.implicitWidth + 14)
                 implicitHeight: 22
 
@@ -59,8 +72,8 @@ Item {
                     id: valueLabel
                     anchors.centerIn: parent
                     text: root.valueText
-                    color: root.pressed ? "#f4f7f9" : "#9ea9b4"
-                    font.family: "Menlo"
+                    color: root.pressed ? theme.textStrong : theme.textMuted
+                    font.family: theme.fontMono
                     font.pixelSize: 10
                 }
             }
@@ -68,7 +81,7 @@ Item {
 
         Item {
             Layout.fillWidth: true
-            implicitHeight: 22
+            implicitHeight: 20
 
             Slider {
                 id: control
@@ -82,9 +95,9 @@ Item {
 
                 background: Item {
                     x: control.leftPadding
-                    y: control.topPadding + control.availableHeight / 2 - 2
+                    y: control.topPadding + control.availableHeight / 2 - 1.5
                     width: control.availableWidth
-                    height: 4
+                    height: 3
 
                     Canvas {
                         id: trackCanvas
@@ -102,10 +115,10 @@ Item {
                                 }
                                 ctx.fillStyle = gradient;
                             } else {
-                                ctx.fillStyle = "#313841";
+                                ctx.fillStyle = theme.lineStrong;
                             }
 
-                            const radius = Math.min(2, width / 2, height / 2);
+                            const radius = Math.min(1.5, width / 2, height / 2);
                             ctx.beginPath();
                             ctx.moveTo(radius, 0);
                             ctx.lineTo(width - radius, 0);
@@ -126,7 +139,7 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         radius: 2
-                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? "#44101519" : "#313841"
+                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? theme.alpha(theme.ink950, 0.46) : theme.lineStrong
                     }
 
                     Rectangle {
@@ -144,24 +157,26 @@ Item {
                         height: 10
                         radius: 1
                         anchors.verticalCenter: parent.verticalCenter
-                        color: "#6f7983"
+                        color: theme.textFaint
                     }
                 }
 
                 handle: Rectangle {
                     x: control.leftPadding + control.visualPosition * (control.availableWidth - width)
                     y: control.topPadding + control.availableHeight / 2 - height / 2
-                    width: 14
-                    height: 14
-                    radius: 7
+                    width: 12
+                    height: 12
+                    radius: 6
                     color: root.accent
+                    border.width: 1
+                    border.color: theme.alpha(theme.textStrong, 0.16)
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 4
-                        height: 4
-                        radius: 2
-                        color: "#f4f7f8"
+                        width: 3
+                        height: 3
+                        radius: 1.5
+                        color: theme.textStrong
                         opacity: control.pressed ? 1.0 : 0.8
                     }
                 }

@@ -7,6 +7,8 @@ Rectangle {
     color: "transparent"
     focus: true
 
+    Theme { id: theme }
+
     property real manualZoom: 1.0
     property bool fitToView: true
     property bool inspectorCollapsed: false
@@ -219,29 +221,29 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: 8
 
-        BrandPanel {
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            headerVisible: false
-            bodyMargin: 4
-            bodySpacing: 6
-            title: "Editor"
-
-            Rectangle {
-                id: previewSurface
+            BrandPanel {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                radius: 10
-                color: "#14171a"
-                clip: true
+                headerVisible: false
+                bodyMargin: 2
+                bodySpacing: 4
+                title: "Editor"
 
-                Item {
-                    id: fitPreviewRow
-                    anchors.fill: parent
-                    anchors.margins: 4
-                    visible: fitToView
+                Rectangle {
+                    id: previewSurface
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: theme.radius12
+                    color: theme.ink900
+                    clip: true
+
+                    Item {
+                        id: fitPreviewRow
+                        anchors.fill: parent
+                        anchors.margins: 2
+                        visible: fitToView
 
                     Image {
                         id: editedPreviewFit
@@ -264,7 +266,7 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
                         anchors.horizontalCenter: parent.horizontalCenter
-                        color: "#2d3339"
+                        color: theme.alpha(theme.lineStrong, 0.42)
                     }
 
                     Image {
@@ -304,7 +306,7 @@ Rectangle {
                 Flickable {
                     id: zoomPreviewFlick
                     anchors.fill: parent
-                    anchors.margins: 4
+                    anchors.margins: 2
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     interactive: false
@@ -410,10 +412,10 @@ Rectangle {
 
                 Rectangle {
                     anchors.fill: parent
-                    anchors.margins: 4
-                    radius: 10
+                    anchors.margins: 2
+                    radius: theme.radius8
                     visible: editorPreview.previewSource.length === 0
-                    color: "#181c20"
+                    color: theme.ink800
 
                     ColumnLayout {
                         anchors.centerIn: parent
@@ -444,8 +446,8 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 74
-                radius: 10
-                color: "#1a1d21"
+                radius: theme.radius8
+                color: theme.alpha(theme.ink800, 0.82)
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -459,8 +461,8 @@ Rectangle {
                         Label {
                             Layout.fillWidth: true
                             text: editorPreview.processing ? "Rendering preview..." : editorPreview.status
-                            color: "#8e98a2"
-                            font.family: "Avenir Next"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
                             font.pixelSize: 10
                             elide: Text.ElideRight
                         }
@@ -468,14 +470,14 @@ Rectangle {
                         Rectangle {
                             Layout.preferredWidth: 48
                             Layout.preferredHeight: 24
-                            radius: 6
-                            color: fitToView ? Qt.rgba(0.788, 0.604, 0.322, 0.14) : "#151a1f"
+                            radius: theme.radius8
+                            color: fitToView ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
 
                             Label {
                                 anchors.centerIn: parent
                                 text: "Fit"
-                                color: fitToView ? "#f0d4a8" : "#d2d9df"
-                                font.family: "Avenir Next"
+                                color: fitToView ? theme.textStrong : theme.textMain
+                                font.family: theme.fontUi
                                 font.pixelSize: 10
                                 font.weight: Font.Medium
                             }
@@ -493,14 +495,14 @@ Rectangle {
                         Rectangle {
                             Layout.preferredWidth: 48
                             Layout.preferredHeight: 24
-                            radius: 6
-                            color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? Qt.rgba(0.788, 0.604, 0.322, 0.14) : "#151a1f"
+                            radius: theme.radius8
+                            color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
 
                             Label {
                                 anchors.centerIn: parent
                                 text: "1:1"
-                                color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? "#f0d4a8" : "#d2d9df"
-                                font.family: "Menlo"
+                                color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? theme.textStrong : theme.textMain
+                                font.family: theme.fontMono
                                 font.pixelSize: 10
                             }
 
@@ -516,15 +518,15 @@ Rectangle {
                         Rectangle {
                             Layout.preferredWidth: 74
                             Layout.preferredHeight: 24
-                            radius: 6
-                            color: editorPreview.compareMode ? Qt.rgba(0.788, 0.604, 0.322, 0.14) : "#151a1f"
+                            radius: theme.radius8
+                            color: editorPreview.compareMode ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
                             opacity: editorPreview.hasAsset ? 1.0 : 0.55
 
                             Label {
                                 anchors.centerIn: parent
                                 text: "Compare"
-                                color: editorPreview.compareMode ? "#f0d4a8" : "#d2d9df"
-                                font.family: "Avenir Next"
+                                color: editorPreview.compareMode ? theme.textStrong : theme.textMain
+                                font.family: theme.fontUi
                                 font.pixelSize: 10
                                 font.weight: Font.Medium
                             }
@@ -538,8 +540,8 @@ Rectangle {
 
                         Label {
                             text: fitToView ? "Fit" : (Math.round(manualZoom * 100) + "%")
-                            color: "#8f98a2"
-                            font.family: "Menlo"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
                             font.pixelSize: 10
                         }
                     }
@@ -604,14 +606,14 @@ Rectangle {
         }
 
         Item {
-            Layout.preferredWidth: inspectorCollapsed ? 28 : 348
+            Layout.preferredWidth: inspectorCollapsed ? 24 : 324
             Layout.fillHeight: true
 
             Rectangle {
                 anchors.fill: parent
                 visible: inspectorCollapsed
-                radius: 10
-                color: "#16191d"
+                radius: theme.radius8
+                color: theme.ink850
 
                 Label {
                     anchors.centerIn: parent
@@ -632,15 +634,15 @@ Rectangle {
                 anchors.fill: parent
                 visible: !inspectorCollapsed
                 headerVisible: false
-                bodyMargin: 6
-                bodySpacing: 6
+                bodyMargin: 4
+                bodySpacing: 4
                 title: "Inspector"
 
                 Rectangle {
                     implicitHeight: inspectorSummary.implicitHeight + 16
                     Layout.fillWidth: true
                     radius: 8
-                    color: "#14181d"
+                    color: theme.alpha(theme.ink800, 0.82)
 
                     ColumnLayout {
                         id: inspectorSummary
@@ -656,7 +658,7 @@ Rectangle {
                                 Layout.preferredWidth: 24
                                 Layout.preferredHeight: 24
                                 radius: 7
-                                color: "#1a1f24"
+                                color: theme.ink850
 
                                 Label {
                                     anchors.centerIn: parent
@@ -674,8 +676,8 @@ Rectangle {
 
                             Label {
                                 text: "Adjust"
-                                color: "#d8dee4"
-                                font.family: "Avenir Next"
+                                color: theme.textMain
+                                font.family: theme.fontUi
                                 font.pixelSize: 12
                                 font.weight: Font.Medium
                             }
@@ -722,7 +724,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 28
                                 radius: 7
-                                color: "#171c21"
+                                color: theme.ink850
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -733,13 +735,13 @@ Rectangle {
                                         Layout.preferredWidth: 5
                                         Layout.preferredHeight: 5
                                         radius: 3
-                                        color: "#c99a52"
+                                        color: theme.textMuted
                                     }
 
                                     Label {
                                         text: catalogAssets.selectedRecipeJson.length > 0 ? "Edited" : "Base"
-                                        color: "#e8edf1"
-                                        font.family: "Avenir Next"
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
                                         font.pixelSize: 10
                                         font.weight: Font.Medium
                                     }
@@ -750,15 +752,15 @@ Rectangle {
 
                                     Label {
                                         text: editorPreview.compareMode ? "Compare" : "Single"
-                                        color: "#8f98a2"
-                                        font.family: "Menlo"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
                                         font.pixelSize: 9
                                     }
 
                                     Label {
                                         text: editorPreview.linearMaskEnabled ? "Mask On" : "Mask Off"
-                                        color: "#8f98a2"
-                                        font.family: "Menlo"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
                                         font.pixelSize: 9
                                     }
                                 }

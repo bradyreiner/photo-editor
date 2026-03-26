@@ -12,14 +12,18 @@ Rectangle {
     property bool expanded: true
     default property alias contentData: body.data
 
-    implicitHeight: sectionLayout.implicitHeight + 20
-    radius: 8
-    color: "#13171c"
+    Theme { id: theme }
+
+    implicitHeight: sectionLayout.implicitHeight + 18
+    radius: theme.radius8
+    color: theme.alpha(theme.ink800, 0.88)
+    border.width: 1
+    border.color: expanded ? theme.alpha(theme.lineSoft, 0.32) : theme.alpha(theme.lineSoft, 0.2)
 
     ColumnLayout {
         id: sectionLayout
         anchors.fill: parent
-        anchors.margins: 10
+        anchors.margins: 12
         spacing: 10
 
         Item {
@@ -43,7 +47,7 @@ Rectangle {
                     spacing: 8
 
                     Rectangle {
-                        Layout.preferredWidth: 14
+                        Layout.preferredWidth: 18
                         Layout.preferredHeight: 2
                         radius: 1
                         color: root.accent
@@ -51,8 +55,8 @@ Rectangle {
 
                     Label {
                         text: root.title.toUpperCase()
-                        color: "#ccd4dc"
-                        font.family: "Avenir Next"
+                        color: theme.textMain
+                        font.family: theme.fontMono
                         font.pixelSize: 10
                         font.weight: Font.DemiBold
                         font.letterSpacing: 1.1
@@ -65,8 +69,8 @@ Rectangle {
                     Label {
                         visible: root.expandable
                         text: root.expanded ? "˅" : ">"
-                        color: "#7f8993"
-                        font.family: "Menlo"
+                        color: theme.textFaint
+                        font.family: theme.fontMono
                         font.pixelSize: 12
                     }
                 }
@@ -74,8 +78,8 @@ Rectangle {
                 Label {
                     visible: root.subtitle.length > 0
                     text: root.subtitle
-                    color: "#78838d"
-                    font.family: "Avenir Next"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true

@@ -6,18 +6,20 @@ TextField {
 
     property color accent: "#c99a52"
 
+    Theme { id: theme }
+
     implicitHeight: 38
-    color: "#eef1f4"
-    placeholderTextColor: "#7f8892"
-    selectedTextColor: "#111317"
+    color: theme.textStrong
+    placeholderTextColor: theme.textFaint
+    selectedTextColor: theme.ink950
     selectionColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.85)
-    font.family: "Avenir Next"
+    font.family: theme.fontUi
     font.pixelSize: 12
 
     background: Rectangle {
-        radius: 10
-        color: "#171a1e"
+        radius: theme.radius8
+        color: theme.ink900
         border.width: 1
-        border.color: root.activeFocus ? root.accent : "#2d3339"
+        border.color: root.activeFocus ? root.accent : theme.lineSoft
     }
 }

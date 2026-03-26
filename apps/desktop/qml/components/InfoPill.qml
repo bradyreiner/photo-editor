@@ -9,10 +9,14 @@ Rectangle {
     required property string value
     property color accent: "#c99a52"
 
+    Theme { id: theme }
+
     implicitHeight: 38
     implicitWidth: Math.max(116, textColumn.implicitWidth + 24)
     radius: 10
-    color: "#171a1e"
+    color: theme.ink900
+    border.width: 1
+    border.color: theme.lineSoft
 
     RowLayout {
         anchors.fill: parent
@@ -32,16 +36,16 @@ Rectangle {
 
             Label {
                 text: root.label
-                color: "#8f98a2"
-                font.family: "Avenir Next"
+                color: theme.textFaint
+                font.family: theme.fontMono
                 font.pixelSize: 9
                 font.letterSpacing: 0.8
             }
 
             Label {
                 text: root.value
-                color: "#f1f4f7"
-                font.family: "Avenir Next"
+                color: theme.textStrong
+                font.family: theme.fontUi
                 font.pixelSize: 12
                 font.weight: Font.Medium
             }

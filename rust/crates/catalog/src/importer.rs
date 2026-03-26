@@ -15,8 +15,8 @@ use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
     "3fr", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "gif", "heic", "heif", "iiq",
-    "jpeg", "jpg", "kdc", "mef", "mos", "nef", "nrw", "orf", "pef", "png", "raf", "raw", "rw2",
-    "sr2", "srf", "tif", "tiff", "webp", "x3f",
+    "jpeg", "jpg", "kdc", "m4v", "mef", "mos", "mov", "mp4", "mpeg", "mpg", "nef", "nrw", "orf",
+    "pef", "png", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "webm", "webp", "x3f",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

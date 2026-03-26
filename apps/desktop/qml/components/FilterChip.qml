@@ -7,32 +7,35 @@ Button {
     property bool active: false
     property color accent: "#c99a52"
 
-    implicitHeight: 30
-    implicitWidth: Math.max(82, contentLabel.implicitWidth + 20)
-    font.family: "Avenir Next"
+    Theme { id: theme }
+
+    implicitHeight: 28
+    implicitWidth: Math.max(80, contentLabel.implicitWidth + 18)
+    font.family: theme.fontUi
     font.pixelSize: 11
+    hoverEnabled: true
 
     background: Rectangle {
-        radius: height / 2
+        radius: theme.radius8
         color: root.down
-               ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.3)
+               ? theme.alpha(root.accent, 0.22)
                : root.active
-                 ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.2)
+                 ? theme.alpha(root.accent, 0.12)
                  : root.hovered
-                   ? "#252b31"
-                   : "#171d22"
+                   ? theme.ink800
+                   : theme.ink850
         border.width: 1
-        border.color: root.active ? Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.65) : "#2a3239"
+        border.color: root.active ? theme.alpha(root.accent, 0.34) : theme.lineSoft
 
         Behavior on color {
-            ColorAnimation { duration: 120 }
+            ColorAnimation { duration: theme.durationFast }
         }
     }
 
     contentItem: Text {
         id: contentLabel
         text: root.text
-        color: root.active ? "#f7ead2" : "#d3dae1"
+        color: root.active ? theme.textStrong : theme.textMain
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         font.family: root.font.family

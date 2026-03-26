@@ -1,5 +1,4 @@
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Layouts
 
 Rectangle {
@@ -13,8 +12,18 @@ Rectangle {
     property int bodySpacing: root.headerVisible ? 12 : 10
     default property alias contentData: body.data
 
-    radius: 14
-    color: "#16191d"
+    Theme { id: theme }
+
+    radius: theme.radius12
+    color: theme.ink850
+    border.width: 1
+    border.color: theme.alpha(theme.lineSoft, 0.4)
+
+    gradient: Gradient {
+        GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.06) }
+        GradientStop { position: 0.12; color: theme.ink850 }
+        GradientStop { position: 1.0; color: theme.ink900 }
+    }
 
     ColumnLayout {
         id: body
@@ -26,28 +35,11 @@ Rectangle {
             visible: root.headerVisible
             spacing: 5
 
-            Rectangle {
-                Layout.preferredWidth: 18
-                Layout.preferredHeight: 2
-                radius: 1
-                color: root.accent
-            }
-
-            Label {
-                text: root.title
-                font.family: "Avenir Next"
-                font.pixelSize: 16
-                font.weight: Font.Medium
-                color: "#f2f4f6"
-            }
-
-            Label {
-                visible: root.subtitle.length > 0
-                text: root.subtitle
-                wrapMode: Text.WordWrap
-                color: "#8f98a2"
-                font.family: "Avenir Next"
-                font.pixelSize: 12
+            SectionHeader {
+                Layout.fillWidth: true
+                title: root.title
+                subtitle: root.subtitle
+                accent: root.accent
             }
         }
     }

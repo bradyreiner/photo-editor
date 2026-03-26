@@ -1,13 +1,17 @@
-find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Quick Qml QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Quick Qml QuickControls2 Widgets)
 
 qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
 
 qt_add_executable(photo_editor_app
+  src/carousel_document_controller.cpp
   src/catalog_asset_model.cpp
   src/editor_preview_controller.cpp
   src/main.cpp
   src/app_bootstrap.cpp
+  src/timeline_asset_store.cpp
+  src/timeline_document_controller.cpp
+  src/timeline_playback_controller.cpp
 )
 
 qt_add_qml_module(photo_editor_app
@@ -23,15 +27,22 @@ qt_add_qml_module(photo_editor_app
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
     qml/components/MetricCard.qml
+    qml/components/SectionHeader.qml
     qml/components/SidebarButton.qml
+    qml/components/Theme.qml
     qml/components/ToneComboBox.qml
     qml/components/ToneCurveEditor.qml
     qml/components/ToneTextField.qml
+    qml/workspaces/CarouselView.qml
     qml/workspaces/EditView.qml
+    qml/workspaces/EditWorkspace.qml
     qml/workspaces/ExportView.qml
     qml/workspaces/ImportView.qml
     qml/workspaces/LibraryView.qml
+    qml/workspaces/LibraryWorkspace.qml
     qml/workspaces/MaskView.qml
+    qml/workspaces/SequenceWorkspace.qml
+    qml/workspaces/TimelineView.qml
 )
 
 target_include_directories(photo_editor_app PRIVATE src)
@@ -42,6 +53,7 @@ target_link_libraries(
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
+    Qt6::Multimedia
     Qt6::Quick
     Qt6::Qml
     Qt6::QuickControls2

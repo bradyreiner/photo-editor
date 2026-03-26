@@ -6,9 +6,12 @@ ComboBox {
 
     property color accent: "#c99a52"
 
+    Theme { id: theme }
+
     implicitHeight: 34
-    font.family: "Avenir Next"
+    font.family: theme.fontUi
     font.pixelSize: 11
+    hoverEnabled: true
 
     delegate: ItemDelegate {
         width: root.width
@@ -16,7 +19,7 @@ ComboBox {
 
         contentItem: Text {
             text: modelData
-            color: highlighted ? "#f3f6f8" : "#d7dce1"
+            color: highlighted ? theme.textStrong : theme.textMain
             font.family: root.font.family
             font.pixelSize: 11
             verticalAlignment: Text.AlignVCenter
@@ -24,14 +27,14 @@ ComboBox {
         }
 
         background: Rectangle {
-            color: highlighted ? "#20262c" : "#14191e"
+            color: highlighted ? theme.ink750 : theme.ink900
         }
     }
 
     indicator: Text {
         text: "˅"
-        color: "#8d97a1"
-        font.family: "Menlo"
+        color: theme.textFaint
+        font.family: theme.fontMono
         font.pixelSize: 12
         anchors.right: parent.right
         anchors.rightMargin: 12
@@ -40,7 +43,7 @@ ComboBox {
 
     contentItem: Text {
         text: root.displayText
-        color: "#e5ebf0"
+        color: theme.textStrong
         leftPadding: 12
         rightPadding: 26
         verticalAlignment: Text.AlignVCenter
@@ -50,8 +53,10 @@ ComboBox {
     }
 
     background: Rectangle {
-        radius: 7
-        color: "#14191e"
+        radius: theme.radius8
+        color: theme.ink900
+        border.width: 1
+        border.color: root.hovered ? theme.alpha(root.accent, 0.18) : theme.lineSoft
     }
 
     popup: Popup {
@@ -67,8 +72,10 @@ ComboBox {
         }
 
         background: Rectangle {
-            radius: 8
-            color: "#14191e"
+            radius: theme.radius8
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.lineSoft
         }
     }
 }

@@ -28,6 +28,10 @@ struct CatalogAssetItem final {
   QDateTime imported_at_value;
   QStringList project_names;
   QString project_summary;
+  QString media_type = QStringLiteral("photo");
+  QString duration_text;
+  double duration_seconds = 0.0;
+  QString timeline_document_path;
   bool online = false;
 };
 
@@ -60,11 +64,15 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(QString selectedThumbnailSource READ selectedThumbnailSource NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedRecipeJson READ selectedRecipeJson NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedProjectSummary READ selectedProjectSummary NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedMediaType READ selectedMediaType NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedDurationText READ selectedDurationText NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedTimelineDocumentPath READ selectedTimelineDocumentPath NOTIFY selectedAssetChanged)
   Q_PROPERTY(QStringList projectNames READ projectNames NOTIFY projectNamesChanged)
   Q_PROPERTY(QStringList captureYears READ captureYears NOTIFY captureYearsChanged)
   Q_PROPERTY(QString projectFilter READ projectFilter WRITE setProjectFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString importDateFilter READ importDateFilter WRITE setImportDateFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString captureYearFilter READ captureYearFilter WRITE setCaptureYearFilter NOTIFY filtersChanged)
+  Q_PROPERTY(QString mediaTypeFilter READ mediaTypeFilter WRITE setMediaTypeFilter NOTIFY filtersChanged)
 
  public:
   enum Roles {
@@ -81,6 +89,9 @@ class CatalogAssetModel final : public QAbstractListModel {
     ImportedAtRole,
     ProjectNamesRole,
     ProjectSummaryRole,
+    MediaTypeRole,
+    DurationTextRole,
+    TimelineDocumentPathRole,
     OnlineRole,
   };
 
@@ -111,11 +122,15 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString selectedThumbnailSource() const;
   [[nodiscard]] QString selectedRecipeJson() const;
   [[nodiscard]] QString selectedProjectSummary() const;
+  [[nodiscard]] QString selectedMediaType() const;
+  [[nodiscard]] QString selectedDurationText() const;
+  [[nodiscard]] QString selectedTimelineDocumentPath() const;
   [[nodiscard]] QStringList projectNames() const;
   [[nodiscard]] QStringList captureYears() const;
   [[nodiscard]] QString projectFilter() const;
   [[nodiscard]] QString importDateFilter() const;
   [[nodiscard]] QString captureYearFilter() const;
+  [[nodiscard]] QString mediaTypeFilter() const;
 
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void refreshImportSources();
@@ -126,7 +141,7 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QStringList& file_paths,
       const QString& project_name);
   Q_INVOKABLE void selectIndex(int index);
-  Q_INVOKABLE QString pickFolder(const QString& title = QStringLiteral("Browse Photo Folder")) const;
+  Q_INVOKABLE QString pickFolder(const QString& title = QStringLiteral("Browse Media Folder")) const;
   Q_INVOKABLE QString localPathForUrl(const QString& url) const;
   Q_INVOKABLE QString parentFolderUrl(const QString& url) const;
   Q_INVOKABLE void createProject(const QString& name);
@@ -137,6 +152,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void setProjectFilter(const QString& project_filter);
   void setImportDateFilter(const QString& import_date_filter);
   void setCaptureYearFilter(const QString& capture_year_filter);
+  void setMediaTypeFilter(const QString& media_type_filter);
 
  signals:
   void statusChanged();
@@ -175,6 +191,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void rebuildImportSources();
   void rebuildProjectMetadata();
   void rebuildCaptureYears();
+  void loadTimelineAssets();
   void loadProjects();
   void saveProjects() const;
   void addAssetsToProject(const QStringList& asset_ids, const QString& project_name);
@@ -186,6 +203,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] bool matchesImportDateFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesCaptureYearFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesProjectFilter(const CatalogAssetItem& item) const;
+  [[nodiscard]] bool matchesMediaTypeFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] const CatalogAssetItem* selectedItem() const;
 
   QString snapshotProgram() const;
@@ -212,6 +230,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   QString project_filter_ = QStringLiteral("all");
   QString import_date_filter_ = QStringLiteral("all");
   QString capture_year_filter_ = QStringLiteral("all");
+  QString media_type_filter_ = QStringLiteral("all");
   QString import_selection_manifest_path_;
   QStringList pending_import_file_paths_;
   QString pending_import_project_name_;

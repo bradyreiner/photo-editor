@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "components"
+import "workspaces"
 
 ApplicationWindow {
     id: window
@@ -9,29 +10,37 @@ ApplicationWindow {
     height: 980
     visible: true
     title: "PhotoEditor"
-    color: "#111317"
-    font.family: "Avenir Next"
+    color: theme.ink950
+    font.family: theme.fontUi
     font.pixelSize: 12
 
+    Theme { id: theme }
+
     property int currentWorkspace: 0
+    property string libraryWorkspaceMode: "catalog"
+    property string editWorkspaceMode: "adjust"
     property bool editorUsesLocalAsset: false
     property string localEditorFilePath: ""
     property string localEditorPreviewSource: ""
     property string localEditorDisplayName: ""
-    readonly property var workspaceTitles: ["Library", "Import", "Edit", "Mask", "Export"]
-    readonly property var workspaceKinds: ["library", "import", "edit", "mask", "export"]
+    readonly property int editWorkspaceIndex: 1
+    readonly property int carouselWorkspaceIndex: 2
+    readonly property int timelineWorkspaceIndex: 3
+    readonly property int exportWorkspaceIndex: 4
+    readonly property var workspaceTitles: ["Library", "Edit", "Carousel", "Timeline", "Export"]
+    readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export"]
     readonly property var workspaceSubtitles: [
-        "Browse imported assets and select a working image.",
-        "Browse drives, cards, and folders to bring photos in.",
-        "Refine a single image with a focused preview and inspector.",
-        "Build local adjustments against the live image.",
+        "Browse imported assets or bring media into the catalog.",
+        "Refine a single image and handle local masking without leaving the canvas.",
+        "Assemble social slides and mixed-media carousel layouts.",
+        "Cut video on a dedicated editing timeline.",
         "Prepare deliveries and export jobs."
     ]
     readonly property var workspaceDetails: [
-        "Asset browser",
-        "In-app importer",
-        "Hero image editor",
-        "Local adjustment stack",
+        "Catalog and intake",
+        "Adjust and mask",
+        "Carousel composer",
+        "Timeline editor",
         "Delivery pipeline"
     ]
 
@@ -44,8 +53,14 @@ ApplicationWindow {
         if (index === 0)
             return String(catalogAssets.totalAssetCount)
 
-        if (index === 2 || index === 3)
+        if (index === editWorkspaceIndex)
             return editorAssetReady() ? "Ready" : ""
+
+        if (index === carouselWorkspaceIndex)
+            return carouselDocument.slideCount > 0 ? String(carouselDocument.slideCount) : ""
+
+        if (index === timelineWorkspaceIndex)
+            return timelineDocument.clipCount > 0 ? String(timelineDocument.clipCount) : ""
 
         return ""
     }
@@ -57,7 +72,7 @@ ApplicationWindow {
         if (catalogAssets.selectedAssetId.length > 0)
             return catalogAssets.selectedCameraLabel
 
-        return "No active image"
+        return "No active asset"
     }
 
     function selectionMeta() {
@@ -66,14 +81,18 @@ ApplicationWindow {
 
         if (catalogAssets.selectedAssetId.length > 0) {
             const parts = []
-            if (catalogAssets.selectedCaptureDate.length > 0)
+            if (catalogAssets.selectedMediaType === "photo" && catalogAssets.selectedCaptureDate.length > 0)
                 parts.push(catalogAssets.selectedCaptureDate)
+            if (catalogAssets.selectedMediaType !== "photo")
+                parts.push(catalogAssets.selectedMediaType === "timeline" ? "Saved timeline" : "Video clip")
+            if (catalogAssets.selectedDurationText.length > 0)
+                parts.push(catalogAssets.selectedDurationText)
             if (catalogAssets.selectedLensModel.length > 0)
                 parts.push(catalogAssets.selectedLensModel)
-            return parts.length > 0 ? parts.join("  •  ") : "Catalog image"
+            return parts.length > 0 ? parts.join("  •  ") : "Catalog asset"
         }
 
-        return "Choose an asset in Library to drive Edit and Mask."
+        return "Choose an asset in Library to drive Edit, Carousel, or Timeline."
     }
 
     function selectionSupport() {
@@ -84,15 +103,15 @@ ApplicationWindow {
             if (catalogAssets.selectedProjectSummary.length > 0)
                 return catalogAssets.selectedProjectSummary
             if (catalogAssets.selectedImportedAt.length > 0)
-                return "Imported " + catalogAssets.selectedImportedAt
-            return "Ready for Edit and Mask"
+                return (catalogAssets.selectedMediaType === "timeline" ? "Saved " : "Imported ") + catalogAssets.selectedImportedAt
+            return catalogAssets.selectedMediaType === "photo" ? "Ready for Edit" : "Ready for Timeline"
         }
 
         return catalogAssets.status
     }
 
     function loadSelectedAssetIntoEditor() {
-        if (catalogAssets.selectedAssetId.length === 0) {
+        if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo") {
             return
         }
 
@@ -124,7 +143,7 @@ ApplicationWindow {
     }
 
     onCurrentWorkspaceChanged: {
-        if (currentWorkspace === 2 || currentWorkspace === 3) {
+        if (currentWorkspace === editWorkspaceIndex) {
             if (editorUsesLocalAsset)
                 loadLocalAssetIntoEditor()
             else
@@ -137,43 +156,43 @@ ApplicationWindow {
 
         function onSelectedAssetChanged() {
             window.editorUsesLocalAsset = false
-            if (window.currentWorkspace === 2 || window.currentWorkspace === 3)
+            if (window.currentWorkspace === window.editWorkspaceIndex
+                    && catalogAssets.selectedMediaType === "photo")
                 window.loadSelectedAssetIntoEditor();
         }
     }
 
     Rectangle {
         anchors.fill: parent
-        color: "#111317"
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.22) }
+            GradientStop { position: 0.18; color: theme.ink900 }
+            GradientStop { position: 1.0; color: theme.ink950 }
+        }
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
+        anchors.margins: 6
         spacing: 0
 
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 10
+            spacing: 6
 
             Rectangle {
-                Layout.preferredWidth: 72
+                Layout.preferredWidth: 104
                 Layout.fillHeight: true
-                radius: 20
-                color: "#12171c"
+                radius: theme.radius12
+                color: theme.ink850
                 border.width: 1
-                border.color: "#1d242b"
+                border.color: theme.alpha(theme.lineSoft, 0.42)
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 10
-
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 10
-                    }
+                    anchors.margins: 6
+                    spacing: 6
 
                     Repeater {
                         model: workspaceTitles
@@ -183,12 +202,11 @@ ApplicationWindow {
                             required property string modelData
 
                             Layout.fillWidth: true
-                            title: ""
-                            subtitle: ""
+                            title: modelData
                             tooltipText: modelData + "  •  " + workspaceSubtitles[index]
-                            badgeText: ""
+                            badgeText: window.workspaceBadge(index)
                             badgeEmphasis: false
-                            compact: true
+                            compact: false
                             kind: window.workspaceKinds[index]
                             highlighted: index === window.currentWorkspace
                             onClicked: window.currentWorkspace = index
@@ -199,9 +217,9 @@ ApplicationWindow {
 
                     Button {
                         id: compactStatusButton
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: 24
-                        Layout.preferredHeight: 24
+                        Layout.alignment: Qt.AlignLeft
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 28
                         hoverEnabled: true
 
                         ToolTip.visible: compactStatusButton.hovered
@@ -209,15 +227,28 @@ ApplicationWindow {
                         ToolTip.text: window.selectionHeadline() + "\n" + window.selectionMeta()
 
                         background: Rectangle {
-                            radius: 12
-                            color: compactStatusButton.hovered ? "#171d23" : "transparent"
+                            radius: theme.radius8
+                            color: compactStatusButton.hovered ? theme.alpha(theme.ink700, 0.18) : "transparent"
                         }
 
-                        contentItem: Rectangle {
-                            implicitWidth: 8
-                            implicitHeight: 8
-                            radius: 4
-                            color: window.editorAssetReady() ? "#c99a52" : "#59636d"
+                        contentItem: RowLayout {
+                            spacing: 6
+
+                            Rectangle {
+                                implicitWidth: 6
+                                implicitHeight: 6
+                                radius: 3
+                                color: (window.editorAssetReady() || catalogAssets.selectedAssetId.length > 0) ? theme.textMuted : theme.textFaint
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: window.selectionHeadline()
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
                         }
                     }
                 }
@@ -226,13 +257,15 @@ ApplicationWindow {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                radius: 12
-                color: "#13161a"
+                radius: theme.radius12
+                color: theme.ink900
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.3)
 
                 Loader {
                     anchors.fill: parent
-                    anchors.margins: 10
-                    sourceComponent: [libraryView, importView, editView, maskView, exportView][window.currentWorkspace]
+                    anchors.margins: 4
+                    sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
                 }
             }
         }
@@ -241,21 +274,58 @@ ApplicationWindow {
     Component {
         id: libraryView
 
-        LibraryView {
-            onAssetActivated: window.currentWorkspace = 2
+        LibraryWorkspace {
+            mode: window.libraryWorkspaceMode
+            onModeSelected: function(mode) {
+                window.libraryWorkspaceMode = mode
+            }
+            onAssetActivated: function(destination) {
+                if (destination === "edit") {
+                    window.editWorkspaceMode = "adjust"
+                    window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+
+                if (catalogAssets.selectedMediaType === "timeline"
+                        && catalogAssets.selectedTimelineDocumentPath.length > 0)
+                    timelineDocument.loadTimeline(catalogAssets.selectedTimelineDocumentPath)
+
+                window.currentWorkspace = window.timelineWorkspaceIndex
+            }
             onLocalAssetActivated: function (filePath, previewSource, displayName) {
                 window.editorUsesLocalAsset = true
                 window.localEditorFilePath = filePath
                 window.localEditorPreviewSource = previewSource
                 window.localEditorDisplayName = displayName
                 window.loadLocalAssetIntoEditor()
-                window.currentWorkspace = 2
+                window.editWorkspaceMode = "adjust"
+                window.currentWorkspace = window.editWorkspaceIndex
             }
         }
     }
 
-    Component { id: importView; ImportView {} }
-    Component { id: editView; EditView {} }
-    Component { id: maskView; MaskView {} }
+    Component {
+        id: editView
+
+        EditWorkspace {
+            mode: window.editWorkspaceMode
+            onModeSelected: function(mode) {
+                window.editWorkspaceMode = mode
+            }
+        }
+    }
+
+    Component {
+        id: carouselView
+
+        CarouselView {}
+    }
+
+    Component {
+        id: timelineView
+
+        TimelineView {}
+    }
+
     Component { id: exportView; ExportView {} }
 }
