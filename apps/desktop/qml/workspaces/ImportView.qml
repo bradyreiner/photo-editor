@@ -8,6 +8,8 @@ Rectangle {
     id: root
     color: "transparent"
 
+    Theme { id: theme }
+
     property string sourceRootPath: ""
     property string sourceRootUrl: ""
     property string sourceLabel: ""
@@ -17,6 +19,8 @@ Rectangle {
     property var selectedPathsByFile: ({})
     property int selectionRevision: 0
 
+    readonly property bool hasSource: sourceRootPath.length > 0
+    readonly property bool canGoUp: currentFolderPath.length > 0 && currentFolderPath !== sourceRootPath
     readonly property var selectedFilePaths: {
         selectionRevision
         const paths = []
@@ -136,7 +140,7 @@ Rectangle {
     }
 
     function goUp() {
-        if (currentFolderUrl.length === 0 || currentFolderPath === sourceRootPath)
+        if (!canGoUp)
             return
         openFolder(catalogAssets.parentFolderUrl(currentFolderUrl))
     }
@@ -215,135 +219,130 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: theme.space8
 
-        Rectangle {
-            Layout.preferredWidth: 240
+        BrandPanel {
+            Layout.preferredWidth: 236
             Layout.fillHeight: true
-            radius: 18
-            color: "#14191d"
-            border.width: 1
-            border.color: "#242c34"
+            title: "Sources"
+            subtitle: "Mounted volumes, camera cards, and working folders staged for intake."
+            accent: theme.accentCool400
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
+            ScrollView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
 
-                Label {
-                    text: "Sources"
-                    color: "#f2f4f6"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 18
-                    font.weight: Font.DemiBold
-                }
+                ColumnLayout {
+                    width: parent.width
+                    spacing: theme.space8
 
-                Label {
-                    text: "Browse folders, mounted drives, SD cards, and removable media without leaving the app."
-                    color: "#98a3ad"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
+                    Repeater {
+                        model: catalogAssets.importSources
 
-                Flickable {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    contentWidth: width
-                    contentHeight: sourceColumn.height
-                    clip: true
+                        delegate: Rectangle {
+                            required property var modelData
 
-                    Column {
-                        id: sourceColumn
-                        width: parent.width
-                        spacing: 8
+                            Layout.fillWidth: true
+                            implicitHeight: 64
+                            radius: theme.radius10
+                            color: root.sourceRootPath === modelData.path
+                                   ? theme.alpha(theme.accentCool500, 0.12)
+                                   : theme.alpha(theme.ink900, 0.88)
+                            border.width: 1
+                            border.color: root.sourceRootPath === modelData.path
+                                          ? theme.alpha(theme.accentWarm400, 0.82)
+                                          : theme.alpha(theme.lineSoft, 0.92)
 
-                        Repeater {
-                            model: catalogAssets.importSources
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: theme.sectionPadding
+                                spacing: 2
 
-                            delegate: Rectangle {
-                                required property var modelData
-
-                                width: sourceColumn.width
-                                height: 58
-                                radius: 12
-                                color: root.sourceRootPath === modelData.path ? "#1b232a" : "#10151a"
-                                border.width: 1
-                                border.color: root.sourceRootPath === modelData.path ? "#c99a52" : "#263039"
-
-                                Column {
-                                    anchors.fill: parent
-                                    anchors.margins: 12
-                                    spacing: 2
-
-                                    Label {
-                                        text: modelData.label
-                                        color: "#f2f5f7"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 13
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
-                                        width: parent.width
-                                    }
-
-                                    Label {
-                                        text: modelData.subtitle
-                                        color: "#8b96a0"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 10
-                                        elide: Text.ElideRight
-                                        width: parent.width
-                                    }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
                                 }
 
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: root.openSource(modelData.path, modelData.url, modelData.label)
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.subtitle
+                                    color: root.sourceRootPath === modelData.path ? theme.textMain : theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
                                 }
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: root.openSource(modelData.path, modelData.url, modelData.label)
                             }
                         }
                     }
-                }
 
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Refresh Sources"
-                    enabled: !catalogAssets.busy
-                    onClicked: catalogAssets.refreshImportSources()
+                    Label {
+                        visible: catalogAssets.importSources.length === 0
+                        Layout.fillWidth: true
+                        text: "No import sources are available yet. Refresh sources to rescan mounted storage."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
                 }
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Refresh Sources"
+                iconName: "source"
+                enabled: !catalogAssets.busy
+                onClicked: catalogAssets.refreshImportSources()
             }
         }
 
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 18
-            color: "#14191d"
+            radius: theme.radiusSurface
+            color: theme.ink850
             border.width: 1
-            border.color: "#242c34"
+            border.color: theme.alpha(theme.lineSoft, 0.34)
+
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: theme.alpha(theme.accentCool500, 0.05) }
+                GradientStop { position: 0.14; color: theme.alpha(theme.ink850, 0.98) }
+                GradientStop { position: 1.0; color: theme.ink900 }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
+                anchors.margins: theme.panelPadding
+                spacing: theme.gapPanel
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
-                    radius: 16
-                    color: "#11161b"
+                    Layout.preferredHeight: 144
+                    radius: theme.radiusSurface
+                    color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
-                    border.color: "#273038"
+                    border.color: theme.alpha(theme.lineSoft, 0.9)
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 12
+                        anchors.margins: theme.space16
+                        spacing: theme.space10
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 14
+                            spacing: theme.space14
 
                             ColumnLayout {
                                 Layout.fillWidth: true
@@ -351,25 +350,27 @@ Rectangle {
 
                                 Label {
                                     text: "Import"
-                                    color: "#f3f5f7"
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 28
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: 30
                                     font.weight: Font.DemiBold
                                 }
 
                                 Label {
-                                    text: root.sourceLabel.length > 0
-                                          ? root.sourceLabel + "  •  " + fileModel.count + " visible files  •  " + root.selectedFileCount + " selected"
-                                          : "Choose a source to begin"
-                                    color: "#c1cad2"
-                                    font.family: "Avenir Next"
+                                    text: root.hasSource
+                                          ? root.sourceLabel + "  •  " + fileModel.count + " visible  •  " + root.selectedFileCount + " selected"
+                                          : "Choose a source to begin staging media."
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
                                     font.pixelSize: 12
+                                    elide: Text.ElideRight
+                                    Layout.fillWidth: true
                                 }
 
                                 Label {
-                                    text: root.currentFolderPath.length > 0 ? root.currentFolderPath : "Mounted sources appear on the left."
-                                    color: "#f0d2a0"
-                                    font.family: "Menlo"
+                                    text: root.currentFolderPath.length > 0 ? root.currentFolderPath : "Select a source from the left rail."
+                                    color: theme.accentWarm300
+                                    font.family: theme.fontMono
                                     font.pixelSize: 10
                                     elide: Text.ElideMiddle
                                     Layout.fillWidth: true
@@ -377,11 +378,11 @@ Rectangle {
                             }
 
                             RowLayout {
-                                spacing: 8
+                                spacing: theme.gapControl
 
                                 ActionButton {
                                     text: "Up One Folder"
-                                    enabled: root.currentFolderPath.length > 0 && root.currentFolderPath !== root.sourceRootPath
+                                    enabled: root.canGoUp
                                     onClicked: root.goUp()
                                 }
 
@@ -399,13 +400,37 @@ Rectangle {
                             }
                         }
 
-                        Label {
-                            text: catalogAssets.status
-                            color: "#8d98a3"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
+                        RowLayout {
                             Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            Rectangle {
+                                radius: theme.radiusChip
+                                color: theme.alpha(theme.accentWarm500, 0.14)
+                                border.width: 1
+                                border.color: theme.alpha(theme.accentWarm400, 0.3)
+                                implicitWidth: statusLabel.implicitWidth + theme.space12 * 2
+                                implicitHeight: 24
+
+                                Label {
+                                    id: statusLabel
+                                    anchors.centerIn: parent
+                                    text: catalogAssets.status
+                                    color: theme.textMain
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    font.weight: Font.Medium
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            Label {
+                                text: catalogAssets.driveCount + " drives"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
                         }
                     }
                 }
@@ -413,87 +438,83 @@ Rectangle {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    spacing: 12
+                    spacing: theme.space10
 
-                    Rectangle {
-                        Layout.preferredWidth: 230
+                    BrandPanel {
+                        Layout.preferredWidth: 240
                         Layout.fillHeight: true
-                        radius: 14
-                        color: "#10151a"
-                        border.width: 1
-                        border.color: "#232c34"
+                        title: "Folders"
+                        subtitle: root.hasSource ? "Move within the active source without leaving intake." : "Choose a source to start browsing."
+                        accent: theme.accentWarm400
 
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 10
+                        ListView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            spacing: theme.space8
+                            model: directoryModel
 
-                            Label {
-                                text: "Folders"
-                                color: "#f2f4f6"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 15
-                                font.weight: Font.Medium
-                            }
+                            delegate: Rectangle {
+                                required property int index
+                                required property string fileName
+                                required property string fileUrl
 
-                            ListView {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                clip: true
-                                spacing: 8
-                                model: directoryModel
+                                width: ListView.view.width
+                                height: 46
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink900, 0.84)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.9)
 
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property string fileName
-                                    required property string fileUrl
+                                Label {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: theme.space12
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: theme.space12
+                                    text: fileName
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    elide: Text.ElideRight
+                                }
 
-                                    width: ListView.view.width
-                                    height: 48
-                                    radius: 10
-                                    color: "#141b21"
-                                    border.width: 1
-                                    border.color: "#222a32"
-
-                                    Label {
-                                        anchors.verticalCenter: parent.verticalCenter
-                                        anchors.left: parent.left
-                                        anchors.leftMargin: 12
-                                        anchors.right: parent.right
-                                        anchors.rightMargin: 12
-                                        text: fileName
-                                        color: "#dde3e8"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 12
-                                        elide: Text.ElideRight
-                                    }
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: root.openFolder(fileUrl)
-                                    }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: root.openFolder(fileUrl)
                                 }
                             }
                         }
+
+                        Label {
+                            visible: root.currentFolderPath.length > 0 && directoryModel.count === 0
+                            Layout.fillWidth: true
+                            text: "No subfolders in this location."
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                        }
                     }
 
-                    Rectangle {
+                    BrandPanel {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        radius: 14
-                        color: "#10151a"
-                        border.width: 1
-                        border.color: "#232c34"
+                        title: "Visible Media"
+                        subtitle: root.hasSource
+                                  ? "Select one or many files before sending them into the catalog."
+                                  : "Supported photo and video files will appear here."
+                        accent: theme.accentCool400
 
                         Item {
-                            anchors.fill: parent
-                            anchors.margins: 10
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
 
                             GridView {
                                 anchors.fill: parent
                                 clip: true
-                                cellWidth: 188
-                                cellHeight: 218
+                                cellWidth: 192
+                                cellHeight: 228
                                 boundsBehavior: Flickable.StopAtBounds
                                 model: fileModel
 
@@ -513,23 +534,27 @@ Rectangle {
                                         return parts.length > 1 ? parts[parts.length - 1].toUpperCase() : "FILE"
                                     }
 
-                                    width: 176
-                                    height: 206
-                                    radius: 12
-                                    color: selected ? "#192128" : "#12181d"
-                                    border.width: selected ? 1 : 0
-                                    border.color: "#d0a157"
+                                    width: 180
+                                    height: 214
+                                    radius: theme.radius12
+                                    color: selected
+                                           ? theme.alpha(theme.accentCool500, 0.09)
+                                           : theme.alpha(theme.ink900, 0.86)
+                                    border.width: 1
+                                    border.color: selected
+                                                  ? theme.alpha(theme.accentWarm400, 0.82)
+                                                  : theme.alpha(theme.lineSoft, 0.86)
 
                                     ColumnLayout {
                                         anchors.fill: parent
-                                        anchors.margins: 8
-                                        spacing: 8
+                                        anchors.margins: theme.space8
+                                        spacing: theme.space8
 
                                         Rectangle {
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 150
-                                            radius: 10
-                                            color: "#0d1216"
+                                            Layout.preferredHeight: 154
+                                            radius: theme.radius10
+                                            color: theme.ink950
                                             clip: true
 
                                             Image {
@@ -542,46 +567,53 @@ Rectangle {
                                                 visible: !delegateIsVideo && status === Image.Ready
                                             }
 
-                                            Column {
-                                                anchors.centerIn: parent
+                                            Rectangle {
+                                                anchors.fill: parent
                                                 visible: delegateIsVideo || previewImage.status !== Image.Ready
-                                                spacing: 6
+                                                color: theme.alpha(theme.ink900, 0.88)
 
-                                                Label {
-                                                    anchors.horizontalCenter: parent.horizontalCenter
-                                                    text: delegateIsVideo ? "VIDEO" : delegateExtension
-                                                    color: "#f1d5a6"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 16
-                                                    font.weight: Font.DemiBold
-                                                }
+                                                Column {
+                                                    anchors.centerIn: parent
+                                                    spacing: theme.space6
 
-                                                Label {
-                                                    anchors.horizontalCenter: parent.horizontalCenter
-                                                    text: delegateIsVideo ? delegateExtension + " clip" : "Preview unavailable"
-                                                    color: "#90a0ac"
-                                                    font.family: "Avenir Next"
-                                                    font.pixelSize: 10
+                                                    Label {
+                                                        anchors.horizontalCenter: parent.horizontalCenter
+                                                        text: delegateIsVideo ? "VIDEO" : delegateExtension
+                                                        color: theme.accentWarm300
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 15
+                                                        font.weight: Font.DemiBold
+                                                    }
+
+                                                    Label {
+                                                        anchors.horizontalCenter: parent.horizontalCenter
+                                                        text: delegateIsVideo ? delegateExtension + " clip" : "Preview unavailable"
+                                                        color: theme.textMuted
+                                                        font.family: theme.fontUi
+                                                        font.pixelSize: 10
+                                                    }
                                                 }
                                             }
 
                                             Rectangle {
                                                 anchors.top: parent.top
                                                 anchors.right: parent.right
-                                                anchors.topMargin: 8
-                                                anchors.rightMargin: 8
+                                                anchors.topMargin: theme.space8
+                                                anchors.rightMargin: theme.space8
                                                 width: 24
                                                 height: 24
                                                 radius: 12
-                                                color: selected ? "#c99a52" : Qt.rgba(17 / 255, 22 / 255, 27 / 255, 0.72)
+                                                color: selected ? theme.accentWarm500 : theme.alpha(theme.ink900, 0.82)
                                                 border.width: 1
-                                                border.color: selected ? "#f3d6aa" : "#3b444c"
+                                                border.color: selected
+                                                              ? theme.alpha(theme.accentWarm300, 0.72)
+                                                              : theme.alpha(theme.lineStrong, 0.9)
 
                                                 Label {
                                                     anchors.centerIn: parent
                                                     text: selected ? "✓" : "+"
-                                                    color: selected ? "#111317" : "#dbe1e7"
-                                                    font.family: "Avenir Next"
+                                                    color: selected ? theme.ink950 : theme.textMain
+                                                    font.family: theme.fontUi
                                                     font.pixelSize: 13
                                                     font.weight: Font.DemiBold
                                                 }
@@ -589,26 +621,28 @@ Rectangle {
                                         }
 
                                         Label {
-                                            text: delegateFileName
-                                            color: "#f2f5f7"
-                                            font.family: "Avenir Next"
-                                            font.pixelSize: 11
-                                            elide: Text.ElideRight
                                             Layout.fillWidth: true
+                                            text: delegateFileName
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            font.weight: Font.Medium
+                                            elide: Text.ElideRight
                                         }
 
                                         Label {
+                                            Layout.fillWidth: true
                                             text: root.parentPathForFile(delegateFilePath)
-                                            color: "#7f8a94"
-                                            font.family: "Avenir Next"
+                                            color: theme.textFaint
+                                            font.family: theme.fontUi
                                             font.pixelSize: 10
                                             elide: Text.ElideMiddle
-                                            Layout.fillWidth: true
                                         }
                                     }
 
                                     MouseArea {
                                         anchors.fill: parent
+                                        hoverEnabled: true
                                         onClicked: root.toggleSelection(delegateFilePath)
                                     }
                                 }
@@ -617,22 +651,45 @@ Rectangle {
                             Column {
                                 anchors.centerIn: parent
                                 visible: root.currentFolderPath.length > 0 && fileModel.count === 0
-                                spacing: 8
+                                spacing: theme.space8
 
                                 Label {
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     text: "No supported media here."
-                                    color: "#d7dde3"
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 18
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: 22
                                     font.weight: Font.DemiBold
                                 }
 
                                 Label {
                                     anchors.horizontalCenter: parent.horizontalCenter
                                     text: "Open another folder or choose a different source."
-                                    color: "#85909a"
-                                    font.family: "Avenir Next"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                }
+                            }
+
+                            Column {
+                                anchors.centerIn: parent
+                                visible: !root.hasSource
+                                spacing: theme.space8
+
+                                Label {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: "No source selected"
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: 22
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: "Pick a source from the left rail to begin intake."
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
                                     font.pixelSize: 12
                                 }
                             }
@@ -642,168 +699,167 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            Layout.preferredWidth: 320
+        BrandPanel {
+            Layout.preferredWidth: 322
             Layout.fillHeight: true
-            radius: 18
-            color: "#14191d"
-            border.width: 1
-            border.color: "#242c34"
+            title: "Import Queue"
+            subtitle: root.selectedFileCount > 0
+                      ? root.selectedFileCount + " files staged from " + (root.sourceLabel.length > 0 ? root.sourceLabel : "the current source")
+                      : "Select files for a targeted import, or ingest the current folder recursively."
+            accent: theme.accentWarm400
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 14
-                spacing: 12
+            Label {
+                Layout.fillWidth: true
+                text: "Project"
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+            }
 
-                Label {
-                    text: "Import Queue"
-                    color: "#f2f4f6"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 18
-                    font.weight: Font.Medium
+            ToneTextField {
+                id: newProjectField
+                Layout.fillWidth: true
+                placeholderText: "Create a project"
+                onAccepted: {
+                    catalogAssets.createProject(text)
+                    text = ""
                 }
+            }
 
-                Label {
-                    text: root.selectedFileCount > 0
-                          ? root.selectedFileCount + " files ready from " + (root.sourceLabel.length > 0 ? root.sourceLabel : "the current source")
-                          : "Select one or many files, or import the current folder recursively."
-                    color: "#9ca6af"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
+            ToneComboBox {
+                Layout.fillWidth: true
+                model: root.projectOptionLabels
+                currentIndex: Math.max(0, root.projectOptionValues.indexOf(root.projectTarget))
+                onActivated: root.projectTarget = root.projectOptionValues[currentIndex]
+            }
 
-                ToneTextField {
-                    id: newProjectField
-                    Layout.fillWidth: true
-                    placeholderText: "Create a project"
-                    onAccepted: {
-                        catalogAssets.createProject(text)
-                        text = ""
-                    }
-                }
-
-                ToneComboBox {
-                    Layout.fillWidth: true
-                    model: root.projectOptionLabels
-                    currentIndex: root.projectOptionValues.indexOf(root.projectTarget)
-                    onActivated: root.projectTarget = root.projectOptionValues[currentIndex]
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Create"
-                        enabled: newProjectField.text.trim().length > 0
-                        onClicked: {
-                            catalogAssets.createProject(newProjectField.text)
-                            newProjectField.text = ""
-                        }
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: projectTarget.length > 0 ? projectTarget : "No Project"
-                        enabled: false
-                    }
-                }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.space8
 
                 ActionButton {
                     Layout.fillWidth: true
-                    text: catalogAssets.importing ? "Importing..." : "Import"
-                    tone: "primary"
-                    enabled: root.selectedFileCount > 0 && !catalogAssets.busy
-                    onClicked: root.importSelected()
-                }
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: catalogAssets.importing ? "Importing..." : "Import Folder"
-                    enabled: root.currentFolderPath.length > 0 && !catalogAssets.busy
-                    onClicked: root.importCurrentFolder()
-                }
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Clear Selection"
-                    enabled: root.selectedFileCount > 0
-                    onClicked: root.clearSelection()
+                    text: "Create"
+                    enabled: newProjectField.text.trim().length > 0
+                    onClicked: {
+                        catalogAssets.createProject(newProjectField.text)
+                        newProjectField.text = ""
+                    }
                 }
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: 12
-                    color: "#10151a"
+                    implicitHeight: theme.controlHeight
+                    radius: theme.radiusPanel
+                    color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
-                    border.color: "#222a32"
+                    border.color: theme.alpha(theme.lineSoft, 0.92)
 
-                    ScrollView {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        clip: true
+                    Label {
+                        anchors.centerIn: parent
+                        text: root.projectTarget.length > 0 ? root.projectTarget : "No Project"
+                        color: root.projectTarget.length > 0 ? theme.textMain : theme.textFaint
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        font.weight: Font.Medium
+                    }
+                }
+            }
 
-                        Column {
-                            width: parent.width
-                            spacing: 8
+            ActionButton {
+                Layout.fillWidth: true
+                text: catalogAssets.importing ? "Importing..." : "Import Selection"
+                tone: "primary"
+                enabled: root.selectedFileCount > 0 && !catalogAssets.busy
+                onClicked: root.importSelected()
+            }
 
-                            Repeater {
-                                model: root.selectedFilePaths
+            ActionButton {
+                Layout.fillWidth: true
+                text: catalogAssets.importing ? "Importing..." : "Import Folder"
+                enabled: root.currentFolderPath.length > 0 && !catalogAssets.busy
+                onClicked: root.importCurrentFolder()
+            }
 
-                                delegate: Rectangle {
-                                    required property string modelData
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Clear Selection"
+                enabled: root.selectedFileCount > 0
+                onClicked: root.clearSelection()
+            }
 
-                                    width: parent.width
-                                    height: 54
-                                    radius: 10
-                                    color: "#141b21"
-                                    border.width: 1
-                                    border.color: "#222a32"
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: theme.radius12
+                color: theme.alpha(theme.ink900, 0.9)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.9)
 
-                                    Column {
-                                        anchors.fill: parent
-                                        anchors.margins: 10
-                                        spacing: 2
+                ScrollView {
+                    anchors.fill: parent
+                    anchors.margins: theme.space10
+                    clip: true
 
-                                        Label {
-                                            text: root.fileNameForPath(modelData)
-                                            color: "#f2f5f7"
-                                            font.family: "Avenir Next"
-                                            font.pixelSize: 11
-                                            elide: Text.ElideRight
-                                            width: parent.width
-                                        }
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: theme.space8
 
-                                        Label {
-                                            text: root.parentPathForFile(modelData)
-                                            color: "#7f8a94"
-                                            font.family: "Avenir Next"
-                                            font.pixelSize: 10
-                                            elide: Text.ElideMiddle
-                                            width: parent.width
-                                        }
+                        Repeater {
+                            model: root.selectedFilePaths
+
+                            delegate: Rectangle {
+                                required property string modelData
+
+                                Layout.fillWidth: true
+                                implicitHeight: 56
+                                radius: theme.radius8
+                                color: theme.alpha(theme.ink850, 0.92)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.88)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: theme.space10
+                                    spacing: 2
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: root.fileNameForPath(modelData)
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.Medium
+                                        elide: Text.ElideRight
                                     }
 
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: root.toggleSelection(modelData)
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: root.parentPathForFile(modelData)
+                                        color: theme.textFaint
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        elide: Text.ElideMiddle
                                     }
                                 }
-                            }
 
-                            Label {
-                                visible: root.selectedFileCount === 0
-                                text: "Selected photos and videos will appear here. Assigned project membership is optional."
-                                color: "#85909a"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                                width: parent.width
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: root.toggleSelection(modelData)
+                                }
                             }
+                        }
+
+                        Label {
+                            visible: root.selectedFileCount === 0
+                            Layout.fillWidth: true
+                            text: "Selected photos and videos will appear here. Project assignment stays optional."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            wrapMode: Text.WordWrap
                         }
                     }
                 }

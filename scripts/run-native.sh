@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build/dev"
+APP_BINARY="${BUILD_DIR}/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required. Install it with: brew install cmake ninja rust qt"
@@ -31,13 +32,51 @@ fi
 
 cd "${REPO_ROOT}"
 
+if [ -z "${PHOTO_EDITOR_APP_DATA_DIR:-}" ]; then
+  PHOTO_EDITOR_APP_DATA_DIR="${HOME}/Library/Application Support/PhotoEditor"
+fi
+if [ -z "${PHOTO_EDITOR_LOG_DIR:-}" ]; then
+  PHOTO_EDITOR_LOG_DIR="${PHOTO_EDITOR_APP_DATA_DIR}/logs"
+fi
+if [ -z "${PHOTO_EDITOR_BACKUP_DIR:-}" ]; then
+  PHOTO_EDITOR_BACKUP_DIR="${PHOTO_EDITOR_APP_DATA_DIR}/backups"
+fi
+
+export PHOTO_EDITOR_APP_DATA_DIR
+export PHOTO_EDITOR_LOG_DIR
+export PHOTO_EDITOR_BACKUP_DIR
+
+mkdir -p "${PHOTO_EDITOR_APP_DATA_DIR}" "${PHOTO_EDITOR_LOG_DIR}" "${PHOTO_EDITOR_BACKUP_DIR}"
+
 echo "Building Rust catalog binaries..."
 cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins
+if [ -n "${PHOTO_EDITOR_DATABASE_URL:-}" ]; then
+  echo "Applying catalog migrations against configured database..."
+  "${REPO_ROOT}/rust/target/debug/catalog_migrate"
+else
+  echo "Bootstrapping local catalog database..."
+  "${REPO_ROOT}/rust/target/debug/catalog_local_db" ensure-running
+fi
 echo "Configuring desktop build..."
-cmake -S . -B "${BUILD_DIR}" -G Ninja -DPHOTO_EDITOR_BUILD_DESKTOP=ON
+cmake -S . -B "${BUILD_DIR}" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DPHOTO_EDITOR_BUILD_DESKTOP=ON \
+  -DPHOTO_EDITOR_RUST_BINARY_DIR="${REPO_ROOT}/rust/target/debug"
 echo "Building desktop app..."
+cmake --build "${BUILD_DIR}" --target clean
 cmake --build "${BUILD_DIR}"
+
+EXISTING_APP_PIDS="$(pgrep -f "${BUILD_DIR}/apps/desktop/(photo_editor_app|PhotoEditor.app/Contents/MacOS/PhotoEditor)" || true)"
+if [ -n "${EXISTING_APP_PIDS}" ]; then
+  echo "Stopping existing PhotoEditor instance..."
+  while IFS= read -r pid; do
+    if [ -n "${pid}" ]; then
+      kill "${pid}" 2>/dev/null || true
+    fi
+  done <<< "${EXISTING_APP_PIDS}"
+  sleep 1
+fi
 
 echo "Launching PhotoEditor..."
 echo "The terminal will stay attached while the app is open."
-exec "${BUILD_DIR}/apps/desktop/photo_editor_app"
+exec "${APP_BINARY}"

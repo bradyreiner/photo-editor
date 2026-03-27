@@ -9,14 +9,14 @@ Button {
 
     Theme { id: theme }
 
-    implicitHeight: 28
-    implicitWidth: Math.max(80, contentLabel.implicitWidth + 18)
+    implicitHeight: theme.controlHeightDense
+    implicitWidth: Math.max(72, contentLabel.implicitWidth + theme.space16)
     font.family: theme.fontUi
     font.pixelSize: 11
     hoverEnabled: true
 
     background: Rectangle {
-        radius: theme.radius8
+        radius: theme.radiusChip
         color: root.down
                ? theme.alpha(root.accent, 0.22)
                : root.active
@@ -25,9 +25,13 @@ Button {
                    ? theme.ink800
                    : theme.ink850
         border.width: 1
-        border.color: root.active ? theme.alpha(root.accent, 0.34) : theme.lineSoft
+        border.color: root.active ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.lineSoft, 0.92)
 
         Behavior on color {
+            ColorAnimation { duration: theme.durationFast }
+        }
+
+        Behavior on border.color {
             ColorAnimation { duration: theme.durationFast }
         }
     }

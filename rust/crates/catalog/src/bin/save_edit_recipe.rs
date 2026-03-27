@@ -1,6 +1,6 @@
 use std::env;
 
-use photo_catalog::{CatalogService, PostgresCatalogConfig};
+use photo_catalog::{AppRuntimePaths, CatalogService, PostgresCatalogConfig};
 use serde_json::Value;
 
 #[tokio::main]
@@ -11,6 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recipe_json = arguments.get(2).ok_or("missing recipe_json argument")?;
     let recipe_value: Value = serde_json::from_str(recipe_json)?;
 
+    AppRuntimePaths::from_env().ensure_directories()?;
     let config = PostgresCatalogConfig::from_env();
     let catalog = CatalogService::connect(&config).await?;
     catalog.initialize_schema().await?;

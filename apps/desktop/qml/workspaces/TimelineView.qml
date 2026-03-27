@@ -1,4 +1,6 @@
+pragma ComponentBehavior: Bound
 import QtQuick
+import QtCore
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
@@ -11,6 +13,7 @@ Rectangle {
     Theme { id: theme }
 
     property var currentClip: timelineDocument.currentClip
+    property var sourceClip: timelineDocument.sourceClip
     property real playheadSeconds: timelineDocument.currentClipPlayheadSeconds
     property real sequencePlayheadSeconds: timelineDocument.sequencePlayheadSeconds
     property bool sequencePlaying: timelineDocument.sequencePlaying
@@ -19,22 +22,272 @@ Rectangle {
     property real snapThresholdPixels: 10
     property bool snappingEnabled: true
     property bool rippleModeEnabled: true
-    property real sourceDurationSeconds: 0
-    property real sourceTrimInSeconds: 0
-    property real sourceTrimOutSeconds: 0
+    property int mediaPickerSelectedIndex: -1
+    property string mediaPickerAssetId: ""
+    property string mediaPickerFilePath: ""
+    property string mediaPickerDisplayLabel: ""
+    property string mediaPickerThumbnailSource: ""
+    property string mediaPickerMediaType: ""
+    property string mediaPickerTimelineDocumentPath: ""
+    property string mediaPickerDurationText: ""
+    property bool mediaPickerOnline: false
+    property var mediaPickerAssets: []
+    property string mediaPickerProjectName: ""
+    property string mediaPickerScope: "all"
+    property string setupTimelineName: ""
+    property string setupProjectBinding: ""
+    property string setupResolutionPreset: "1080 x 1350"
+    property string setupWidth: "1080"
+    property string setupHeight: "1350"
+    property string setupFrameRate: "30"
+    property string setupAudioSampleRate: "48000"
+    property string setupColorSpace: "Rec.709"
+    property string setupDataLevels: "Legal"
+    property string setupExportContainer: "mp4"
+    property string setupExportCodec: "h264"
+    property string inspectorTab: "effects"
+    property bool sourcePanelCollapsed: false
+    property bool effectsPanelCollapsed: false
+    property string sourceRailTab: "source"
+    property real sourcePanelWidth: 320
+    property real effectsPanelWidth: 344
+    property bool marqueeActive: false
+    property real marqueeStartX: 0
+    property real marqueeStartY: 0
+    property real marqueeCurrentX: 0
+    property real marqueeCurrentY: 0
+    property bool dragPreviewVisible: false
+    property real dragPreviewX: 0
+    property real dragPreviewY: 0
+    property real dragPreviewWidth: 0
+    property color dragPreviewColor: theme.alpha(theme.accentWarm300, 0.22)
+    property bool snapGuideVisible: false
+    property real snapGuideSeconds: 0
+    property string snapGuideLabel: ""
     readonly property var sequenceTrackModel: timelineDocument.sequenceTracks ? timelineDocument.sequenceTracks : []
-    readonly property real laneHeaderWidth: 96
-    readonly property real laneHeight: 56
-    readonly property real rulerHeight: 28
-    readonly property real trackSpacing: 6
+    readonly property var sequenceMarkerModel: timelineDocument.sequenceMarkers ? timelineDocument.sequenceMarkers : []
+    readonly property var effectLibraryModel: [
+        {"name": "Transform", "category": "Motion", "description": "Position, scale, and framing controls."},
+        {"name": "Opacity", "category": "Composite", "description": "Animate transparency and blends."},
+        {"name": "Crop", "category": "Motion", "description": "Trim frame edges."},
+        {"name": "Color Balance", "category": "Color", "description": "Primary warmth and tint balance."},
+        {"name": "Contrast", "category": "Color", "description": "Punch up midtones."},
+        {"name": "Sharpen", "category": "Detail", "description": "Restore edge definition."},
+        {"name": "Gaussian Blur", "category": "Stylize", "description": "Soft blur for focus pulls."},
+        {"name": "Vignette", "category": "Stylize", "description": "Darken frame edges."},
+        {"name": "Volume", "category": "Audio", "description": "Clip gain and loudness."},
+        {"name": "Pan", "category": "Audio", "description": "Stereo position."}
+    ]
+    readonly property var transitionLibraryModel: [
+        {"name": "Cut", "description": "Direct clip boundary."},
+        {"name": "Cross Dissolve", "description": "Blend outgoing and incoming clips."},
+        {"name": "Dip To Color", "description": "Fade through a solid color."},
+        {"name": "Fade In", "description": "Bring in from black or silence."},
+        {"name": "Fade Out", "description": "Exit to black or silence."},
+        {"name": "Wipe", "description": "Directional reveal between clips."}
+    ]
+    readonly property real laneHeaderWidth: 128
+    readonly property real laneHeight: 52
+    readonly property real rulerHeight: 24
+    readonly property real trackSpacing: 4
     readonly property real timelineContentWidth: Math.max(
                                                     timelineViewport.width,
                                                     Math.max(1, sequenceDurationSeconds()) * timelineZoom + 140)
     readonly property real timelineContentHeight: rulerHeight
                                                   + Math.max(1, sequenceTrackModel.length) * (laneHeight + trackSpacing)
+    readonly property var resolutionPresetLabels: [
+        "1080 x 1350",
+        "1920 x 1080",
+        "3840 x 2160",
+        "1080 x 1920",
+        "Custom"
+    ]
+
+    Settings {
+        id: timelineWorkspaceSettings
+        category: "TimelineWorkspace"
+        property bool sourcePanelCollapsed: false
+        property bool effectsPanelCollapsed: false
+        property string sourceRailTab: "source"
+        property string inspectorTab: "effects"
+        property real sourcePanelWidth: 320
+        property real effectsPanelWidth: 344
+        property bool snappingEnabled: appShell.defaultTimelineSnapping
+        property bool rippleModeEnabled: appShell.defaultTimelineRipple
+    }
+
+    Component.onCompleted: {
+        sourcePanelCollapsed = timelineWorkspaceSettings.sourcePanelCollapsed
+        effectsPanelCollapsed = timelineWorkspaceSettings.effectsPanelCollapsed
+        sourceRailTab = timelineWorkspaceSettings.sourceRailTab
+        inspectorTab = timelineWorkspaceSettings.inspectorTab
+        sourcePanelWidth = Math.max(260, Number(timelineWorkspaceSettings.sourcePanelWidth || 320))
+        effectsPanelWidth = Math.max(288, Number(timelineWorkspaceSettings.effectsPanelWidth || 344))
+        snappingEnabled = timelineWorkspaceSettings.snappingEnabled
+        rippleModeEnabled = timelineWorkspaceSettings.rippleModeEnabled
+        beginTimelineSetup()
+        timelinePlayback.attachVideoOutput(videoMonitor)
+    }
+    Component.onDestruction: timelinePlayback.attachVideoOutput(null)
+
+    onSourcePanelCollapsedChanged: timelineWorkspaceSettings.sourcePanelCollapsed = sourcePanelCollapsed
+    onEffectsPanelCollapsedChanged: timelineWorkspaceSettings.effectsPanelCollapsed = effectsPanelCollapsed
+    onSourceRailTabChanged: timelineWorkspaceSettings.sourceRailTab = sourceRailTab
+    onInspectorTabChanged: timelineWorkspaceSettings.inspectorTab = inspectorTab
+    onSourcePanelWidthChanged: timelineWorkspaceSettings.sourcePanelWidth = sourcePanelWidth
+    onEffectsPanelWidthChanged: timelineWorkspaceSettings.effectsPanelWidth = effectsPanelWidth
+    onSnappingEnabledChanged: timelineWorkspaceSettings.snappingEnabled = snappingEnabled
+    onRippleModeEnabledChanged: timelineWorkspaceSettings.rippleModeEnabled = rippleModeEnabled
+
+    Connections {
+        target: appShell
+
+        function onTimelineDefaultsChanged() {
+            root.snappingEnabled = appShell.defaultTimelineSnapping
+            root.rippleModeEnabled = appShell.defaultTimelineRipple
+        }
+
+        function onTimelineWorkspaceSettingsReset() {
+            root.restoreDefaultLayout()
+        }
+    }
+
+    Connections {
+        target: timelineDocument
+
+        function onTimelineStateChanged() {
+            if (!timelineDocument.hasActiveTimeline)
+                root.beginTimelineSetup()
+        }
+    }
+
+    Connections {
+        target: catalogAssets
+
+        function onAssetCountChanged() {
+            if (mediaPickerDialog.visible)
+                root.refreshMediaPickerAssets()
+        }
+
+        function onTotalAssetCountChanged() {
+            if (mediaPickerDialog.visible)
+                root.refreshMediaPickerAssets()
+        }
+
+        function onProjectStatsRevisionChanged() {
+            if (mediaPickerDialog.visible)
+                root.refreshMediaPickerAssets()
+        }
+    }
 
     function clipSourceUrl() {
         return timelineDocument.playbackSourceUrl ? timelineDocument.playbackSourceUrl : ""
+    }
+
+    function canLoadPickedMedia() {
+        return mediaPickerMediaType !== "timeline" && mediaPickerFilePath.length > 0 && mediaPickerOnline
+    }
+
+    function preferredMediaPickerProject() {
+        if (timelineDocument.projectBinding.length > 0)
+            return timelineDocument.projectBinding
+        if (catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned")
+            return catalogAssets.projectFilter
+        return ""
+    }
+
+    function hasProjectScopedMediaPicker() {
+        return preferredMediaPickerProject().length > 0
+    }
+
+    function refreshMediaPickerAssets() {
+        mediaPickerProjectName = mediaPickerScope === "project" ? preferredMediaPickerProject() : ""
+        mediaPickerAssets = catalogAssets.timelinePickerAssets(mediaPickerProjectName)
+        if (mediaPickerAssets.length > 0) {
+            const first = mediaPickerAssets[0]
+            selectMediaPickerAsset(
+                        0,
+                        first.assetId || "",
+                        first.filePath || "",
+                        first.cameraLabel || "",
+                        first.thumbnailSource || "",
+                        first.mediaType || "",
+                        first.timelineDocumentPath || "",
+                        first.durationText || "",
+                        Boolean(first.online))
+        } else {
+            clearMediaPickerSelection()
+        }
+    }
+
+    function mediaPickerSubtitle() {
+        if (mediaPickerScope === "project" && mediaPickerProjectName.length > 0)
+            return "Showing timeline-ready media in " + mediaPickerProjectName
+        return "Showing all timeline-ready media from the catalog"
+    }
+
+    function mediaPickerEmptyStateText() {
+        if (catalogAssets.loading)
+            return "Library is still loading."
+        if (mediaPickerScope === "project" && mediaPickerProjectName.length > 0)
+            return "No photo, video, or audio media is assigned to " + mediaPickerProjectName + "."
+        return "No timeline-ready media is available yet. Import media in Library first."
+    }
+
+    function applyResolutionPreset() {
+        switch (setupResolutionPreset) {
+        case "1920 x 1080":
+            setupWidth = "1920"
+            setupHeight = "1080"
+            break
+        case "3840 x 2160":
+            setupWidth = "3840"
+            setupHeight = "2160"
+            break
+        case "1080 x 1920":
+            setupWidth = "1080"
+            setupHeight = "1920"
+            break
+        case "1080 x 1350":
+            setupWidth = "1080"
+            setupHeight = "1350"
+            break
+        default:
+            break
+        }
+    }
+
+    function beginTimelineSetup() {
+        setupTimelineName = catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                ? catalogAssets.projectFilter + " Sequence"
+                : "Untitled Timeline"
+        setupProjectBinding = catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                ? catalogAssets.projectFilter
+                : ""
+        setupResolutionPreset = "1080 x 1350"
+        setupWidth = "1080"
+        setupHeight = "1350"
+        setupFrameRate = "30"
+        setupAudioSampleRate = "48000"
+        setupColorSpace = "Rec.709"
+        setupDataLevels = "Legal"
+        setupExportContainer = "mp4"
+        setupExportCodec = "h264"
+    }
+
+    function createTimelineFromSetup() {
+        timelineDocument.createTimelineWithSettings({
+            "timelineName": setupTimelineName,
+            "projectBinding": setupProjectBinding,
+            "width": Math.max(16, Number(setupWidth || 1080)),
+            "height": Math.max(16, Number(setupHeight || 1350)),
+            "frameRate": Math.max(1, Number(setupFrameRate || 30)),
+            "audioSampleRate": Math.max(8000, Number(setupAudioSampleRate || 48000)),
+            "colorSpace": setupColorSpace,
+            "dataLevels": setupDataLevels,
+            "exportContainer": setupExportContainer,
+            "exportCodec": setupExportCodec
+        })
     }
 
     function trimStartSeconds() {
@@ -55,28 +308,6 @@ Rectangle {
 
     function shouldShowTimelinePoster() {
         return timelineDocument.previewSource.length > 0 && (!hasPlayableClip() || !timelinePlayback.mediaReady)
-    }
-
-    function hasLibraryVideoSelection() {
-        return catalogAssets.selectedMediaType === "video"
-                && catalogAssets.selectedFilePath.length > 0
-    }
-
-    function resetSourceTrimRange() {
-        if (!hasLibraryVideoSelection()) {
-            sourceDurationSeconds = 0
-            sourceTrimInSeconds = 0
-            sourceTrimOutSeconds = 0
-            return
-        }
-
-        sourceDurationSeconds = timelineDocument.sourceDurationSecondsForFile(catalogAssets.selectedFilePath)
-        sourceTrimInSeconds = 0
-        sourceTrimOutSeconds = sourceDurationSeconds
-    }
-
-    function libraryPreviewSource() {
-        return catalogAssets.selectedThumbnailSource ? catalogAssets.selectedThumbnailSource : ""
     }
 
     function sequenceDurationSeconds() {
@@ -113,8 +344,15 @@ Rectangle {
     }
 
     function snapSequenceSeconds(proposedSeconds, excludedClipId) {
+        return snapSequenceResult(proposedSeconds, excludedClipId).seconds
+    }
+
+    function snapSequenceResult(proposedSeconds, excludedClipId) {
         if (!snappingEnabled)
-            return Math.max(0, Number(proposedSeconds || 0))
+            return {
+                "seconds": Math.max(0, Number(proposedSeconds || 0)),
+                "snapped": false
+            }
 
         const thresholdSeconds = snapThresholdPixels / Math.max(1, timelineZoom)
         let snappedSeconds = Math.max(0, Number(proposedSeconds || 0))
@@ -143,7 +381,11 @@ Rectangle {
             }
         }
 
-        return snappedSeconds
+        return {
+            "seconds": snappedSeconds,
+            "snapped": nearestDistance <= thresholdSeconds,
+            "distance": nearestDistance
+        }
     }
 
     function seekTimelineFromX(xPos) {
@@ -159,6 +401,35 @@ Rectangle {
 
         if (timelineDocument.splitSelectedClip(playheadSeconds))
             timelineDocument.seekCurrentClipSeconds(trimStartSeconds())
+    }
+
+    function saveTimelineToLibrary() {
+        if (!timelineDocument.saveTimeline())
+            return false
+
+        if (timelineDocument.projectBinding.length > 0 && timelineDocument.timelineAssetId.length > 0)
+            catalogAssets.addAssetToProject(timelineDocument.timelineAssetId, timelineDocument.projectBinding)
+        catalogAssets.refresh()
+        return true
+    }
+
+    function toggleSourcePanel() {
+        sourcePanelCollapsed = !sourcePanelCollapsed
+    }
+
+    function toggleEffectsPanel() {
+        effectsPanelCollapsed = !effectsPanelCollapsed
+    }
+
+    function restoreDefaultLayout() {
+        sourcePanelCollapsed = false
+        effectsPanelCollapsed = false
+        sourceRailTab = "source"
+        inspectorTab = "effects"
+        sourcePanelWidth = 320
+        effectsPanelWidth = 344
+        snappingEnabled = appShell.defaultTimelineSnapping
+        rippleModeEnabled = appShell.defaultTimelineRipple
     }
 
     function programVideoFillMode() {
@@ -183,138 +454,684 @@ Rectangle {
         }
     }
 
-    function appendSelectedSourceClip() {
-        if (!hasLibraryVideoSelection())
+    function clearMediaPickerSelection() {
+        mediaPickerSelectedIndex = -1
+        mediaPickerAssetId = ""
+        mediaPickerFilePath = ""
+        mediaPickerDisplayLabel = ""
+        mediaPickerThumbnailSource = ""
+        mediaPickerMediaType = ""
+        mediaPickerTimelineDocumentPath = ""
+        mediaPickerDurationText = ""
+        mediaPickerOnline = false
+    }
+
+    function openMediaPicker() {
+        clearMediaPickerSelection()
+        mediaPickerScope = hasProjectScopedMediaPicker() ? "project" : "all"
+        refreshMediaPickerAssets()
+        mediaPickerDialog.open()
+    }
+
+    function setMediaPickerScope(scope) {
+        if (mediaPickerScope === scope)
             return
-        timelineDocument.addClipFromGallery(
-                    catalogAssets.selectedAssetId,
-                    catalogAssets.selectedFilePath,
-                    catalogAssets.selectedCameraLabel,
-                    sourceDurationSeconds,
-                    catalogAssets.selectedThumbnailSource)
+        mediaPickerScope = scope
+        refreshMediaPickerAssets()
     }
 
-    function insertSelectedSourceClip() {
-        if (!hasLibraryVideoSelection())
+    function selectMediaPickerAsset(index, assetId, filePath, displayLabel, thumbnailSource, mediaType, timelineDocumentPath, durationText, online) {
+        mediaPickerSelectedIndex = index
+        mediaPickerAssetId = assetId
+        mediaPickerFilePath = filePath
+        mediaPickerDisplayLabel = displayLabel
+        mediaPickerThumbnailSource = thumbnailSource
+        mediaPickerMediaType = mediaType
+        mediaPickerTimelineDocumentPath = timelineDocumentPath
+        mediaPickerDurationText = durationText
+        mediaPickerOnline = online
+    }
+
+    function addPickedMedia() {
+        if (!canLoadPickedMedia())
             return
-        timelineDocument.insertClipFromGallery(
-                    catalogAssets.selectedAssetId,
-                    catalogAssets.selectedFilePath,
-                    catalogAssets.selectedCameraLabel,
-                    sourceDurationSeconds,
-                    sourceTrimInSeconds,
-                    sourceTrimOutSeconds,
-                    catalogAssets.selectedThumbnailSource)
+
+        timelineDocument.loadSourceClipFromGallery(
+                    mediaPickerAssetId,
+                    mediaPickerFilePath,
+                    mediaPickerDisplayLabel,
+                    0,
+                    mediaPickerThumbnailSource)
+        mediaPickerDialog.close()
     }
 
-    function overwriteSelectedSourceClip() {
-        if (!hasLibraryVideoSelection())
+    function insertPickedMedia() {
+        addPickedMedia()
+        timelineDocument.insertSourceClipAtPlayhead()
+    }
+
+    function overwritePickedMedia() {
+        addPickedMedia()
+        timelineDocument.overwriteSourceClipAtPlayhead()
+    }
+
+    function clipSequenceTime(modelData, localX) {
+        return Number(modelData.startSeconds || 0) + Math.max(0, localX / timelineZoom)
+    }
+
+    function resetTimelinePreviewState() {
+        dragPreviewVisible = false
+        snapGuideVisible = false
+    }
+
+    function updateSnapGuide(seconds, snapped, labelPrefix) {
+        if (snapped) {
+            snapGuideVisible = true
+            snapGuideSeconds = seconds
+            snapGuideLabel = labelPrefix + " " + timecodeText(seconds)
+        } else {
+            snapGuideVisible = false
+            snapGuideLabel = ""
+        }
+    }
+
+    function applyEffectToClip(clipIndex, effectName) {
+        if (clipIndex < 0 || !effectName || effectName.length === 0)
             return
-        timelineDocument.overwriteClipFromGallery(
-                    catalogAssets.selectedAssetId,
-                    catalogAssets.selectedFilePath,
-                    catalogAssets.selectedCameraLabel,
-                    sourceDurationSeconds,
-                    sourceTrimInSeconds,
-                    sourceTrimOutSeconds,
-                    catalogAssets.selectedThumbnailSource)
+        timelineDocument.selectClip(clipIndex)
+        timelineDocument.addSelectedClipEffect(effectName)
+        if (effectName === "Transform" || effectName === "Opacity" || effectName === "Crop")
+            inspectorTab = "motion"
+        else if (effectName === "Volume" || effectName === "Pan")
+            inspectorTab = "audio"
+        else
+            inspectorTab = "effects"
     }
 
-    Component.onCompleted: {
-        resetSourceTrimRange()
-        timelinePlayback.attachVideoOutput(videoMonitor)
+    function applyTransitionToClipEdge(clipIndex, edge, transitionName, durationSeconds) {
+        if (clipIndex < 0 || !transitionName || transitionName.length === 0)
+            return
+        timelineDocument.selectClip(clipIndex)
+        timelineDocument.assignSelectedClipTransition(edge, transitionName, durationSeconds)
+        if (transitionName === "Fade In")
+            timelineDocument.setSelectedClipFadeInSeconds(durationSeconds)
+        else if (transitionName === "Fade Out")
+            timelineDocument.setSelectedClipFadeOutSeconds(durationSeconds)
+        inspectorTab = "transitions"
     }
-    Component.onDestruction: timelinePlayback.attachVideoOutput(null)
 
-    Connections {
-        target: catalogAssets
+    function selectClipFromMarquee() {
+        const left = Math.min(marqueeStartX, marqueeCurrentX)
+        const right = Math.max(marqueeStartX, marqueeCurrentX)
+        const top = Math.min(marqueeStartY, marqueeCurrentY)
+        const bottom = Math.max(marqueeStartY, marqueeCurrentY)
+        let bestClipIndex = -1
+        let bestTrackRow = -1
 
-        function onSelectedAssetChanged() {
-            root.resetSourceTrimRange()
+        for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
+            const track = sequenceTrackModel[trackIndex]
+            if (!track || !track.clips)
+                continue
+            const laneTop = rulerHeight + trackIndex * (laneHeight + trackSpacing)
+            const laneBottom = laneTop + laneHeight
+            if (bottom < laneTop || top > laneBottom)
+                continue
+
+            for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
+                const clip = track.clips[clipIndex]
+                if (!clip || clip.trackKind !== "video")
+                    continue
+                const clipLeft = Number(clip.startSeconds || 0) * timelineZoom
+                const clipRight = clipLeft + clipWidth(clip.trimmedDurationSeconds)
+                if (right >= clipLeft && left <= clipRight && trackIndex >= bestTrackRow) {
+                    bestTrackRow = trackIndex
+                    bestClipIndex = Number(clip.index || -1)
+                }
+            }
+        }
+
+        if (bestClipIndex >= 0)
+            timelineDocument.selectClip(bestClipIndex)
+    }
+
+    Dialog {
+        id: mediaPickerDialog
+        parent: Overlay.overlay
+        modal: true
+        width: Math.min(root.width - 32, 1080)
+        height: Math.min(root.height - 32, 760)
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        padding: 0
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            radius: 22
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineStrong, 0.46)
+        }
+
+        contentItem: RowLayout {
+            spacing: 0
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: "transparent"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 12
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Label {
+                                text: "Gallery"
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 26
+                                font.weight: Font.DemiBold
+                            }
+
+                            Label {
+                                text: root.mediaPickerSubtitle()
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        ActionButton {
+                            text: "Current Project"
+                            compact: true
+                            active: root.mediaPickerScope === "project"
+                            visible: root.hasProjectScopedMediaPicker()
+                            onClicked: root.setMediaPickerScope("project")
+                        }
+
+                        ActionButton {
+                            text: "All Media"
+                            compact: true
+                            active: root.mediaPickerScope === "all"
+                            onClicked: root.setMediaPickerScope("all")
+                        }
+
+                        ActionButton {
+                            text: "Close"
+                            onClicked: mediaPickerDialog.close()
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 18
+                        color: theme.alpha(theme.ink950, 0.76)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.4)
+                        clip: true
+
+                        GridView {
+                            id: mediaPickerGrid
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            clip: true
+                            cellWidth: 176
+                            cellHeight: 212
+                            model: root.mediaPickerAssets
+
+                            delegate: Rectangle {
+                                required property int index
+                                required property var modelData
+
+                                readonly property string assetId: String(modelData.assetId || "")
+                                readonly property string cameraLabel: String(modelData.cameraLabel || "")
+                                readonly property string filePath: String(modelData.filePath || "")
+                                readonly property string thumbnailSource: String(modelData.thumbnailSource || "")
+                                readonly property string mediaType: String(modelData.mediaType || "")
+                                readonly property string durationText: String(modelData.durationText || "")
+                                readonly property string timelineDocumentPath: String(modelData.timelineDocumentPath || "")
+                                readonly property bool online: Boolean(modelData.online)
+
+                                radius: 14
+                                color: root.mediaPickerAssetId === assetId ? theme.alpha(theme.accentWarm500, 0.16) : theme.alpha(theme.ink900, 0.88)
+                                border.width: 1
+                                border.color: root.mediaPickerAssetId === assetId
+                                              ? theme.accentWarm300
+                                              : theme.alpha(theme.lineSoft, 0.34)
+                                opacity: online ? 1 : 0.56
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 8
+
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 132
+                                        radius: 10
+                                        color: "#0b1014"
+                                        clip: true
+
+                                        Image {
+                                            anchors.fill: parent
+                                            source: thumbnailSource
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
+                                            cache: false
+                                            visible: source.length > 0
+                                        }
+
+                                        Label {
+                                            anchors.centerIn: parent
+                                            visible: thumbnailSource.length === 0
+                                            text: mediaType === "timeline" ? "Timeline" : "Preview"
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: cameraLabel.length > 0 ? cameraLabel : assetId
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 12
+                                        font.weight: Font.Medium
+                                        elide: Text.ElideRight
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        Label {
+                                            text: mediaType === "photo"
+                                                  ? "Photo"
+                                                  : mediaType === "audio"
+                                                    ? "Audio"
+                                                  : mediaType === "timeline"
+                                                    ? "Timeline"
+                                                    : "Video"
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+
+                                        Item { Layout.fillWidth: true }
+
+                                        Label {
+                                            text: durationText
+                                            visible: durationText.length > 0
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: root.selectMediaPickerAsset(
+                                                   index,
+                                                   assetId,
+                                                   filePath,
+                                                   cameraLabel,
+                                                   thumbnailSource,
+                                                   mediaType,
+                                                   timelineDocumentPath,
+                                                   durationText,
+                                                   online)
+                                }
+                            }
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            visible: root.mediaPickerAssets.length === 0
+                            text: root.mediaPickerEmptyStateText()
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth: 280
+                Layout.fillHeight: true
+                color: theme.alpha(theme.ink950, 0.84)
+                border.width: 0
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 18
+                    spacing: 12
+
+                    Label {
+                        text: "Selection"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 15
+                        font.weight: Font.DemiBold
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 170
+                        radius: 14
+                        color: "#0b1014"
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.34)
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            source: root.mediaPickerThumbnailSource
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: false
+                            cache: false
+                            visible: source.length > 0
+                        }
+
+                        Label {
+                            anchors.centerIn: parent
+                            visible: root.mediaPickerThumbnailSource.length === 0
+                            text: "Choose media"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.mediaPickerDisplayLabel.length > 0 ? root.mediaPickerDisplayLabel : "No media selected"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 16
+                        font.weight: Font.Medium
+                        wrapMode: Text.Wrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.mediaPickerMediaType === "video"
+                              ? "Video clip ready for source, insert, or overwrite."
+                              : root.mediaPickerMediaType === "audio"
+                                ? "Standalone audio will route to the targeted audio lane."
+                              : root.mediaPickerMediaType === "photo"
+                                ? "Stills will load as timed clips on the targeted video lane."
+                              : root.mediaPickerMediaType === "timeline"
+                                  ? "Saved timelines stay visible in the project gallery."
+                                  : "Select media from the gallery and click Add."
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.mediaPickerDisplayLabel.length > 0 && !root.mediaPickerOnline
+                        text: "This media is offline and cannot be loaded until the source path is available."
+                        color: "#f4b7af"
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.Wrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.mediaPickerDurationText
+                        visible: text.length > 0
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                    }
+
+                    Item { Layout.fillHeight: true }
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Load To Source"
+                        tone: "primary"
+                        enabled: root.canLoadPickedMedia()
+                        onClicked: root.addPickedMedia()
+                    }
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Insert"
+                        enabled: root.canLoadPickedMedia()
+                        onClicked: root.insertPickedMedia()
+                    }
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Overwrite"
+                        enabled: root.canLoadPickedMedia()
+                        onClicked: root.overwritePickedMedia()
+                    }
+                }
+            }
         }
     }
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        visible: !timelineDocument.hasActiveTimeline
+        spacing: 18
+
+        Item { Layout.fillHeight: true }
 
         RowLayout {
+            Layout.alignment: Qt.AlignHCenter
             Layout.fillWidth: true
-            spacing: 10
+            Layout.maximumWidth: 1260
+            spacing: 16
 
-            Label {
-                text: "Timeline Editor"
-                color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 26
-                font.weight: Font.DemiBold
-            }
+            BrandPanel {
+                Layout.preferredWidth: 440
+                Layout.fillHeight: false
+                title: "Create Timeline"
+                subtitle: "Start with sequence settings instead of an implicit default timeline."
+                accent: theme.warning
 
-            Rectangle {
-                width: 1
-                height: 18
-                color: theme.lineSoft
-            }
+                Label {
+                    Layout.fillWidth: true
+                    text: "This setup defines the sequence format, audio base, color pipeline defaults, and render container before you start cutting."
+                    color: theme.textMain
+                    wrapMode: Text.WordWrap
+                }
 
-            Label {
-                text: timelineDocument.clipCount + " clips  •  " + timelineDocument.sequenceFormatLabel
-                color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 11
-            }
+                InspectorSection {
+                    Layout.fillWidth: true
+                    title: "Sequence"
 
-            Item { Layout.fillWidth: true }
+                    ToneTextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Timeline name"
+                        text: root.setupTimelineName
+                        onTextChanged: root.setupTimelineName = text
+                    }
 
-            ActionButton {
-                text: "New Timeline"
-                onClicked: timelineDocument.createTimeline(timelineNameField.text)
-            }
+                    ToneTextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Project binding"
+                        text: root.setupProjectBinding
+                        onTextChanged: root.setupProjectBinding = text
+                    }
 
-            ActionButton {
-                text: "Save Timeline"
-                tone: "primary"
-                enabled: timelineDocument.clipCount > 0
-                onClicked: {
-                    if (timelineDocument.saveTimeline())
-                        catalogAssets.refresh()
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: root.resolutionPresetLabels
+                            currentIndex: Math.max(0, root.resolutionPresetLabels.indexOf(root.setupResolutionPreset))
+                            onActivated: {
+                                root.setupResolutionPreset = root.resolutionPresetLabels[currentIndex]
+                                root.applyResolutionPreset()
+                            }
+                        }
+
+                        ToneTextField {
+                            Layout.preferredWidth: 110
+                            text: root.setupWidth
+                            onTextChanged: root.setupWidth = text
+                        }
+
+                        ToneTextField {
+                            Layout.preferredWidth: 110
+                            text: root.setupHeight
+                            onTextChanged: root.setupHeight = text
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: ["23.976", "24", "25", "29.97", "30", "60"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupFrameRate))
+                            onActivated: root.setupFrameRate = model[currentIndex]
+                        }
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: ["44100", "48000", "96000"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupAudioSampleRate))
+                            onActivated: root.setupAudioSampleRate = model[currentIndex]
+                        }
+                    }
                 }
             }
 
-            ActionButton {
-                text: "Add Track"
-                onClicked: timelineDocument.addVideoTrack()
+            BrandPanel {
+                Layout.preferredWidth: 440
+                Layout.fillHeight: false
+                title: "Color + Delivery"
+                subtitle: "Professional core defaults for sequence and export."
+                accent: theme.accentCool400
+
+                InspectorSection {
+                    Layout.fillWidth: true
+                    title: "Color Pipeline"
+
+                    ToneComboBox {
+                        Layout.fillWidth: true
+                        model: ["Rec.709", "Display P3", "sRGB"]
+                        currentIndex: Math.max(0, model.indexOf(root.setupColorSpace))
+                        onActivated: root.setupColorSpace = model[currentIndex]
+                    }
+
+                    ToneComboBox {
+                        Layout.fillWidth: true
+                        model: ["Legal", "Full"]
+                        currentIndex: Math.max(0, model.indexOf(root.setupDataLevels))
+                        onActivated: root.setupDataLevels = model[currentIndex]
+                    }
+                }
+
+                InspectorSection {
+                    Layout.fillWidth: true
+                    title: "Export Defaults"
+
+                    RowLayout {
+                        Layout.fillWidth: true
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: ["mp4", "mov"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupExportContainer))
+                            onActivated: root.setupExportContainer = model[currentIndex]
+                        }
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: ["h264", "prores"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupExportCodec))
+                            onActivated: root.setupExportCodec = model[currentIndex]
+                        }
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Project-bound timelines save back into the active project by default. Media can be added after creation from the Timeline media browser."
+                    color: theme.textMuted
+                    wrapMode: Text.WordWrap
+                }
+
+                Item { Layout.fillHeight: true }
+
+                RowLayout {
+                    Layout.fillWidth: true
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Use Active Project"
+                        enabled: catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                        onClicked: root.setupProjectBinding = catalogAssets.projectFilter
+                    }
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Create Timeline"
+                        tone: "primary"
+                        onClicked: root.createTimelineFromSetup()
+                    }
+                }
             }
         }
 
-        Label {
-            Layout.fillWidth: true
-            text: timelineDocument.status
-            color: theme.textMuted
-            font.family: theme.fontUi
-            font.pixelSize: 12
-            elide: Text.ElideRight
-        }
+        Item { Layout.fillHeight: true }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        visible: timelineDocument.hasActiveTimeline
+        spacing: 8
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 10
+            spacing: 8
 
             TextField {
                 id: timelineNameField
+                Layout.preferredWidth: 320
                 Layout.fillWidth: true
                 text: timelineDocument.timelineName
                 color: theme.textStrong
                 font.family: theme.fontUi
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
                 selectByMouse: true
                 placeholderText: "Timeline name"
                 onEditingFinished: timelineDocument.timelineName = text
 
                 background: Rectangle {
-                    radius: 12
+                    radius: 8
                     color: theme.ink850
                     border.width: 1
-                    border.color: theme.lineSoft
+                    border.color: theme.alpha(theme.lineSoft, 0.92)
                 }
+            }
+
+            InfoPill {
+                label: "Format"
+                value: timelineDocument.sequenceFormatLabel
             }
 
             InfoPill {
@@ -322,256 +1139,137 @@ Rectangle {
                 value: timelineDocument.videoTrackCount + "V / " + timelineDocument.audioTrackCount + "A"
             }
 
-            InfoPill {
-                label: "Sequence"
-                value: formatSeconds(sequencePlayheadSeconds) + " / " + formatSeconds(sequenceDurationSeconds())
+            ActionButton {
+                text: "New"
+                iconName: "plus"
+                compact: true
+                tooltipText: "Create a new timeline"
+                onClicked: timelineDocument.closeTimeline()
             }
 
-            InfoPill {
-                label: "Clip"
-                value: currentClip.trimmedDurationText && currentClip.trimmedDurationText.length > 0
-                       ? currentClip.trimmedDurationText
-                       : "No clip"
+            ActionButton {
+                text: "Media"
+                iconName: "plus"
+                compact: true
+                tooltipText: "Open media browser"
+                onClicked: root.openMediaPicker()
+            }
+
+            ActionButton {
+                text: "Save"
+                iconName: "save"
+                compact: true
+                tooltipText: "Save timeline to the library"
+                tone: "primary"
+                enabled: timelineDocument.clipCount > 0
+                onClicked: root.saveTimelineToLibrary()
             }
         }
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 10
+            spacing: 8
+
+            Label {
+                text: timecodeText(sequencePlayheadSeconds) + " / " + formatSeconds(sequenceDurationSeconds())
+                color: theme.textStrong
+                font.family: theme.fontMono
+                font.pixelSize: 11
+            }
 
             Rectangle {
-                Layout.preferredWidth: 248
-                Layout.fillHeight: true
-                radius: 18
-                color: theme.alpha(theme.ink900, 0.82)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.55)
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: 14
+                color: theme.alpha(theme.lineSoft, 0.8)
+            }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 10
+            Label {
+                visible: timelineDocument.hasSourceClip
+                Layout.preferredWidth: 220
+                Layout.maximumWidth: 260
+                text: sourceClip.displayLabel
+                color: theme.textMain
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                elide: Text.ElideRight
+            }
 
-                    Label {
-                        text: "Source"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 15
-                        font.weight: Font.DemiBold
-                    }
+            Rectangle {
+                visible: timelineDocument.hasSourceClip
+                Layout.preferredWidth: 1
+                Layout.preferredHeight: 14
+                color: theme.alpha(theme.lineSoft, 0.8)
+            }
 
-                    Label {
-                        Layout.fillWidth: true
-                        text: catalogAssets.selectedAssetId.length > 0
-                              ? catalogAssets.selectedCameraLabel
-                              : "Select a video in Library"
-                        color: theme.textMain
-                        font.family: theme.fontUi
-                        font.pixelSize: 12
-                        wrapMode: Text.Wrap
-                    }
+            Label {
+                text: timelineDocument.activeTool.toUpperCase() + "  |  "
+                      + timelineDocument.editMode.toUpperCase() + "  |  "
+                      + (snappingEnabled ? "SNAP" : "FREE")
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+            }
 
-                    Label {
-                        Layout.fillWidth: true
-                        text: catalogAssets.selectedDurationText.length > 0
-                              ? catalogAssets.selectedDurationText
-                              : "Drag media in from Library or add the current selection."
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.Wrap
-                    }
+            Item { Layout.fillWidth: true }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 14
-                        color: theme.alpha(theme.ink950, 0.72)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.42)
-                        implicitHeight: 226
+            Label {
+                text: timelineDocument.dirty ? "Unsaved changes" : timelineDocument.status
+                color: timelineDocument.dirty ? theme.accentWarm300 : theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+            }
+        }
 
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
+        SplitView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            orientation: Qt.Horizontal
 
-                            Label {
-                                text: "Source Monitor"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: 110
-                                radius: 10
-                                color: "#0b1014"
-                                clip: true
-
-                                Image {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    source: root.libraryPreviewSource()
-                                    fillMode: Image.PreserveAspectFit
-                                    visible: source.length > 0
-                                    cache: false
-                                    asynchronous: false
-                                }
-
-                                Label {
-                                    anchors.centerIn: parent
-                                    visible: root.libraryPreviewSource().length === 0
-                                    text: "Select a Library video"
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                }
-                            }
-
-                            Label {
-                                text: "In  •  " + Number(sourceTrimInSeconds || 0).toFixed(2) + "s"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 0
-                                to: Math.max(0.05, sourceDurationSeconds)
-                                value: sourceTrimInSeconds
-                                enabled: root.hasLibraryVideoSelection() && sourceDurationSeconds > 0
-                                onMoved: sourceTrimInSeconds = Math.min(value, Math.max(0, sourceTrimOutSeconds - 0.05))
-                            }
-
-                            Label {
-                                text: "Out  •  " + Number(sourceTrimOutSeconds || 0).toFixed(2) + "s"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 0
-                                to: Math.max(0.05, sourceDurationSeconds)
-                                value: sourceTrimOutSeconds
-                                enabled: root.hasLibraryVideoSelection() && sourceDurationSeconds > 0
-                                onMoved: sourceTrimOutSeconds = Math.max(value, Math.min(sourceDurationSeconds, sourceTrimInSeconds + 0.05))
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Append"
-                            enabled: catalogAssets.selectedMediaType === "video"
-                            onClicked: root.appendSelectedSourceClip()
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Insert"
-                            tone: "primary"
-                            enabled: catalogAssets.selectedMediaType === "video"
-                            onClicked: root.insertSelectedSourceClip()
-                        }
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Overwrite"
-                        enabled: catalogAssets.selectedMediaType === "video"
-                        onClicked: root.overwriteSelectedSourceClip()
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Load Selected Timeline"
-                        enabled: catalogAssets.selectedMediaType === "timeline"
-                                 && catalogAssets.selectedTimelineDocumentPath.length > 0
-                        onClicked: timelineDocument.loadTimeline(catalogAssets.selectedTimelineDocumentPath)
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 14
-                        color: theme.alpha(theme.ink950, 0.72)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.42)
-                        implicitHeight: 150
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            Label {
-                                text: "Sequence Readout"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Label {
-                                text: timecodeText(sequencePlayheadSeconds)
-                                color: theme.accentWarm300
-                                font.family: theme.fontMono
-                                font.pixelSize: 18
-                            }
-
-                            Label {
-                                text: timelineDocument.sequenceFormatLabel
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                wrapMode: Text.Wrap
-                            }
-
-                            Label {
-                                text: timelineDocument.savedRenderPath.length > 0 ? "Saved to gallery" : "Unsaved timeline"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-                        }
-                    }
-
-                    Item { Layout.fillHeight: true }
+            TimelineSourcePanel {
+                id: sourceRail
+                SplitView.preferredWidth: sourcePanelCollapsed ? 56 : sourcePanelWidth
+                SplitView.minimumWidth: sourcePanelCollapsed ? 56 : 260
+                SplitView.maximumWidth: sourcePanelCollapsed ? 56 : 460
+                theme: theme
+                timelineDocument: timelineDocument
+                sourceClip: sourceClip
+                catalogAssets: catalogAssets
+                collapsed: sourcePanelCollapsed
+                activeTab: sourceRailTab
+                onToggleCollapseRequested: sourcePanelCollapsed = !sourcePanelCollapsed
+                onTabChangeRequested: function(tab) { sourceRailTab = tab }
+                onMediaPickerRequested: root.openMediaPicker()
+                onWidthChanged: {
+                    if (!sourcePanelCollapsed && width >= 260)
+                        sourcePanelWidth = width
                 }
             }
 
             Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: 18
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 480
+                radius: 12
                 color: theme.alpha(theme.ink900, 0.82)
                 border.width: 1
                 border.color: theme.alpha(theme.lineSoft, 0.55)
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 10
+                    anchors.margins: 10
+                    spacing: 8
 
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        radius: 18
+                        radius: 12
                         color: "#0b1014"
                         clip: true
 
                         VideoOutput {
                             id: videoMonitor
                             anchors.centerIn: parent
-                            width: parent.width - 24
-                            height: parent.height - 24
+                            width: parent.width - 18
+                            height: parent.height - 18
                             fillMode: root.programVideoFillMode()
                             visible: root.shouldShowVideoMonitor()
                             transformOrigin: Item.Center
@@ -582,8 +1280,8 @@ Rectangle {
 
                         Image {
                             anchors.centerIn: parent
-                            width: parent.width - 24
-                            height: parent.height - 24
+                            width: parent.width - 18
+                            height: parent.height - 18
                             source: timelineDocument.previewSource
                             fillMode: root.programImageFillMode()
                             cache: false
@@ -595,37 +1293,21 @@ Rectangle {
                             anchors.verticalCenterOffset: (currentClip.frameOffsetY ? currentClip.frameOffsetY : 0) * height * 0.18
                         }
 
-                        Image {
-                            anchors.centerIn: parent
-                            width: parent.width - 24
-                            height: parent.height - 24
-                            source: root.libraryPreviewSource()
-                            fillMode: Image.PreserveAspectFit
-                            cache: false
-                            asynchronous: false
-                            visible: !root.hasPlayableClip()
-                                     && !sequencePlaying
-                                     && timelineDocument.previewSource.length === 0
-                                     && root.hasLibraryVideoSelection()
-                                     && source.length > 0
-                        }
-
                         Rectangle {
                             visible: !root.hasPlayableClip()
                                      && timelineDocument.previewSource.length === 0
-                                     && !root.hasLibraryVideoSelection()
                             anchors.centerIn: parent
-                            radius: 18
+                            radius: 10
                             color: theme.alpha(theme.ink950, 0.82)
                             border.width: 1
                             border.color: theme.alpha(theme.lineStrong, 0.55)
-                            implicitWidth: emptyState.implicitWidth + 36
-                            implicitHeight: emptyState.implicitHeight + 32
+                            implicitWidth: emptyState.implicitWidth + 28
+                            implicitHeight: emptyState.implicitHeight + 26
 
                             ColumnLayout {
                                 id: emptyState
                                 anchors.centerIn: parent
-                                spacing: 10
+                                spacing: 8
 
                                 Label {
                                     Layout.alignment: Qt.AlignHCenter
@@ -638,63 +1320,17 @@ Rectangle {
 
                                 Label {
                                     Layout.alignment: Qt.AlignHCenter
-                                    text: "Select a video in Library and add it to the timeline."
+                                    text: "Load media to source, then insert or overwrite."
                                     color: theme.textMuted
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
                                 }
-                            }
-                        }
-
-                        Rectangle {
-                            visible: !root.hasPlayableClip()
-                                     && timelineDocument.previewSource.length === 0
-                                     && root.hasLibraryVideoSelection()
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            anchors.margins: 12
-                            radius: 14
-                            color: theme.alpha(theme.ink950, 0.84)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.42)
-                            implicitHeight: 56
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 12
-                                spacing: 10
-
-                                Label {
-                                    text: catalogAssets.selectedCameraLabel.length > 0
-                                          ? catalogAssets.selectedCameraLabel
-                                          : "Selected video"
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 12
-                                    font.weight: Font.Medium
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-
-                                Label {
-                                    text: catalogAssets.selectedDurationText.length > 0
-                                          ? catalogAssets.selectedDurationText
-                                          : "Ready"
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                }
-
+                                
                                 ActionButton {
-                                    text: "Add To Timeline"
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: "Add Media"
                                     tone: "primary"
-                                    onClicked: timelineDocument.addClipFromGallery(
-                                                   catalogAssets.selectedAssetId,
-                                                   catalogAssets.selectedFilePath,
-                                                   catalogAssets.selectedCameraLabel,
-                                                   0,
-                                                   catalogAssets.selectedThumbnailSource)
+                                    onClicked: root.openMediaPicker()
                                 }
                             }
                         }
@@ -702,13 +1338,13 @@ Rectangle {
                         Rectangle {
                             anchors.right: parent.right
                             anchors.top: parent.top
-                            anchors.margins: 12
-                            radius: 12
+                            anchors.margins: 10
+                            radius: 8
                             color: theme.alpha(theme.ink950, 0.82)
                             border.width: 1
                             border.color: theme.alpha(theme.lineSoft, 0.45)
-                            implicitWidth: overlayReadout.implicitWidth + 20
-                            implicitHeight: 28
+                            implicitWidth: overlayReadout.implicitWidth + 16
+                            implicitHeight: 24
 
                             Label {
                                 id: overlayReadout
@@ -716,7 +1352,7 @@ Rectangle {
                                 text: timecodeText(sequencePlayheadSeconds)
                                 color: theme.textStrong
                                 font.family: theme.fontMono
-                                font.pixelSize: 11
+                                font.pixelSize: 10
                             }
                         }
 
@@ -725,8 +1361,8 @@ Rectangle {
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.bottom: parent.bottom
-                            anchors.margins: 12
-                            radius: 14
+                            anchors.margins: 10
+                            radius: 10
                             color: theme.alpha("#4f1713", 0.94)
                             border.width: 1
                             border.color: theme.alpha("#e58767", 0.58)
@@ -747,23 +1383,26 @@ Rectangle {
 
                     Rectangle {
                         Layout.fillWidth: true
-                        radius: 16
+                        radius: 10
                         color: theme.alpha(theme.ink950, 0.78)
                         border.width: 1
                         border.color: theme.alpha(theme.lineStrong, 0.46)
-                        implicitHeight: 78
+                        implicitHeight: 64
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 12
-                            spacing: 8
+                            anchors.margins: 8
+                            spacing: 6
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 8
+                                spacing: 6
 
                                 ActionButton {
-                                    text: sequencePlaying ? "Pause" : "Play"
+                                    iconName: sequencePlaying ? "pause" : "play"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: sequencePlaying ? "Pause playback" : "Play sequence"
                                     enabled: root.hasPlayableClip()
                                     onClicked: {
                                         if (sequencePlaying) {
@@ -775,65 +1414,107 @@ Rectangle {
                                 }
 
                                 ActionButton {
-                                    text: "To Start"
+                                    iconName: "jump-start"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Jump to start"
                                     enabled: timelineDocument.clipCount > 0
                                     onClicked: timelinePlayback.seekSequenceSeconds(0)
                                 }
 
                                 ActionButton {
-                                    text: "-1f"
+                                    iconName: "step-back"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Step back one frame"
                                     enabled: root.hasPlayableClip()
                                     onClicked: timelinePlayback.stepFrames(-1)
                                 }
 
                                 ActionButton {
-                                    text: "+1f"
+                                    iconName: "step-forward"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Step forward one frame"
                                     enabled: root.hasPlayableClip()
                                     onClicked: timelinePlayback.stepFrames(1)
                                 }
 
+                                Rectangle {
+                                    Layout.preferredWidth: 1
+                                    Layout.preferredHeight: 18
+                                    color: theme.alpha(theme.lineSoft, 0.78)
+                                }
+
                                 ActionButton {
-                                    text: "Split"
+                                    iconName: "cut"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Split at playhead"
                                     tone: "primary"
                                     enabled: root.hasPlayableClip()
                                     onClicked: splitAtPlayhead()
                                 }
 
                                 ActionButton {
-                                    text: snappingEnabled ? "Snap On" : "Snap Off"
-                                    onClicked: snappingEnabled = !snappingEnabled
+                                    iconName: "insert"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Insert source at playhead"
+                                    enabled: timelineDocument.hasSourceClip
+                                    onClicked: timelineDocument.insertSourceClipAtPlayhead()
                                 }
 
                                 ActionButton {
-                                    text: rippleModeEnabled ? "Ripple On" : "Ripple Off"
-                                    enabled: timelineDocument.currentIndex >= 0
-                                    onClicked: rippleModeEnabled = !rippleModeEnabled
+                                    iconName: "overwrite"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Overwrite with source at playhead"
+                                    enabled: timelineDocument.hasSourceClip
+                                    onClicked: timelineDocument.overwriteSourceClipAtPlayhead()
+                                }
+
+                                Rectangle {
+                                    Layout.preferredWidth: 1
+                                    Layout.preferredHeight: 18
+                                    color: theme.alpha(theme.lineSoft, 0.78)
                                 }
 
                                 ActionButton {
-                                    text: "Back"
+                                    iconName: "move-back"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Move clip earlier"
                                     enabled: timelineDocument.currentIndex > 0
                                     onClicked: timelineDocument.moveSelectedBackward()
                                 }
 
                                 ActionButton {
-                                    text: "Forward"
+                                    iconName: "move-forward"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Move clip later"
                                     enabled: timelineDocument.currentIndex >= 0
                                              && timelineDocument.currentIndex < timelineDocument.clipCount - 1
                                     onClicked: timelineDocument.moveSelectedForward()
                                 }
 
                                 ActionButton {
-                                    text: "Remove"
+                                    iconName: "delete"
+                                    showText: false
+                                    compact: true
+                                    tooltipText: "Delete selected clip"
                                     enabled: timelineDocument.currentIndex >= 0
                                     onClicked: timelineDocument.removeSelectedClip()
                                 }
 
                                 Item { Layout.fillWidth: true }
 
-                                InfoPill {
-                                    label: "Playhead"
-                                    value: formatSeconds(sequencePlayheadSeconds)
+                                Label {
+                                    text: timecodeText(sequencePlayheadSeconds)
+                                    color: theme.accentWarm300
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
                                 }
                             }
 
@@ -855,273 +1536,49 @@ Rectangle {
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 286
-                Layout.fillHeight: true
-                radius: 18
-                color: theme.alpha(theme.ink900, 0.82)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.55)
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 10
-
-                    Label {
-                        text: "Inspector"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 15
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: currentClip.displayLabel && currentClip.displayLabel.length > 0
-                              ? currentClip.displayLabel
-                              : "No clip selected"
-                        color: theme.textMain
-                        font.family: theme.fontUi
-                        font.pixelSize: 13
-                        wrapMode: Text.Wrap
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: currentClip.trackLabel
-                              ? currentClip.trackLabel + "  •  " + (currentClip.hasAudio ? "Linked audio" : "Silent source")
-                              : "Select a clip on the timeline to inspect it."
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        wrapMode: Text.Wrap
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 14
-                        color: theme.alpha(theme.ink950, 0.72)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.42)
-                        implicitHeight: 176
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            Label {
-                                text: "Trim"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Label {
-                                text: "In  •  " + Number(currentClip.trimStartSeconds || 0).toFixed(2) + "s"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 0
-                                to: currentClip.durationSeconds ? currentClip.durationSeconds : 1
-                                value: currentClip.trimStartSeconds ? currentClip.trimStartSeconds : 0
-                                enabled: timelineDocument.currentIndex >= 0
-                                onMoved: timelineDocument.setSelectedTrimStartSeconds(value)
-                            }
-
-                            Label {
-                                text: "Out  •  " + Number(currentClip.trimEndSeconds || 0).toFixed(2) + "s"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 0
-                                to: currentClip.durationSeconds ? currentClip.durationSeconds : 1
-                                value: currentClip.trimEndSeconds ? currentClip.trimEndSeconds : 0
-                                enabled: timelineDocument.currentIndex >= 0
-                                onMoved: timelineDocument.setSelectedTrimEndSeconds(value)
-                            }
-
-                            Label {
-                                text: currentClip.trimmedDurationText
-                                      ? "Duration  •  " + currentClip.trimmedDurationText
-                                      : "Duration  •  0:00"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 14
-                        color: theme.alpha(theme.ink950, 0.72)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.42)
-                        implicitHeight: 206
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            Label {
-                                text: "Frame"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            ToneComboBox {
-                                Layout.fillWidth: true
-                                model: ["Fit", "Fill", "Stretch"]
-                                currentIndex: currentClip.frameMode === "fill"
-                                              ? 1
-                                              : currentClip.frameMode === "stretch"
-                                                ? 2
-                                                : 0
-                                enabled: timelineDocument.currentIndex >= 0
-                                onActivated: timelineDocument.setSelectedFrameMode(currentText.toLowerCase())
-                            }
-
-                            Label {
-                                text: "Scale  •  " + Number(currentClip.frameScale || 1).toFixed(2) + "x"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 1
-                                to: 2.5
-                                value: currentClip.frameScale ? currentClip.frameScale : 1
-                                enabled: timelineDocument.currentIndex >= 0
-                                onMoved: timelineDocument.setSelectedFrameScale(value)
-                            }
-
-                            Label {
-                                text: "Horizontal  •  " + Number(currentClip.frameOffsetX || 0).toFixed(2)
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: -1
-                                to: 1
-                                value: currentClip.frameOffsetX ? currentClip.frameOffsetX : 0
-                                enabled: timelineDocument.currentIndex >= 0
-                                onMoved: timelineDocument.setSelectedFrameOffsetX(value)
-                            }
-
-                            Label {
-                                text: "Vertical  •  " + Number(currentClip.frameOffsetY || 0).toFixed(2)
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: -1
-                                to: 1
-                                value: currentClip.frameOffsetY ? currentClip.frameOffsetY : 0
-                                enabled: timelineDocument.currentIndex >= 0
-                                onMoved: timelineDocument.setSelectedFrameOffsetY(value)
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        radius: 14
-                        color: theme.alpha(theme.ink950, 0.72)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.42)
-                        implicitHeight: 132
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 8
-
-                            Label {
-                                text: "Timeline View"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Label {
-                                text: "Zoom  •  " + Math.round(timelineZoom) + " px/s"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Slider {
-                                Layout.fillWidth: true
-                                from: 36
-                                to: 180
-                                value: timelineZoom
-                                onMoved: timelineZoom = value
-                            }
-
-                            Label {
-                                text: "Frames  •  " + Number(timelineDocument.framesPerSecond || 30).toFixed(0) + " fps"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            Label {
-                                text: "Drag a video clip horizontally to retime it or vertically to another lane."
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                wrapMode: Text.Wrap
-                            }
-                        }
-                    }
-
-                    Item { Layout.fillHeight: true }
+            TimelineEffectsPanel {
+                id: effectsRail
+                SplitView.preferredWidth: effectsPanelCollapsed ? 56 : effectsPanelWidth
+                SplitView.minimumWidth: effectsPanelCollapsed ? 56 : 288
+                SplitView.maximumWidth: effectsPanelCollapsed ? 56 : 460
+                theme: theme
+                timelineDocument: timelineDocument
+                currentClip: currentClip
+                collapsed: effectsPanelCollapsed
+                activeTab: inspectorTab
+                effectLibraryModel: effectLibraryModel
+                transitionLibraryModel: transitionLibraryModel
+                onToggleCollapseRequested: effectsPanelCollapsed = !effectsPanelCollapsed
+                onTabChangeRequested: function(tab) { inspectorTab = tab }
+                onWidthChanged: {
+                    if (!effectsPanelCollapsed && width >= 288)
+                        effectsPanelWidth = width
                 }
             }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 308
-            radius: 18
+            Layout.preferredHeight: 286
+            radius: 12
             color: theme.alpha(theme.ink900, 0.84)
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.55)
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+                anchors.margins: 8
+                spacing: 6
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 10
+                    spacing: 8
 
                     Label {
-                        text: "Timeline Canvas"
+                        text: "Timeline"
                         color: theme.textStrong
                         font.family: theme.fontUi
-                        font.pixelSize: 14
+                        font.pixelSize: 13
                         font.weight: Font.DemiBold
                     }
 
@@ -1133,7 +1590,7 @@ Rectangle {
                     }
 
                     Label {
-                        text: "Drag video clips between lanes"
+                        text: sequenceMarkerModel.length + " markers"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -1141,11 +1598,130 @@ Rectangle {
 
                     Item { Layout.fillWidth: true }
 
+                    ActionButton {
+                        text: "Marker"
+                        iconName: "plus"
+                        compact: true
+                        tooltipText: "Add marker at playhead"
+                        onClicked: timelineDocument.addSequenceMarker()
+                    }
+
+                    ActionButton {
+                        text: "Track"
+                        iconName: "plus"
+                        compact: true
+                        tooltipText: "Add video track"
+                        onClicked: timelineDocument.addVideoTrack()
+                    }
+
                     Label {
                         text: timecodeText(sequencePlayheadSeconds)
                         color: theme.accentWarm300
                         font.family: theme.fontMono
                         font.pixelSize: 11
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    ActionButton {
+                        iconName: "select"
+                        showText: false
+                        compact: true
+                        tooltipText: "Select tool"
+                        active: timelineDocument.activeTool === "select"
+                        onClicked: timelineDocument.activeTool = "select"
+                    }
+
+                    ActionButton {
+                        iconName: "cut"
+                        showText: false
+                        compact: true
+                        tooltipText: "Razor tool"
+                        active: timelineDocument.activeTool === "razor"
+                        onClicked: timelineDocument.activeTool = "razor"
+                    }
+
+                    ActionButton {
+                        iconName: "slip"
+                        showText: false
+                        compact: true
+                        tooltipText: "Slip tool"
+                        active: timelineDocument.activeTool === "slip"
+                        onClicked: timelineDocument.activeTool = "slip"
+                    }
+
+                    ActionButton {
+                        iconName: "roll"
+                        showText: false
+                        compact: true
+                        tooltipText: "Roll tool"
+                        active: timelineDocument.activeTool === "roll"
+                        onClicked: timelineDocument.activeTool = "roll"
+                    }
+
+                    ActionButton {
+                        text: "Ins"
+                        compact: true
+                        tooltipText: "Insert edit mode"
+                        active: timelineDocument.editMode === "insert"
+                        onClicked: timelineDocument.editMode = "insert"
+                    }
+
+                    ActionButton {
+                        text: "Ovr"
+                        compact: true
+                        tooltipText: "Overwrite edit mode"
+                        active: timelineDocument.editMode === "overwrite"
+                        onClicked: timelineDocument.editMode = "overwrite"
+                    }
+
+                    ActionButton {
+                        iconName: "link"
+                        showText: false
+                        compact: true
+                        tooltipText: timelineDocument.linkedSelectionEnabled ? "Disable linked selection" : "Enable linked selection"
+                        active: timelineDocument.linkedSelectionEnabled
+                        onClicked: timelineDocument.linkedSelectionEnabled = !timelineDocument.linkedSelectionEnabled
+                    }
+
+                    ActionButton {
+                        iconName: "snap"
+                        showText: false
+                        compact: true
+                        tooltipText: snappingEnabled ? "Disable snapping" : "Enable snapping"
+                        active: snappingEnabled
+                        onClicked: snappingEnabled = !snappingEnabled
+                    }
+
+                    ActionButton {
+                        iconName: "ripple"
+                        showText: false
+                        compact: true
+                        tooltipText: rippleModeEnabled ? "Disable ripple trim" : "Enable ripple trim"
+                        active: rippleModeEnabled
+                        enabled: timelineDocument.currentIndex >= 0
+                        onClicked: rippleModeEnabled = !rippleModeEnabled
+                    }
+
+                    ActionButton {
+                        iconName: "cut"
+                        showText: false
+                        compact: true
+                        tooltipText: "Split selected clip"
+                        enabled: root.hasPlayableClip()
+                        onClicked: splitAtPlayhead()
+                    }
+
+                    ActionButton {
+                        iconName: "delete"
+                        showText: false
+                        compact: true
+                        tooltipText: "Delete selected clip"
+                        enabled: timelineDocument.currentIndex >= 0
+                        onClicked: timelineDocument.removeSelectedClip()
                     }
                 }
 
@@ -1156,7 +1732,7 @@ Rectangle {
 
                     Column {
                         id: trackHeaders
-                        width: laneHeaderWidth
+                        Layout.preferredWidth: laneHeaderWidth
                         spacing: trackSpacing
 
                         Rectangle {
@@ -1168,36 +1744,13 @@ Rectangle {
                         Repeater {
                             model: sequenceTrackModel
 
-                            delegate: Rectangle {
+                            delegate: TimelineTrackHeader {
                                 required property var modelData
 
                                 width: laneHeaderWidth
                                 height: laneHeight
-                                radius: 10
-                                color: theme.alpha(theme.ink950, 0.78)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.42)
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 3
-
-                                    Label {
-                                        text: modelData.displayLabel
-                                        color: theme.textStrong
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                    }
-
-                                    Label {
-                                        text: modelData.trackKind === "audio" ? "Linked lane" : "Picture lane"
-                                        color: theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-                                }
+                                theme: theme
+                                timelineDocument: timelineDocument
                             }
                         }
                     }
@@ -1226,15 +1779,64 @@ Rectangle {
                                 color: "transparent"
 
                                 MouseArea {
+                                    id: timelineCanvasMouseArea
                                     anchors.fill: parent
-                                    acceptedButtons: Qt.LeftButton
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
                                     hoverEnabled: true
                                     onPressed: function(mouse) {
+                                        if (mouse.button === Qt.RightButton) {
+                                            timelineCanvasMenu.popup()
+                                            mouse.accepted = true
+                                            return
+                                        }
+                                        if (mouse.modifiers & Qt.ShiftModifier) {
+                                            root.marqueeActive = true
+                                            root.marqueeStartX = mouse.x
+                                            root.marqueeStartY = mouse.y
+                                            root.marqueeCurrentX = mouse.x
+                                            root.marqueeCurrentY = mouse.y
+                                            return
+                                        }
+                                        root.resetTimelinePreviewState()
                                         root.seekTimelineFromX(mouse.x)
                                     }
                                     onPositionChanged: function(mouse) {
+                                        if (root.marqueeActive) {
+                                            root.marqueeCurrentX = mouse.x
+                                            root.marqueeCurrentY = mouse.y
+                                            return
+                                        }
                                         if (pressed)
                                             root.seekTimelineFromX(mouse.x)
+                                    }
+                                    onReleased: function(mouse) {
+                                        if (!root.marqueeActive)
+                                            return
+                                        root.marqueeCurrentX = mouse.x
+                                        root.marqueeCurrentY = mouse.y
+                                        root.selectClipFromMarquee()
+                                        root.marqueeActive = false
+                                    }
+                                }
+
+                                Menu {
+                                    id: timelineCanvasMenu
+
+                                    MenuItem {
+                                        text: "Add Marker At Playhead"
+                                        onTriggered: timelineDocument.addSequenceMarker()
+                                    }
+
+                                    MenuItem {
+                                        text: "Insert Source Here"
+                                        enabled: timelineDocument.hasSourceClip
+                                        onTriggered: timelineDocument.insertSourceClipAtPlayhead()
+                                    }
+
+                                    MenuItem {
+                                        text: "Overwrite Source Here"
+                                        enabled: timelineDocument.hasSourceClip
+                                        onTriggered: timelineDocument.overwriteSourceClipAtPlayhead()
                                     }
                                 }
 
@@ -1265,6 +1867,46 @@ Rectangle {
                                             color: theme.textMuted
                                             font.family: theme.fontMono
                                             font.pixelSize: 9
+                                        }
+                                    }
+                                }
+
+                                Repeater {
+                                    model: sequenceMarkerModel
+
+                                    delegate: Item {
+                                        required property var modelData
+
+                                        x: Number(modelData.seconds || 0) * timelineZoom
+                                        y: 0
+                                        width: 2
+                                        height: timelineContentHeight
+
+                                        Rectangle {
+                                            anchors.top: parent.top
+                                            width: 2
+                                            height: timelineContentHeight
+                                            color: modelData.color ? modelData.color : theme.accentWarm300
+                                            opacity: 0.7
+                                        }
+
+                                        Rectangle {
+                                            anchors.top: parent.top
+                                            anchors.topMargin: 2
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            radius: 6
+                                            color: modelData.color ? modelData.color : theme.accentWarm300
+                                            implicitWidth: markerLabel.implicitWidth + 12
+                                            implicitHeight: markerLabel.implicitHeight + 6
+
+                                            Label {
+                                                id: markerLabel
+                                                anchors.centerIn: parent
+                                                text: modelData.label
+                                                color: theme.ink950
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                            }
                                         }
                                     }
                                 }
@@ -1305,6 +1947,7 @@ Rectangle {
                                                 property real pressX: 0
                                                 property real pressY: 0
                                                 property real trimHandleWidth: modelData.trackKind === "video" ? 12 : 0
+                                                property real fadeHandleWidth: 18
 
                                                 x: committedX + dragOffsetX
                                                 y: 6 + dragOffsetY
@@ -1316,42 +1959,136 @@ Rectangle {
                                                           ? theme.alpha(theme.ink700, 0.78)
                                                           : theme.alpha(theme.accentCool400, 0.26))
                                                        : (modelData.selected
-                                                          ? theme.alpha(theme.accentWarm500, 0.82)
-                                                          : theme.alpha(theme.accentWarm400, 0.34))
+                                                          ? theme.alpha(theme.accentWarm500, Math.max(0.35, Number(modelData.opacity || 1) * 0.82))
+                                                          : theme.alpha(theme.accentWarm400, Math.max(0.18, Number(modelData.opacity || 1) * 0.34)))
                                                 border.width: modelData.selected ? 2 : 1
                                                 border.color: modelData.selected
                                                               ? theme.textStrong
                                                               : theme.alpha(theme.lineStrong, 0.4)
 
                                                 MouseArea {
+                                                    id: clipMouseArea
                                                     anchors.fill: parent
-                                                    cursorShape: modelData.trackKind === "video" ? Qt.OpenHandCursor : Qt.PointingHandCursor
+                                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                    cursorShape: modelData.trackKind !== "video"
+                                                                 ? Qt.PointingHandCursor
+                                                                 : timelineDocument.activeTool === "razor"
+                                                                   ? Qt.CrossCursor
+                                                                   : timelineDocument.activeTool === "slip"
+                                                                     ? Qt.SizeHorCursor
+                                                                   : Qt.OpenHandCursor
                                                     onPressed: function(mouse) {
+                                                        if (mouse.button === Qt.RightButton) {
+                                                            timelineDocument.selectClip(modelData.index)
+                                                            clipMenu.popup()
+                                                            mouse.accepted = true
+                                                            return
+                                                        }
+                                                        if (modelData.trackKind === "video" && timelineDocument.activeTool === "razor") {
+                                                            timelineDocument.selectClip(modelData.index)
+                                                            timelineDocument.splitSelectedClip(root.clipSequenceTime(modelData, mouse.x))
+                                                            return
+                                                        }
                                                         clipBlock.pressX = mouse.x
                                                         clipBlock.pressY = mouse.y
                                                         timelineDocument.selectClip(modelData.index)
                                                     }
                                                     onPositionChanged: function(mouse) {
-                                                        if (!pressed || modelData.trackKind !== "video")
+                                                        if (!pressed || modelData.trackKind !== "video"
+                                                                || trackLane.modelData.locked)
                                                             return
-                                                        clipBlock.dragOffsetX = mouse.x - clipBlock.pressX
-                                                        clipBlock.dragOffsetY = mouse.y - clipBlock.pressY
+                                                        if (timelineDocument.activeTool === "select") {
+                                                            clipBlock.dragOffsetX = mouse.x - clipBlock.pressX
+                                                            clipBlock.dragOffsetY = mouse.y - clipBlock.pressY
+                                                            const targetRow = Math.max(
+                                                                        0,
+                                                                        Math.min(
+                                                                            sequenceTrackModel.length - 1,
+                                                                            trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (laneHeight + trackSpacing))))
+                                                            const snapResult = root.snapSequenceResult(
+                                                                        Math.max(0, (clipBlock.committedX + clipBlock.dragOffsetX - 3) / timelineZoom),
+                                                                        modelData.clipId)
+                                                            root.dragPreviewVisible = true
+                                                            root.dragPreviewWidth = clipBlock.width
+                                                            root.dragPreviewX = snapResult.seconds * timelineZoom + 3
+                                                            root.dragPreviewY = rulerHeight + targetRow * (laneHeight + trackSpacing) + 6
+                                                            root.updateSnapGuide(snapResult.seconds, snapResult.snapped, "Snap")
+                                                        } else if (timelineDocument.activeTool === "slip") {
+                                                            const deltaSeconds = (mouse.x - clipBlock.pressX) / timelineZoom
+                                                            timelineDocument.slipSelectedClipBySeconds(deltaSeconds)
+                                                            clipBlock.pressX = mouse.x
+                                                            root.updateSnapGuide(
+                                                                        Number(modelData.startSeconds || 0),
+                                                                        false,
+                                                                        "")
+                                                        }
                                                     }
                                                     onReleased: {
                                                         if (modelData.trackKind === "video"
+                                                                && timelineDocument.activeTool === "select"
+                                                                && !trackLane.modelData.locked
                                                                 && (Math.abs(clipBlock.dragOffsetX) > 4 || Math.abs(clipBlock.dragOffsetY) > 4)) {
                                                             const targetRow = Math.max(
                                                                         0,
                                                                         Math.min(
                                                                             sequenceTrackModel.length - 1,
                                                                             trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (laneHeight + trackSpacing))))
-                                                            const proposedStart = root.snapSequenceSeconds(
+                                                            const snapResult = root.snapSequenceResult(
                                                                         Math.max(0, (clipBlock.committedX + clipBlock.dragOffsetX - 3) / timelineZoom),
                                                                         modelData.clipId)
-                                                            timelineDocument.moveSelectedClipToTrackRow(targetRow, proposedStart)
+                                                            timelineDocument.moveSelectedClipToTrackRow(targetRow, snapResult.seconds)
                                                         }
                                                         clipBlock.dragOffsetX = 0
                                                         clipBlock.dragOffsetY = 0
+                                                        root.resetTimelinePreviewState()
+                                                    }
+                                                }
+
+                                                DropArea {
+                                                    anchors.fill: parent
+                                                    keys: ["effect"]
+                                                    onEntered: function(drag) {
+                                                        if (drag.source && drag.source.libraryType === "effect")
+                                                            clipBlock.border.color = theme.accentCool300
+                                                    }
+                                                    onExited: clipBlock.border.color = modelData.selected
+                                                                                  ? theme.textStrong
+                                                                                  : theme.alpha(theme.lineStrong, 0.4)
+                                                    onDropped: function(drop) {
+                                                        clipBlock.border.color = modelData.selected
+                                                                              ? theme.textStrong
+                                                                              : theme.alpha(theme.lineStrong, 0.4)
+                                                        if (drop.source && drop.source.libraryType === "effect")
+                                                            root.applyEffectToClip(modelData.index, drop.source.libraryName)
+                                                    }
+                                                }
+
+                                                Menu {
+                                                    id: clipMenu
+
+                                                    MenuItem {
+                                                        text: "Split At Playhead"
+                                                        enabled: root.hasPlayableClip()
+                                                        onTriggered: splitAtPlayhead()
+                                                    }
+
+                                                    MenuItem {
+                                                        text: "Move Earlier"
+                                                        enabled: timelineDocument.currentIndex > 0
+                                                        onTriggered: timelineDocument.moveSelectedBackward()
+                                                    }
+
+                                                    MenuItem {
+                                                        text: "Move Later"
+                                                        enabled: timelineDocument.currentIndex >= 0
+                                                                 && timelineDocument.currentIndex < timelineDocument.clipCount - 1
+                                                        onTriggered: timelineDocument.moveSelectedForward()
+                                                    }
+
+                                                    MenuItem {
+                                                        text: "Delete Clip"
+                                                        enabled: timelineDocument.currentIndex >= 0
+                                                        onTriggered: timelineDocument.removeSelectedClip()
                                                     }
                                                 }
 
@@ -1377,24 +2114,50 @@ Rectangle {
                                                     radius: 8
                                                     color: theme.alpha(theme.textStrong, 0.16)
 
+                                                    DropArea {
+                                                        anchors.fill: parent
+                                                        keys: ["transition"]
+                                                        onDropped: function(drop) {
+                                                            if (drop.source && drop.source.libraryType === "transition")
+                                                                root.applyTransitionToClipEdge(
+                                                                            modelData.index,
+                                                                            "in",
+                                                                            drop.source.libraryName,
+                                                                            Number(drop.source.libraryDurationSeconds || 0.35))
+                                                        }
+                                                    }
+
                                                     MouseArea {
                                                         id: leftTrimHandle
                                                         anchors.fill: parent
                                                         cursorShape: Qt.SizeHorCursor
                                                         preventStealing: true
                                                         onPressed: function(mouse) {
+                                                            if (trackLane.modelData.locked)
+                                                                return
                                                             timelinePlayback.pause()
                                                             timelineDocument.selectClip(modelData.index)
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
-                                                            const proposedStart = root.snapSequenceSeconds(point.x / timelineZoom, modelData.clipId)
-                                                            timelineDocument.trimSelectedClipStartToSequenceSeconds(proposedStart, rippleModeEnabled)
+                                                            const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            if (timelineDocument.activeTool === "roll")
+                                                                timelineDocument.rollSelectedClipStartToSequenceSeconds(snapResult.seconds)
+                                                            else
+                                                                timelineDocument.trimSelectedClipStartToSequenceSeconds(snapResult.seconds, rippleModeEnabled)
+                                                            root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
                                                         }
                                                         onPositionChanged: function(mouse) {
-                                                            if (!pressed)
+                                                            if (!pressed || trackLane.modelData.locked)
                                                                 return
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
-                                                            const proposedStart = root.snapSequenceSeconds(point.x / timelineZoom, modelData.clipId)
-                                                            timelineDocument.trimSelectedClipStartToSequenceSeconds(proposedStart, rippleModeEnabled)
+                                                            const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            if (timelineDocument.activeTool === "roll")
+                                                                timelineDocument.rollSelectedClipStartToSequenceSeconds(snapResult.seconds)
+                                                            else
+                                                                timelineDocument.trimSelectedClipStartToSequenceSeconds(snapResult.seconds, rippleModeEnabled)
+                                                            root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
+                                                        }
+                                                        onReleased: {
+                                                            root.resetTimelinePreviewState()
                                                         }
                                                     }
                                                 }
@@ -1408,24 +2171,50 @@ Rectangle {
                                                     radius: 8
                                                     color: theme.alpha(theme.textStrong, 0.16)
 
+                                                    DropArea {
+                                                        anchors.fill: parent
+                                                        keys: ["transition"]
+                                                        onDropped: function(drop) {
+                                                            if (drop.source && drop.source.libraryType === "transition")
+                                                                root.applyTransitionToClipEdge(
+                                                                            modelData.index,
+                                                                            "out",
+                                                                            drop.source.libraryName,
+                                                                            Number(drop.source.libraryDurationSeconds || 0.35))
+                                                        }
+                                                    }
+
                                                     MouseArea {
                                                         id: rightTrimHandle
                                                         anchors.fill: parent
                                                         cursorShape: Qt.SizeHorCursor
                                                         preventStealing: true
                                                         onPressed: function(mouse) {
+                                                            if (trackLane.modelData.locked)
+                                                                return
                                                             timelinePlayback.pause()
                                                             timelineDocument.selectClip(modelData.index)
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
-                                                            const proposedEnd = root.snapSequenceSeconds(point.x / timelineZoom, modelData.clipId)
-                                                            timelineDocument.trimSelectedClipEndToSequenceSeconds(proposedEnd, rippleModeEnabled)
+                                                            const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            if (timelineDocument.activeTool === "roll")
+                                                                timelineDocument.rollSelectedClipEndToSequenceSeconds(snapResult.seconds)
+                                                            else
+                                                                timelineDocument.trimSelectedClipEndToSequenceSeconds(snapResult.seconds, rippleModeEnabled)
+                                                            root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
                                                         }
                                                         onPositionChanged: function(mouse) {
-                                                            if (!pressed)
+                                                            if (!pressed || trackLane.modelData.locked)
                                                                 return
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
-                                                            const proposedEnd = root.snapSequenceSeconds(point.x / timelineZoom, modelData.clipId)
-                                                            timelineDocument.trimSelectedClipEndToSequenceSeconds(proposedEnd, rippleModeEnabled)
+                                                            const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            if (timelineDocument.activeTool === "roll")
+                                                                timelineDocument.rollSelectedClipEndToSequenceSeconds(snapResult.seconds)
+                                                            else
+                                                                timelineDocument.trimSelectedClipEndToSequenceSeconds(snapResult.seconds, rippleModeEnabled)
+                                                            root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
+                                                        }
+                                                        onReleased: {
+                                                            root.resetTimelinePreviewState()
                                                         }
                                                     }
                                                 }
@@ -1454,6 +2243,100 @@ Rectangle {
                                                     }
                                                 }
 
+                                                Rectangle {
+                                                    visible: modelData.transitionInName && modelData.transitionInName.length > 0
+                                                    anchors.left: parent.left
+                                                    anchors.top: parent.top
+                                                    anchors.margins: 4
+                                                    radius: 6
+                                                    color: theme.alpha(theme.accentCool500, 0.9)
+                                                    implicitWidth: transitionInLabel.implicitWidth + 10
+                                                    implicitHeight: transitionInLabel.implicitHeight + 4
+
+                                                    Label {
+                                                        id: transitionInLabel
+                                                        anchors.centerIn: parent
+                                                        text: modelData.transitionInName
+                                                        color: theme.ink950
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                    }
+                                                }
+
+                                                Rectangle {
+                                                    visible: modelData.transitionOutName && modelData.transitionOutName.length > 0
+                                                    anchors.right: parent.right
+                                                    anchors.top: parent.top
+                                                    anchors.margins: 4
+                                                    radius: 6
+                                                    color: theme.alpha(theme.accentCool500, 0.9)
+                                                    implicitWidth: transitionOutLabel.implicitWidth + 10
+                                                    implicitHeight: transitionOutLabel.implicitHeight + 4
+
+                                                    Label {
+                                                        id: transitionOutLabel
+                                                        anchors.centerIn: parent
+                                                        text: modelData.transitionOutName
+                                                        color: theme.ink950
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                    }
+                                                }
+
+                                                Rectangle {
+                                                    anchors.left: parent.left
+                                                    anchors.leftMargin: 4
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.bottomMargin: 4
+                                                    width: Math.min(parent.width / 2 - 6, Math.max(12, Number(modelData.fadeInSeconds || 0) * timelineZoom))
+                                                    height: 8
+                                                    radius: 4
+                                                    color: theme.alpha(theme.accentCool400, 0.82)
+                                                    visible: modelData.selected || Number(modelData.fadeInSeconds || 0) > 0
+
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.SizeHorCursor
+                                                        enabled: timelineDocument.currentIndex >= 0
+                                                        onPressed: timelineDocument.selectClip(modelData.index)
+                                                        onPositionChanged: function(mouse) {
+                                                            if (!pressed)
+                                                                return
+                                                            timelineDocument.selectClip(modelData.index)
+                                                            const durationSeconds = Math.max(0, Math.min(Number(modelData.trimmedDurationSeconds || 0), mouse.x / timelineZoom))
+                                                            timelineDocument.setSelectedClipFadeInSeconds(durationSeconds)
+                                                            inspectorTab = "audio"
+                                                        }
+                                                    }
+                                                }
+
+                                                Rectangle {
+                                                    anchors.right: parent.right
+                                                    anchors.rightMargin: 4
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.bottomMargin: 4
+                                                    width: Math.min(parent.width / 2 - 6, Math.max(12, Number(modelData.fadeOutSeconds || 0) * timelineZoom))
+                                                    height: 8
+                                                    radius: 4
+                                                    color: theme.alpha(theme.accentCool400, 0.82)
+                                                    visible: modelData.selected || Number(modelData.fadeOutSeconds || 0) > 0
+
+                                                    MouseArea {
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.SizeHorCursor
+                                                        enabled: timelineDocument.currentIndex >= 0
+                                                        onPressed: timelineDocument.selectClip(modelData.index)
+                                                        onPositionChanged: function(mouse) {
+                                                            if (!pressed)
+                                                                return
+                                                            timelineDocument.selectClip(modelData.index)
+                                                            const durationSeconds = Math.max(0, Math.min(Number(modelData.trimmedDurationSeconds || 0), (parent.width - mouse.x) / timelineZoom))
+                                                            timelineDocument.setSelectedClipFadeOutSeconds(durationSeconds)
+                                                            inspectorTab = "audio"
+                                                        }
+                                                    }
+                                                }
+
                                                 ColumnLayout {
                                                     anchors.fill: parent
                                                     anchors.leftMargin: 8 + clipBlock.trimHandleWidth
@@ -1474,16 +2357,105 @@ Rectangle {
                                                     Label {
                                                         Layout.fillWidth: true
                                                         text: modelData.trackKind === "audio"
-                                                              ? (modelData.silentPlaceholder ? "Silent bed" : "Audio lane")
-                                                              : modelData.trimmedDurationText
+                                                              ? (modelData.silentPlaceholder
+                                                                 ? "Silent bed"
+                                                                 : (Number(modelData.audioGainDb || 0).toFixed(1) + " dB  •  Fades "
+                                                                    + Number(modelData.fadeInSeconds || 0).toFixed(1)
+                                                                    + "/" + Number(modelData.fadeOutSeconds || 0).toFixed(1)))
+                                                              : (modelData.trimmedDurationText
+                                                                 + "  •  Op "
+                                                                 + Math.round(Number(modelData.opacity || 1) * 100)
+                                                                 + "%  •  " + Number(modelData.playbackRate || 1).toFixed(2) + "x")
                                                         color: theme.textMuted
                                                         font.family: theme.fontMono
                                                         font.pixelSize: 9
                                                         elide: Text.ElideRight
                                                     }
+
+                                                    Flow {
+                                                        Layout.fillWidth: true
+                                                        spacing: 4
+                                                        visible: modelData.effectStack && modelData.effectStack.length > 0
+
+                                                        Repeater {
+                                                            model: modelData.effectStack ? modelData.effectStack : []
+
+                                                            delegate: Rectangle {
+                                                                required property var modelData
+                                                                radius: 5
+                                                                color: theme.alpha(theme.ink950, 0.74)
+                                                                border.width: 1
+                                                                border.color: theme.alpha(theme.lineStrong, 0.34)
+                                                                implicitWidth: effectChipLabel.implicitWidth + 10
+                                                                implicitHeight: effectChipLabel.implicitHeight + 4
+
+                                                                Label {
+                                                                    id: effectChipLabel
+                                                                    anchors.centerIn: parent
+                                                                    text: modelData
+                                                                    color: theme.textMain
+                                                                    font.family: theme.fontMono
+                                                                    font.pixelSize: 8
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
+                                    }
+                                }
+
+                                Rectangle {
+                                    visible: root.dragPreviewVisible
+                                    x: root.dragPreviewX
+                                    y: root.dragPreviewY
+                                    width: root.dragPreviewWidth
+                                    height: laneHeight - 12
+                                    radius: 8
+                                    color: root.dragPreviewColor
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.accentWarm300, 0.7)
+                                }
+
+                                Rectangle {
+                                    visible: root.marqueeActive
+                                    x: Math.min(root.marqueeStartX, root.marqueeCurrentX)
+                                    y: Math.min(root.marqueeStartY, root.marqueeCurrentY)
+                                    width: Math.abs(root.marqueeCurrentX - root.marqueeStartX)
+                                    height: Math.abs(root.marqueeCurrentY - root.marqueeStartY)
+                                    color: theme.alpha(theme.accentCool400, 0.14)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.accentCool300, 0.72)
+                                }
+
+                                Rectangle {
+                                    visible: root.snapGuideVisible
+                                    x: root.snapGuideSeconds * timelineZoom
+                                    y: 0
+                                    width: 2
+                                    height: timelineContentHeight
+                                    color: theme.accentCool400
+                                }
+
+                                Rectangle {
+                                    visible: root.snapGuideVisible
+                                    x: Math.max(0, root.snapGuideSeconds * timelineZoom - snapGuideBubble.implicitWidth / 2)
+                                    y: 2
+                                    radius: 8
+                                    color: theme.alpha(theme.ink950, 0.94)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.accentCool400, 0.56)
+                                    implicitWidth: snapGuideBubble.implicitWidth + 12
+                                    implicitHeight: snapGuideBubble.implicitHeight + 6
+
+                                    Label {
+                                        id: snapGuideBubble
+                                        anchors.centerIn: parent
+                                        text: root.snapGuideLabel
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
                                     }
                                 }
 

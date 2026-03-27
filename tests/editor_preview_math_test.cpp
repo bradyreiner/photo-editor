@@ -62,6 +62,17 @@ int main() {
     return fail("raising the highlight curve point should brighten high values");
   }
 
+  ColorAdjustmentState point_curve_state;
+  point_curve_state.master_curve_points = {
+      {.x = 0.0, .y = 0.0},
+      {.x = 0.5, .y = 0.75},
+      {.x = 1.0, .y = 1.0},
+  };
+  const auto point_curve_mid = photo_editor::pipeline::evaluate_tone_curve(0.5, point_curve_state);
+  if (!(point_curve_mid > 0.5)) {
+    return fail("master point curve should brighten a lifted midpoint");
+  }
+
   const auto neutral_shadow = photo_editor::pipeline::evaluate_tone_curve(0.20, neutral_state);
   const auto curved_shadow = photo_editor::pipeline::evaluate_tone_curve(0.20, curve_state);
   if (!(curved_shadow < neutral_shadow)) {
@@ -140,6 +151,34 @@ int main() {
   }
   if (!(luminance(shoulder_adjusted) < 0.999999)) {
     return fail("highlight shoulder should keep strong exposure edits below hard clipping");
+  }
+
+  ColorAdjustmentState red_curve_state;
+  red_curve_state.red_curve_points = {
+      {.x = 0.0, .y = 0.0},
+      {.x = 0.5, .y = 0.72},
+      {.x = 1.0, .y = 1.0},
+  };
+  const auto gray_input = linear_pixel_from_srgb(QColor::fromRgbF(0.5F, 0.5F, 0.5F, 1.0F));
+  const auto red_curve_adjusted = apply_single_pixel(gray_input, red_curve_state);
+  if (!(red_curve_adjusted.red > red_curve_adjusted.green &&
+        almost_equal(red_curve_adjusted.green, red_curve_adjusted.blue, 1e-5))) {
+    return fail("red point curve should affect red without shifting green and blue equally");
+  }
+
+  const auto radial_input = linear_pixel_from_srgb(QColor::fromRgbF(0.45F, 0.45F, 0.45F, 1.0F));
+  std::vector<ColorPixel> radial_pixels(9, radial_input);
+  ColorAdjustmentState radial_state;
+  radial_state.radial_mask_enabled = true;
+  radial_state.radial_mask_exposure = 1.0;
+  radial_state.radial_mask_feather = 0.2;
+  radial_state.radial_mask_center_x = 0.5;
+  radial_state.radial_mask_center_y = 0.5;
+  radial_state.radial_mask_radius_x = 0.22;
+  radial_state.radial_mask_radius_y = 0.22;
+  photo_editor::pipeline::apply_color_adjustments(&radial_pixels, 3, 3, radial_state);
+  if (!(luminance(radial_pixels[4]) > luminance(radial_pixels[0]))) {
+    return fail("radial mask should affect the center more strongly than the corners");
   }
 
   return EXIT_SUCCESS;

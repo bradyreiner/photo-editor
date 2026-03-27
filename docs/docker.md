@@ -69,6 +69,13 @@ The development containers expose:
 
 On the host, PostgreSQL is published on port `5433` by default to avoid conflicting with an existing local database. You can override that with `PHOTO_EDITOR_POSTGRES_HOST_PORT`.
 
+For runtime catalog setup, use the checked-in migration flow instead of relying only on container init scripts:
+
+```sh
+cd rust
+cargo run -p photo-catalog --bin catalog_migrate
+```
+
 This installs Qt 6 packages and attempts a Linux desktop build of the QML shell.
 
 ## Product reality

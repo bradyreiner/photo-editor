@@ -12,6 +12,7 @@ Rectangle {
     property real manualZoom: 1.0
     property bool fitToView: true
     property bool inspectorCollapsed: false
+    property string cropGuideMode: "Thirds"
     property string editedDisplaySource: ""
     property string referenceDisplaySource: ""
     property var hslChannels: [
@@ -282,11 +283,29 @@ Rectangle {
                         cache: false
                         visible: editorPreview.compareMode && referenceDisplaySource.length > 0
                     }
+
+                    CropOverlay {
+                        anchors.fill: parent
+                        active: fitToView && editorPreview.cropEditing && !editorPreview.compareMode && editedPreviewFit.visible
+                        imageX: editedPreviewFit.x + (editedPreviewFit.width - editedPreviewFit.paintedWidth) / 2
+                        imageY: editedPreviewFit.y + (editedPreviewFit.height - editedPreviewFit.paintedHeight) / 2
+                        imageWidth: Math.max(0, editedPreviewFit.paintedWidth)
+                        imageHeight: Math.max(0, editedPreviewFit.paintedHeight)
+                        cropX: editorPreview.cropRectX
+                        cropY: editorPreview.cropRectY
+                        cropWidth: editorPreview.cropRectWidth
+                        cropHeight: editorPreview.cropRectHeight
+                        aspectRatio: editorPreview.cropAspectRatio
+                        guideMode: cropGuideMode
+                        onRectEdited: function(x, y, width, height) {
+                            editorPreview.updateCropRect(x, y, width, height);
+                        }
+                    }
                 }
 
                 MouseArea {
                     anchors.fill: fitPreviewRow
-                    visible: fitToView && editorPreview.whiteBalanceSampling && editedPreviewFit.visible
+                    visible: fitToView && editorPreview.whiteBalanceSampling && !editorPreview.cropEditing && editedPreviewFit.visible
                     cursorShape: Qt.CrossCursor
                     onClicked: function (mouse) {
                         const imageX = editedPreviewFit.x + (editedPreviewFit.width - editedPreviewFit.paintedWidth) / 2;
@@ -353,7 +372,7 @@ Rectangle {
 
                         MouseArea {
                             anchors.fill: parent
-                            visible: editorPreview.whiteBalanceSampling && editedPreviewZoom.visible
+                            visible: editorPreview.whiteBalanceSampling && !editorPreview.cropEditing && editedPreviewZoom.visible
                             cursorShape: Qt.CrossCursor
                             onClicked: function (mouse) {
                                 if (mouse.x < editedPreviewZoom.x || mouse.x > editedPreviewZoom.x + editedPreviewZoom.width || mouse.y < editedPreviewZoom.y || mouse.y > editedPreviewZoom.y + editedPreviewZoom.height) {
@@ -362,6 +381,24 @@ Rectangle {
                                 }
 
                                 editorPreview.sampleWhiteBalanceAt((mouse.x - editedPreviewZoom.x) / editedPreviewZoom.width, (mouse.y - editedPreviewZoom.y) / editedPreviewZoom.height);
+                            }
+                        }
+
+                        CropOverlay {
+                            anchors.fill: parent
+                            active: !fitToView && editorPreview.cropEditing && !editorPreview.compareMode && editedPreviewZoom.visible
+                            imageX: editedPreviewZoom.x
+                            imageY: editedPreviewZoom.y
+                            imageWidth: editedPreviewZoom.width
+                            imageHeight: editedPreviewZoom.height
+                            cropX: editorPreview.cropRectX
+                            cropY: editorPreview.cropRectY
+                            cropWidth: editorPreview.cropRectWidth
+                            cropHeight: editorPreview.cropRectHeight
+                            aspectRatio: editorPreview.cropAspectRatio
+                            guideMode: cropGuideMode
+                            onRectEdited: function(x, y, width, height) {
+                                editorPreview.updateCropRect(x, y, width, height);
                             }
                         }
                     }
@@ -385,7 +422,7 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: zoomPreviewFlick
-                    visible: !fitToView && !editorPreview.whiteBalanceSampling
+                    visible: !fitToView && !editorPreview.whiteBalanceSampling && !editorPreview.cropEditing
                     acceptedButtons: Qt.LeftButton
                     preventStealing: true
                     cursorShape: maxPanX() > 0 || maxPanY() > 0 ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
@@ -954,20 +991,17 @@ Rectangle {
 
                             ToneCurveEditor {
                                 Layout.fillWidth: true
-                                shadowsValue: editorPreview.curveShadows
-                                darksValue: editorPreview.curveDarks
-                                lightsValue: editorPreview.curveLights
-                                highlightsValue: editorPreview.curveHighlights
-                                onCurveValueDragged: function (pointName, value) {
-                                    if (pointName === "shadows")
-                                        editorPreview.curveShadows = value;
-                                    else if (pointName === "darks")
-                                        editorPreview.curveDarks = value;
-                                    else if (pointName === "lights")
-                                        editorPreview.curveLights = value;
-                                    else if (pointName === "highlights")
-                                        editorPreview.curveHighlights = value;
-                                }
+                                accent: editorPreview.curveChannel === "Red"
+                                        ? "#d45a62"
+                                        : (editorPreview.curveChannel === "Green"
+                                           ? "#61b56f"
+                                           : (editorPreview.curveChannel === "Blue"
+                                              ? "#4e86d9"
+                                              : "#c99a52"))
+                                selectedChannel: editorPreview.curveChannel
+                                pointsModel: editorPreview.activeCurvePoints
+                                onChannelSelected: editorPreview.curveChannel = channel
+                                onPointsEdited: editorPreview.activeCurvePoints = points
                             }
                         }
 
@@ -1038,11 +1072,50 @@ Rectangle {
                             expandable: true
                             expanded: true
 
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    text: editorPreview.cropEditing ? "Done" : "Edit Crop"
+                                    active: editorPreview.cropEditing
+                                    onClicked: editorPreview.cropEditing = !editorPreview.cropEditing
+                                }
+
+                                ActionButton {
+                                    text: "Reset Box"
+                                    enabled: editorPreview.hasAsset
+                                    onClicked: editorPreview.resetCropRect()
+                                }
+                            }
+
+                            Label {
+                                text: "Ratio"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
                             ToneComboBox {
                                 Layout.fillWidth: true
-                                model: ["Original", "Square", "4x5", "16x9"]
+                                model: ["Original", "Square", "4x5", "3x2", "16x9"]
                                 currentIndex: model.indexOf(editorPreview.cropPreset)
                                 onActivated: editorPreview.cropPreset = currentText
+                            }
+
+                            Label {
+                                text: "Guides"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            ToneComboBox {
+                                Layout.fillWidth: true
+                                model: ["Off", "Thirds", "Center", "Diagonal"]
+                                currentIndex: model.indexOf(cropGuideMode)
+                                onActivated: cropGuideMode = currentText
                             }
 
                             InspectorSlider {

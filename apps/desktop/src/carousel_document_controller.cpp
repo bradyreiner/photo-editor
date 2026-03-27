@@ -1,5 +1,6 @@
 #include "carousel_document_controller.h"
 
+#include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QPainter>
 #include <QPen>
 #include <QProcess>
+#include <QRectF>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
@@ -75,13 +77,20 @@ double crop_aspect_ratio(const QString& preset) {
   if (preset == QStringLiteral("4x5")) {
     return 4.0 / 5.0;
   }
+  if (preset == QStringLiteral("3x2")) {
+    return 3.0 / 2.0;
+  }
   if (preset == QStringLiteral("16x9")) {
     return 16.0 / 9.0;
   }
   return 0.0;
 }
 
-QRect crop_rect_for_image(const QSize& size, const QString& preset, double crop_zoom) {
+bool has_explicit_crop_rect(const CarouselDocumentController::RecipeState& state) {
+  return state.crop_rect_width > 0.0 && state.crop_rect_height > 0.0;
+}
+
+QRect legacy_crop_rect_for_image(const QSize& size, const QString& preset, double crop_zoom) {
   int crop_width = size.width();
   int crop_height = size.height();
 
@@ -101,6 +110,24 @@ QRect crop_rect_for_image(const QSize& size, const QString& preset, double crop_
   const auto x = qMax(0, (size.width() - crop_width) / 2);
   const auto y = qMax(0, (size.height() - crop_height) / 2);
   return {x, y, crop_width, crop_height};
+}
+
+QRect crop_rect_for_image(const QSize& size, const CarouselDocumentController::RecipeState& state) {
+  if (has_explicit_crop_rect(state)) {
+    const auto width = qBound(0.05, state.crop_rect_width, 1.0);
+    const auto height = qBound(0.05, state.crop_rect_height, 1.0);
+    const auto x = qBound(0.0, state.crop_rect_x, 1.0 - width);
+    const auto y = qBound(0.0, state.crop_rect_y, 1.0 - height);
+    const auto pixel_x = qBound(0, static_cast<int>(qRound(x * static_cast<double>(size.width()))), size.width() - 1);
+    const auto pixel_y = qBound(0, static_cast<int>(qRound(y * static_cast<double>(size.height()))), size.height() - 1);
+    const auto pixel_width =
+        qBound(1, static_cast<int>(qRound(width * static_cast<double>(size.width()))), size.width() - pixel_x);
+    const auto pixel_height =
+        qBound(1, static_cast<int>(qRound(height * static_cast<double>(size.height()))), size.height() - pixel_y);
+    return {pixel_x, pixel_y, pixel_width, pixel_height};
+  }
+
+  return legacy_crop_rect_for_image(size, state.crop_preset, state.crop_zoom);
 }
 
 photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
@@ -133,6 +160,15 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .linear_mask_feather = state.linear_mask_feather,
       .linear_mask_position = state.linear_mask_position,
       .linear_mask_rotation = state.linear_mask_rotation,
+      .radial_mask_enabled = state.radial_mask_enabled,
+      .radial_mask_exposure = state.radial_mask_exposure,
+      .radial_mask_temperature = state.radial_mask_temperature,
+      .radial_mask_feather = state.radial_mask_feather,
+      .radial_mask_center_x = state.radial_mask_center_x,
+      .radial_mask_center_y = state.radial_mask_center_y,
+      .radial_mask_radius_x = state.radial_mask_radius_x,
+      .radial_mask_radius_y = state.radial_mask_radius_y,
+      .radial_mask_rotation = state.radial_mask_rotation,
   };
 }
 
@@ -794,7 +830,7 @@ QSize CarouselDocumentController::exportPixelSize() const {
 }
 
 QString CarouselDocumentController::previewsRoot() const {
-  const auto cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+  const auto cache_root = AppBootstrap::cacheLocation();
   const auto base = cache_root.isEmpty() ? QDir::current().filePath(QStringLiteral(".photo-editor-cache")) : cache_root;
   return QDir(base).filePath(QStringLiteral("carousel-previews/%1").arg(session_id_));
 }
@@ -816,47 +852,7 @@ QString CarouselDocumentController::versionedLocalFile(const QString& file_path,
 
 CarouselDocumentController::RecipeState CarouselDocumentController::recipeStateFromJson(
     const QString& recipe_json) const {
-  if (recipe_json.trimmed().isEmpty()) {
-    return {};
-  }
-
-  const auto document = QJsonDocument::fromJson(recipe_json.toUtf8());
-  if (!document.isObject()) {
-    return {};
-  }
-
-  const auto object = document.object();
-  RecipeState state;
-  state.exposure = object.value(QStringLiteral("exposure")).toDouble();
-  state.contrast = object.value(QStringLiteral("contrast")).toDouble();
-  state.highlights = object.value(QStringLiteral("highlights")).toDouble();
-  state.shadows = object.value(QStringLiteral("shadows")).toDouble();
-  state.whites = object.value(QStringLiteral("whites")).toDouble();
-  state.blacks = object.value(QStringLiteral("blacks")).toDouble();
-  state.temperature = object.value(QStringLiteral("temperature")).toDouble();
-  state.tint = object.value(QStringLiteral("tint")).toDouble();
-  state.texture = object.value(QStringLiteral("texture")).toDouble();
-  state.clarity = object.value(QStringLiteral("clarity")).toDouble();
-  state.dehaze = object.value(QStringLiteral("dehaze")).toDouble();
-  state.vibrance = object.value(QStringLiteral("vibrance")).toDouble();
-  state.saturation = object.value(QStringLiteral("saturation")).toDouble();
-  state.curve_shadows = object.value(QStringLiteral("curveShadows")).toDouble();
-  state.curve_darks = object.value(QStringLiteral("curveDarks")).toDouble();
-  state.curve_lights = object.value(QStringLiteral("curveLights")).toDouble();
-  state.curve_highlights = object.value(QStringLiteral("curveHighlights")).toDouble();
-  state.hsl_channel = object.value(QStringLiteral("hslChannel")).toString(QStringLiteral("Reds"));
-  state.hue_adjustment = object.value(QStringLiteral("hueAdjustment")).toDouble();
-  state.saturation_adjustment = object.value(QStringLiteral("saturationAdjustment")).toDouble();
-  state.luminance_adjustment = object.value(QStringLiteral("luminanceAdjustment")).toDouble();
-  state.crop_zoom = object.value(QStringLiteral("cropZoom")).toDouble(1.0);
-  state.crop_preset = object.value(QStringLiteral("cropPreset")).toString(QStringLiteral("Original"));
-  state.linear_mask_enabled = object.value(QStringLiteral("linearMaskEnabled")).toBool(false);
-  state.linear_mask_exposure = object.value(QStringLiteral("linearMaskExposure")).toDouble();
-  state.linear_mask_temperature = object.value(QStringLiteral("linearMaskTemperature")).toDouble();
-  state.linear_mask_feather = object.value(QStringLiteral("linearMaskFeather")).toDouble(0.22);
-  state.linear_mask_position = object.value(QStringLiteral("linearMaskPosition")).toDouble(0.5);
-  state.linear_mask_rotation = object.value(QStringLiteral("linearMaskRotation")).toDouble();
-  return state;
+  return parse_edit_recipe_json(recipe_json);
 }
 
 bool CarouselDocumentController::isImageFile(const QString& file_path) const {
@@ -1209,8 +1205,10 @@ bool CarouselDocumentController::decodeEditedImage(
     return false;
   }
 
-  if (media.recipe_state.crop_preset != QStringLiteral("Original") || !qFuzzyCompare(media.recipe_state.crop_zoom, 1.0)) {
-    *image = image->copy(crop_rect_for_image(image->size(), media.recipe_state.crop_preset, media.recipe_state.crop_zoom));
+  if (has_explicit_crop_rect(media.recipe_state) ||
+      media.recipe_state.crop_preset != QStringLiteral("Original") ||
+      !qFuzzyCompare(media.recipe_state.crop_zoom, 1.0)) {
+    *image = image->copy(crop_rect_for_image(image->size(), media.recipe_state));
   }
   apply_color_adjustments(image, media.recipe_state);
   return !image->isNull();

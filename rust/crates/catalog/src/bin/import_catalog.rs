@@ -3,7 +3,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use photo_catalog::{
-    discover_assets, CatalogService, ImportMode, ImportRequest, PostgresCatalogConfig,
+    discover_assets, AppRuntimePaths, CatalogService, ImportMode, ImportRequest,
+    PostgresCatalogConfig,
 };
 
 #[tokio::main]
@@ -29,6 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let summary = discover_assets(&request)?;
+    AppRuntimePaths::from_env().ensure_directories()?;
     let config = PostgresCatalogConfig::from_env();
     let catalog = CatalogService::connect(&config).await?;
     catalog.initialize_schema().await?;

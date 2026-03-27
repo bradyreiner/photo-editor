@@ -160,6 +160,11 @@ void TimelinePlaybackController::syncToDocument() {
   const auto next_source_url = timeline_document_->playbackSourceUrl();
   const auto target_position_ms =
       qRound64(timeline_document_->currentClipPlayheadSeconds() * 1000.0);
+  const auto current_clip = timeline_document_->currentClip();
+  const auto audio_playback_enabled =
+      !current_clip.contains(QStringLiteral("audioPlaybackEnabled")) ||
+      current_clip.value(QStringLiteral("audioPlaybackEnabled")).toBool();
+  audio_output_.setVolume(audio_playback_enabled ? 1.0 : 0.0);
 
   if (current_source_url_ != next_source_url) {
     current_source_url_ = next_source_url;

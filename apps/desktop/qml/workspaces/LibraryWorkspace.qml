@@ -9,6 +9,7 @@ Rectangle {
     property string mode: "catalog"
     signal modeSelected(string mode)
     signal assetActivated(string destination)
+    signal projectActivated(string destination, string projectName)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
 
     Theme { id: theme }
@@ -65,6 +66,9 @@ Rectangle {
         LibraryView {
             onAssetActivated: function(destination) {
                 root.assetActivated(destination)
+            }
+            onProjectActivated: function(destination, projectName) {
+                root.projectActivated(destination, projectName)
             }
             onLocalAssetActivated: function(filePath, previewSource, displayName) {
                 root.localAssetActivated(filePath, previewSource, displayName)

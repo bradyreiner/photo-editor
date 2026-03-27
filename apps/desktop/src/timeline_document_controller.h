@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
@@ -11,6 +12,7 @@ namespace photo_editor::desktop {
 
 class TimelineDocumentController final : public QObject {
   Q_OBJECT
+  Q_PROPERTY(bool hasActiveTimeline READ hasActiveTimeline NOTIFY timelineStateChanged)
   Q_PROPERTY(QVariantList clips READ clips NOTIFY clipsChanged)
   Q_PROPERTY(QVariantList sequenceTracks READ sequenceTracks NOTIFY sequenceChanged)
   Q_PROPERTY(QVariantMap currentClip READ currentClip NOTIFY selectionChanged)
@@ -19,7 +21,16 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(int trackCount READ trackCount NOTIFY sequenceChanged)
   Q_PROPERTY(int videoTrackCount READ videoTrackCount NOTIFY sequenceChanged)
   Q_PROPERTY(int audioTrackCount READ audioTrackCount NOTIFY sequenceChanged)
-  Q_PROPERTY(double framesPerSecond READ framesPerSecond CONSTANT)
+  Q_PROPERTY(double framesPerSecond READ framesPerSecond NOTIFY sequenceChanged)
+  Q_PROPERTY(int sequenceWidth READ sequenceWidth NOTIFY sequenceChanged)
+  Q_PROPERTY(int sequenceHeight READ sequenceHeight NOTIFY sequenceChanged)
+  Q_PROPERTY(int audioSampleRate READ audioSampleRate NOTIFY sequenceChanged)
+  Q_PROPERTY(QString projectBinding READ projectBinding NOTIFY sequenceChanged)
+  Q_PROPERTY(QString colorSpace READ colorSpace NOTIFY sequenceChanged)
+  Q_PROPERTY(QString dataLevels READ dataLevels NOTIFY sequenceChanged)
+  Q_PROPERTY(QString exportContainer READ exportContainer NOTIFY sequenceChanged)
+  Q_PROPERTY(QString exportCodec READ exportCodec NOTIFY sequenceChanged)
+  Q_PROPERTY(QVariantMap sequenceSettings READ sequenceSettings NOTIFY sequenceChanged)
   Q_PROPERTY(QString sequenceFormatLabel READ sequenceFormatLabel NOTIFY sequenceChanged)
   Q_PROPERTY(QString timelineName READ timelineName WRITE setTimelineName NOTIFY timelineNameChanged)
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
@@ -33,10 +44,20 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(QString previewSource READ previewSource NOTIFY previewSourceChanged)
   Q_PROPERTY(QString savedDocumentPath READ savedDocumentPath NOTIFY savedPathsChanged)
   Q_PROPERTY(QString savedRenderPath READ savedRenderPath NOTIFY savedPathsChanged)
+  Q_PROPERTY(QString timelineAssetId READ timelineAssetId NOTIFY savedPathsChanged)
+  Q_PROPERTY(QString activeTool READ activeTool WRITE setActiveTool NOTIFY editorStateChanged)
+  Q_PROPERTY(QString editMode READ editMode WRITE setEditMode NOTIFY editorStateChanged)
+  Q_PROPERTY(bool linkedSelectionEnabled READ linkedSelectionEnabled WRITE setLinkedSelectionEnabled NOTIFY editorStateChanged)
+  Q_PROPERTY(QVariantList sequenceMarkers READ sequenceMarkers NOTIFY markersChanged)
+  Q_PROPERTY(QVariantMap sourceClip READ sourceClip NOTIFY sourceMonitorChanged)
+  Q_PROPERTY(bool hasSourceClip READ hasSourceClip NOTIFY sourceMonitorChanged)
+  Q_PROPERTY(double sourceInSeconds READ sourceInSeconds NOTIFY sourceMonitorChanged)
+  Q_PROPERTY(double sourceOutSeconds READ sourceOutSeconds NOTIFY sourceMonitorChanged)
 
  public:
   explicit TimelineDocumentController(QObject* parent = nullptr);
 
+  [[nodiscard]] bool hasActiveTimeline() const;
   [[nodiscard]] QVariantList clips() const;
   [[nodiscard]] QVariantList sequenceTracks() const;
   [[nodiscard]] QVariantMap currentClip() const;
@@ -46,6 +67,15 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] int videoTrackCount() const;
   [[nodiscard]] int audioTrackCount() const;
   [[nodiscard]] double framesPerSecond() const;
+  [[nodiscard]] int sequenceWidth() const;
+  [[nodiscard]] int sequenceHeight() const;
+  [[nodiscard]] int audioSampleRate() const;
+  [[nodiscard]] QString projectBinding() const;
+  [[nodiscard]] QString colorSpace() const;
+  [[nodiscard]] QString dataLevels() const;
+  [[nodiscard]] QString exportContainer() const;
+  [[nodiscard]] QString exportCodec() const;
+  [[nodiscard]] QVariantMap sequenceSettings() const;
   [[nodiscard]] QString sequenceFormatLabel() const;
   [[nodiscard]] QString timelineName() const;
   [[nodiscard]] QString status() const;
@@ -59,10 +89,24 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] QString previewSource() const;
   [[nodiscard]] QString savedDocumentPath() const;
   [[nodiscard]] QString savedRenderPath() const;
+  [[nodiscard]] QString timelineAssetId() const;
+  [[nodiscard]] QString activeTool() const;
+  [[nodiscard]] QString editMode() const;
+  [[nodiscard]] bool linkedSelectionEnabled() const;
+  [[nodiscard]] QVariantList sequenceMarkers() const;
+  [[nodiscard]] QVariantMap sourceClip() const;
+  [[nodiscard]] bool hasSourceClip() const;
+  [[nodiscard]] double sourceInSeconds() const;
+  [[nodiscard]] double sourceOutSeconds() const;
 
   void setTimelineName(const QString& timeline_name);
+  void setActiveTool(const QString& active_tool);
+  void setEditMode(const QString& edit_mode);
+  void setLinkedSelectionEnabled(bool enabled);
 
   Q_INVOKABLE void createTimeline(const QString& timeline_name = QString());
+  Q_INVOKABLE void createTimelineWithSettings(const QVariantMap& settings);
+  Q_INVOKABLE void closeTimeline();
   Q_INVOKABLE bool loadTimeline(const QString& document_path);
   Q_INVOKABLE bool saveTimeline();
   Q_INVOKABLE void selectClip(int index);
@@ -93,16 +137,53 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void removeSelectedClip();
   Q_INVOKABLE void moveSelectedBackward();
   Q_INVOKABLE void moveSelectedForward();
+  Q_INVOKABLE void toggleTrackLocked(int track_row_index);
+  Q_INVOKABLE void toggleTrackMuted(int track_row_index);
+  Q_INVOKABLE void toggleTrackSolo(int track_row_index);
+  Q_INVOKABLE void toggleTrackVisibility(int track_row_index);
+  Q_INVOKABLE void toggleTrackTargeted(int track_row_index);
   Q_INVOKABLE void setSelectedTrimStartSeconds(double seconds);
   Q_INVOKABLE void setSelectedTrimEndSeconds(double seconds);
   Q_INVOKABLE void trimSelectedClipStartToSequenceSeconds(double seconds, bool ripple = false);
   Q_INVOKABLE void trimSelectedClipEndToSequenceSeconds(double seconds, bool ripple = false);
+  Q_INVOKABLE bool rollSelectedClipStartToSequenceSeconds(double seconds);
+  Q_INVOKABLE bool rollSelectedClipEndToSequenceSeconds(double seconds);
+  Q_INVOKABLE bool slipSelectedClipBySeconds(double delta_seconds);
   Q_INVOKABLE void setSelectedFrameMode(const QString& frame_mode);
   Q_INVOKABLE void setSelectedFrameScale(double frame_scale);
   Q_INVOKABLE void setSelectedFrameOffsetX(double frame_offset_x);
   Q_INVOKABLE void setSelectedFrameOffsetY(double frame_offset_y);
+  Q_INVOKABLE void setSelectedClipOpacity(double opacity);
+  Q_INVOKABLE void setSelectedClipAudioGain(double gain_db);
+  Q_INVOKABLE void setSelectedClipFadeInSeconds(double seconds);
+  Q_INVOKABLE void setSelectedClipFadeOutSeconds(double seconds);
+  Q_INVOKABLE void setSelectedClipPlaybackRate(double playback_rate);
+  Q_INVOKABLE void addSelectedClipEffect(const QString& effect_name);
+  Q_INVOKABLE void removeSelectedClipEffect(const QString& effect_name);
+  Q_INVOKABLE void assignSelectedClipTransition(
+      const QString& edge,
+      const QString& transition_name,
+      double duration_seconds = 0.35);
+  Q_INVOKABLE void clearSelectedClipTransition(const QString& edge);
   Q_INVOKABLE double sourceDurationSecondsForFile(const QString& file_path) const;
   Q_INVOKABLE bool splitSelectedClip(double split_seconds);
+  Q_INVOKABLE void loadSourceClipFromGallery(
+      const QString& asset_id,
+      const QString& file_path,
+      const QString& display_label,
+      double duration_seconds,
+      const QString& poster_source = QString());
+  Q_INVOKABLE void clearSourceClip();
+  Q_INVOKABLE void setSourceInSeconds(double seconds);
+  Q_INVOKABLE void setSourceOutSeconds(double seconds);
+  Q_INVOKABLE void clearSourceRange();
+  Q_INVOKABLE void appendSourceClipToTimeline();
+  Q_INVOKABLE void insertSourceClipAtPlayhead();
+  Q_INVOKABLE void overwriteSourceClipAtPlayhead();
+  Q_INVOKABLE QString addSequenceMarker(const QString& label = QString());
+  Q_INVOKABLE void moveSequenceMarker(const QString& marker_id, double seconds);
+  Q_INVOKABLE void renameSequenceMarker(const QString& marker_id, const QString& label);
+  Q_INVOKABLE void removeSequenceMarker(const QString& marker_id);
   Q_INVOKABLE void playSequence();
   Q_INVOKABLE void pauseSequence();
   Q_INVOKABLE void seekSequenceSeconds(double seconds);
@@ -111,7 +192,8 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void syncPlaybackPosition(double clip_seconds);
   Q_INVOKABLE bool advancePlaybackAfterClipEnd();
 
- signals:
+signals:
+  void timelineStateChanged();
   void clipsChanged();
   void sequenceChanged();
   void selectionChanged();
@@ -121,6 +203,9 @@ class TimelineDocumentController final : public QObject {
   void previewSourceChanged();
   void savedPathsChanged();
   void playbackStateChanged();
+  void editorStateChanged();
+  void sourceMonitorChanged();
+  void markersChanged();
 
  private:
   enum class TrackKind {
@@ -131,6 +216,7 @@ class TimelineDocumentController final : public QObject {
   struct Clip final {
     QString clip_id;
     QString asset_id;
+    QString media_type = QStringLiteral("video");
     QString file_path;
     QString display_label;
     QString poster_source;
@@ -145,6 +231,16 @@ class TimelineDocumentController final : public QObject {
     double frame_scale = 1.0;
     double frame_offset_x = 0.0;
     double frame_offset_y = 0.0;
+    double opacity = 1.0;
+    double audio_gain_db = 0.0;
+    double fade_in_seconds = 0.0;
+    double fade_out_seconds = 0.0;
+    double playback_rate = 1.0;
+    QStringList effect_stack;
+    QString transition_in_name;
+    QString transition_out_name;
+    double transition_in_seconds = 0.0;
+    double transition_out_seconds = 0.0;
   };
 
   struct Track final {
@@ -155,7 +251,16 @@ class TimelineDocumentController final : public QObject {
     bool locked = false;
     bool muted = false;
     bool solo = false;
+    bool visible = true;
+    bool targeted = false;
     QVector<Clip> clips;
+  };
+
+  struct Marker final {
+    QString marker_id;
+    QString label;
+    QString color = QStringLiteral("#dfb8a8");
+    double seconds = 0.0;
   };
 
   struct ClipRef final {
@@ -168,6 +273,9 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] QVariantMap clipMap(const Clip& clip, int flattened_index, const Track& track) const;
   [[nodiscard]] QVariantMap trackMap(const Track& track, int track_index) const;
   [[nodiscard]] bool isVideoFile(const QString& file_path) const;
+  [[nodiscard]] bool isAudioFile(const QString& file_path) const;
+  [[nodiscard]] bool isImageFile(const QString& file_path) const;
+  [[nodiscard]] QString mediaTypeForFile(const QString& file_path) const;
   [[nodiscard]] QVector<ClipRef> orderedVideoClipRefs() const;
   [[nodiscard]] ClipRef clipRefAt(int index) const;
   [[nodiscard]] ClipRef selectedClipRef() const;
@@ -181,9 +289,12 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] Track* primaryVideoTrack();
   [[nodiscard]] const Track* videoTrackForLane(int lane_index) const;
   [[nodiscard]] Track* videoTrackForLane(int lane_index);
+  [[nodiscard]] const Track* audioTrackForLane(int lane_index) const;
+  [[nodiscard]] Track* audioTrackForLane(int lane_index);
   [[nodiscard]] const Track* videoTrackForRowIndex(int track_row_index) const;
   [[nodiscard]] Track* videoTrackForRowIndex(int track_row_index);
   [[nodiscard]] Track* defaultTargetVideoTrack();
+  [[nodiscard]] Track* defaultTargetAudioTrack();
   [[nodiscard]] const Track* pairedAudioTrack(const Track& video_track) const;
   [[nodiscard]] Track* pairedAudioTrack(const Track& video_track);
   [[nodiscard]] ClipRef activeVideoClipRefForTime(double seconds) const;
@@ -198,7 +309,9 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] double totalDurationSeconds() const;
   [[nodiscard]] double clipLocalSecondsForSequenceTime(const Clip& clip, double seconds) const;
   [[nodiscard]] QString formatDurationText(double seconds) const;
+  [[nodiscard]] QVariantMap markerMap(const Marker& marker) const;
   [[nodiscard]] double probeVideoDurationSeconds(const QString& file_path) const;
+  [[nodiscard]] double probeAudioDurationSeconds(const QString& file_path) const;
   [[nodiscard]] bool probeVideoHasAudio(const QString& file_path) const;
   [[nodiscard]] QString ensureVideoPoster(const QString& file_path, const QString& cache_key = QString()) const;
   [[nodiscard]] QString ensureAudioWaveform(const QString& file_path, const QString& cache_key = QString()) const;
@@ -227,11 +340,16 @@ class TimelineDocumentController final : public QObject {
   void setDirty(bool dirty);
   void clampPlaybackState();
   void emitAllState();
+  void emitEditorState();
+  void emitSourceMonitorState();
+  void emitMarkersState();
 
+  bool has_active_timeline_ = false;
   QVector<Track> tracks_;
+  QVector<Marker> markers_;
   QString timeline_id_;
   QString timeline_name_ = QStringLiteral("Untitled Timeline");
-  QString status_ = QStringLiteral("Timeline ready.");
+  QString status_ = QStringLiteral("Create a timeline to begin editing.");
   QString preview_source_;
   QString saved_document_path_;
   QString saved_render_path_;
@@ -239,11 +357,25 @@ class TimelineDocumentController final : public QObject {
   QString created_at_;
   QString selected_clip_id_;
   QSize sequence_size_ = QSize(1080, 1350);
+  double sequence_frame_rate_ = 30.0;
+  int audio_sample_rate_ = 48000;
+  QString project_binding_;
+  QString color_space_ = QStringLiteral("Rec.709");
+  QString data_levels_ = QStringLiteral("Legal");
+  QString export_container_ = QStringLiteral("mp4");
+  QString export_codec_ = QStringLiteral("h264");
   int current_index_ = -1;
   bool dirty_ = false;
   double sequence_playhead_seconds_ = 0.0;
   double current_clip_playhead_seconds_ = 0.0;
   bool sequence_playing_ = false;
+  QString active_tool_ = QStringLiteral("select");
+  QString edit_mode_ = QStringLiteral("insert");
+  bool linked_selection_enabled_ = true;
+  Clip source_clip_;
+  bool has_source_clip_ = false;
+  double source_in_seconds_ = 0.0;
+  double source_out_seconds_ = 0.0;
 };
 
 }  // namespace photo_editor::desktop

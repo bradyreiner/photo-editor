@@ -7,6 +7,7 @@ Button {
 
     property color accent: "#c99a52"
     property string kind: "library"
+    property string iconName: kind
     property string title: ""
     property string subtitle: ""
     property string tooltipText: ""
@@ -16,9 +17,9 @@ Button {
 
     Theme { id: theme }
 
-    implicitHeight: compact ? 36 : 34
+    implicitHeight: compact ? theme.controlHeight : theme.controlHeightTall
     font.family: theme.fontUi
-    font.pixelSize: 12
+    font.pixelSize: compact ? 11 : 12
     hoverEnabled: true
 
     ToolTip.visible: root.hovered && root.tooltipText.length > 0
@@ -27,38 +28,61 @@ Button {
     ToolTip.text: root.tooltipText
 
     background: Rectangle {
-        radius: theme.radius8
+        radius: theme.radiusControl
         color: root.down
                ? theme.ink800
                : root.highlighted
-                 ? theme.alpha(theme.ink800, 0.9)
-                 : (root.hovered ? theme.alpha(theme.ink700, 0.22) : "transparent")
-        border.width: root.highlighted ? 1 : 0
+                 ? theme.alpha(theme.ink800, 0.96)
+                 : (root.hovered ? theme.alpha(theme.ink700, 0.32) : "transparent")
+        border.width: 1
         border.color: root.highlighted
-                      ? theme.alpha(theme.lineStrong, 0.55)
-                      : "transparent"
+                      ? theme.alpha(root.accent, 0.42)
+                      : (root.hovered ? theme.alpha(theme.lineStrong, 0.36) : "transparent")
 
         Rectangle {
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             anchors.leftMargin: 0
             width: 2
-            height: parent.height - 10
+            height: parent.height - 8
             radius: 1
             visible: root.highlighted
-            color: theme.textMuted
+            color: root.accent
         }
 
         Behavior on color {
+            ColorAnimation { duration: theme.durationFast }
+        }
+
+        Behavior on border.color {
             ColorAnimation { duration: theme.durationFast }
         }
     }
 
     contentItem: RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 8
-        spacing: 8
+        anchors.leftMargin: theme.space10
+        anchors.rightMargin: theme.space10
+        spacing: theme.gapControl
+
+        Rectangle {
+            Layout.preferredWidth: 20
+            Layout.preferredHeight: 20
+            radius: theme.radiusChip
+            color: root.highlighted
+                   ? theme.alpha(root.accent, 0.18)
+                   : (root.hovered ? theme.alpha(theme.ink700, 0.56) : theme.alpha(theme.ink900, 0.7))
+            border.width: root.highlighted ? 1 : 0
+            border.color: root.highlighted ? theme.alpha(root.accent, 0.36) : "transparent"
+
+            AppIcon {
+                anchors.centerIn: parent
+                name: root.iconName
+                color: root.highlighted ? root.accent : (root.hovered ? theme.textMain : theme.textMuted)
+                width: 11
+                height: 11
+            }
+        }
 
         Text {
             Layout.fillWidth: true
@@ -73,18 +97,21 @@ Button {
 
         Rectangle {
             visible: root.badgeText.length > 0
-            radius: theme.radius8
-            color: root.highlighted ? theme.alpha(theme.lineStrong, 0.34) : "transparent"
-            implicitWidth: Math.max(20, badgeLabel.implicitWidth + 10)
-            implicitHeight: 20
+            Layout.alignment: Qt.AlignVCenter
+            radius: theme.radius4
+            color: root.badgeEmphasis ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.ink700, 0.5)
+            border.width: 1
+            border.color: root.badgeEmphasis ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.lineSoft, 0.4)
+            implicitWidth: badgeLabel.implicitWidth + 8
+            implicitHeight: 16
 
-            Text {
+            Label {
                 id: badgeLabel
                 anchors.centerIn: parent
                 text: root.badgeText
-                color: root.highlighted ? theme.textMain : theme.textFaint
+                color: root.badgeEmphasis ? root.accent : theme.textMuted
                 font.family: theme.fontMono
-                font.pixelSize: 9
+                font.pixelSize: 8
             }
         }
     }

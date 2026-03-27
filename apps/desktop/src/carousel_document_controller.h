@@ -12,6 +12,8 @@
 #include <QVariantMap>
 #include <QVector>
 
+#include "edit_recipe_state.h"
+
 namespace photo_editor::desktop {
 
 class CarouselDocumentController final : public QObject {
@@ -76,7 +78,7 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE bool exportCarouselToDirectory(const QString& directory_path);
 
  signals:
- void slidesChanged();
+  void slidesChanged();
   void selectionChanged();
   void documentFormatChanged();
   void statusChanged();
@@ -88,37 +90,7 @@ class CarouselDocumentController final : public QObject {
   enum class SlideTemplate { Single, SplitPair };
   enum class GroupKind { None, HorizontalPair, VerticalTriptych };
 
-  struct RecipeState final {
-    double exposure = 0.0;
-    double contrast = 0.0;
-    double highlights = 0.0;
-    double shadows = 0.0;
-    double whites = 0.0;
-    double blacks = 0.0;
-    double temperature = 0.0;
-    double tint = 0.0;
-    double texture = 0.0;
-    double clarity = 0.0;
-    double dehaze = 0.0;
-    double vibrance = 0.0;
-    double saturation = 0.0;
-    double curve_shadows = 0.0;
-    double curve_darks = 0.0;
-    double curve_lights = 0.0;
-    double curve_highlights = 0.0;
-    QString hsl_channel = QStringLiteral("Reds");
-    double hue_adjustment = 0.0;
-    double saturation_adjustment = 0.0;
-    double luminance_adjustment = 0.0;
-    double crop_zoom = 1.0;
-    QString crop_preset = QStringLiteral("Original");
-    bool linear_mask_enabled = false;
-    double linear_mask_exposure = 0.0;
-    double linear_mask_temperature = 0.0;
-    double linear_mask_feather = 0.22;
-    double linear_mask_position = 0.5;
-    double linear_mask_rotation = 0.0;
-  };
+  using RecipeState = EditRecipeState;
 
   struct MediaItem final {
     MediaType type = MediaType::Empty;

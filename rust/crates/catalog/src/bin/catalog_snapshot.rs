@@ -1,6 +1,8 @@
 use std::env;
 
-use photo_catalog::{CatalogAssetSnapshot, CatalogService, DriveRecord, PostgresCatalogConfig};
+use photo_catalog::{
+    AppRuntimePaths, CatalogAssetSnapshot, CatalogService, DriveRecord, PostgresCatalogConfig,
+};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -14,6 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments: Vec<String> = env::args().collect();
     let limit = parse_limit(arguments.get(1).map(String::as_str));
 
+    AppRuntimePaths::from_env().ensure_directories()?;
     let config = PostgresCatalogConfig::from_env();
     let catalog = CatalogService::connect(&config).await?;
     catalog.initialize_schema().await?;

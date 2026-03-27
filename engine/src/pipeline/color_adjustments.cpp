@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,11 @@ struct OklabColor final {
   double lightness = 0.0;
   double a = 0.0;
   double b = 0.0;
+};
+
+struct CurveEvaluationData final {
+  std::vector<CurvePoint> points;
+  std::vector<double> tangents;
 };
 
 [[nodiscard]] double smoothstep(double edge0, double edge1, double x) {
@@ -114,6 +120,115 @@ struct OklabColor final {
       point(0.85, state.curve_highlights),
       std::pair<double, double>{1.0, 1.0},
   };
+}
+
+[[nodiscard]] bool has_point_curve(std::span<const CurvePoint> points) {
+  return points.size() >= 2;
+}
+
+[[nodiscard]] CurveEvaluationData build_curve_data(std::span<const CurvePoint> input_points) {
+  CurveEvaluationData data;
+  if (input_points.size() < 2) {
+    return data;
+  }
+
+  data.points.assign(input_points.begin(), input_points.end());
+  std::sort(data.points.begin(), data.points.end(), [](const CurvePoint& left, const CurvePoint& right) {
+    return left.x < right.x;
+  });
+
+  std::vector<CurvePoint> normalized_points;
+  normalized_points.reserve(data.points.size());
+  for (const auto& point : data.points) {
+    const auto x = clamp_unit(point.x);
+    const auto y = clamp_unit(point.y);
+    if (!normalized_points.empty() && std::abs(normalized_points.back().x - x) <= 1e-6) {
+      normalized_points.back().y = y;
+      continue;
+    }
+    normalized_points.push_back(CurvePoint{.x = x, .y = y});
+  }
+
+  if (normalized_points.size() < 2) {
+    return {};
+  }
+
+  normalized_points.front() = CurvePoint{.x = 0.0, .y = 0.0};
+  normalized_points.back() = CurvePoint{.x = 1.0, .y = 1.0};
+  data.points = std::move(normalized_points);
+
+  if (data.points.size() == 2) {
+    data.tangents = {1.0, 1.0};
+    return data;
+  }
+
+  const auto segment_count = data.points.size() - 1;
+  std::vector<double> secants(segment_count, 0.0);
+  for (std::size_t index = 0; index < segment_count; ++index) {
+    const auto span = std::max(1e-6, data.points[index + 1].x - data.points[index].x);
+    secants[index] = (data.points[index + 1].y - data.points[index].y) / span;
+  }
+
+  data.tangents.resize(data.points.size(), 0.0);
+  data.tangents.front() = secants.front();
+  data.tangents.back() = secants.back();
+  for (std::size_t index = 1; index + 1 < data.points.size(); ++index) {
+    if (secants[index - 1] * secants[index] <= 0.0) {
+      data.tangents[index] = 0.0;
+    } else {
+      data.tangents[index] = 0.5 * (secants[index - 1] + secants[index]);
+    }
+  }
+
+  for (std::size_t index = 0; index < segment_count; ++index) {
+    if (std::abs(secants[index]) <= 1e-9) {
+      data.tangents[index] = 0.0;
+      data.tangents[index + 1] = 0.0;
+      continue;
+    }
+
+    const auto a = data.tangents[index] / secants[index];
+    const auto b = data.tangents[index + 1] / secants[index];
+    const auto magnitude = std::hypot(a, b);
+    if (magnitude <= 3.0) {
+      continue;
+    }
+
+    const auto scale = 3.0 / magnitude;
+    data.tangents[index] = scale * a * secants[index];
+    data.tangents[index + 1] = scale * b * secants[index];
+  }
+
+  return data;
+}
+
+[[nodiscard]] double evaluate_curve_data(double value, const CurveEvaluationData& data) {
+  if (data.points.size() < 2) {
+    return clamp_unit(value);
+  }
+
+  const auto clamped_value = clamp_unit(value);
+  for (std::size_t index = 0; index + 1 < data.points.size(); ++index) {
+    const auto& start = data.points[index];
+    const auto& end = data.points[index + 1];
+    if (clamped_value > end.x && index + 2 <= data.points.size()) {
+      continue;
+    }
+
+    const auto span = std::max(1e-6, end.x - start.x);
+    const auto t = clamp_unit((clamped_value - start.x) / span);
+    const auto t2 = t * t;
+    const auto t3 = t2 * t;
+    const auto h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    const auto h10 = t3 - 2.0 * t2 + t;
+    const auto h01 = -2.0 * t3 + 3.0 * t2;
+    const auto h11 = t3 - t2;
+    const auto result = h00 * start.y + h10 * span * data.tangents[index] +
+                        h01 * end.y + h11 * span * data.tangents[index + 1];
+    return clamp_unit(result);
+  }
+
+  return clamp_unit(clamped_value);
 }
 
 [[nodiscard]] double apply_pivoted_contrast(double value, double amount) {
@@ -265,6 +380,57 @@ struct OklabColor final {
   };
 }
 
+[[nodiscard]] std::array<double, 3> white_balance_multipliers(double temperature, double tint);
+
+void apply_local_adjustment_mask(
+    ColorPixel* pixel,
+    double weight,
+    double exposure,
+    double temperature) {
+  if (pixel == nullptr || weight <= 0.0) {
+    return;
+  }
+
+  const auto local_white_balance = white_balance_multipliers(temperature, 0.0);
+  const auto local_exposure_gain = std::pow(2.0, exposure * weight);
+  pixel->red *= 1.0 + (local_white_balance[0] - 1.0) * weight;
+  pixel->green *= 1.0 + (local_white_balance[1] - 1.0) * weight;
+  pixel->blue *= 1.0 + (local_white_balance[2] - 1.0) * weight;
+  pixel->red *= local_exposure_gain;
+  pixel->green *= local_exposure_gain;
+  pixel->blue *= local_exposure_gain;
+}
+
+[[nodiscard]] double radial_mask_weight(
+    double normalized_x,
+    double normalized_y,
+    const ColorAdjustmentState& state) {
+  if (!state.radial_mask_enabled) {
+    return 0.0;
+  }
+
+  const auto radius_x = std::max(0.05, state.radial_mask_radius_x);
+  const auto radius_y = std::max(0.05, state.radial_mask_radius_y);
+  const auto feather = std::clamp(state.radial_mask_feather, 0.05, 1.0);
+  const auto radians = state.radial_mask_rotation * kPi / 180.0;
+  const auto cosine = std::cos(radians);
+  const auto sine = std::sin(radians);
+  const auto translated_x = normalized_x - state.radial_mask_center_x;
+  const auto translated_y = normalized_y - state.radial_mask_center_y;
+  const auto local_x = translated_x * cosine + translated_y * sine;
+  const auto local_y = -translated_x * sine + translated_y * cosine;
+  const auto distance = std::sqrt((local_x * local_x) / (radius_x * radius_x) +
+                                  (local_y * local_y) / (radius_y * radius_y));
+  const auto inner_radius = std::max(0.0, 1.0 - feather);
+  if (distance <= inner_radius) {
+    return 1.0;
+  }
+  if (distance >= 1.0) {
+    return 0.0;
+  }
+  return 1.0 - smoothstep(inner_radius, 1.0, distance);
+}
+
 [[nodiscard]] ColorPixel gamut_fit_oklch(double lightness, double chroma, double hue, double alpha) {
   lightness = clamp_unit(lightness);
   chroma = std::max(0.0, chroma);
@@ -330,6 +496,10 @@ double linear_to_srgb(double value) {
 }
 
 double evaluate_tone_curve(double value, const ColorAdjustmentState& state) {
+  if (has_point_curve(state.master_curve_points)) {
+    return evaluate_curve_data(value, build_curve_data(state.master_curve_points));
+  }
+
   const auto points = tone_curve_control_points(state);
   const auto clamped_value = clamp_unit(value);
 
@@ -403,7 +573,10 @@ void apply_color_adjustments(
 
   const auto exposure_gain = std::pow(2.0, state.exposure);
   const auto white_balance = white_balance_multipliers(state.temperature, state.tint);
-  const auto local_white_balance = white_balance_multipliers(state.linear_mask_temperature, 0.0);
+  const auto master_curve = build_curve_data(state.master_curve_points);
+  const auto red_curve = build_curve_data(state.red_curve_points);
+  const auto green_curve = build_curve_data(state.green_curve_points);
+  const auto blue_curve = build_curve_data(state.blue_curve_points);
   const auto texture_strength = clamp_signed_percent(state.texture) / 100.0;
   const auto clarity_strength = clamp_signed_percent(state.clarity) / 100.0;
   const auto dehaze_strength = clamp_signed_percent(state.dehaze) / 100.0;
@@ -424,24 +597,22 @@ void apply_color_adjustments(
       pixel.green = std::max(0.0, pixel.green * exposure_gain * white_balance[1]);
       pixel.blue = std::max(0.0, pixel.blue * exposure_gain * white_balance[2]);
 
+      const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
+      const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
       if (state.linear_mask_enabled) {
-        const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
-        const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         const auto axis_coordinate =
             ((normalized_x - 0.5) * gradient_cosine + (normalized_y - 0.5) * gradient_sine) + 0.5;
         const auto mask_weight =
             clamp_unit(((state.linear_mask_position - axis_coordinate) / gradient_feather) + 0.5);
-
-        if (mask_weight > 0.0) {
-          const auto local_exposure_gain = std::pow(2.0, state.linear_mask_exposure * mask_weight);
-          pixel.red *= 1.0 + (local_white_balance[0] - 1.0) * mask_weight;
-          pixel.green *= 1.0 + (local_white_balance[1] - 1.0) * mask_weight;
-          pixel.blue *= 1.0 + (local_white_balance[2] - 1.0) * mask_weight;
-          pixel.red *= local_exposure_gain;
-          pixel.green *= local_exposure_gain;
-          pixel.blue *= local_exposure_gain;
-        }
+        apply_local_adjustment_mask(
+            &pixel, mask_weight, state.linear_mask_exposure, state.linear_mask_temperature);
       }
+
+      apply_local_adjustment_mask(
+          &pixel,
+          radial_mask_weight(normalized_x, normalized_y, state),
+          state.radial_mask_exposure,
+          state.radial_mask_temperature);
 
       target_luminances[index] = apply_global_tone(luminance_for_pixel(pixel), state);
       max_target_luminance = std::max(max_target_luminance, target_luminances[index]);
@@ -454,8 +625,10 @@ void apply_color_adjustments(
     if (shoulder_threshold < 1.0) {
       target_luminance = apply_highlight_shoulder(target_luminance, shoulder_threshold);
     }
-    (*pixels)[index] =
-        scale_pixel_to_luminance((*pixels)[index], evaluate_tone_curve(clamp_unit(target_luminance), state));
+    const auto curve_target = has_point_curve(state.master_curve_points)
+                                  ? clamp_unit(target_luminance)
+                                  : evaluate_tone_curve(clamp_unit(target_luminance), state);
+    (*pixels)[index] = scale_pixel_to_luminance((*pixels)[index], curve_target);
   }
 
   if (std::abs(texture_strength) > 1e-6 || std::abs(clarity_strength) > 1e-6 ||
@@ -486,6 +659,21 @@ void apply_color_adjustments(
   }
 
   for (auto& pixel : *pixels) {
+    if (master_curve.points.size() >= 2) {
+      pixel.red = evaluate_curve_data(pixel.red, master_curve);
+      pixel.green = evaluate_curve_data(pixel.green, master_curve);
+      pixel.blue = evaluate_curve_data(pixel.blue, master_curve);
+    }
+    if (red_curve.points.size() >= 2) {
+      pixel.red = evaluate_curve_data(pixel.red, red_curve);
+    }
+    if (green_curve.points.size() >= 2) {
+      pixel.green = evaluate_curve_data(pixel.green, green_curve);
+    }
+    if (blue_curve.points.size() >= 2) {
+      pixel.blue = evaluate_curve_data(pixel.blue, blue_curve);
+    }
+
     auto oklab = linear_rgb_to_oklab(pixel);
     auto lightness = clamp_unit(oklab.lightness);
     auto chroma = std::hypot(oklab.a, oklab.b);

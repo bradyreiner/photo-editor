@@ -5,6 +5,11 @@ project(PhotoEditor VERSION 0.1.0 LANGUAGES CXX)
 option(PHOTO_EDITOR_BUILD_DESKTOP "Build the Qt/QML desktop application." ON)
 option(PHOTO_EDITOR_ENABLE_RUST "Enable Rust workspace integration targets." ON)
 option(PHOTO_EDITOR_BUILD_TESTS "Build lightweight native tests." ON)
+option(PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER "Enable Sparkle-based macOS update integration." OFF)
+
+if(APPLE AND PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)
+  enable_language(OBJCXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

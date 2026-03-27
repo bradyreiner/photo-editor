@@ -11,16 +11,16 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitWidth: Math.max(76, labelText.implicitWidth + 30)
-    implicitHeight: 32
-    radius: theme.radius8
+    implicitWidth: Math.max(72, labelText.implicitWidth + 28)
+    implicitHeight: theme.controlHeight
+    radius: theme.radiusChip
     color: root.selected ? theme.alpha(root.swatch, 0.18) : theme.ink900
     border.width: 1
-    border.color: root.selected ? theme.alpha(root.swatch, 0.26) : theme.lineSoft
+    border.color: root.selected ? theme.alpha(root.swatch, 0.3) : theme.alpha(theme.lineSoft, 0.92)
 
     Row {
         anchors.centerIn: parent
-        spacing: 8
+        spacing: theme.gapControl
 
         Rectangle {
             width: 8

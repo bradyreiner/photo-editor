@@ -34,15 +34,37 @@ QtObject {
     readonly property color error: "#a56a5e"
 
     readonly property int space4: 4
+    readonly property int space6: 6
     readonly property int space8: 8
+    readonly property int space10: 10
     readonly property int space12: 12
+    readonly property int space14: 14
     readonly property int space16: 16
+    readonly property int space18: 18
     readonly property int space20: 20
     readonly property int space24: 24
+    readonly property int space28: 28
     readonly property int radius4: 3
+    readonly property int radius6: 5
     readonly property int radius8: 6
+    readonly property int radius10: 7
     readonly property int radius12: 8
     readonly property int radius16: 10
+
+    readonly property int controlHeightDense: 28
+    readonly property int controlHeight: 32
+    readonly property int controlHeightTall: 36
+    readonly property int panelPadding: 14
+    readonly property int panelPaddingCompact: 10
+    readonly property int sectionPadding: 12
+    readonly property int sectionPaddingCompact: 10
+    readonly property int gapDense: 6
+    readonly property int gapControl: 8
+    readonly property int gapPanel: 10
+    readonly property int radiusControl: radius4
+    readonly property int radiusChip: radius6
+    readonly property int radiusPanel: radius8
+    readonly property int radiusSurface: radius12
 
     readonly property int durationFast: 110
     readonly property int durationMedium: 180

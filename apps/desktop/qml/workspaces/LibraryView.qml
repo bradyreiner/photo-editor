@@ -8,9 +8,12 @@ Rectangle {
     id: root
     color: "transparent"
 
-    Theme { id: theme }
+    Theme {
+        id: theme
+    }
 
     signal assetActivated(string destination)
+    signal projectActivated(string destination, string projectName)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
 
     property string projectTarget: ""
@@ -24,104 +27,115 @@ Rectangle {
     readonly property var mediaFilterValues: ["all", "photos", "videos", "timelines"]
     readonly property var mediaFilterLabels: ["All Media", "Photos", "Videos", "Timelines"]
     readonly property var captureFilterValues: {
-        const values = ["all", "unknown"]
+        const values = ["all", "unknown"];
         for (let i = 0; i < catalogAssets.captureYears.length; ++i)
-            values.push(catalogAssets.captureYears[i])
-        return values
+            values.push(catalogAssets.captureYears[i]);
+        return values;
     }
     readonly property var captureFilterLabels: {
-        const labels = ["All Capture Dates", "Unknown"]
+        const labels = ["All Capture Dates", "Unknown"];
         for (let i = 0; i < catalogAssets.captureYears.length; ++i)
-            labels.push(catalogAssets.captureYears[i])
-        return labels
+            labels.push(catalogAssets.captureYears[i]);
+        return labels;
     }
     readonly property var projectFilterValues: {
-        const values = ["all", "unassigned"]
+        const values = ["all", "unassigned"];
         for (let i = 0; i < catalogAssets.projectNames.length; ++i)
-            values.push(catalogAssets.projectNames[i])
-        return values
+            values.push(catalogAssets.projectNames[i]);
+        return values;
     }
     readonly property var projectFilterLabels: {
-        const labels = ["All Projects", "Unassigned"]
+        const labels = ["All Projects", "Unassigned"];
         for (let i = 0; i < catalogAssets.projectNames.length; ++i)
-            labels.push(catalogAssets.projectNames[i])
-        return labels
+            labels.push(catalogAssets.projectNames[i]);
+        return labels;
     }
 
     function indexForValue(values, value) {
-        const index = values.indexOf(value)
-        return index >= 0 ? index : 0
+        const index = values.indexOf(value);
+        return index >= 0 ? index : 0;
     }
 
     function activeFilterSummary() {
-        const parts = []
+        const parts = [];
         if (catalogAssets.importDateFilter !== "all")
-            parts.push(importFilterLabels[indexForValue(importFilterValues, catalogAssets.importDateFilter)])
+            parts.push(importFilterLabels[indexForValue(importFilterValues, catalogAssets.importDateFilter)]);
         if (catalogAssets.captureYearFilter !== "all")
-            parts.push(captureFilterLabels[indexForValue(captureFilterValues, catalogAssets.captureYearFilter)])
+            parts.push(captureFilterLabels[indexForValue(captureFilterValues, catalogAssets.captureYearFilter)]);
         if (catalogAssets.projectFilter !== "all")
-            parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)])
+            parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)]);
         if (catalogAssets.mediaTypeFilter !== "all")
-            parts.push(mediaFilterLabels[indexForValue(mediaFilterValues, catalogAssets.mediaTypeFilter)])
-        return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets"
+            parts.push(mediaFilterLabels[indexForValue(mediaFilterValues, catalogAssets.mediaTypeFilter)]);
+        return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets";
     }
 
     function selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType) {
-        catalogAssets.selectIndex(index)
+        catalogAssets.selectIndex(index);
         if (mediaType === "photo")
-            editorPreview.loadAsset(assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson)
+            editorPreview.loadAsset(assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson);
     }
 
     function chooseImportFolder() {
-        const folderUrl = catalogAssets.pickFolder("Browse Media Folder")
+        const folderUrl = catalogAssets.pickFolder("Browse Media Folder");
         if (folderUrl.length === 0)
-            return
-
-        openLocalFolder(folderUrl)
-        importBrowserOpen = true
+            return;
+        openLocalFolder(folderUrl);
+        importBrowserOpen = true;
     }
 
     function openLocalFolder(folderUrl) {
         if (folderUrl.length === 0)
-            return
-
-        localFolderUrl = folderUrl
-        localFolderPath = catalogAssets.localPathForUrl(folderUrl)
-        localSelectedFilePath = ""
+            return;
+        localFolderUrl = folderUrl;
+        localFolderPath = catalogAssets.localPathForUrl(folderUrl);
+        localSelectedFilePath = "";
     }
 
     function selectLocalFile(index) {
-        localSelectedFilePath = localImageModel.get(index, "filePath")
+        localSelectedFilePath = localImageModel.get(index, "filePath");
     }
 
     function importCurrentFolder() {
         if (localFolderPath.length === 0)
-            return
-
-        catalogAssets.importFolderPath(localFolderPath)
-        importBrowserOpen = false
+            return;
+        catalogAssets.importFolderPath(localFolderPath);
+        importBrowserOpen = false;
     }
 
     function clearFilters() {
-        catalogAssets.importDateFilter = "all"
-        catalogAssets.captureYearFilter = "all"
-        catalogAssets.projectFilter = "all"
-        catalogAssets.mediaTypeFilter = "all"
+        catalogAssets.importDateFilter = "all";
+        catalogAssets.captureYearFilter = "all";
+        catalogAssets.projectFilter = "all";
+        catalogAssets.mediaTypeFilter = "all";
+    }
+
+    function applyProjectSelection(projectValue) {
+        catalogAssets.projectFilter = projectValue;
+        if (projectValue !== "all" && projectValue !== "unassigned")
+            projectTarget = projectValue;
+    }
+
+    function createAndFocusProject(projectName) {
+        const trimmedName = projectName.trim();
+        if (trimmedName.length === 0)
+            return;
+        catalogAssets.createProject(trimmedName);
+        root.applyProjectSelection(trimmedName);
     }
 
     function syncProjectTarget() {
         if (catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned" && catalogAssets.projectFilter.length > 0) {
-            projectTarget = catalogAssets.projectFilter
-            return
+            projectTarget = catalogAssets.projectFilter;
+            return;
         }
 
         if (catalogAssets.projectNames.length === 0) {
-            projectTarget = ""
-            return
+            projectTarget = "";
+            return;
         }
 
         if (projectTarget.length === 0 || catalogAssets.projectNames.indexOf(projectTarget) === -1)
-            projectTarget = catalogAssets.projectNames[0]
+            projectTarget = catalogAssets.projectNames[0];
     }
 
     Component.onCompleted: syncProjectTarget()
@@ -130,16 +144,16 @@ Rectangle {
         target: catalogAssets
 
         function onProjectNamesChanged() {
-            root.syncProjectTarget()
+            root.syncProjectTarget();
         }
 
         function onFiltersChanged() {
-            root.syncProjectTarget()
+            root.syncProjectTarget();
         }
 
         function onImportingChanged() {
             if (catalogAssets.importing)
-                root.importBrowserOpen = false
+                root.importBrowserOpen = false;
         }
     }
 
@@ -236,10 +250,7 @@ Rectangle {
 
                                 ActionButton {
                                     text: "Clear Filters"
-                                    enabled: catalogAssets.importDateFilter !== "all"
-                                             || catalogAssets.captureYearFilter !== "all"
-                                             || catalogAssets.projectFilter !== "all"
-                                             || catalogAssets.mediaTypeFilter !== "all"
+                                    enabled: catalogAssets.importDateFilter !== "all" || catalogAssets.captureYearFilter !== "all" || catalogAssets.projectFilter !== "all" || catalogAssets.mediaTypeFilter !== "all"
                                     onClicked: root.clearFilters()
                                 }
                             }
@@ -280,21 +291,6 @@ Rectangle {
                             }
 
                             Label {
-                                text: "Project"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 200
-                                model: root.projectFilterLabels
-                                currentIndex: root.indexForValue(root.projectFilterValues, catalogAssets.projectFilter)
-                                onActivated: catalogAssets.projectFilter = root.projectFilterValues[currentIndex]
-                            }
-
-                            Label {
                                 text: "Media"
                                 color: "#7f8a94"
                                 font.family: "Avenir Next"
@@ -307,17 +303,6 @@ Rectangle {
                                 model: root.mediaFilterLabels
                                 currentIndex: root.indexForValue(root.mediaFilterValues, catalogAssets.mediaTypeFilter)
                                 onActivated: catalogAssets.mediaTypeFilter = root.mediaFilterValues[currentIndex]
-                            }
-
-                            Item { Layout.fillWidth: true }
-
-                            Label {
-                                text: catalogAssets.status
-                                color: "#8d98a3"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                                Layout.maximumWidth: 260
                             }
                         }
                     }
@@ -369,11 +354,10 @@ Rectangle {
                                     Rectangle {
                                         id: previewFrame
                                         width: parent.width
-                                        height: Math.max(120, previewImage.paintedHeight > 0 ? previewImage.paintedHeight : width * 0.66)
+                                        readonly property real sourceAspectRatio: previewImage.sourceSize.width > 0 && previewImage.sourceSize.height > 0 ? previewImage.sourceSize.height / previewImage.sourceSize.width : 0.66
+                                        height: Math.max(120, width * sourceAspectRatio)
                                         radius: 8
                                         color: "#0f1418"
-                                        border.width: catalogAssets.selectedIndex === index ? 2 : 0
-                                        border.color: "#d0a157"
                                         clip: true
 
                                         Image {
@@ -430,10 +414,18 @@ Rectangle {
                                             anchors.fill: parent
                                             onClicked: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
                                             onDoubleClicked: {
-                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
-                                                root.assetActivated(mediaType === "photo" ? "edit" : "timeline")
+                                                root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType);
+                                                root.assetActivated(mediaType === "photo" ? "edit" : "timeline");
                                             }
                                         }
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: previewFrame
+                                        radius: previewFrame.radius
+                                        color: "transparent"
+                                        border.width: catalogAssets.selectedIndex === index ? 2 : 1
+                                        border.color: catalogAssets.selectedIndex === index ? "#d0a157" : theme.alpha(theme.lineSoft, 0.52)
                                     }
                                 }
                             }
@@ -460,9 +452,7 @@ Rectangle {
 
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                text: catalogAssets.totalAssetCount === 0
-                                      ? "Switch to Import to bring photos and videos in from folders, cards, and drives."
-                                      : "Try changing the media, imported date, capture date, or project filter."
+                                text: catalogAssets.totalAssetCount === 0 ? "Switch to Import to bring photos and videos in from folders, cards, and drives." : "Try changing the media, imported date, capture date, or project filter."
                                 color: "#85909a"
                                 font.family: "Avenir Next"
                                 font.pixelSize: 12
@@ -500,9 +490,7 @@ Rectangle {
                                     }
 
                                     Label {
-                                        text: root.localFolderPath.length > 0
-                                              ? root.localFolderPath
-                                              : "Choose a folder, preview the media, then import it."
+                                        text: root.localFolderPath.length > 0 ? root.localFolderPath : "Choose a folder, preview the media, then import it."
                                         color: "#b3bdc7"
                                         font.family: "Avenir Next"
                                         font.pixelSize: 12
@@ -639,7 +627,7 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: 264
+            Layout.preferredWidth: 308
             Layout.fillHeight: true
             radius: theme.radius12
             color: theme.ink850
@@ -652,141 +640,194 @@ Rectangle {
                 spacing: 10
 
                 Label {
-                    text: "Selection"
+                    text: "Projects"
                     color: "#f2f4f6"
                     font.family: "Avenir Next"
                     font.pixelSize: 18
                     font.weight: Font.Medium
                 }
 
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 170
-                    radius: theme.radius8
-                    color: theme.ink900
-                    clip: true
-
-                    Image {
-                        anchors.fill: parent
-                        source: catalogAssets.selectedThumbnailSource
-                        fillMode: Image.PreserveAspectFit
-                        asynchronous: true
-                        cache: false
-                        visible: catalogAssets.selectedThumbnailSource.length > 0
-                    }
-                }
-
                 Label {
-                    text: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "No asset selected"
-                    color: "#f2f5f7"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 18
-                    font.weight: Font.DemiBold
-                    wrapMode: Text.WordWrap
                     Layout.fillWidth: true
-                }
-
-                Label {
-                    text: catalogAssets.selectedCaptureDate.length > 0
-                          ? catalogAssets.selectedCaptureDate
-                          : catalogAssets.selectedMediaType === "timeline"
-                            ? "Saved timeline asset."
-                            : catalogAssets.selectedMediaType === "video"
-                              ? "Video clip selected from the gallery."
-                              : "Choose an asset from the grid."
+                    text: catalogAssets.projectNames.length > 0 ? "Choose a project from the list to filter the gallery." : "Create a project to start organizing the gallery."
                     color: "#9ca6af"
                     font.family: "Avenir Next"
                     font.pixelSize: 12
-                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
                 }
 
-                Label {
-                    text: catalogAssets.selectedDurationText
-                    visible: text.length > 0
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
+                Rectangle {
+                    id: newProjectCard
                     Layout.fillWidth: true
-                }
+                    Layout.preferredHeight: newProjectColumn.implicitHeight + 20
+                    Layout.minimumHeight: Layout.preferredHeight
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink900, 0.88)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.34)
 
-                Label {
-                    text: catalogAssets.selectedImportedAt.length > 0
-                          ? (catalogAssets.selectedMediaType === "timeline" ? "Saved " : "Imported ") + catalogAssets.selectedImportedAt
-                          : ""
-                    visible: text.length > 0
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    Layout.fillWidth: true
-                }
+                    ColumnLayout {
+                        id: newProjectColumn
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 10
 
-                Label {
-                    text: catalogAssets.selectedLocationPath.length > 0 ? catalogAssets.selectedLocationPath : ""
-                    visible: text.length > 0
-                    color: "#79848d"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 11
-                    wrapMode: Text.WrapAnywhere
-                    Layout.fillWidth: true
-                }
+                        Label {
+                            text: "New Project"
+                            color: "#f2f4f6"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            font.capitalization: Font.AllUppercase
+                        }
 
-                ToneTextField {
-                    id: newProjectField
-                    Layout.fillWidth: true
-                    placeholderText: "Create a project"
-                    onAccepted: {
-                        catalogAssets.createProject(text)
-                        text = ""
-                    }
-                }
+                        Label {
+                            text: "Create a project, then click it in the list to make it the active gallery view."
+                            color: "#9ca6af"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                        }
 
-                ToneComboBox {
-                    Layout.fillWidth: true
-                    model: catalogAssets.projectNames
-                    enabled: catalogAssets.projectNames.length > 0
-                    currentIndex: enabled ? Math.max(0, catalogAssets.projectNames.indexOf(root.projectTarget)) : -1
-                    onActivated: root.projectTarget = currentText
-                }
+                        ToneTextField {
+                            id: newProjectField
+                            Layout.fillWidth: true
+                            placeholderText: "Project name"
+                            onAccepted: {
+                                root.createAndFocusProject(text);
+                                text = "";
+                            }
+                        }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Create"
-                        enabled: newProjectField.text.trim().length > 0
-                        onClicked: {
-                            catalogAssets.createProject(newProjectField.text)
-                            newProjectField.text = ""
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Create Project"
+                            tone: "primary"
+                            enabled: newProjectField.text.trim().length > 0
+                            onClicked: {
+                                root.createAndFocusProject(newProjectField.text);
+                                newProjectField.text = "";
+                            }
                         }
                     }
+                }
 
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Add to Project"
-                        tone: "primary"
-                        enabled: catalogAssets.selectedAssetId.length > 0 && root.projectTarget.length > 0
-                        onClicked: catalogAssets.addAssetToProject(catalogAssets.selectedAssetId, root.projectTarget)
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink900, 0.88)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 10
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: "Browse Projects"
+                                color: "#f2f4f6"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Label {
+                                text: catalogAssets.projectNames.length + (catalogAssets.projectNames.length === 1 ? " project" : " projects")
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 1
+                            color: theme.alpha(theme.lineSoft, 0.48)
+                        }
+
+                        ListView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            spacing: 6
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: root.projectFilterValues
+
+                            delegate: Rectangle {
+                                required property int index
+                                required property string modelData
+
+                                width: ListView.view.width
+                                height: 48
+                                radius: theme.radius8
+                                color: catalogAssets.projectFilter === modelData ? theme.alpha(theme.accentWarm500, 0.22) : (projectMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.9) : theme.alpha(theme.ink900, 0.72))
+                                border.width: 1
+                                border.color: catalogAssets.projectFilter === modelData ? theme.alpha(theme.accentWarm400, 0.8) : theme.alpha(theme.lineSoft, 0.46)
+
+                                Column {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.margins: 12
+                                    spacing: 2
+
+                                    Label {
+                                        width: parent.width
+                                        text: root.projectFilterLabels[index]
+                                        color: catalogAssets.projectFilter === modelData ? "#f4ede2" : "#f2f4f6"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 12
+                                        font.weight: Font.Medium
+                                        elide: Text.ElideRight
+                                    }
+
+                                    RowLayout {
+                                        width: parent.width
+                                        spacing: 8
+
+                                        Label {
+                                            readonly property int assetCount: {
+                                                catalogAssets.projectStatsRevision;
+                                                return catalogAssets.assetCountForProject(modelData);
+                                            }
+                                            text: assetCount + (assetCount === 1 ? " asset" : " assets")
+                                            color: theme.textFaint
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: modelData === "all" ? "Show the full gallery." : modelData === "unassigned" ? "Only assets without a project." : "Filter the gallery to this project."
+                                            color: theme.textFaint
+                                            font.family: "Avenir Next"
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: projectMouseArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: root.applyProjectSelection(modelData)
+                                }
+                            }
+                        }
                     }
-                }
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: "Remove from Project"
-                    enabled: catalogAssets.selectedAssetId.length > 0
-                             && root.projectTarget.length > 0
-                             && catalogAssets.assetInProject(catalogAssets.selectedAssetId, root.projectTarget)
-                    onClicked: catalogAssets.removeAssetFromProject(catalogAssets.selectedAssetId, root.projectTarget)
-                }
-
-                Item { Layout.fillHeight: true }
-
-                ActionButton {
-                    Layout.fillWidth: true
-                    text: catalogAssets.selectedMediaType === "photo" ? "Open in Edit" : "Open in Timeline"
-                    enabled: catalogAssets.selectedAssetId.length > 0
-                    onClicked: root.assetActivated(catalogAssets.selectedMediaType === "photo" ? "edit" : "timeline")
                 }
             }
         }

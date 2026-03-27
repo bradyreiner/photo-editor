@@ -12,18 +12,18 @@ Rectangle {
 
     Theme { id: theme }
 
-    radius: theme.radius12
-    color: theme.ink850
+    radius: theme.radiusSurface
+    color: theme.alpha(theme.ink850, 0.96)
     border.color: theme.alpha(root.accent, 0.18)
     border.width: 1
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 6
+        anchors.margins: theme.panelPaddingCompact
+        spacing: theme.gapDense
 
         Rectangle {
-            Layout.preferredWidth: 16
+            Layout.preferredWidth: 14
             Layout.preferredHeight: 2
             radius: 1
             color: root.accent
@@ -41,7 +41,7 @@ Rectangle {
             text: root.value
             color: theme.textStrong
             font.family: theme.fontDisplay
-            font.pixelSize: 20
+            font.pixelSize: 18
             font.weight: Font.Medium
             elide: Text.ElideRight
             Layout.fillWidth: true

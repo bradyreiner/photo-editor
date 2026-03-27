@@ -11,22 +11,22 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: 38
-    implicitWidth: Math.max(116, textColumn.implicitWidth + 24)
-    radius: 10
-    color: theme.ink900
+    implicitHeight: 32
+    implicitWidth: Math.max(96, textColumn.implicitWidth + 18)
+    radius: 6
+    color: theme.alpha(theme.ink900, 0.9)
     border.width: 1
-    border.color: theme.lineSoft
+    border.color: theme.alpha(theme.lineSoft, 0.9)
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 10
+        anchors.margins: 9
+        spacing: 8
 
         Rectangle {
-            Layout.preferredWidth: 6
-            Layout.preferredHeight: 6
-            radius: 3
+            Layout.preferredWidth: 5
+            Layout.preferredHeight: 5
+            radius: 2
             color: root.accent
         }
 
@@ -38,15 +38,15 @@ Rectangle {
                 text: root.label
                 color: theme.textFaint
                 font.family: theme.fontMono
-                font.pixelSize: 9
-                font.letterSpacing: 0.8
+                font.pixelSize: 8
+                font.letterSpacing: 0.7
             }
 
             Label {
                 text: root.value
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
+                font.pixelSize: 11
                 font.weight: Font.Medium
             }
         }

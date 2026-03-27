@@ -1,5 +1,7 @@
 #include "catalog_asset_model.h"
 
+#include "app_bootstrap.h"
+
 #include "timeline_asset_store.h"
 
 #include <algorithm>
@@ -46,6 +48,21 @@ const QStringList& supported_video_extensions() {
   return kExtensions;
 }
 
+const QStringList& supported_audio_extensions() {
+  static const QStringList kExtensions = {
+      QStringLiteral("aac"),
+      QStringLiteral("aif"),
+      QStringLiteral("aiff"),
+      QStringLiteral("flac"),
+      QStringLiteral("m4a"),
+      QStringLiteral("mp3"),
+      QStringLiteral("ogg"),
+      QStringLiteral("opus"),
+      QStringLiteral("wav"),
+  };
+  return kExtensions;
+}
+
 const QStringList& supported_import_extensions() {
   static const QStringList kExtensions = {
       QStringLiteral("3fr"),
@@ -84,6 +101,15 @@ const QStringList& supported_import_extensions() {
       QStringLiteral("mpg"),
       QStringLiteral("webp"),
       QStringLiteral("webm"),
+      QStringLiteral("aac"),
+      QStringLiteral("aif"),
+      QStringLiteral("aiff"),
+      QStringLiteral("flac"),
+      QStringLiteral("m4a"),
+      QStringLiteral("mp3"),
+      QStringLiteral("ogg"),
+      QStringLiteral("opus"),
+      QStringLiteral("wav"),
       QStringLiteral("x3f"),
   };
   return kExtensions;
@@ -318,18 +344,20 @@ bool preview_supported(const QString& file_path) {
 }
 
 QString media_type_for_path(const QString& file_path) {
-  return supported_video_extensions().contains(QFileInfo(file_path).suffix().toLower())
-      ? QStringLiteral("video")
-      : QStringLiteral("photo");
+  const auto suffix = QFileInfo(file_path).suffix().toLower();
+  if (supported_video_extensions().contains(suffix)) {
+    return QStringLiteral("video");
+  }
+  if (supported_audio_extensions().contains(suffix)) {
+    return QStringLiteral("audio");
+  }
+  return QStringLiteral("photo");
 }
 
 QString thumbnail_cache_root() {
-  const auto cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-  if (cache_root.isEmpty()) {
-    return QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-cache"));
-  }
-
-  return QDir(cache_root).filePath(QStringLiteral("thumbnails"));
+  const auto cache_root = AppBootstrap::cacheLocation();
+  const auto base = cache_root.isEmpty() ? QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-cache")) : cache_root;
+  return QDir(base).filePath(QStringLiteral("thumbnails"));
 }
 
 QString thumbnail_cache_path_for_file(const QString& file_path) {
@@ -476,8 +504,14 @@ QString ensure_video_poster(const QString& file_path) {
 }
 
 QString thumbnail_source_for_path(const QString& file_path) {
-  return media_type_for_path(file_path) == QStringLiteral("video") ? ensure_video_poster(file_path)
-                                                                   : ensure_thumbnail(file_path);
+  const auto media_type = media_type_for_path(file_path);
+  if (media_type == QStringLiteral("video")) {
+    return ensure_video_poster(file_path);
+  }
+  if (media_type == QStringLiteral("audio")) {
+    return {};
+  }
+  return ensure_thumbnail(file_path);
 }
 
 QDateTime parse_iso_datetime(const QString& value) {
@@ -602,6 +636,13 @@ QVector<CatalogAssetItem> parse_assets(const QJsonArray& asset_array) {
       item.duration_text = format_duration_text(item.duration_seconds);
       if (item.lens_model.isEmpty()) {
         item.lens_model = QStringLiteral("Video clip");
+      }
+    } else if (item.media_type == QStringLiteral("audio")) {
+      item.camera_label = QFileInfo(item.file_path).completeBaseName();
+      item.duration_seconds = probe_video_duration_seconds(item.file_path);
+      item.duration_text = format_duration_text(item.duration_seconds);
+      if (item.lens_model.isEmpty()) {
+        item.lens_model = QStringLiteral("Audio clip");
       }
     }
     item.thumbnail_source = thumbnail_source_for_path(item.file_path);
@@ -832,6 +873,28 @@ QString CatalogAssetModel::selectedTimelineDocumentPath() const {
   return {};
 }
 
+QVariantMap CatalogAssetModel::assetMap(const CatalogAssetItem& item) const {
+  QVariantMap map;
+  map.insert(QStringLiteral("assetId"), item.asset_id);
+  map.insert(QStringLiteral("captureDate"), item.capture_date);
+  map.insert(QStringLiteral("cameraLabel"), item.camera_label);
+  map.insert(QStringLiteral("lensModel"), item.lens_model);
+  map.insert(QStringLiteral("locationPath"), item.location_path);
+  map.insert(QStringLiteral("filePath"), item.file_path);
+  map.insert(QStringLiteral("thumbnailSource"), item.thumbnail_source);
+  map.insert(QStringLiteral("recipeJson"), item.recipe_json);
+  map.insert(QStringLiteral("driveId"), item.drive_id);
+  map.insert(QStringLiteral("importMode"), item.import_mode);
+  map.insert(QStringLiteral("importedAt"), item.imported_at);
+  map.insert(QStringLiteral("projectNames"), item.project_names);
+  map.insert(QStringLiteral("projectSummary"), item.project_summary);
+  map.insert(QStringLiteral("mediaType"), item.media_type);
+  map.insert(QStringLiteral("durationText"), item.duration_text);
+  map.insert(QStringLiteral("timelineDocumentPath"), item.timeline_document_path);
+  map.insert(QStringLiteral("online"), item.online);
+  return map;
+}
+
 QStringList CatalogAssetModel::projectNames() const {
   QStringList names;
   names.reserve(projects_.size());
@@ -840,6 +903,8 @@ QStringList CatalogAssetModel::projectNames() const {
   }
   return names;
 }
+
+int CatalogAssetModel::projectStatsRevision() const { return project_stats_revision_; }
 
 QStringList CatalogAssetModel::captureYears() const { return capture_years_; }
 
@@ -850,6 +915,26 @@ QString CatalogAssetModel::importDateFilter() const { return import_date_filter_
 QString CatalogAssetModel::captureYearFilter() const { return capture_year_filter_; }
 
 QString CatalogAssetModel::mediaTypeFilter() const { return media_type_filter_; }
+
+QVariantList CatalogAssetModel::timelinePickerAssets(const QString& project_name) const {
+  QVariantList items;
+  const auto normalized_project_name = normalizedProjectName(project_name);
+  items.reserve(all_assets_.size());
+
+  for (const auto& item : all_assets_) {
+    if (item.media_type == QStringLiteral("timeline")) {
+      continue;
+    }
+    if (!normalized_project_name.isEmpty() && normalized_project_name != QStringLiteral("all") &&
+        normalized_project_name != QStringLiteral("unassigned") &&
+        !item.project_names.contains(normalized_project_name)) {
+      continue;
+    }
+    items.push_back(assetMap(item));
+  }
+
+  return items;
+}
 
 void CatalogAssetModel::refresh() {
   if (snapshot_process_.state() != QProcess::NotRunning) {
@@ -862,7 +947,14 @@ void CatalogAssetModel::refresh() {
   setStatus(QStringLiteral("Loading catalog snapshot..."));
 
   snapshot_process_.setWorkingDirectory(QDir::currentPath());
-  auto environment = QProcessEnvironment::systemEnvironment();
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    setLoading(false);
+    setErrorMessage(environment_error);
+    setStatus(QStringLiteral("Catalog unavailable"));
+    return;
+  }
   snapshot_process_.setProcessEnvironment(environment);
   snapshot_process_.start(snapshotProgram(), snapshotArguments());
 }
@@ -997,7 +1089,14 @@ void CatalogAssetModel::startImport(
                 : QStringLiteral("Importing selected photos into catalog..."));
 
   import_process_.setWorkingDirectory(QDir::currentPath());
-  auto environment = QProcessEnvironment::systemEnvironment();
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    setImporting(false);
+    setErrorMessage(environment_error);
+    setStatus(QStringLiteral("Import failed"));
+    return;
+  }
   import_process_.setProcessEnvironment(environment);
   import_process_.start(importProgram(), importArguments(normalized_path));
 }
@@ -1059,8 +1158,48 @@ void CatalogAssetModel::createProject(const QString& name) {
   projects_.push_back(project);
   saveProjects();
   emit projectNamesChanged();
+  bumpProjectStatsRevision();
   setProjectFilter(trimmed_name);
   setStatus(QStringLiteral("Created project '%1'.").arg(trimmed_name));
+}
+
+void CatalogAssetModel::openProject(const QString& project_name) {
+  const auto trimmed_name = normalizedProjectName(project_name);
+  if (trimmed_name.isEmpty()) {
+    return;
+  }
+
+  if (findProject(trimmed_name) == nullptr) {
+    setStatus(QStringLiteral("Project '%1' is unavailable.").arg(trimmed_name));
+    return;
+  }
+
+  const auto preferred_asset_id = selectedAssetId();
+  auto filters_changed = false;
+
+  if (project_filter_ != trimmed_name) {
+    project_filter_ = trimmed_name;
+    filters_changed = true;
+  }
+  if (import_date_filter_ != QStringLiteral("all")) {
+    import_date_filter_ = QStringLiteral("all");
+    filters_changed = true;
+  }
+  if (capture_year_filter_ != QStringLiteral("all")) {
+    capture_year_filter_ = QStringLiteral("all");
+    filters_changed = true;
+  }
+  if (media_type_filter_ != QStringLiteral("all")) {
+    media_type_filter_ = QStringLiteral("all");
+    filters_changed = true;
+  }
+
+  if (filters_changed) {
+    emit filtersChanged();
+  }
+
+  applyFilters(preferred_asset_id);
+  setStatus(QStringLiteral("Opened project '%1'.").arg(trimmed_name));
 }
 
 void CatalogAssetModel::addAssetToProject(const QString& asset_id, const QString& project_name) {
@@ -1092,6 +1231,7 @@ void CatalogAssetModel::removeAssetFromProject(const QString& asset_id, const QS
   project->asset_ids.remove(asset_id);
   saveProjects();
   rebuildProjectMetadata();
+  bumpProjectStatsRevision();
   applyFilters(asset_id);
   setStatus(QStringLiteral("Removed photo from '%1'.").arg(trimmed_name));
 }
@@ -1104,6 +1244,32 @@ bool CatalogAssetModel::assetInProject(const QString& asset_id, const QString& p
 
   const auto* project = findProject(trimmed_name);
   return project != nullptr && project->asset_ids.contains(asset_id);
+}
+
+int CatalogAssetModel::assetCountForProject(const QString& project_name) const {
+  const auto normalized_name = normalizedProjectName(project_name);
+
+  if (normalized_name == QStringLiteral("all")) {
+    return static_cast<int>(all_assets_.size());
+  }
+
+  int count = 0;
+  if (normalized_name == QStringLiteral("unassigned")) {
+    for (const auto& item : all_assets_) {
+      if (item.project_names.isEmpty()) {
+        ++count;
+      }
+    }
+    return count;
+  }
+
+  for (const auto& item : all_assets_) {
+    if (item.project_names.contains(normalized_name)) {
+      ++count;
+    }
+  }
+
+  return count;
 }
 
 void CatalogAssetModel::setProjectFilter(const QString& project_filter) {
@@ -1286,6 +1452,7 @@ void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
   all_assets_ = items;
   loadTimelineAssets();
   rebuildProjectMetadata();
+  bumpProjectStatsRevision();
   rebuildCaptureYears();
 
   if (previous_total_count != all_assets_.size()) {
@@ -1352,6 +1519,11 @@ void CatalogAssetModel::applyFilters(const QString& preferred_asset_id) {
     emit selectedIndexChanged();
   }
   emit selectedAssetChanged();
+}
+
+void CatalogAssetModel::bumpProjectStatsRevision() {
+  ++project_stats_revision_;
+  emit projectStatsRevisionChanged();
 }
 
 void CatalogAssetModel::rebuildProjectMetadata() {
@@ -1519,6 +1691,7 @@ void CatalogAssetModel::addAssetsToProject(
     emit projectNamesChanged();
   }
   rebuildProjectMetadata();
+  bumpProjectStatsRevision();
   applyFilters(selectedAssetId());
 }
 
@@ -1556,12 +1729,7 @@ void CatalogAssetModel::finalizePendingImportProjectAssignment() {
 }
 
 QString CatalogAssetModel::projectsFilePath() const {
-  auto data_root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-  if (data_root.isEmpty()) {
-    data_root = QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-data"));
-  }
-
-  return QDir(data_root).filePath(QStringLiteral("projects.json"));
+  return QDir(AppBootstrap::appDataLocation()).filePath(QStringLiteral("projects.json"));
 }
 
 ProjectRecord* CatalogAssetModel::findProject(const QString& project_name) {

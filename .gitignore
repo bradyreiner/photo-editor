@@ -3,6 +3,20 @@ build/
 *.user
 *.swp
 *.swo
+*.log
+
+# Local runtime data
+.env
+.env.local
+.env.*.local
+.photo-editor/
+data/
+logs/
+backups/
+postgres-data/
+*.db
+*.sqlite
+*.sqlite3
 
 # Rust
 rust/target/
@@ -11,3 +25,7 @@ rust/target/
 *.dmg
 *.zip
 *.msi
+*.msix
+*.appinstaller
+*.appcast.xml
+*.blockmap

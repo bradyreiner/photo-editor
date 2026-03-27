@@ -68,6 +68,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(QString selectedDurationText READ selectedDurationText NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedTimelineDocumentPath READ selectedTimelineDocumentPath NOTIFY selectedAssetChanged)
   Q_PROPERTY(QStringList projectNames READ projectNames NOTIFY projectNamesChanged)
+  Q_PROPERTY(int projectStatsRevision READ projectStatsRevision NOTIFY projectStatsRevisionChanged)
   Q_PROPERTY(QStringList captureYears READ captureYears NOTIFY captureYearsChanged)
   Q_PROPERTY(QString projectFilter READ projectFilter WRITE setProjectFilter NOTIFY filtersChanged)
   Q_PROPERTY(QString importDateFilter READ importDateFilter WRITE setImportDateFilter NOTIFY filtersChanged)
@@ -126,6 +127,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString selectedDurationText() const;
   [[nodiscard]] QString selectedTimelineDocumentPath() const;
   [[nodiscard]] QStringList projectNames() const;
+  [[nodiscard]] int projectStatsRevision() const;
   [[nodiscard]] QStringList captureYears() const;
   [[nodiscard]] QString projectFilter() const;
   [[nodiscard]] QString importDateFilter() const;
@@ -145,9 +147,12 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE QString localPathForUrl(const QString& url) const;
   Q_INVOKABLE QString parentFolderUrl(const QString& url) const;
   Q_INVOKABLE void createProject(const QString& name);
+  Q_INVOKABLE void openProject(const QString& project_name);
   Q_INVOKABLE void addAssetToProject(const QString& asset_id, const QString& project_name);
   Q_INVOKABLE void removeAssetFromProject(const QString& asset_id, const QString& project_name);
   Q_INVOKABLE bool assetInProject(const QString& asset_id, const QString& project_name) const;
+  Q_INVOKABLE int assetCountForProject(const QString& project_name) const;
+  Q_INVOKABLE QVariantList timelinePickerAssets(const QString& project_name = QString()) const;
 
   void setProjectFilter(const QString& project_filter);
   void setImportDateFilter(const QString& import_date_filter);
@@ -167,6 +172,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void selectedIndexChanged();
   void selectedAssetChanged();
   void projectNamesChanged();
+  void projectStatsRevisionChanged();
   void captureYearsChanged();
   void filtersChanged();
 
@@ -196,6 +202,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void saveProjects() const;
   void addAssetsToProject(const QStringList& asset_ids, const QString& project_name);
   void finalizePendingImportProjectAssignment();
+  void bumpProjectStatsRevision();
   [[nodiscard]] QString projectsFilePath() const;
   [[nodiscard]] ProjectRecord* findProject(const QString& project_name);
   [[nodiscard]] const ProjectRecord* findProject(const QString& project_name) const;
@@ -205,6 +212,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] bool matchesProjectFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] bool matchesMediaTypeFilter(const CatalogAssetItem& item) const;
   [[nodiscard]] const CatalogAssetItem* selectedItem() const;
+  [[nodiscard]] QVariantMap assetMap(const CatalogAssetItem& item) const;
 
   QString snapshotProgram() const;
   QStringList snapshotArguments() const;
@@ -227,6 +235,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   bool importing_ = false;
   int drive_count_ = 0;
   int selected_index_ = -1;
+  int project_stats_revision_ = 0;
   QString project_filter_ = QStringLiteral("all");
   QString import_date_filter_ = QStringLiteral("all");
   QString capture_year_filter_ = QStringLiteral("all");

@@ -1,5 +1,7 @@
 #include "timeline_asset_store.h"
 
+#include "app_bootstrap.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -14,17 +16,12 @@ namespace photo_editor::desktop {
 namespace {
 
 QString app_data_root() {
-  const auto override_root =
-      qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_ROOT").trimmed();
-  if (!override_root.isEmpty()) {
-    return QDir::cleanPath(override_root);
+  const auto legacy_override_root = qEnvironmentVariable("PHOTO_EDITOR_APP_DATA_ROOT").trimmed();
+  if (!legacy_override_root.isEmpty()) {
+    return QDir::cleanPath(legacy_override_root);
   }
 
-  auto data_root = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-  if (data_root.isEmpty()) {
-    data_root = QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-data"));
-  }
-  return data_root;
+  return AppBootstrap::appDataLocation();
 }
 
 TimelineAssetRecord record_from_object(const QJsonObject& object) {

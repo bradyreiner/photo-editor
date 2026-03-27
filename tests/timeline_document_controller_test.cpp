@@ -128,12 +128,40 @@ int main(int argc, char** argv) {
 
   const auto first_video = touch_file(workspace.filePath(QStringLiteral("clip-01.mp4")));
   const auto second_video = touch_file(workspace.filePath(QStringLiteral("clip-02.mov")));
+  const auto photo_still = touch_file(workspace.filePath(QStringLiteral("still-01.jpg")));
+  const auto audio_clip = touch_file(workspace.filePath(QStringLiteral("audio-01.wav")));
   if (first_video.isEmpty() || second_video.isEmpty()) {
     return fail("video placeholders should be created");
   }
 
   TimelineDocumentController controller;
-  controller.createTimeline(QStringLiteral("Gallery Timeline"));
+  if (controller.hasActiveTimeline()) {
+    return fail("timeline controller should start without an implicit active timeline");
+  }
+  controller.createTimelineWithSettings({
+      {QStringLiteral("timelineName"), QStringLiteral("Gallery Timeline")},
+      {QStringLiteral("width"), 1920},
+      {QStringLiteral("height"), 1080},
+      {QStringLiteral("frameRate"), 24.0},
+      {QStringLiteral("audioSampleRate"), 44100},
+      {QStringLiteral("projectBinding"), QStringLiteral("Campaign")},
+      {QStringLiteral("colorSpace"), QStringLiteral("Display P3")},
+      {QStringLiteral("dataLevels"), QStringLiteral("Full")},
+      {QStringLiteral("exportContainer"), QStringLiteral("mov")},
+      {QStringLiteral("exportCodec"), QStringLiteral("prores")},
+  });
+  if (!controller.hasActiveTimeline() ||
+      controller.sequenceWidth() != 1920 ||
+      controller.sequenceHeight() != 1080 ||
+      !nearly_equal(controller.framesPerSecond(), 24.0) ||
+      controller.audioSampleRate() != 44100 ||
+      controller.projectBinding() != QStringLiteral("Campaign") ||
+      controller.colorSpace() != QStringLiteral("Display P3") ||
+      controller.dataLevels() != QStringLiteral("Full") ||
+      controller.exportContainer() != QStringLiteral("mov") ||
+      controller.exportCodec() != QStringLiteral("prores")) {
+    return fail("explicit timeline setup should persist professional sequence settings");
+  }
   controller.addClipFromGallery(QStringLiteral("video:1"), first_video, QStringLiteral("Clip One"), 12.0, QStringLiteral("poster://one"));
   controller.addClipFromGallery(QStringLiteral("video:2"), second_video, QStringLiteral("Clip Two"), 8.0, QStringLiteral("poster://two"));
 
@@ -256,6 +284,73 @@ int main(int argc, char** argv) {
       !nearly_equal(layered_controller.currentClipPlayheadSeconds(), 0.5)) {
     return fail("sequence seeking should resolve the topmost active clip after moving it to a higher track");
   }
+  layered_controller.toggleTrackTargeted(2);
+  layered_controller.toggleTrackLocked(2);
+  layered_controller.toggleTrackVisibility(2);
+  const auto targeted_track_state = layered_controller.sequenceTracks().at(2).toMap();
+  if (!targeted_track_state.value(QStringLiteral("targeted")).toBool() ||
+      !targeted_track_state.value(QStringLiteral("locked")).toBool() ||
+      targeted_track_state.value(QStringLiteral("visible")).toBool()) {
+    return fail("track state toggles should persist on the selected lane");
+  }
+  layered_controller.toggleTrackVisibility(2);
+  layered_controller.toggleTrackMuted(3);
+  layered_controller.seekSequenceSeconds(1.5);
+  if (layered_controller.currentClip().value(QStringLiteral("trackLabel")).toString() != QStringLiteral("V2") ||
+      layered_controller.currentClip().value(QStringLiteral("audioPlaybackEnabled")).toBool()) {
+    return fail("audio mute should silence playback without hiding the visible video clip");
+  }
+
+  TimelineDocumentController source_controller;
+  source_controller.createTimeline(QStringLiteral("Source Timeline"));
+  source_controller.loadSourceClipFromGallery(
+      QStringLiteral("video:src"),
+      first_video,
+      QStringLiteral("Source Clip"),
+      5.0,
+      QStringLiteral("poster://src"));
+  source_controller.setSourceInSeconds(1.0);
+  source_controller.setSourceOutSeconds(3.0);
+  source_controller.appendSourceClipToTimeline();
+  source_controller.addSequenceMarker(QStringLiteral("Beat"));
+  if (source_controller.clipCount() != 1 ||
+      !nearly_equal(source_controller.currentClip().value(QStringLiteral("trimStartSeconds")).toDouble(), 1.0) ||
+      !nearly_equal(source_controller.currentClip().value(QStringLiteral("trimEndSeconds")).toDouble(), 3.0) ||
+      source_controller.sequenceMarkers().size() != 1) {
+    return fail("source monitor edits and sequence markers should persist in controller state");
+  }
+
+  TimelineDocumentController photo_controller;
+  photo_controller.createTimeline(QStringLiteral("Photo Timeline"));
+  photo_controller.addClipFromGallery(
+      QStringLiteral("photo:1"),
+      photo_still,
+      QStringLiteral("Still"),
+      0.0,
+      QStringLiteral("file:///poster.jpg"));
+  if (photo_controller.clipCount() != 1 ||
+      photo_controller.currentClip().value(QStringLiteral("mediaType")).toString() != QStringLiteral("photo") ||
+      !photo_controller.playbackSourceUrl().isEmpty()) {
+    return fail("photo clips should be insertable onto video tracks without requiring video playback");
+  }
+
+  TimelineDocumentController audio_controller;
+  audio_controller.createTimeline(QStringLiteral("Audio Timeline"));
+  audio_controller.loadSourceClipFromGallery(
+      QStringLiteral("audio:1"),
+      audio_clip,
+      QStringLiteral("Narration"),
+      6.0,
+      QString{});
+  audio_controller.appendSourceClipToTimeline();
+  const auto audio_tracks = audio_controller.sequenceTracks();
+  if (audio_tracks.size() != 2 ||
+      audio_tracks.at(0).toMap().value(QStringLiteral("clipCount")).toInt() != 0 ||
+      audio_tracks.at(1).toMap().value(QStringLiteral("clipCount")).toInt() != 1 ||
+      audio_tracks.at(1).toMap().value(QStringLiteral("clips")).toList().at(0).toMap().value(QStringLiteral("mediaType")).toString()
+          != QStringLiteral("audio")) {
+    return fail("standalone audio clips should persist on audio lanes instead of being discarded during sync");
+  }
 
   TimelineDocumentController edit_controller;
   edit_controller.createTimeline(QStringLiteral("Edit Timeline"));
@@ -285,6 +380,20 @@ int main(int argc, char** argv) {
   const auto ripple_clips = edit_controller.clips();
   if (!nearly_equal(ripple_clips.at(1).toMap().value(QStringLiteral("startSeconds")).toDouble(), 1.0)) {
     return fail("ripple trims should close downstream timing after a trim-out change");
+  }
+  edit_controller.selectClip(1);
+  const auto slipped_before = edit_controller.currentClip();
+  if (!edit_controller.slipSelectedClipBySeconds(0.5)) {
+    return fail("slipping a selected clip should succeed when source handles remain available");
+  }
+  const auto slipped_after = edit_controller.currentClip();
+  if (!nearly_equal(slipped_after.value(QStringLiteral("trimStartSeconds")).toDouble(),
+                    slipped_before.value(QStringLiteral("trimStartSeconds")).toDouble() + 0.5) ||
+      !nearly_equal(slipped_after.value(QStringLiteral("trimEndSeconds")).toDouble(),
+                    slipped_before.value(QStringLiteral("trimEndSeconds")).toDouble() + 0.5) ||
+      !nearly_equal(slipped_after.value(QStringLiteral("startSeconds")).toDouble(),
+                    slipped_before.value(QStringLiteral("startSeconds")).toDouble())) {
+    return fail("slipping should change source trim without moving the clip on the timeline");
   }
 
   TimelineDocumentController overwrite_controller;
@@ -316,12 +425,44 @@ int main(int argc, char** argv) {
   overwrite_controller.setSelectedFrameScale(1.35);
   overwrite_controller.setSelectedFrameOffsetX(0.4);
   overwrite_controller.setSelectedFrameOffsetY(-0.25);
+  overwrite_controller.setSelectedClipOpacity(0.62);
+  overwrite_controller.setSelectedClipAudioGain(4.5);
+  overwrite_controller.setSelectedClipFadeInSeconds(0.35);
+  overwrite_controller.setSelectedClipFadeOutSeconds(0.40);
+  overwrite_controller.setSelectedClipPlaybackRate(1.25);
+  overwrite_controller.addSelectedClipEffect(QStringLiteral("Transform"));
+  overwrite_controller.addSelectedClipEffect(QStringLiteral("Opacity"));
+  overwrite_controller.assignSelectedClipTransition(QStringLiteral("in"), QStringLiteral("Fade In"), 0.30);
+  overwrite_controller.assignSelectedClipTransition(QStringLiteral("out"), QStringLiteral("Cross Dissolve"), 0.45);
+  overwrite_controller.addSequenceMarker(QStringLiteral("Start"));
   const auto transformed_clip = overwrite_controller.currentClip();
+  const auto transformed_effects = transformed_clip.value(QStringLiteral("effectStack")).toList();
   if (transformed_clip.value(QStringLiteral("frameMode")).toString() != QStringLiteral("fill") ||
       !nearly_equal(transformed_clip.value(QStringLiteral("frameScale")).toDouble(), 1.35) ||
       !nearly_equal(transformed_clip.value(QStringLiteral("frameOffsetX")).toDouble(), 0.4) ||
-      !nearly_equal(transformed_clip.value(QStringLiteral("frameOffsetY")).toDouble(), -0.25)) {
-    return fail("frame controls should persist per-clip transform settings");
+      !nearly_equal(transformed_clip.value(QStringLiteral("frameOffsetY")).toDouble(), -0.25) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("opacity")).toDouble(), 0.62) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("audioGainDb")).toDouble(), 4.5) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("fadeInSeconds")).toDouble(), 0.35) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("fadeOutSeconds")).toDouble(), 0.40) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("playbackRate")).toDouble(), 1.25) ||
+      transformed_effects.size() != 2 ||
+      transformed_effects.at(0).toString() != QStringLiteral("Transform") ||
+      transformed_effects.at(1).toString() != QStringLiteral("Opacity") ||
+      transformed_clip.value(QStringLiteral("transitionInName")).toString() != QStringLiteral("Fade In") ||
+      transformed_clip.value(QStringLiteral("transitionOutName")).toString() != QStringLiteral("Cross Dissolve") ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("transitionInSeconds")).toDouble(), 0.30) ||
+      !nearly_equal(transformed_clip.value(QStringLiteral("transitionOutSeconds")).toDouble(), 0.45) ||
+      overwrite_controller.sequenceMarkers().size() != 1) {
+    return fail("extended clip controls, effects, transitions, and markers should persist on the selected clip");
+  }
+  overwrite_controller.selectClip(1);
+  const auto roll_target = overwrite_controller.currentClip().value(QStringLiteral("startSeconds")).toDouble() - 0.5;
+  if (!overwrite_controller.rollSelectedClipStartToSequenceSeconds(roll_target)) {
+    return fail("rolling the selected clip start should succeed when an adjacent left clip exists");
+  }
+  if (!nearly_equal(overwrite_controller.currentClip().value(QStringLiteral("startSeconds")).toDouble(), roll_target)) {
+    return fail("rolling a clip boundary should move the boundary to the requested sequence time");
   }
 
   const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
@@ -348,9 +489,13 @@ int main(int argc, char** argv) {
     render_controller.selectClip(0);
     render_controller.setSelectedTrimStartSeconds(0.10);
     render_controller.setSelectedTrimEndSeconds(0.70);
+    render_controller.setSelectedClipOpacity(0.7);
+    render_controller.setSelectedClipAudioGain(3.0);
     render_controller.selectClip(1);
     render_controller.setSelectedTrimStartSeconds(0.20);
     render_controller.setSelectedTrimEndSeconds(0.80);
+    render_controller.setSelectedClipPlaybackRate(1.1);
+    render_controller.addSequenceMarker(QStringLiteral("Cut"));
 
     if (!render_controller.saveTimeline()) {
       return fail("saving a rendered timeline should succeed when ffmpeg is available");
@@ -412,6 +557,13 @@ int main(int argc, char** argv) {
     if (saved_json.value(QStringLiteral("tracks")).toArray().size() != 2) {
       return fail("saved timelines should persist their track-based sequence layout");
     }
+    const auto saved_format = saved_json.value(QStringLiteral("sequenceFormat")).toObject();
+    if (!saved_format.contains(QStringLiteral("audioSampleRate")) ||
+        !saved_json.contains(QStringLiteral("projectBinding")) ||
+        !saved_json.contains(QStringLiteral("exportContainer")) ||
+        !saved_json.contains(QStringLiteral("exportCodec"))) {
+      return fail("saved timelines should persist the expanded sequence and export settings");
+    }
 
     const auto records = loadTimelineAssetRecords();
     if (records.isEmpty()) {
@@ -439,13 +591,28 @@ int main(int argc, char** argv) {
         load_controller.timelineName() != QStringLiteral("Rendered Timeline")) {
       return fail("loading a saved timeline should restore its clips and metadata");
     }
+    if (load_controller.sequenceMarkers().size() != 1) {
+      return fail("saved timelines should restore sequence markers");
+    }
 
     const auto loaded_clips = load_controller.clips();
     if (loaded_clips.at(0).toMap().value(QStringLiteral("trimStartSeconds")).toDouble() != 0.10 ||
         loaded_clips.at(0).toMap().value(QStringLiteral("trimEndSeconds")).toDouble() != 0.70 ||
+        loaded_clips.at(0).toMap().value(QStringLiteral("opacity")).toDouble() != 0.7 ||
+        loaded_clips.at(0).toMap().value(QStringLiteral("audioGainDb")).toDouble() != 3.0 ||
         loaded_clips.at(1).toMap().value(QStringLiteral("trimStartSeconds")).toDouble() != 0.20 ||
-        loaded_clips.at(1).toMap().value(QStringLiteral("trimEndSeconds")).toDouble() != 0.80) {
-      return fail("loading a saved timeline should preserve trimmed clip ranges");
+        loaded_clips.at(1).toMap().value(QStringLiteral("trimEndSeconds")).toDouble() != 0.80 ||
+        loaded_clips.at(1).toMap().value(QStringLiteral("playbackRate")).toDouble() != 1.1 ||
+        load_controller.sequenceMarkers().size() != 1) {
+      return fail("loading a saved timeline should preserve extended clip and marker state");
+    }
+
+    load_controller.selectClip(0);
+    load_controller.addSelectedClipEffect(QStringLiteral("Transform"));
+    load_controller.assignSelectedClipTransition(QStringLiteral("out"), QStringLiteral("Fade Out"), 0.25);
+    if (load_controller.currentClip().value(QStringLiteral("effectStack")).toList().size() != 1 ||
+        load_controller.currentClip().value(QStringLiteral("transitionOutName")).toString() != QStringLiteral("Fade Out")) {
+      return fail("loaded timelines should accept new effects and transitions on selected clips");
     }
   }
 

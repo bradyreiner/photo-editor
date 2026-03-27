@@ -14,9 +14,9 @@ use walkdir::WalkDir;
 use crate::{AssetLocation, CatalogAssetRecord, DriveRecord, ImportMode};
 
 const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "3fr", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "gif", "heic", "heif", "iiq",
-    "jpeg", "jpg", "kdc", "m4v", "mef", "mos", "mov", "mp4", "mpeg", "mpg", "nef", "nrw", "orf",
-    "pef", "png", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "webm", "webp", "x3f",
+    "3fr", "arw", "avif", "bmp", "cr2", "cr3", "dng", "erf", "gif", "heic", "heif", "iiq", "jpeg",
+    "jpg", "kdc", "m4v", "mef", "mos", "mov", "mp4", "mpeg", "mpg", "nef", "nrw", "orf", "pef",
+    "png", "raf", "raw", "rw2", "sr2", "srf", "tif", "tiff", "webm", "webp", "x3f",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -219,7 +219,10 @@ pub fn fallback_metadata(path: &Path) -> ExtractedMetadata {
     let mut metadata = ExtractedMetadata::default();
 
     if let Ok(file_metadata) = std::fs::metadata(path) {
-        if let Ok(system_time) = file_metadata.modified().or_else(|_| file_metadata.created()) {
+        if let Ok(system_time) = file_metadata
+            .modified()
+            .or_else(|_| file_metadata.created())
+        {
             if let Some((year, month, day)) = system_time_to_ymd(system_time) {
                 metadata.capture_year = year;
                 metadata.capture_month = month;
@@ -239,25 +242,27 @@ fn field_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
 }
 
 fn field_unsigned_i32(exif: &exif::Exif, tag: Tag) -> Option<i32> {
-    exif.get_field(tag, In::PRIMARY).and_then(|field| match &field.value {
-        Value::Byte(values) => values.first().map(|value| i32::from(*value)),
-        Value::Short(values) => values.first().map(|value| i32::from(*value)),
-        Value::Long(values) => values.first().and_then(|value| i32::try_from(*value).ok()),
-        _ => None,
-    })
+    exif.get_field(tag, In::PRIMARY)
+        .and_then(|field| match &field.value {
+            Value::Byte(values) => values.first().map(|value| i32::from(*value)),
+            Value::Short(values) => values.first().map(|value| i32::from(*value)),
+            Value::Long(values) => values.first().and_then(|value| i32::try_from(*value).ok()),
+            _ => None,
+        })
 }
 
 fn field_rational_f64(exif: &exif::Exif, tag: Tag) -> Option<f64> {
-    exif.get_field(tag, In::PRIMARY).and_then(|field| match &field.value {
-        Value::Rational(values) => values.first().and_then(|value| {
-            if value.denom == 0 {
-                None
-            } else {
-                Some(f64::from(value.num) / f64::from(value.denom))
-            }
-        }),
-        _ => None,
-    })
+    exif.get_field(tag, In::PRIMARY)
+        .and_then(|field| match &field.value {
+            Value::Rational(values) => values.first().and_then(|value| {
+                if value.denom == 0 {
+                    None
+                } else {
+                    Some(f64::from(value.num) / f64::from(value.denom))
+                }
+            }),
+            _ => None,
+        })
 }
 
 fn parse_exif_date(value: &str) -> Option<(u16, u8, u8)> {
@@ -340,7 +345,10 @@ mod tests {
         let summary = discover_assets(&request).expect("discovery should succeed");
         assert_eq!(summary.assets.len(), 1);
         assert_eq!(summary.skipped_unsupported, 1);
-        assert_eq!(summary.assets[0].location.relative_path, "day-1/image001.CR3");
+        assert_eq!(
+            summary.assets[0].location.relative_path,
+            "day-1/image001.CR3"
+        );
         assert_eq!(summary.assets[0].location.drive_id, "drive-main");
     }
 

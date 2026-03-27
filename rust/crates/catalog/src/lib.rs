@@ -1,18 +1,30 @@
 mod importer;
+mod local_database;
+
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{Executor, PgPool, Row};
+use sqlx::{PgPool, Row};
 
 pub use importer::{
-    discover_assets, extract_metadata, fallback_metadata, is_supported_photo_path, ExtractedMetadata,
-    ImportRequest, ImportSummary,
+    discover_assets, extract_metadata, fallback_metadata, is_supported_photo_path,
+    ExtractedMetadata, ImportRequest, ImportSummary,
+};
+pub use local_database::{
+    ensure_external_database_ready, CatalogDatabaseStatus, LocalCatalogDatabaseManager,
+    LocalPostgresState, POSTGRES_BIN_DIR_ENV,
 };
 
-const DEFAULT_DATABASE_URL: &str = "postgresql://photo_editor:photo_editor@localhost:5433/photo_editor";
+const DEFAULT_DATABASE_URL: &str =
+    "postgresql://photo_editor:photo_editor@localhost:5433/photo_editor";
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
-const POSTGRES_SCHEMA_SQL: &str = include_str!("../../../../docs/postgres-schema.sql");
+pub const APP_DATA_DIR_ENV: &str = "PHOTO_EDITOR_APP_DATA_DIR";
+pub const LOG_DIR_ENV: &str = "PHOTO_EDITOR_LOG_DIR";
+pub const BACKUP_DIR_ENV: &str = "PHOTO_EDITOR_BACKUP_DIR";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ImportMode {
@@ -82,6 +94,13 @@ pub struct PostgresCatalogConfig {
     pub max_connections: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppRuntimePaths {
+    pub app_data_dir: PathBuf,
+    pub log_dir: PathBuf,
+    pub backup_dir: PathBuf,
+}
+
 impl Default for PostgresCatalogConfig {
     fn default() -> Self {
         Self {
@@ -109,6 +128,33 @@ impl PostgresCatalogConfig {
     }
 }
 
+impl AppRuntimePaths {
+    pub fn from_env() -> Self {
+        let app_data_dir = std::env::var_os(APP_DATA_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(default_app_data_dir);
+        let log_dir = std::env::var_os(LOG_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| app_data_dir.join("logs"));
+        let backup_dir = std::env::var_os(BACKUP_DIR_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| app_data_dir.join("backups"));
+
+        Self {
+            app_data_dir,
+            log_dir,
+            backup_dir,
+        }
+    }
+
+    pub fn ensure_directories(&self) -> std::io::Result<()> {
+        fs::create_dir_all(&self.app_data_dir)?;
+        fs::create_dir_all(&self.log_dir)?;
+        fs::create_dir_all(&self.backup_dir)?;
+        Ok(())
+    }
+}
+
 pub struct CatalogService {
     pool: PgPool,
 }
@@ -127,8 +173,10 @@ impl CatalogService {
         &self.pool
     }
 
-    pub async fn initialize_schema(&self) -> Result<(), sqlx::Error> {
-        self.pool.execute(POSTGRES_SCHEMA_SQL).await?;
+    pub async fn initialize_schema(&self) -> Result<(), sqlx::migrate::MigrateError> {
+        let migrator =
+            Migrator::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations")).await?;
+        migrator.run(&self.pool).await?;
         Ok(())
     }
 
@@ -351,6 +399,48 @@ pub fn postgres_feature_enabled() -> bool {
     true
 }
 
+fn default_app_data_dir() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        return platform_home_dir()
+            .unwrap_or_else(current_dir_fallback)
+            .join("Library")
+            .join("Application Support")
+            .join("PhotoEditor");
+    }
+
+    if cfg!(target_os = "windows") {
+        if let Some(app_data) = std::env::var_os("APPDATA").map(PathBuf::from) {
+            return app_data.join("PhotoEditor");
+        }
+
+        return platform_home_dir()
+            .unwrap_or_else(current_dir_fallback)
+            .join("AppData")
+            .join("Roaming")
+            .join("PhotoEditor");
+    }
+
+    if let Some(xdg_data_home) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
+        return xdg_data_home.join("photo-editor");
+    }
+
+    platform_home_dir()
+        .unwrap_or_else(current_dir_fallback)
+        .join(".local")
+        .join("share")
+        .join("photo-editor")
+}
+
+fn platform_home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(PathBuf::from))
+}
+
+fn current_dir_fallback() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf())
+}
+
 fn map_asset_row(row: PgRow) -> CatalogAssetRecord {
     let capture_year: i32 = row.get("capture_year");
     let capture_month: i32 = row.get("capture_month");
@@ -425,5 +515,18 @@ mod tests {
     #[tokio::test]
     async fn postgres_feature_probe_is_available() {
         assert!(postgres_feature_enabled());
+    }
+
+    #[test]
+    fn runtime_paths_default_to_app_relative_subdirectories() {
+        let app_data_dir = PathBuf::from("/tmp/photo-editor-data");
+        let paths = AppRuntimePaths {
+            app_data_dir: app_data_dir.clone(),
+            log_dir: app_data_dir.join("logs"),
+            backup_dir: app_data_dir.join("backups"),
+        };
+
+        assert_eq!(paths.log_dir, app_data_dir.join("logs"));
+        assert_eq!(paths.backup_dir, app_data_dir.join("backups"));
     }
 }

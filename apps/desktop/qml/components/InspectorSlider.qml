@@ -24,7 +24,7 @@ Item {
 
     onTrackColorsChanged: trackCanvas.requestPaint()
 
-    implicitHeight: 60
+    implicitHeight: 56
 
     TapHandler {
         acceptedButtons: Qt.LeftButton
@@ -34,7 +34,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radius8
+        radius: theme.radiusPanel
         color: control.pressed ? theme.ink750 : theme.ink900
         border.width: 1
         border.color: control.pressed ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.lineSoft, 0.18)
@@ -42,8 +42,8 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 10
-        spacing: 8
+        anchors.margins: theme.sectionPaddingCompact
+        spacing: theme.gapControl
 
         RowLayout {
             Layout.fillWidth: true
@@ -61,12 +61,12 @@ Item {
             }
 
             Rectangle {
-                radius: 6
+                radius: theme.radiusChip
                 color: control.pressed ? theme.alpha(root.accent, 0.16) : theme.ink850
                 border.width: 1
                 border.color: control.pressed ? theme.alpha(root.accent, 0.14) : theme.alpha(theme.lineSoft, 0.16)
-                implicitWidth: Math.max(48, valueLabel.implicitWidth + 14)
-                implicitHeight: 22
+                implicitWidth: Math.max(44, valueLabel.implicitWidth + theme.space12)
+                implicitHeight: 20
 
                 Label {
                     id: valueLabel
@@ -166,7 +166,7 @@ Item {
                     y: control.topPadding + control.availableHeight / 2 - height / 2
                     width: 12
                     height: 12
-                    radius: 6
+                    radius: theme.radiusChip
                     color: root.accent
                     border.width: 1
                     border.color: theme.alpha(theme.textStrong, 0.16)

@@ -1,0 +1,184 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            configure_preset: release-macos
+            build_preset: build-release-macos
+          - os: windows-2022
+            configure_preset: release-windows
+            build_preset: build-release-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.3"
+
+      - name: Install macOS native dependencies
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja postgresql@16
+
+      - name: Install Windows native dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build Rust helper binaries
+        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
+
+      - name: Prepare macOS PostgreSQL runtime
+        if: runner.os == 'macOS'
+        id: postgres-runtime-macos
+        shell: bash
+        run: |
+          runtime_dir="$(brew --prefix postgresql@16)"
+          printf 'runtime_dir=%s\n' "${runtime_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Sparkle distribution
+        if: runner.os == 'macOS'
+        id: sparkle-macos
+        shell: bash
+        env:
+          PHOTO_EDITOR_SPARKLE_ARCHIVE: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE }}
+          PHOTO_EDITOR_SPARKLE_URL: ${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_URL }}
+          PHOTO_EDITOR_SPARKLE_DEST: "${{ runner.temp }}/photo-editor-sparkle"
+        run: |
+          if [ -z "${PHOTO_EDITOR_SPARKLE_ARCHIVE}" ] && [ -z "${PHOTO_EDITOR_SPARKLE_URL}" ]; then
+            echo "Skipping Sparkle distribution because no archive path or URL was configured."
+            printf 'distribution_dir=\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          chmod +x ./scripts/prepare-sparkle-distribution.sh
+          distribution_dir="$(./scripts/prepare-sparkle-distribution.sh)"
+          printf 'distribution_dir=%s\n' "${distribution_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Prepare Windows PostgreSQL runtime
+        if: runner.os == 'Windows'
+        id: postgres-runtime-windows
+        shell: bash
+        env:
+          PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE }}
+          PHOTO_EDITOR_POSTGRES_RUNTIME_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL }}
+          PHOTO_EDITOR_POSTGRES_RUNTIME_DEST: "${{ runner.temp }}/photo-editor-postgres-windows"
+        run: |
+          if [ -z "${PHOTO_EDITOR_POSTGRES_RUNTIME_ARCHIVE}" ] && [ -z "${PHOTO_EDITOR_POSTGRES_RUNTIME_URL}" ]; then
+            echo "Skipping bundled Windows PostgreSQL runtime because no archive path or URL was configured."
+            printf 'runtime_dir=\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          ./scripts/prepare-postgres-runtime.sh >/tmp/photo-editor-postgres-runtime-path.txt
+          runtime_dir="$(cat /tmp/photo-editor-postgres-runtime-path.txt)"
+          printf 'runtime_dir=%s\n' "${runtime_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure
+        shell: bash
+        run: |
+          configure_args=(
+            --preset "${{ matrix.configure_preset }}"
+            "-DPHOTO_EDITOR_RUST_BINARY_DIR=${GITHUB_WORKSPACE}/rust/target/release"
+            "-DPHOTO_EDITOR_STRICT_PACKAGING=ON"
+          )
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            configure_args+=("-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=${{ steps.postgres-runtime-macos.outputs.runtime_dir }}")
+            if [ -n "${{ steps.sparkle-macos.outputs.distribution_dir }}" ] && [ -n "${{ vars.PHOTO_EDITOR_MACOS_APPCAST_URL }}" ] && [ -n "${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY }}" ]; then
+              configure_args+=(
+                "-DPHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER=ON"
+                "-DPHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR=${{ steps.sparkle-macos.outputs.distribution_dir }}"
+                "-DPHOTO_EDITOR_MACOS_APPCAST_URL=${{ vars.PHOTO_EDITOR_MACOS_APPCAST_URL }}"
+                "-DPHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY=${{ vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY }}"
+              )
+            fi
+          fi
+          if [ "${RUNNER_OS}" = "Windows" ] && [ -n "${{ steps.postgres-runtime-windows.outputs.runtime_dir }}" ]; then
+            configure_args+=("-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=${{ steps.postgres-runtime-windows.outputs.runtime_dir }}")
+          fi
+          cmake "${configure_args[@]}"
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.build_preset }}
+
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          build_dir="build/${{ matrix.configure_preset }}"
+          cpack --config "${build_dir}/CPackConfig.cmake" -B "${build_dir}/package"
+
+      - name: Generate macOS Sparkle appcast
+        if: runner.os == 'macOS' && steps.sparkle-macos.outputs.distribution_dir != '' && vars.PHOTO_EDITOR_MACOS_APPCAST_URL != '' && vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY != ''
+        shell: bash
+        env:
+          PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR: ${{ steps.sparkle-macos.outputs.distribution_dir }}
+          PHOTO_EDITOR_MACOS_PACKAGE_DIR: build/${{ matrix.configure_preset }}/package
+        run: |
+          chmod +x ./scripts/generate-macos-appcast.sh
+          ./scripts/generate-macos-appcast.sh
+
+      - name: Stage Windows install root
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake --install "build/${{ matrix.configure_preset }}" --prefix "${RUNNER_TEMP}/photo-editor-windows-install"
+
+      - name: Prepare Windows signing certificate
+        if: runner.os == 'Windows' && secrets.WINDOWS_SIGNING_CERT_BASE64 != ''
+        shell: bash
+        env:
+          WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+        run: |
+          cert_path="${RUNNER_TEMP}/photo-editor-windows-signing.pfx"
+          printf '%s' "${WINDOWS_SIGNING_CERT_BASE64}" | base64 --decode > "${cert_path}"
+          printf 'WINDOWS_SIGNING_CERT_PATH=%s\n' "${cert_path}" >> "${GITHUB_ENV}"
+
+      - name: Package Windows MSIX
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PHOTO_EDITOR_WINDOWS_PACKAGE_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_NAME }}
+          PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME }}
+          PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER }}
+          PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME: ${{ vars.PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME }}
+          PHOTO_EDITOR_WINDOWS_DESCRIPTION: ${{ vars.PHOTO_EDITOR_WINDOWS_DESCRIPTION }}
+          PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL: ${{ vars.PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL }}
+          PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI: ${{ vars.PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI }}
+          PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $packageVersion = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+            $packageVersion = "0.1.0"
+          }
+          ./scripts/package-windows-msix.ps1 `
+            -InstallRoot "${env:RUNNER_TEMP}\photo-editor-windows-install" `
+            -OutputDir "build/${{ matrix.configure_preset }}/package" `
+            -PackageName $env:PHOTO_EDITOR_WINDOWS_PACKAGE_NAME `
+            -PackageDisplayName $env:PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME `
+            -Publisher $env:PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER `
+            -PublisherDisplayName $env:PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME `
+            -Description $env:PHOTO_EDITOR_WINDOWS_DESCRIPTION `
+            -Version $packageVersion `
+            -CertificatePath $env:WINDOWS_SIGNING_CERT_PATH `
+            -CertificatePassword $env:WINDOWS_SIGNING_CERT_PASSWORD `
+            -TimestampUrl $env:PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL `
+            -AppInstallerUri $env:PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI `
+            -PackageBaseUri $env:PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-editor-${{ runner.os }}
+          path: build/${{ matrix.configure_preset }}/package/**

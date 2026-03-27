@@ -1,3 +1,6 @@
+-- Reviewed schema snapshot.
+-- Runtime schema changes must be added through rust/crates/catalog/migrations.
+
 CREATE TABLE IF NOT EXISTS drives (
     drive_id TEXT PRIMARY KEY,
     display_name TEXT NOT NULL,

@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 
@@ -8,44 +9,50 @@ ComboBox {
 
     Theme { id: theme }
 
-    implicitHeight: 34
+    implicitHeight: theme.controlHeight
     font.family: theme.fontUi
     font.pixelSize: 11
     hoverEnabled: true
 
     delegate: ItemDelegate {
+        id: optionDelegate
+        required property int index
+        required property var modelData
         width: root.width
         highlighted: root.highlightedIndex === index
 
         contentItem: Text {
-            text: modelData
-            color: highlighted ? theme.textStrong : theme.textMain
+            text: optionDelegate.modelData
+            color: optionDelegate.highlighted ? theme.textStrong : theme.textMain
             font.family: root.font.family
             font.pixelSize: 11
             verticalAlignment: Text.AlignVCenter
             elide: Text.ElideRight
+            leftPadding: theme.space12
+            rightPadding: theme.space12
         }
 
         background: Rectangle {
-            color: highlighted ? theme.ink750 : theme.ink900
+            color: optionDelegate.highlighted ? theme.ink750 : theme.ink900
         }
     }
 
-    indicator: Text {
-        text: "˅"
+    indicator: AppIcon {
+        name: "chevron-right"
         color: theme.textFaint
-        font.family: theme.fontMono
-        font.pixelSize: 12
+        rotation: 90
+        width: 10
+        height: 10
         anchors.right: parent.right
-        anchors.rightMargin: 12
+        anchors.rightMargin: theme.space12
         anchors.verticalCenter: parent.verticalCenter
     }
 
     contentItem: Text {
         text: root.displayText
         color: theme.textStrong
-        leftPadding: 12
-        rightPadding: 26
+        leftPadding: theme.space12
+        rightPadding: theme.space24 + theme.space4
         verticalAlignment: Text.AlignVCenter
         font.family: root.font.family
         font.pixelSize: root.font.pixelSize
@@ -53,16 +60,20 @@ ComboBox {
     }
 
     background: Rectangle {
-        radius: theme.radius8
+        radius: theme.radiusPanel
         color: theme.ink900
         border.width: 1
-        border.color: root.hovered ? theme.alpha(root.accent, 0.18) : theme.lineSoft
+        border.color: root.hovered ? theme.alpha(root.accent, 0.22) : theme.alpha(theme.lineSoft, 0.92)
+
+        Behavior on border.color {
+            ColorAnimation { duration: theme.durationFast }
+        }
     }
 
     popup: Popup {
-        y: root.height + 4
+        y: root.height + theme.space4
         width: root.width
-        padding: 4
+        padding: theme.space4
 
         contentItem: ListView {
             clip: true
@@ -72,7 +83,7 @@ ComboBox {
         }
 
         background: Rectangle {
-            radius: theme.radius8
+            radius: theme.radiusPanel
             color: theme.ink900
             border.width: 1
             border.color: theme.lineSoft

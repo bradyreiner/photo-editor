@@ -1,10 +1,12 @@
 #include "editor_preview_controller.h"
 
+#include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 
 #include <QtMath>
 #include <QtConcurrent>
 
+#include <algorithm>
 #include <cmath>
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -20,6 +22,7 @@
 #include <QMutexLocker>
 #include <QProcess>
 #include <QRect>
+#include <QRectF>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -33,6 +36,7 @@ namespace {
 constexpr int kInteractivePreviewEdge = 960;
 constexpr int kFullRenderDebounceMs = 420;
 constexpr int kMaxCachedDecodedImages = 4;
+constexpr int kMaxEditHistoryDepth = 100;
 
 struct DecodedImageCache final {
   QMutex mutex;
@@ -53,12 +57,9 @@ QString decoded_image_cache_key(const QFileInfo& file_info, int max_edge) {
 }
 
 QString preview_cache_root() {
-  const auto cache_root = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-  if (cache_root.isEmpty()) {
-    return QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-cache/previews"));
-  }
-
-  return QDir(cache_root).filePath(QStringLiteral("previews"));
+  const auto cache_root = AppBootstrap::cacheLocation();
+  const auto base = cache_root.isEmpty() ? QDir::current().absoluteFilePath(QStringLiteral(".photo-editor-cache")) : cache_root;
+  return QDir(base).filePath(QStringLiteral("previews"));
 }
 
 QString versioned_file_url(const QString& file_path) {
@@ -84,6 +85,10 @@ QString with_preview_revision(const QString& source, int revision) {
   return url.toString();
 }
 
+bool edit_states_equal(const EditState& left, const EditState& right) {
+  return serialize_edit_recipe_json(left) == serialize_edit_recipe_json(right);
+}
+
 bool preview_supported(const QString& file_path) {
   const QFileInfo file_info(file_path);
   const auto suffix = file_info.suffix().toLower().toUtf8();
@@ -100,6 +105,110 @@ double clamp_signed_percent(double value) {
 
 double clamp_unit(double value) {
   return qBound(0.0, value, 1.0);
+}
+
+QVariantMap curve_point(double x, double y) {
+  QVariantMap point;
+  point.insert(QStringLiteral("x"), clamp_unit(x));
+  point.insert(QStringLiteral("y"), clamp_unit(y));
+  return point;
+}
+
+double curve_point_coordinate(const QVariant& value, const QString& key, double fallback) {
+  const auto point = value.toMap();
+  if (!point.contains(key)) {
+    return clamp_unit(fallback);
+  }
+  return clamp_unit(point.value(key).toDouble());
+}
+
+QVariantList default_curve_points() {
+  return {
+      curve_point(0.0, 0.0),
+      curve_point(1.0, 1.0),
+  };
+}
+
+QVariantList parametric_curve_points(double shadows, double darks, double lights, double highlights) {
+  const auto point_output = [](double x, double delta) {
+    return clamp_unit(x + (delta / 100.0) * 0.34);
+  };
+
+  return {
+      curve_point(0.0, 0.0),
+      curve_point(0.20, point_output(0.20, shadows)),
+      curve_point(0.40, point_output(0.40, darks)),
+      curve_point(0.65, point_output(0.65, lights)),
+      curve_point(0.85, point_output(0.85, highlights)),
+      curve_point(1.0, 1.0),
+  };
+}
+
+bool is_identity_curve_points(const QVariantList& points) {
+  if (points.size() != 2) {
+    return false;
+  }
+
+  return std::abs(curve_point_coordinate(points[0], QStringLiteral("x"), 0.0) - 0.0) <= 1e-6 &&
+         std::abs(curve_point_coordinate(points[0], QStringLiteral("y"), 0.0) - 0.0) <= 1e-6 &&
+         std::abs(curve_point_coordinate(points[1], QStringLiteral("x"), 1.0) - 1.0) <= 1e-6 &&
+         std::abs(curve_point_coordinate(points[1], QStringLiteral("y"), 1.0) - 1.0) <= 1e-6;
+}
+
+QVariantList normalize_curve_points(const QVariantList& points) {
+  std::vector<QVariantMap> interior_points;
+  interior_points.reserve(static_cast<std::size_t>(points.size()));
+  for (const auto& value : points) {
+    const auto point = value.toMap();
+    if (point.isEmpty()) {
+      continue;
+    }
+    interior_points.push_back(curve_point(
+        point.value(QStringLiteral("x")).toDouble(),
+        point.value(QStringLiteral("y")).toDouble()));
+  }
+
+  std::sort(interior_points.begin(), interior_points.end(), [](const QVariantMap& left, const QVariantMap& right) {
+    return left.value(QStringLiteral("x")).toDouble() < right.value(QStringLiteral("x")).toDouble();
+  });
+
+  QVariantList normalized;
+  normalized.append(curve_point(0.0, 0.0));
+  auto previous_x = 0.0;
+  for (const auto& point : interior_points) {
+    auto x = clamp_unit(point.value(QStringLiteral("x")).toDouble());
+    auto y = clamp_unit(point.value(QStringLiteral("y")).toDouble());
+    if (x <= 0.0 + 1e-6 || x >= 1.0 - 1e-6) {
+      continue;
+    }
+
+    x = std::max(previous_x + 0.001, x);
+    x = std::min(0.999, x);
+    if (x >= 0.999) {
+      continue;
+    }
+
+    normalized.append(curve_point(x, y));
+    previous_x = x;
+  }
+  normalized.append(curve_point(1.0, 1.0));
+
+  if (is_identity_curve_points(normalized)) {
+    return {};
+  }
+  return normalized;
+}
+
+std::vector<photo_editor::pipeline::CurvePoint> pipeline_curve_points(const QVariantList& points) {
+  std::vector<photo_editor::pipeline::CurvePoint> curve_points;
+  curve_points.reserve(static_cast<std::size_t>(points.size()));
+  for (const auto& value : points) {
+    curve_points.push_back(photo_editor::pipeline::CurvePoint{
+        .x = curve_point_coordinate(value, QStringLiteral("x"), 0.0),
+        .y = curve_point_coordinate(value, QStringLiteral("y"), 0.0),
+    });
+  }
+  return curve_points;
 }
 
 photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& state) {
@@ -121,6 +230,10 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& 
       .curve_darks = state.curve_darks,
       .curve_lights = state.curve_lights,
       .curve_highlights = state.curve_highlights,
+      .master_curve_points = pipeline_curve_points(state.master_curve_points),
+      .red_curve_points = pipeline_curve_points(state.red_curve_points),
+      .green_curve_points = pipeline_curve_points(state.green_curve_points),
+      .blue_curve_points = pipeline_curve_points(state.blue_curve_points),
       .color_mixer_channel = state.hsl_channel.toStdString(),
       .hue_adjustment = state.hue_adjustment,
       .saturation_adjustment = state.saturation_adjustment,
@@ -131,6 +244,15 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& 
       .linear_mask_feather = state.linear_mask_feather,
       .linear_mask_position = state.linear_mask_position,
       .linear_mask_rotation = state.linear_mask_rotation,
+      .radial_mask_enabled = state.radial_mask_enabled,
+      .radial_mask_exposure = state.radial_mask_exposure,
+      .radial_mask_temperature = state.radial_mask_temperature,
+      .radial_mask_feather = state.radial_mask_feather,
+      .radial_mask_center_x = state.radial_mask_center_x,
+      .radial_mask_center_y = state.radial_mask_center_y,
+      .radial_mask_radius_x = state.radial_mask_radius_x,
+      .radial_mask_radius_y = state.radial_mask_radius_y,
+      .radial_mask_rotation = state.radial_mask_rotation,
   };
 }
 
@@ -151,6 +273,10 @@ double crop_aspect_ratio(const QString& preset) {
     return 4.0 / 5.0;
   }
 
+  if (preset == QStringLiteral("3x2")) {
+    return 3.0 / 2.0;
+  }
+
   if (preset == QStringLiteral("16x9")) {
     return 16.0 / 9.0;
   }
@@ -158,7 +284,11 @@ double crop_aspect_ratio(const QString& preset) {
   return 0.0;
 }
 
-QRect crop_rect_for_image(const QSize& size, const QString& preset, double crop_zoom) {
+bool has_explicit_crop_rect(const EditState& state) {
+  return state.crop_rect_width > 0.0 && state.crop_rect_height > 0.0;
+}
+
+QRect legacy_crop_rect_for_image(const QSize& size, const QString& preset, double crop_zoom) {
   int crop_width = size.width();
   int crop_height = size.height();
 
@@ -180,6 +310,44 @@ QRect crop_rect_for_image(const QSize& size, const QString& preset, double crop_
   return {x, y, crop_width, crop_height};
 }
 
+QRectF normalized_crop_rect_for_state(const QSize& size, const EditState& state) {
+  if (!size.isValid() || size.width() <= 0 || size.height() <= 0) {
+    return QRectF(0.0, 0.0, 1.0, 1.0);
+  }
+
+  if (has_explicit_crop_rect(state)) {
+    const auto width = clamp_unit(state.crop_rect_width);
+    const auto height = clamp_unit(state.crop_rect_height);
+    const auto x = clamp_unit(state.crop_rect_x);
+    const auto y = clamp_unit(state.crop_rect_y);
+    return QRectF(
+        std::min(x, std::max(0.0, 1.0 - width)),
+        std::min(y, std::max(0.0, 1.0 - height)),
+        width,
+        height);
+  }
+
+  const auto legacy = legacy_crop_rect_for_image(size, state.crop_preset, state.crop_zoom);
+  return QRectF(
+      static_cast<double>(legacy.x()) / static_cast<double>(size.width()),
+      static_cast<double>(legacy.y()) / static_cast<double>(size.height()),
+      static_cast<double>(legacy.width()) / static_cast<double>(size.width()),
+      static_cast<double>(legacy.height()) / static_cast<double>(size.height()));
+}
+
+QRect crop_rect_for_image(const QSize& size, const EditState& state) {
+  if (!size.isValid()) {
+    return {};
+  }
+
+  const auto normalized = normalized_crop_rect_for_state(size, state);
+  const auto x = qBound(0, static_cast<int>(qRound(normalized.x() * static_cast<double>(size.width()))), size.width() - 1);
+  const auto y = qBound(0, static_cast<int>(qRound(normalized.y() * static_cast<double>(size.height()))), size.height() - 1);
+  const auto width = qBound(1, static_cast<int>(qRound(normalized.width() * static_cast<double>(size.width()))), size.width() - x);
+  const auto height = qBound(1, static_cast<int>(qRound(normalized.height() * static_cast<double>(size.height()))), size.height() - y);
+  return {x, y, width, height};
+}
+
 bool has_visible_adjustments(const EditState& state) {
   return !qFuzzyIsNull(state.exposure) ||
          !qFuzzyIsNull(state.contrast) ||
@@ -198,9 +366,14 @@ bool has_visible_adjustments(const EditState& state) {
          !qFuzzyIsNull(state.curve_darks) ||
          !qFuzzyIsNull(state.curve_lights) ||
          !qFuzzyIsNull(state.curve_highlights) ||
+         !state.master_curve_points.isEmpty() ||
+         !state.red_curve_points.isEmpty() ||
+         !state.green_curve_points.isEmpty() ||
+         !state.blue_curve_points.isEmpty() ||
          !qFuzzyIsNull(state.hue_adjustment) ||
          !qFuzzyIsNull(state.saturation_adjustment) ||
          !qFuzzyIsNull(state.luminance_adjustment) ||
+         has_explicit_crop_rect(state) ||
          !qFuzzyCompare(state.crop_zoom, 1.0) ||
          state.crop_preset != QStringLiteral("Original") ||
          state.linear_mask_enabled ||
@@ -208,7 +381,16 @@ bool has_visible_adjustments(const EditState& state) {
          !qFuzzyIsNull(state.linear_mask_temperature) ||
          !qFuzzyCompare(state.linear_mask_feather, 0.22) ||
          !qFuzzyCompare(state.linear_mask_position, 0.5) ||
-         !qFuzzyIsNull(state.linear_mask_rotation);
+         !qFuzzyIsNull(state.linear_mask_rotation) ||
+         state.radial_mask_enabled ||
+         !qFuzzyIsNull(state.radial_mask_exposure) ||
+         !qFuzzyIsNull(state.radial_mask_temperature) ||
+         !qFuzzyCompare(state.radial_mask_feather, 0.25) ||
+         !qFuzzyCompare(state.radial_mask_center_x, 0.5) ||
+         !qFuzzyCompare(state.radial_mask_center_y, 0.5) ||
+         !qFuzzyCompare(state.radial_mask_radius_x, 0.25) ||
+         !qFuzzyCompare(state.radial_mask_radius_y, 0.25) ||
+         !qFuzzyIsNull(state.radial_mask_rotation);
 }
 
 bool decode_source_image(const QString& file_path, QImage* image, int max_edge) {
@@ -258,7 +440,7 @@ bool decode_source_image(const QString& file_path, QImage* image, int max_edge) 
 }
 
 QImage apply_crop(const QImage& image, const EditState& state) {
-  return image.copy(crop_rect_for_image(image.size(), state.crop_preset, state.crop_zoom));
+  return image.copy(crop_rect_for_image(image.size(), state));
 }
 
 void apply_color_adjustments(QImage* image, const EditState& state) {
@@ -295,43 +477,28 @@ void apply_color_adjustments(QImage* image, const EditState& state) {
 }
 
 QString cache_path_for_selection(const QString& file_path, const EditState& state, bool edited, bool full_resolution) {
-  const auto fingerprint = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14|%15|%16|%17|%18|%19")
+  const auto fingerprint = QStringLiteral("%1|%2|%3|%4|%5")
                                .arg(file_path)
-                               .arg(QStringLiteral("pipeline-v2"))
+                               .arg(QStringLiteral("pipeline-v3"))
                                .arg(edited ? QStringLiteral("edited") : QStringLiteral("reference"))
                                .arg(full_resolution ? QStringLiteral("full") : QStringLiteral("interactive"))
-                               .arg(state.exposure, 0, 'f', 2)
-                               .arg(state.contrast, 0, 'f', 2)
-                               .arg(state.highlights, 0, 'f', 2)
-                               .arg(state.shadows, 0, 'f', 2)
-                               .arg(state.whites, 0, 'f', 2)
-                               .arg(state.blacks, 0, 'f', 2)
-                               .arg(state.temperature, 0, 'f', 2)
-                               .arg(state.tint, 0, 'f', 2)
-                               .arg(QStringLiteral("%1:%2:%3").arg(state.texture, 0, 'f', 2).arg(state.clarity, 0, 'f', 2).arg(state.dehaze, 0, 'f', 2))
-                               .arg(state.vibrance, 0, 'f', 2)
-                               .arg(state.saturation, 0, 'f', 2)
-                               .arg(QStringLiteral("%1:%2:%3:%4")
-                                        .arg(state.curve_shadows, 0, 'f', 2)
-                                        .arg(state.curve_darks, 0, 'f', 2)
-                                        .arg(state.curve_lights, 0, 'f', 2)
-                                        .arg(state.curve_highlights, 0, 'f', 2))
-                               .arg(QStringLiteral("%1:%2:%3:%4")
-                                        .arg(state.hsl_channel)
-                                        .arg(state.hue_adjustment, 0, 'f', 2)
-                                        .arg(state.saturation_adjustment, 0, 'f', 2)
-                                        .arg(state.luminance_adjustment, 0, 'f', 2))
-                               .arg(QStringLiteral("%1:%2").arg(state.crop_preset).arg(state.crop_zoom, 0, 'f', 2))
-                               .arg(QStringLiteral("%1:%2:%3:%4:%5:%6")
-                                        .arg(state.linear_mask_enabled ? QStringLiteral("on") : QStringLiteral("off"))
-                                        .arg(state.linear_mask_exposure, 0, 'f', 2)
-                                        .arg(state.linear_mask_temperature, 0, 'f', 2)
-                                        .arg(state.linear_mask_feather, 0, 'f', 2)
-                                        .arg(state.linear_mask_position, 0, 'f', 2)
-                                        .arg(state.linear_mask_rotation, 0, 'f', 2));
+                               .arg(serialize_edit_recipe_json(state));
   const auto digest =
       QCryptographicHash::hash(fingerprint.toUtf8(), QCryptographicHash::Sha1).toHex();
   return QDir(preview_cache_root()).filePath(QStringLiteral("%1.jpg").arg(QString::fromLatin1(digest)));
+}
+
+QString cache_path_for_selection(
+    const QString& file_path,
+    const EditState& state,
+    bool edited,
+    bool full_resolution,
+    bool bypass_crop) {
+  return cache_path_for_selection(
+      file_path + (bypass_crop ? QStringLiteral("|crop-editing") : QString()),
+      state,
+      edited,
+      full_resolution);
 }
 
 RenderResult render_preview_request(const RenderRequest& request) {
@@ -347,13 +514,13 @@ RenderResult render_preview_request(const RenderRequest& request) {
 
   QDir().mkpath(preview_cache_root());
 
-  QImage edited_image = apply_crop(source_image, request.state);
+  QImage edited_image = request.bypass_crop ? source_image : apply_crop(source_image, request.state);
   if (has_visible_adjustments(request.state)) {
     apply_color_adjustments(&edited_image, request.state);
   }
 
   const auto output_path =
-      cache_path_for_selection(request.file_path, request.state, true, request.full_resolution);
+      cache_path_for_selection(request.file_path, request.state, true, request.full_resolution, request.bypass_crop);
   QImageWriter writer(output_path, "jpg");
   writer.setQuality(request.jpeg_quality);
   if (!writer.write(edited_image)) {
@@ -364,9 +531,9 @@ RenderResult render_preview_request(const RenderRequest& request) {
   result.preview_source = versioned_file_url(output_path);
 
   if (request.compare_mode) {
-    QImage reference_image = apply_crop(source_image, request.state);
+    QImage reference_image = request.bypass_crop ? source_image : apply_crop(source_image, request.state);
     const auto reference_output_path =
-        cache_path_for_selection(request.file_path, request.state, false, request.full_resolution);
+        cache_path_for_selection(request.file_path, request.state, false, request.full_resolution, request.bypass_crop);
     QImageWriter reference_writer(reference_output_path, "jpg");
     reference_writer.setQuality(request.jpeg_quality);
     if (!reference_writer.write(reference_image)) {
@@ -423,7 +590,14 @@ QString EditorPreviewController::captureDate() const { return capture_date_; }
 QString EditorPreviewController::lensModel() const { return lens_model_; }
 bool EditorPreviewController::hasAsset() const { return !file_path_.isEmpty() || !fallback_thumbnail_source_.isEmpty(); }
 bool EditorPreviewController::processing() const { return processing_; }
+bool EditorPreviewController::canUndo() const {
+  return !asset_id_.isEmpty() && !asset_undo_states_.value(asset_id_).isEmpty();
+}
+bool EditorPreviewController::canRedo() const {
+  return !asset_id_.isEmpty() && !asset_redo_states_.value(asset_id_).isEmpty();
+}
 bool EditorPreviewController::compareMode() const { return compare_mode_; }
+bool EditorPreviewController::cropEditing() const { return crop_editing_; }
 double EditorPreviewController::exposure() const { return exposure_; }
 double EditorPreviewController::contrast() const { return contrast_; }
 double EditorPreviewController::highlights() const { return highlights_; }
@@ -441,10 +615,44 @@ double EditorPreviewController::curveShadows() const { return curve_shadows_; }
 double EditorPreviewController::curveDarks() const { return curve_darks_; }
 double EditorPreviewController::curveLights() const { return curve_lights_; }
 double EditorPreviewController::curveHighlights() const { return curve_highlights_; }
+QString EditorPreviewController::curveChannel() const { return curve_channel_; }
+QVariantList EditorPreviewController::activeCurvePoints() const {
+  const auto normalized_channel = curve_channel_.trimmed().isEmpty() ? QStringLiteral("Master") : curve_channel_;
+  if (normalized_channel == QStringLiteral("Master")) {
+    if (!master_curve_points_.isEmpty()) {
+      return master_curve_points_;
+    }
+    if (!qFuzzyIsNull(curve_shadows_) || !qFuzzyIsNull(curve_darks_) ||
+        !qFuzzyIsNull(curve_lights_) || !qFuzzyIsNull(curve_highlights_)) {
+      return parametric_curve_points(curve_shadows_, curve_darks_, curve_lights_, curve_highlights_);
+    }
+    return default_curve_points();
+  }
+  if (normalized_channel == QStringLiteral("Red")) {
+    return red_curve_points_.isEmpty() ? default_curve_points() : red_curve_points_;
+  }
+  if (normalized_channel == QStringLiteral("Green")) {
+    return green_curve_points_.isEmpty() ? default_curve_points() : green_curve_points_;
+  }
+  return blue_curve_points_.isEmpty() ? default_curve_points() : blue_curve_points_;
+}
 QString EditorPreviewController::hslChannel() const { return hsl_channel_; }
 double EditorPreviewController::hueAdjustment() const { return hue_adjustment_; }
 double EditorPreviewController::saturationAdjustment() const { return saturation_adjustment_; }
 double EditorPreviewController::luminanceAdjustment() const { return luminance_adjustment_; }
+double EditorPreviewController::cropRectX() const {
+  return normalized_crop_rect_for_state(sourceImageSize(), currentState()).x();
+}
+double EditorPreviewController::cropRectY() const {
+  return normalized_crop_rect_for_state(sourceImageSize(), currentState()).y();
+}
+double EditorPreviewController::cropRectWidth() const {
+  return normalized_crop_rect_for_state(sourceImageSize(), currentState()).width();
+}
+double EditorPreviewController::cropRectHeight() const {
+  return normalized_crop_rect_for_state(sourceImageSize(), currentState()).height();
+}
+double EditorPreviewController::cropAspectRatio() const { return crop_aspect_ratio(crop_preset_); }
 double EditorPreviewController::cropZoom() const { return crop_zoom_; }
 QString EditorPreviewController::cropPreset() const { return crop_preset_; }
 bool EditorPreviewController::whiteBalanceSampling() const { return white_balance_sampling_; }
@@ -454,14 +662,48 @@ double EditorPreviewController::linearMaskTemperature() const { return linear_ma
 double EditorPreviewController::linearMaskFeather() const { return linear_mask_feather_; }
 double EditorPreviewController::linearMaskPosition() const { return linear_mask_position_; }
 double EditorPreviewController::linearMaskRotation() const { return linear_mask_rotation_; }
+bool EditorPreviewController::radialMaskEnabled() const { return radial_mask_enabled_; }
+double EditorPreviewController::radialMaskExposure() const { return radial_mask_exposure_; }
+double EditorPreviewController::radialMaskTemperature() const { return radial_mask_temperature_; }
+double EditorPreviewController::radialMaskFeather() const { return radial_mask_feather_; }
+double EditorPreviewController::radialMaskCenterX() const { return radial_mask_center_x_; }
+double EditorPreviewController::radialMaskCenterY() const { return radial_mask_center_y_; }
+double EditorPreviewController::radialMaskRadiusX() const { return radial_mask_radius_x_; }
+double EditorPreviewController::radialMaskRadiusY() const { return radial_mask_radius_y_; }
+double EditorPreviewController::radialMaskRotation() const { return radial_mask_rotation_; }
 
 void EditorPreviewController::setCompareMode(bool compare_mode) {
   if (compare_mode_ == compare_mode) {
     return;
   }
   compare_mode_ = compare_mode;
+  if (compare_mode_ && crop_editing_) {
+    crop_editing_ = false;
+    emit controlsChanged();
+  }
   emit compareModeChanged();
   if (compare_mode_ && hasAsset()) {
+    renderPreview();
+  }
+}
+
+void EditorPreviewController::setCropEditing(bool crop_editing) {
+  if (crop_editing_ == crop_editing) {
+    return;
+  }
+  crop_editing_ = crop_editing;
+  if (crop_editing_) {
+    if (compare_mode_) {
+      compare_mode_ = false;
+      emit compareModeChanged();
+    }
+    if (white_balance_sampling_) {
+      white_balance_sampling_ = false;
+      emit whiteBalanceSamplingChanged();
+    }
+  }
+  emit controlsChanged();
+  if (hasAsset()) {
     renderPreview();
   }
 }
@@ -471,6 +713,7 @@ void EditorPreviewController::setExposure(double exposure) {
   if (qFuzzyCompare(exposure_, exposure)) {
     return;
   }
+  rememberStateForUndo();
   exposure_ = exposure;
   persistCurrentState();
   emit controlsChanged();
@@ -482,6 +725,7 @@ void EditorPreviewController::setContrast(double contrast) {
   if (qFuzzyCompare(contrast_ + 1.0, contrast + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   contrast_ = contrast;
   persistCurrentState();
   emit controlsChanged();
@@ -493,6 +737,7 @@ void EditorPreviewController::setHighlights(double highlights) {
   if (qFuzzyCompare(highlights_ + 1.0, highlights + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   highlights_ = highlights;
   persistCurrentState();
   emit controlsChanged();
@@ -504,6 +749,7 @@ void EditorPreviewController::setShadows(double shadows) {
   if (qFuzzyCompare(shadows_ + 1.0, shadows + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   shadows_ = shadows;
   persistCurrentState();
   emit controlsChanged();
@@ -515,6 +761,7 @@ void EditorPreviewController::setWhites(double whites) {
   if (qFuzzyCompare(whites_ + 1.0, whites + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   whites_ = whites;
   persistCurrentState();
   emit controlsChanged();
@@ -526,6 +773,7 @@ void EditorPreviewController::setBlacks(double blacks) {
   if (qFuzzyCompare(blacks_ + 1.0, blacks + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   blacks_ = blacks;
   persistCurrentState();
   emit controlsChanged();
@@ -537,6 +785,7 @@ void EditorPreviewController::setTemperature(double temperature) {
   if (qFuzzyCompare(temperature_ + 1.0, temperature + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   temperature_ = temperature;
   persistCurrentState();
   emit controlsChanged();
@@ -548,6 +797,7 @@ void EditorPreviewController::setTint(double tint) {
   if (qFuzzyCompare(tint_ + 1.0, tint + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   tint_ = tint;
   persistCurrentState();
   emit controlsChanged();
@@ -559,6 +809,7 @@ void EditorPreviewController::setTexture(double texture) {
   if (qFuzzyCompare(texture_ + 1.0, texture + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   texture_ = texture;
   persistCurrentState();
   emit controlsChanged();
@@ -570,6 +821,7 @@ void EditorPreviewController::setClarity(double clarity) {
   if (qFuzzyCompare(clarity_ + 1.0, clarity + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   clarity_ = clarity;
   persistCurrentState();
   emit controlsChanged();
@@ -581,6 +833,7 @@ void EditorPreviewController::setDehaze(double dehaze) {
   if (qFuzzyCompare(dehaze_ + 1.0, dehaze + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   dehaze_ = dehaze;
   persistCurrentState();
   emit controlsChanged();
@@ -592,6 +845,7 @@ void EditorPreviewController::setVibrance(double vibrance) {
   if (qFuzzyCompare(vibrance_ + 1.0, vibrance + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   vibrance_ = vibrance;
   persistCurrentState();
   emit controlsChanged();
@@ -603,6 +857,7 @@ void EditorPreviewController::setSaturation(double saturation) {
   if (qFuzzyCompare(saturation_ + 1.0, saturation + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   saturation_ = saturation;
   persistCurrentState();
   emit controlsChanged();
@@ -614,7 +869,9 @@ void EditorPreviewController::setCurveShadows(double curve_shadows) {
   if (qFuzzyCompare(curve_shadows_ + 1.0, curve_shadows + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   curve_shadows_ = curve_shadows;
+  master_curve_points_.clear();
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -625,7 +882,9 @@ void EditorPreviewController::setCurveDarks(double curve_darks) {
   if (qFuzzyCompare(curve_darks_ + 1.0, curve_darks + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   curve_darks_ = curve_darks;
+  master_curve_points_.clear();
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -636,7 +895,9 @@ void EditorPreviewController::setCurveLights(double curve_lights) {
   if (qFuzzyCompare(curve_lights_ + 1.0, curve_lights + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   curve_lights_ = curve_lights;
+  master_curve_points_.clear();
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -647,7 +908,48 @@ void EditorPreviewController::setCurveHighlights(double curve_highlights) {
   if (qFuzzyCompare(curve_highlights_ + 1.0, curve_highlights + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   curve_highlights_ = curve_highlights;
+  master_curve_points_.clear();
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setCurveChannel(const QString& curve_channel) {
+  const auto normalized =
+      curve_channel.trimmed().isEmpty() ? QStringLiteral("Master") : curve_channel.trimmed();
+  if (curve_channel_ == normalized) {
+    return;
+  }
+  curve_channel_ = normalized;
+  emit controlsChanged();
+}
+
+void EditorPreviewController::setActiveCurvePoints(const QVariantList& active_curve_points) {
+  const auto normalized_points = normalize_curve_points(active_curve_points);
+  auto* target_points = &blue_curve_points_;
+  if (curve_channel_ == QStringLiteral("Master")) {
+    target_points = &master_curve_points_;
+  } else if (curve_channel_ == QStringLiteral("Red")) {
+    target_points = &red_curve_points_;
+  } else if (curve_channel_ == QStringLiteral("Green")) {
+    target_points = &green_curve_points_;
+  }
+
+  if (*target_points == normalized_points) {
+    return;
+  }
+
+  rememberStateForUndo();
+  *target_points = normalized_points;
+  if (curve_channel_ == QStringLiteral("Master") && !master_curve_points_.isEmpty()) {
+    curve_shadows_ = 0.0;
+    curve_darks_ = 0.0;
+    curve_lights_ = 0.0;
+    curve_highlights_ = 0.0;
+  }
+
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -658,6 +960,7 @@ void EditorPreviewController::setHslChannel(const QString& hsl_channel) {
   if (hsl_channel_ == normalized) {
     return;
   }
+  rememberStateForUndo();
   hsl_channel_ = normalized;
   persistCurrentState();
   emit controlsChanged();
@@ -669,6 +972,7 @@ void EditorPreviewController::setHueAdjustment(double hue_adjustment) {
   if (qFuzzyCompare(hue_adjustment_ + 1.0, hue_adjustment + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   hue_adjustment_ = hue_adjustment;
   persistCurrentState();
   emit controlsChanged();
@@ -680,6 +984,7 @@ void EditorPreviewController::setSaturationAdjustment(double saturation_adjustme
   if (qFuzzyCompare(saturation_adjustment_ + 1.0, saturation_adjustment + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   saturation_adjustment_ = saturation_adjustment;
   persistCurrentState();
   emit controlsChanged();
@@ -691,10 +996,53 @@ void EditorPreviewController::setLuminanceAdjustment(double luminance_adjustment
   if (qFuzzyCompare(luminance_adjustment_ + 1.0, luminance_adjustment + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   luminance_adjustment_ = luminance_adjustment;
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
+}
+
+void EditorPreviewController::updateCropRect(double x, double y, double width, double height) {
+  const auto normalized_width = qBound(0.05, width, 1.0);
+  const auto normalized_height = qBound(0.05, height, 1.0);
+  const auto normalized_x = qBound(0.0, x, 1.0 - normalized_width);
+  const auto normalized_y = qBound(0.0, y, 1.0 - normalized_height);
+
+  if (qFuzzyCompare(crop_rect_x_ + 1.0, normalized_x + 1.0) &&
+      qFuzzyCompare(crop_rect_y_ + 1.0, normalized_y + 1.0) &&
+      qFuzzyCompare(crop_rect_width_ + 1.0, normalized_width + 1.0) &&
+      qFuzzyCompare(crop_rect_height_ + 1.0, normalized_height + 1.0)) {
+    return;
+  }
+
+  rememberStateForUndo();
+  crop_rect_x_ = normalized_x;
+  crop_rect_y_ = normalized_y;
+  crop_rect_width_ = normalized_width;
+  crop_rect_height_ = normalized_height;
+  persistCurrentState();
+  emit controlsChanged();
+  if (!crop_editing_) {
+    renderPreview();
+  }
+}
+
+void EditorPreviewController::resetCropRect() {
+  if (qFuzzyIsNull(crop_rect_width_) && qFuzzyIsNull(crop_rect_height_)) {
+    return;
+  }
+
+  rememberStateForUndo();
+  crop_rect_x_ = 0.0;
+  crop_rect_y_ = 0.0;
+  crop_rect_width_ = 0.0;
+  crop_rect_height_ = 0.0;
+  persistCurrentState();
+  emit controlsChanged();
+  if (!crop_editing_) {
+    renderPreview();
+  }
 }
 
 void EditorPreviewController::setCropZoom(double crop_zoom) {
@@ -702,10 +1050,27 @@ void EditorPreviewController::setCropZoom(double crop_zoom) {
   if (qFuzzyCompare(crop_zoom_, crop_zoom)) {
     return;
   }
+  rememberStateForUndo();
+  const auto previous_zoom = crop_zoom_;
   crop_zoom_ = crop_zoom;
+  const auto size = sourceImageSize();
+  if (size.isValid()) {
+    const auto current_rect = normalized_crop_rect_for_state(size, currentState());
+    const auto center_x = current_rect.x() + current_rect.width() * 0.5;
+    const auto center_y = current_rect.y() + current_rect.height() * 0.5;
+    const auto scale = previous_zoom / crop_zoom_;
+    const auto width = qBound(0.05, current_rect.width() * scale, 1.0);
+    const auto height = qBound(0.05, current_rect.height() * scale, 1.0);
+    crop_rect_width_ = width;
+    crop_rect_height_ = height;
+    crop_rect_x_ = qBound(0.0, center_x - width * 0.5, 1.0 - width);
+    crop_rect_y_ = qBound(0.0, center_y - height * 0.5, 1.0 - height);
+  }
   persistCurrentState();
   emit controlsChanged();
-  renderPreview();
+  if (!crop_editing_) {
+    renderPreview();
+  }
 }
 
 void EditorPreviewController::setCropPreset(const QString& crop_preset) {
@@ -714,16 +1079,48 @@ void EditorPreviewController::setCropPreset(const QString& crop_preset) {
   if (crop_preset_ == normalized) {
     return;
   }
+  rememberStateForUndo();
   crop_preset_ = normalized;
+  const auto size = sourceImageSize();
+  if (size.isValid()) {
+    auto rect = normalized_crop_rect_for_state(size, currentState());
+    const auto aspect_ratio = crop_aspect_ratio(crop_preset_);
+    if (aspect_ratio > 0.0) {
+      const auto center_x = rect.x() + rect.width() * 0.5;
+      const auto center_y = rect.y() + rect.height() * 0.5;
+      auto width = rect.width();
+      auto height = rect.height();
+      const auto current_ratio = width / std::max(1e-6, height);
+      if (current_ratio > aspect_ratio) {
+        width = height * aspect_ratio;
+      } else {
+        height = width / aspect_ratio;
+      }
+      width = qBound(0.05, width, 1.0);
+      height = qBound(0.05, height, 1.0);
+      crop_rect_width_ = width;
+      crop_rect_height_ = height;
+      crop_rect_x_ = qBound(0.0, center_x - width * 0.5, 1.0 - width);
+      crop_rect_y_ = qBound(0.0, center_y - height * 0.5, 1.0 - height);
+    } else {
+      crop_rect_x_ = rect.x();
+      crop_rect_y_ = rect.y();
+      crop_rect_width_ = rect.width();
+      crop_rect_height_ = rect.height();
+    }
+  }
   persistCurrentState();
   emit controlsChanged();
-  renderPreview();
+  if (!crop_editing_) {
+    renderPreview();
+  }
 }
 
 void EditorPreviewController::setLinearMaskEnabled(bool enabled) {
   if (linear_mask_enabled_ == enabled) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_enabled_ = enabled;
   persistCurrentState();
   emit controlsChanged();
@@ -735,6 +1132,7 @@ void EditorPreviewController::setLinearMaskExposure(double local_exposure) {
   if (qFuzzyCompare(linear_mask_exposure_, local_exposure)) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_exposure_ = local_exposure;
   persistCurrentState();
   emit controlsChanged();
@@ -746,6 +1144,7 @@ void EditorPreviewController::setLinearMaskTemperature(double local_temperature)
   if (qFuzzyCompare(linear_mask_temperature_ + 1.0, local_temperature + 1.0)) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_temperature_ = local_temperature;
   persistCurrentState();
   emit controlsChanged();
@@ -757,6 +1156,7 @@ void EditorPreviewController::setLinearMaskFeather(double local_feather) {
   if (qFuzzyCompare(linear_mask_feather_, local_feather)) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_feather_ = local_feather;
   persistCurrentState();
   emit controlsChanged();
@@ -768,6 +1168,7 @@ void EditorPreviewController::setLinearMaskPosition(double local_position) {
   if (qFuzzyCompare(linear_mask_position_, local_position)) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_position_ = local_position;
   persistCurrentState();
   emit controlsChanged();
@@ -779,7 +1180,115 @@ void EditorPreviewController::setLinearMaskRotation(double local_rotation) {
   if (qFuzzyCompare(linear_mask_rotation_ + 360.0, local_rotation + 360.0)) {
     return;
   }
+  rememberStateForUndo();
   linear_mask_rotation_ = local_rotation;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskEnabled(bool enabled) {
+  if (radial_mask_enabled_ == enabled) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_enabled_ = enabled;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskExposure(double local_exposure) {
+  local_exposure = qBound(-2.0, local_exposure, 2.0);
+  if (qFuzzyCompare(radial_mask_exposure_, local_exposure)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_exposure_ = local_exposure;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskTemperature(double local_temperature) {
+  local_temperature = clamp_signed_percent(local_temperature);
+  if (qFuzzyCompare(radial_mask_temperature_ + 1.0, local_temperature + 1.0)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_temperature_ = local_temperature;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskFeather(double local_feather) {
+  local_feather = qBound(0.05, local_feather, 1.0);
+  if (qFuzzyCompare(radial_mask_feather_, local_feather)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_feather_ = local_feather;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskCenterX(double center_x) {
+  center_x = qBound(0.0, center_x, 1.0);
+  if (qFuzzyCompare(radial_mask_center_x_, center_x)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_center_x_ = center_x;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskCenterY(double center_y) {
+  center_y = qBound(0.0, center_y, 1.0);
+  if (qFuzzyCompare(radial_mask_center_y_, center_y)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_center_y_ = center_y;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskRadiusX(double radius_x) {
+  radius_x = qBound(0.05, radius_x, 1.0);
+  if (qFuzzyCompare(radial_mask_radius_x_, radius_x)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_radius_x_ = radius_x;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskRadiusY(double radius_y) {
+  radius_y = qBound(0.05, radius_y, 1.0);
+  if (qFuzzyCompare(radial_mask_radius_y_, radius_y)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_radius_y_ = radius_y;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setRadialMaskRotation(double local_rotation) {
+  local_rotation = qBound(-180.0, local_rotation, 180.0);
+  if (qFuzzyCompare(radial_mask_rotation_ + 360.0, local_rotation + 360.0)) {
+    return;
+  }
+  rememberStateForUndo();
+  radial_mask_rotation_ = local_rotation;
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -811,7 +1320,40 @@ void EditorPreviewController::loadAsset(
   renderPreview();
 }
 
+void EditorPreviewController::undo() {
+  if (!canUndo()) {
+    return;
+  }
+
+  auto& undo_stack = undoStackForAsset(asset_id_);
+  const auto previous_state = undo_stack.takeLast();
+  auto& redo_stack = redoStackForAsset(asset_id_);
+  const auto current_state = currentState();
+  if (redo_stack.isEmpty() || !edit_states_equal(redo_stack.back(), current_state)) {
+    redo_stack.push_back(current_state);
+    if (redo_stack.size() > kMaxEditHistoryDepth) {
+      redo_stack.removeFirst();
+    }
+  }
+  applyHistoryState(previous_state);
+}
+
+void EditorPreviewController::redo() {
+  if (!canRedo()) {
+    return;
+  }
+
+  auto& redo_stack = redoStackForAsset(asset_id_);
+  const auto next_state = redo_stack.takeLast();
+  pushUndoState(currentState());
+  applyHistoryState(next_state);
+}
+
 void EditorPreviewController::resetAdjustments() {
+  if (edit_states_equal(currentState(), EditState{})) {
+    return;
+  }
+  rememberStateForUndo();
   exposure_ = 0.0;
   contrast_ = 0.0;
   highlights_ = 0.0;
@@ -829,12 +1371,36 @@ void EditorPreviewController::resetAdjustments() {
   curve_darks_ = 0.0;
   curve_lights_ = 0.0;
   curve_highlights_ = 0.0;
+  curve_channel_ = QStringLiteral("Master");
+  master_curve_points_.clear();
+  red_curve_points_.clear();
+  green_curve_points_.clear();
+  blue_curve_points_.clear();
   hsl_channel_ = QStringLiteral("Reds");
   hue_adjustment_ = 0.0;
   saturation_adjustment_ = 0.0;
   luminance_adjustment_ = 0.0;
+  crop_rect_x_ = 0.0;
+  crop_rect_y_ = 0.0;
+  crop_rect_width_ = 0.0;
+  crop_rect_height_ = 0.0;
   crop_zoom_ = 1.0;
   crop_preset_ = QStringLiteral("Original");
+  linear_mask_enabled_ = false;
+  linear_mask_exposure_ = 0.0;
+  linear_mask_temperature_ = 0.0;
+  linear_mask_feather_ = 0.22;
+  linear_mask_position_ = 0.5;
+  linear_mask_rotation_ = 0.0;
+  radial_mask_enabled_ = false;
+  radial_mask_exposure_ = 0.0;
+  radial_mask_temperature_ = 0.0;
+  radial_mask_feather_ = 0.25;
+  radial_mask_center_x_ = 0.5;
+  radial_mask_center_y_ = 0.5;
+  radial_mask_radius_x_ = 0.25;
+  radial_mask_radius_y_ = 0.25;
+  radial_mask_rotation_ = 0.0;
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -843,6 +1409,10 @@ void EditorPreviewController::resetAdjustments() {
 void EditorPreviewController::setWhiteBalanceSampling(bool enabled) {
   if (white_balance_sampling_ == enabled) {
     return;
+  }
+  if (enabled && crop_editing_) {
+    crop_editing_ = false;
+    emit controlsChanged();
   }
   white_balance_sampling_ = enabled;
   emit whiteBalanceSamplingChanged();
@@ -1025,6 +1595,7 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
       .fallback_thumbnail_source = fallback_thumbnail_source_,
       .state = currentState(),
       .compare_mode = compare_mode_,
+      .bypass_crop = crop_editing_,
       .full_resolution = full_resolution,
       .max_edge = full_resolution ? 0 : kInteractivePreviewEdge,
       .jpeg_quality = full_resolution ? 90 : 78,
@@ -1066,7 +1637,59 @@ void EditorPreviewController::setProcessing(bool processing) {
 }
 
 QString EditorPreviewController::cachePathForSelection(bool edited, bool full_resolution) const {
-  return cache_path_for_selection(file_path_, currentState(), edited, full_resolution);
+  return cache_path_for_selection(file_path_, currentState(), edited, full_resolution, crop_editing_);
+}
+
+QVector<EditState>& EditorPreviewController::undoStackForAsset(const QString& asset_id) {
+  return asset_undo_states_[asset_id];
+}
+
+QVector<EditState>& EditorPreviewController::redoStackForAsset(const QString& asset_id) {
+  return asset_redo_states_[asset_id];
+}
+
+void EditorPreviewController::pushUndoState(const EditState& state) {
+  if (asset_id_.isEmpty()) {
+    return;
+  }
+
+  auto& undo_stack = undoStackForAsset(asset_id_);
+  if (!undo_stack.isEmpty() && edit_states_equal(undo_stack.back(), state)) {
+    return;
+  }
+
+  undo_stack.push_back(state);
+  if (undo_stack.size() > kMaxEditHistoryDepth) {
+    undo_stack.removeFirst();
+  }
+}
+
+void EditorPreviewController::rememberStateForUndo() {
+  if (asset_id_.isEmpty() || applying_history_state_) {
+    return;
+  }
+
+  pushUndoState(currentState());
+  redoStackForAsset(asset_id_).clear();
+  emit historyChanged();
+}
+
+void EditorPreviewController::clearHistoryForAsset(const QString& asset_id) {
+  if (asset_id.isEmpty()) {
+    return;
+  }
+
+  asset_undo_states_.remove(asset_id);
+  asset_redo_states_.remove(asset_id);
+}
+
+void EditorPreviewController::applyHistoryState(const EditState& state) {
+  applying_history_state_ = true;
+  applyState(state);
+  persistCurrentState();
+  applying_history_state_ = false;
+  emit historyChanged();
+  renderPreview();
 }
 
 void EditorPreviewController::persistCurrentState() {
@@ -1080,15 +1703,19 @@ void EditorPreviewController::persistCurrentState() {
 void EditorPreviewController::restoreStateForAsset(const QString& asset_id, const QString& recipe_json) {
   if (asset_id.isEmpty()) {
     applyState(EditState{});
+    emit historyChanged();
     return;
   }
 
   if (asset_states_.contains(asset_id)) {
     applyState(asset_states_.value(asset_id));
+    emit historyChanged();
     return;
   }
 
+  clearHistoryForAsset(asset_id);
   applyState(stateFromRecipeJson(recipe_json));
+  emit historyChanged();
 }
 
 void EditorPreviewController::applyState(const EditState& state) {
@@ -1109,10 +1736,18 @@ void EditorPreviewController::applyState(const EditState& state) {
   curve_darks_ = state.curve_darks;
   curve_lights_ = state.curve_lights;
   curve_highlights_ = state.curve_highlights;
+  master_curve_points_ = state.master_curve_points;
+  red_curve_points_ = state.red_curve_points;
+  green_curve_points_ = state.green_curve_points;
+  blue_curve_points_ = state.blue_curve_points;
   hsl_channel_ = state.hsl_channel;
   hue_adjustment_ = state.hue_adjustment;
   saturation_adjustment_ = state.saturation_adjustment;
   luminance_adjustment_ = state.luminance_adjustment;
+  crop_rect_x_ = state.crop_rect_x;
+  crop_rect_y_ = state.crop_rect_y;
+  crop_rect_width_ = state.crop_rect_width;
+  crop_rect_height_ = state.crop_rect_height;
   crop_zoom_ = state.crop_zoom;
   crop_preset_ = state.crop_preset;
   linear_mask_enabled_ = state.linear_mask_enabled;
@@ -1121,6 +1756,15 @@ void EditorPreviewController::applyState(const EditState& state) {
   linear_mask_feather_ = state.linear_mask_feather;
   linear_mask_position_ = state.linear_mask_position;
   linear_mask_rotation_ = state.linear_mask_rotation;
+  radial_mask_enabled_ = state.radial_mask_enabled;
+  radial_mask_exposure_ = state.radial_mask_exposure;
+  radial_mask_temperature_ = state.radial_mask_temperature;
+  radial_mask_feather_ = state.radial_mask_feather;
+  radial_mask_center_x_ = state.radial_mask_center_x;
+  radial_mask_center_y_ = state.radial_mask_center_y;
+  radial_mask_radius_x_ = state.radial_mask_radius_x;
+  radial_mask_radius_y_ = state.radial_mask_radius_y;
+  radial_mask_rotation_ = state.radial_mask_rotation;
   emit controlsChanged();
 }
 
@@ -1143,10 +1787,18 @@ EditState EditorPreviewController::currentState() const {
       .curve_darks = curve_darks_,
       .curve_lights = curve_lights_,
       .curve_highlights = curve_highlights_,
+      .master_curve_points = master_curve_points_,
+      .red_curve_points = red_curve_points_,
+      .green_curve_points = green_curve_points_,
+      .blue_curve_points = blue_curve_points_,
       .hsl_channel = hsl_channel_,
       .hue_adjustment = hue_adjustment_,
       .saturation_adjustment = saturation_adjustment_,
       .luminance_adjustment = luminance_adjustment_,
+      .crop_rect_x = crop_rect_x_,
+      .crop_rect_y = crop_rect_y_,
+      .crop_rect_width = crop_rect_width_,
+      .crop_rect_height = crop_rect_height_,
       .crop_zoom = crop_zoom_,
       .crop_preset = crop_preset_,
       .linear_mask_enabled = linear_mask_enabled_,
@@ -1155,86 +1807,24 @@ EditState EditorPreviewController::currentState() const {
       .linear_mask_feather = linear_mask_feather_,
       .linear_mask_position = linear_mask_position_,
       .linear_mask_rotation = linear_mask_rotation_,
+      .radial_mask_enabled = radial_mask_enabled_,
+      .radial_mask_exposure = radial_mask_exposure_,
+      .radial_mask_temperature = radial_mask_temperature_,
+      .radial_mask_feather = radial_mask_feather_,
+      .radial_mask_center_x = radial_mask_center_x_,
+      .radial_mask_center_y = radial_mask_center_y_,
+      .radial_mask_radius_x = radial_mask_radius_x_,
+      .radial_mask_radius_y = radial_mask_radius_y_,
+      .radial_mask_rotation = radial_mask_rotation_,
   };
 }
 
 EditState EditorPreviewController::stateFromRecipeJson(const QString& recipe_json) const {
-  if (recipe_json.trimmed().isEmpty()) {
-    return EditState{};
-  }
-
-  const auto json_document = QJsonDocument::fromJson(recipe_json.toUtf8());
-  if (!json_document.isObject()) {
-    return EditState{};
-  }
-
-  const auto object = json_document.object();
-  EditState state;
-  state.exposure = object.value(QStringLiteral("exposure")).toDouble();
-  state.contrast = object.value(QStringLiteral("contrast")).toDouble();
-  state.highlights = object.value(QStringLiteral("highlights")).toDouble();
-  state.shadows = object.value(QStringLiteral("shadows")).toDouble();
-  state.whites = object.value(QStringLiteral("whites")).toDouble();
-  state.blacks = object.value(QStringLiteral("blacks")).toDouble();
-  state.temperature = object.value(QStringLiteral("temperature")).toDouble();
-  state.tint = object.value(QStringLiteral("tint")).toDouble();
-  state.texture = object.value(QStringLiteral("texture")).toDouble();
-  state.clarity = object.value(QStringLiteral("clarity")).toDouble();
-  state.dehaze = object.value(QStringLiteral("dehaze")).toDouble();
-  state.vibrance = object.value(QStringLiteral("vibrance")).toDouble();
-  state.saturation = object.value(QStringLiteral("saturation")).toDouble();
-  state.curve_shadows = object.value(QStringLiteral("curveShadows")).toDouble();
-  state.curve_darks = object.value(QStringLiteral("curveDarks")).toDouble();
-  state.curve_lights = object.value(QStringLiteral("curveLights")).toDouble();
-  state.curve_highlights = object.value(QStringLiteral("curveHighlights")).toDouble();
-  state.hsl_channel = object.value(QStringLiteral("hslChannel")).toString(QStringLiteral("Reds"));
-  state.hue_adjustment = object.value(QStringLiteral("hueAdjustment")).toDouble();
-  state.saturation_adjustment = object.value(QStringLiteral("saturationAdjustment")).toDouble();
-  state.luminance_adjustment = object.value(QStringLiteral("luminanceAdjustment")).toDouble();
-  state.crop_zoom = object.value(QStringLiteral("cropZoom")).toDouble(1.0);
-  state.crop_preset = object.value(QStringLiteral("cropPreset")).toString(QStringLiteral("Original"));
-  state.linear_mask_enabled = object.value(QStringLiteral("linearMaskEnabled")).toBool(false);
-  state.linear_mask_exposure = object.value(QStringLiteral("linearMaskExposure")).toDouble();
-  state.linear_mask_temperature = object.value(QStringLiteral("linearMaskTemperature")).toDouble();
-  state.linear_mask_feather = object.value(QStringLiteral("linearMaskFeather")).toDouble(0.22);
-  state.linear_mask_position = object.value(QStringLiteral("linearMaskPosition")).toDouble(0.5);
-  state.linear_mask_rotation = object.value(QStringLiteral("linearMaskRotation")).toDouble();
-  return state;
+  return parse_edit_recipe_json(recipe_json);
 }
 
 QString EditorPreviewController::recipeJsonForState(const EditState& state) const {
-  QJsonObject object;
-  object.insert(QStringLiteral("recipeVersion"), 2);
-  object.insert(QStringLiteral("exposure"), state.exposure);
-  object.insert(QStringLiteral("contrast"), state.contrast);
-  object.insert(QStringLiteral("highlights"), state.highlights);
-  object.insert(QStringLiteral("shadows"), state.shadows);
-  object.insert(QStringLiteral("whites"), state.whites);
-  object.insert(QStringLiteral("blacks"), state.blacks);
-  object.insert(QStringLiteral("temperature"), state.temperature);
-  object.insert(QStringLiteral("tint"), state.tint);
-  object.insert(QStringLiteral("texture"), state.texture);
-  object.insert(QStringLiteral("clarity"), state.clarity);
-  object.insert(QStringLiteral("dehaze"), state.dehaze);
-  object.insert(QStringLiteral("vibrance"), state.vibrance);
-  object.insert(QStringLiteral("saturation"), state.saturation);
-  object.insert(QStringLiteral("curveShadows"), state.curve_shadows);
-  object.insert(QStringLiteral("curveDarks"), state.curve_darks);
-  object.insert(QStringLiteral("curveLights"), state.curve_lights);
-  object.insert(QStringLiteral("curveHighlights"), state.curve_highlights);
-  object.insert(QStringLiteral("hslChannel"), state.hsl_channel);
-  object.insert(QStringLiteral("hueAdjustment"), state.hue_adjustment);
-  object.insert(QStringLiteral("saturationAdjustment"), state.saturation_adjustment);
-  object.insert(QStringLiteral("luminanceAdjustment"), state.luminance_adjustment);
-  object.insert(QStringLiteral("cropZoom"), state.crop_zoom);
-  object.insert(QStringLiteral("cropPreset"), state.crop_preset);
-  object.insert(QStringLiteral("linearMaskEnabled"), state.linear_mask_enabled);
-  object.insert(QStringLiteral("linearMaskExposure"), state.linear_mask_exposure);
-  object.insert(QStringLiteral("linearMaskTemperature"), state.linear_mask_temperature);
-  object.insert(QStringLiteral("linearMaskFeather"), state.linear_mask_feather);
-  object.insert(QStringLiteral("linearMaskPosition"), state.linear_mask_position);
-  object.insert(QStringLiteral("linearMaskRotation"), state.linear_mask_rotation);
-  return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+  return serialize_edit_recipe_json(state);
 }
 
 void EditorPreviewController::flushPersistedState() {
@@ -1248,6 +1838,15 @@ void EditorPreviewController::flushPersistedState() {
   }
 
   const auto recipe_json = recipeJsonForState(currentState());
+  persist_process_.setWorkingDirectory(QDir::currentPath());
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    setStatus(environment_error.isEmpty() ? QStringLiteral("Edit recipe save is unavailable.") : environment_error);
+    refreshDebugInfo();
+    return;
+  }
+  persist_process_.setProcessEnvironment(environment);
   persist_process_.start(saveRecipeProgram(), saveRecipeArguments(asset_id_, recipe_json));
 }
 
@@ -1257,6 +1856,19 @@ bool EditorPreviewController::hasVisibleAdjustments() const {
 
 bool EditorPreviewController::decodeSourceImage(QImage* image, int max_edge) const {
   return decode_source_image(file_path_, image, max_edge);
+}
+
+QSize EditorPreviewController::sourceImageSize() const {
+  if (!preview_supported(file_path_)) {
+    return {};
+  }
+
+  QImageReader reader(file_path_);
+  if (!reader.canRead()) {
+    return {};
+  }
+
+  return reader.size();
 }
 
 QImage EditorPreviewController::applyCrop(const QImage& image) const {

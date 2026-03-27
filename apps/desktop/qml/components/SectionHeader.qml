@@ -16,15 +16,15 @@ Item {
     ColumnLayout {
         id: columnLayout
         anchors.fill: parent
-        spacing: 5
+        spacing: theme.space4
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: theme.gapDense + 1
 
             Rectangle {
-                Layout.preferredWidth: 26
-                Layout.preferredHeight: 3
+                Layout.preferredWidth: 18
+                Layout.preferredHeight: 2
                 radius: 2
                 color: root.accent
             }
@@ -33,7 +33,7 @@ Item {
                 text: root.title
                 color: theme.textStrong
                 font.family: theme.fontDisplay
-                font.pixelSize: 18
+                font.pixelSize: 16
                 font.weight: Font.DemiBold
             }
 
@@ -45,7 +45,7 @@ Item {
             text: root.subtitle
             color: theme.textMuted
             font.family: theme.fontUi
-            font.pixelSize: 12
+            font.pixelSize: 11
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }

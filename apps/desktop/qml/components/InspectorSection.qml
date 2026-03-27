@@ -14,17 +14,17 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: sectionLayout.implicitHeight + 18
-    radius: theme.radius8
-    color: theme.alpha(theme.ink800, 0.88)
+    implicitHeight: sectionLayout.implicitHeight + theme.space18
+    radius: theme.radiusPanel
+    color: theme.alpha(theme.ink800, 0.9)
     border.width: 1
     border.color: expanded ? theme.alpha(theme.lineSoft, 0.32) : theme.alpha(theme.lineSoft, 0.2)
 
     ColumnLayout {
         id: sectionLayout
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 10
+        anchors.margins: theme.sectionPadding
+        spacing: theme.gapPanel
 
         Item {
             Layout.fillWidth: true
@@ -40,11 +40,11 @@ Rectangle {
             ColumnLayout {
                 id: headerLayout
                 anchors.fill: parent
-                spacing: 3
+                spacing: theme.space4
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: theme.gapControl
 
                     Rectangle {
                         Layout.preferredWidth: 18
@@ -66,12 +66,13 @@ Rectangle {
                         Layout.fillWidth: true
                     }
 
-                    Label {
+                    AppIcon {
                         visible: root.expandable
-                        text: root.expanded ? "˅" : ">"
+                        name: "chevron-right"
+                        rotation: root.expanded ? 90 : 0
                         color: theme.textFaint
-                        font.family: theme.fontMono
-                        font.pixelSize: 12
+                        Layout.preferredWidth: 10
+                        Layout.preferredHeight: 10
                     }
                 }
 
@@ -93,7 +94,7 @@ Rectangle {
             id: body
             visible: !root.expandable || root.expanded
             Layout.fillWidth: true
-            spacing: 8
+            spacing: theme.gapControl
         }
     }
 }

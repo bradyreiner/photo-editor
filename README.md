@@ -5,9 +5,16 @@ Native desktop photo editor scaffold for a Lightroom-class product:
 - `Qt 6 + QML` desktop UI
 - `C++20` image engine
 - `Rust` catalog, metadata, and workflow services
-- `SQLite` local-first catalog design
+- `PostgreSQL` local-first catalog service scaffold
 - managed and referenced libraries
 - multi-drive aware asset tracking
+
+Current production direction in code:
+
+- `PostgreSQL`-backed catalog service for development and early product packaging
+- Git-tracked SQL migrations in `rust/crates/catalog/migrations`
+- app-owned runtime directories for logs, backups, and local support files
+- app-managed local Postgres bootstrap when `PHOTO_EDITOR_DATABASE_URL` is not provided
 
 ## Repo layout
 
@@ -32,6 +39,8 @@ ctest --preset test-ci-headless
 
 Desktop configure expects Qt 6 development packages to be installed.
 
+The headless preset now skips Qt-dependent desktop tests so it can run in Linux CI and Docker without a Qt toolchain.
+
 ## Run Natively
 
 Install the macOS host dependencies first:
@@ -46,13 +55,19 @@ Then run the app with:
 ./scripts/run-native.sh
 ```
 
-That script now builds the Rust catalog binaries first so the desktop app can read live catalog snapshots without spawning a fresh `cargo run` on every refresh.
+That script now:
+
+- builds the Rust catalog binaries first
+- prepares app runtime directories
+- starts a local managed catalog database when no external DB URL is configured
+- otherwise runs migrations against the configured database
+- launches the desktop app
 
 You can also double-click [PhotoEditor.command](/Users/bradyreiner/projects/PersonalProjects/photo-editor/PhotoEditor.command) in Finder to build and launch the app in Terminal.
 
 ## PostgreSQL
 
-Start the local product-style database:
+For external development databases, start PostgreSQL yourself:
 
 ```sh
 docker compose up -d postgres
@@ -65,6 +80,26 @@ postgresql://photo_editor:photo_editor@localhost:5433/photo_editor
 ```
 
 You can copy [.env.example](/Users/bradyreiner/projects/PersonalProjects/photo-editor/.env.example) into your own environment when the catalog service is wired up.
+
+If `PHOTO_EDITOR_DATABASE_URL` is not set, the desktop app now defaults to a managed local Postgres instance under the app data directory. That path requires Postgres command-line tools (`initdb`, `pg_ctl`) to be available on `PATH` or exposed through `PHOTO_EDITOR_POSTGRES_BIN_DIR`.
+
+Schema changes are versioned in Git as `sqlx` migration files under [rust/crates/catalog/migrations](/Users/bradyreiner/projects/PersonalProjects/photo-editor/rust/crates/catalog/migrations).
+
+To apply migrations manually:
+
+```sh
+cd rust
+cargo run -p photo-catalog --bin catalog_migrate
+```
+
+To inspect or manage the local bundled-style catalog service:
+
+```sh
+cd rust
+cargo run -p photo-catalog --bin catalog_local_db -- status
+cargo run -p photo-catalog --bin catalog_local_db -- ensure-running
+cargo run -p photo-catalog --bin catalog_local_db -- stop
+```
 
 ## Import a folder into PostgreSQL
 
@@ -99,6 +134,18 @@ docker compose build desktop-dev
 ```
 
 Docker is intended for reproducible development and CI. Native macOS and Windows product builds still need platform-native pipelines for packaging, signing, and QA.
+
+## Release Engineering
+
+Repository automation now lives under `.github/workflows`:
+
+- `ci.yml`: Linux headless build and test validation
+- `security.yml`: Rust dependency audit plus secret scanning
+- `release.yml`: tagged or manual native build packaging for macOS and Windows
+
+These workflows provide the release backbone, but code signing, notarization, Sparkle appcasts, and Windows App Installer/MSIX publishing still require your real certificates and hosting configuration.
+
+For the full step-by-step shipping process, see [docs/shipping-guide.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/shipping-guide.md).
 
 To open an interactive shell in the container:
 

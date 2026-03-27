@@ -13,6 +13,11 @@ struct ColorPixel final {
   double alpha = 1.0;
 };
 
+struct CurvePoint final {
+  double x = 0.0;
+  double y = 0.0;
+};
+
 struct ColorAdjustmentState final {
   double exposure = 0.0;
   double contrast = 0.0;
@@ -31,6 +36,10 @@ struct ColorAdjustmentState final {
   double curve_darks = 0.0;
   double curve_lights = 0.0;
   double curve_highlights = 0.0;
+  std::vector<CurvePoint> master_curve_points;
+  std::vector<CurvePoint> red_curve_points;
+  std::vector<CurvePoint> green_curve_points;
+  std::vector<CurvePoint> blue_curve_points;
   std::string color_mixer_channel = "Reds";
   double hue_adjustment = 0.0;
   double saturation_adjustment = 0.0;
@@ -41,6 +50,15 @@ struct ColorAdjustmentState final {
   double linear_mask_feather = 0.22;
   double linear_mask_position = 0.5;
   double linear_mask_rotation = 0.0;
+  bool radial_mask_enabled = false;
+  double radial_mask_exposure = 0.0;
+  double radial_mask_temperature = 0.0;
+  double radial_mask_feather = 0.25;
+  double radial_mask_center_x = 0.5;
+  double radial_mask_center_y = 0.5;
+  double radial_mask_radius_x = 0.25;
+  double radial_mask_radius_y = 0.25;
+  double radial_mask_rotation = 0.0;
 };
 
 [[nodiscard]] double clamp_signed_percent(double value);
