@@ -1,33 +1,35 @@
 import QtQuick
 
 QtObject {
-    readonly property string fontDisplay: "Avenir Next Condensed"
-    readonly property string fontUi: "Avenir Next"
+    property bool darkMode: typeof appShell !== "undefined" ? appShell.darkMode : true
+
+    readonly property string fontDisplay: Qt.platform.os === "osx" ? "Helvetica Neue" : "Noto Sans"
+    readonly property string fontUi: Qt.platform.os === "osx" ? "Helvetica Neue" : "Noto Sans"
     readonly property string fontMono: "Menlo"
 
-    readonly property color ink950: "#0c0c0d"
-    readonly property color ink900: "#111214"
-    readonly property color ink850: "#161719"
-    readonly property color ink800: "#1c1d20"
-    readonly property color ink750: "#232427"
-    readonly property color ink700: "#2d2f33"
-    readonly property color lineStrong: "#38342f"
-    readonly property color lineSoft: "#252320"
+    readonly property color ink950: darkMode ? "#0c0c0d" : "#ffffff"
+    readonly property color ink900: darkMode ? "#111214" : "#f7f6f4"
+    readonly property color ink850: darkMode ? "#161719" : "#efede8"
+    readonly property color ink800: darkMode ? "#1c1d20" : "#e5e2dc"
+    readonly property color ink750: darkMode ? "#232427" : "#dad6cf"
+    readonly property color ink700: darkMode ? "#2d2f33" : "#cecac2"
+    readonly property color lineStrong: darkMode ? "#38342f" : "#c4bfb6"
+    readonly property color lineSoft: darkMode ? "#252320" : "#d8d4cc"
 
-    readonly property color textStrong: "#efede8"
-    readonly property color textMain: "#d8d2ca"
-    readonly property color textMuted: "#9f968b"
-    readonly property color textFaint: "#746c62"
+    readonly property color textStrong: darkMode ? "#efede8" : "#1a1917"
+    readonly property color textMain: darkMode ? "#d8d2ca" : "#33302b"
+    readonly property color textMuted: darkMode ? "#9f968b" : "#706960"
+    readonly property color textFaint: darkMode ? "#746c62" : "#9f968b"
 
     readonly property color accentWarm500: "#b57a60"
     readonly property color accentWarm400: "#c89078"
     readonly property color accentWarm300: "#dfb8a8"
-    readonly property color accentWarmFill: "#2f221d"
+    readonly property color accentWarmFill: darkMode ? "#2f221d" : "#f5ebe6"
 
     readonly property color accentCool500: "#829888"
     readonly property color accentCool400: "#9cae9f"
     readonly property color accentCool300: "#c2cfc4"
-    readonly property color accentCoolFill: "#1b2520"
+    readonly property color accentCoolFill: darkMode ? "#1b2520" : "#e8f0ea"
 
     readonly property color success: "#7fa87c"
     readonly property color warning: "#b98f54"

@@ -253,7 +253,7 @@ Dialog {
 
     function pageSubtitle(index) {
         if (index === 0)
-            return "Tune launch behavior and default workspace routing."
+            return "Tune launch behavior, preview acceleration, and default workspace routing."
         if (index === 1)
             return "Set timeline defaults and restore workspace controls."
         return "Review the folders PhotoEditor uses for application data, cache, logs, and backups."
@@ -313,7 +313,7 @@ Dialog {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Launch behavior, editing defaults, and runtime folders."
+                        text: "Launch behavior, preview acceleration, editing defaults, and runtime folders."
                         color: theme.textMuted
                         font.family: theme.fontUi
                         font.pixelSize: 12
@@ -487,6 +487,20 @@ Dialog {
                             spacing: theme.space16
 
                             PreferenceSection {
+                                title: "Appearance"
+                                subtitle: "Control the visual appearance of the application."
+
+                                PreferenceToggleRow {
+                                    title: "Dark Mode"
+                                    description: "When disabled, the interface switches to a light color scheme."
+                                    checked: appShell.darkMode
+                                    onToggled: function(checked) {
+                                        appShell.darkMode = checked
+                                    }
+                                }
+                            }
+
+                            PreferenceSection {
                                 title: "Launch Behavior"
                                 subtitle: "Choose where the app lands when it opens and whether it should resume your last workspace."
 
@@ -512,6 +526,93 @@ Dialog {
                                     checked: appShell.reopenLastWorkspace
                                     onToggled: function(checked) {
                                         appShell.reopenLastWorkspace = checked
+                                    }
+                                }
+                            }
+
+                            PreferenceSection {
+                                title: "Preview Backend"
+                                subtitle: "Choose how PhotoEditor handles interactive preview acceleration. CPU fallback always remains available."
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Preview Backend Preference"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                }
+
+                                ToneComboBox {
+                                    Layout.fillWidth: true
+                                    model: previewBackend.backendPreferenceOptions
+                                    currentIndex: Math.max(0, model.indexOf(previewBackend.preferredBackend))
+                                    onActivated: previewBackend.preferredBackend = currentText
+                                }
+
+                                Rectangle {
+                                    Layout.fillWidth: true
+                                    radius: theme.radiusControl
+                                    color: theme.alpha(theme.ink900, 0.82)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.8)
+                                    implicitHeight: backendStatusBody.implicitHeight + theme.space12 * 2
+
+                                    ColumnLayout {
+                                        id: backendStatusBody
+                                        anchors.fill: parent
+                                        anchors.margins: theme.space12
+                                        spacing: theme.space6
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Active: " + previewBackend.activeBackend
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 13
+                                            font.weight: Font.DemiBold
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: previewBackend.backendSummary
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Metal available: " + (previewBackend.metalAvailable ? "Yes" : "No")
+                                                  + "  •  CUDA available: " + (previewBackend.cudaAvailable ? "Yes" : "No")
+                                            color: theme.textFaint
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space10
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: previewBackend.fallbackReason.length > 0
+                                              ? previewBackend.fallbackReason
+                                              : "Auto prefers Metal on Apple Silicon and CUDA on supported Windows NVIDIA systems."
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    ActionButton {
+                                        text: "Refresh"
+                                        compact: true
+                                        onClicked: previewBackend.refresh()
                                     }
                                 }
                             }

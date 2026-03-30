@@ -31,6 +31,7 @@ class ExportJobController final : public QObject {
       const QString& display_label,
       const QString& source_path,
       const QString& edited_preview_source,
+      const QString& recipe_json,
       const QString& preset,
       const QString& destination_directory);
   Q_INVOKABLE void retryJob(const QString& job_id);
@@ -50,6 +51,7 @@ class ExportJobController final : public QObject {
     QString display_label;
     QString source_path;
     QString edited_preview_source;
+    QString recipe_json;
     QString preset;
     QString destination_directory;
     QString output_path;
@@ -66,7 +68,7 @@ class ExportJobController final : public QObject {
   [[nodiscard]] QString outputFilePathForJob(
       const ExportJob& job,
       const QString& source_path,
-      bool uses_preview) const;
+      bool rendered_output) const;
   void processNextQueuedJob();
   void finishJob(int index, const QString& output_path);
   void failJob(int index, const QString& error_message);

@@ -6,8 +6,10 @@ option(PHOTO_EDITOR_BUILD_DESKTOP "Build the Qt/QML desktop application." ON)
 option(PHOTO_EDITOR_ENABLE_RUST "Enable Rust workspace integration targets." ON)
 option(PHOTO_EDITOR_BUILD_TESTS "Build lightweight native tests." ON)
 option(PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER "Enable Sparkle-based macOS update integration." OFF)
+option(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND "Enable the Metal preview backend on supported macOS builds." ON)
+option(PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND "Enable the CUDA preview backend on supported Windows builds." ON)
 
-if(APPLE AND PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)
+if(APPLE AND (PHOTO_EDITOR_BUILD_DESKTOP OR PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER))
   enable_language(OBJCXX)
 endif()
 

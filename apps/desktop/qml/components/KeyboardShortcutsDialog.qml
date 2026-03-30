@@ -43,9 +43,20 @@ Dialog {
             items: [
                 { "keys": primary("S"), "description": "Save the current timeline." },
                 { "keys": "Space", "description": "Play or pause sequence playback." },
+                { "keys": "Left / Right", "description": "Step back / forward one frame." },
+                { "keys": "Home / End", "description": "Jump to start / end of timeline." },
+                { "keys": "V", "description": "Select tool." },
+                { "keys": "B", "description": "Razor tool." },
+                { "keys": "Y", "description": "Slip tool." },
+                { "keys": "N", "description": "Roll tool." },
+                { "keys": "S", "description": "Toggle snapping." },
                 { "keys": "M", "description": "Drop a sequence marker at the playhead." },
+                { "keys": primary("= / -"), "description": "Zoom in / out." },
+                { "keys": primary("0"), "description": "Zoom to fit all clips." },
+                { "keys": primary("\\"), "description": "Split the selected clip at the playhead." },
+                { "keys": "Delete / Backspace", "description": "Delete selected clip." },
                 { "keys": primary("Shift+M"), "description": "Open the media browser." },
-                { "keys": primary("\\"), "description": "Split the selected clip at the playhead." }
+                { "keys": primary("Shift+T"), "description": "Add a video track." }
             ]
         },
         {

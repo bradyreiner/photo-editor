@@ -6,8 +6,44 @@ Rectangle {
     id: root
 
     required property var theme
-    required property var modelData
+    required property var trackData
     required property var timelineDocument
+
+    signal resizeRequested(real delta)
+
+    readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
+    readonly property bool canToggleLocked: documentController !== null && typeof documentController.toggleTrackLocked === "function"
+    readonly property bool canToggleMuted: documentController !== null && typeof documentController.toggleTrackMuted === "function"
+    readonly property bool canToggleSolo: documentController !== null && typeof documentController.toggleTrackSolo === "function"
+    readonly property bool canToggleVisibility: documentController !== null && typeof documentController.toggleTrackVisibility === "function"
+    readonly property bool canToggleTargeted: documentController !== null && typeof documentController.toggleTrackTargeted === "function"
+    readonly property bool canTogglePrimary: trackData.trackKind === "video" ? canToggleVisibility : canToggleMuted
+
+    function togglePrimaryTrackState() {
+        if (trackData.trackKind === "video") {
+            if (canToggleVisibility)
+                documentController.toggleTrackVisibility(trackData.trackIndex)
+            return
+        }
+
+        if (canToggleMuted)
+            documentController.toggleTrackMuted(trackData.trackIndex)
+    }
+
+    function toggleSoloTrackState() {
+        if (canToggleSolo)
+            documentController.toggleTrackSolo(trackData.trackIndex)
+    }
+
+    function toggleTargetedTrackState() {
+        if (canToggleTargeted)
+            documentController.toggleTrackTargeted(trackData.trackIndex)
+    }
+
+    function toggleLockedTrackState() {
+        if (canToggleLocked)
+            documentController.toggleTrackLocked(trackData.trackIndex)
+    }
 
     radius: 8
     color: theme.alpha(theme.ink950, 0.78)
@@ -23,7 +59,7 @@ Rectangle {
             spacing: 6
 
             Label {
-                text: modelData.displayLabel
+                text: trackData.displayLabel
                 color: theme.textStrong
                 font.family: theme.fontMono
                 font.pixelSize: 10
@@ -31,7 +67,7 @@ Rectangle {
             }
 
             Label {
-                text: modelData.trackKind === "audio" ? "A" : "V"
+                text: trackData.trackKind === "audio" ? "A" : "V"
                 color: theme.textMuted
                 font.family: theme.fontMono
                 font.pixelSize: 9
@@ -45,15 +81,15 @@ Rectangle {
                 implicitWidth: 20
                 implicitHeight: 18
                 radius: 5
-                color: modelData.trackKind === "video"
-                       ? (modelData.visible ? theme.alpha(theme.accentCool500, 0.24) : theme.alpha(theme.ink700, 0.84))
-                       : (modelData.muted ? theme.alpha(theme.error, 0.24) : theme.alpha(theme.ink700, 0.84))
+                color: trackData.trackKind === "video"
+                       ? (trackData.visible ? theme.alpha(theme.accentCool500, 0.24) : theme.alpha(theme.ink700, 0.84))
+                       : (trackData.muted ? theme.alpha(theme.error, 0.24) : theme.alpha(theme.ink700, 0.84))
                 border.width: 1
                 border.color: theme.alpha(theme.lineStrong, 0.42)
 
                 Label {
                     anchors.centerIn: parent
-                    text: modelData.trackKind === "video" ? "V" : "M"
+                    text: trackData.trackKind === "video" ? "V" : "M"
                     color: theme.textStrong
                     font.family: theme.fontMono
                     font.pixelSize: 9
@@ -61,12 +97,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: {
-                        if (modelData.trackKind === "video")
-                            timelineDocument.toggleTrackVisibility(modelData.trackIndex)
-                        else
-                            timelineDocument.toggleTrackMuted(modelData.trackIndex)
-                    }
+                    enabled: canTogglePrimary
+                    onClicked: root.togglePrimaryTrackState()
                 }
             }
 
@@ -74,10 +106,10 @@ Rectangle {
                 implicitWidth: 20
                 implicitHeight: 18
                 radius: 5
-                color: modelData.solo ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
+                color: trackData.solo ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
                 border.width: 1
                 border.color: theme.alpha(theme.lineStrong, 0.42)
-                visible: modelData.trackKind === "audio"
+                visible: trackData.trackKind === "audio"
 
                 Label {
                     anchors.centerIn: parent
@@ -89,7 +121,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: timelineDocument.toggleTrackSolo(modelData.trackIndex)
+                    enabled: canToggleSolo
+                    onClicked: root.toggleSoloTrackState()
                 }
             }
 
@@ -97,7 +130,7 @@ Rectangle {
                 implicitWidth: 20
                 implicitHeight: 18
                 radius: 5
-                color: modelData.targeted ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
+                color: trackData.targeted ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
                 border.width: 1
                 border.color: theme.alpha(theme.lineStrong, 0.42)
 
@@ -111,7 +144,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: timelineDocument.toggleTrackTargeted(modelData.trackIndex)
+                    enabled: canToggleTargeted
+                    onClicked: root.toggleTargetedTrackState()
                 }
             }
 
@@ -119,7 +153,7 @@ Rectangle {
                 implicitWidth: 20
                 implicitHeight: 18
                 radius: 5
-                color: modelData.locked ? theme.alpha(theme.warning, 0.24) : theme.alpha(theme.ink700, 0.84)
+                color: trackData.locked ? theme.alpha(theme.warning, 0.24) : theme.alpha(theme.ink700, 0.84)
                 border.width: 1
                 border.color: theme.alpha(theme.lineStrong, 0.42)
 
@@ -133,7 +167,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: timelineDocument.toggleTrackLocked(modelData.trackIndex)
+                    enabled: canToggleLocked
+                    onClicked: root.toggleLockedTrackState()
                 }
             }
         }
@@ -150,35 +185,68 @@ Rectangle {
         }
     }
 
+    Rectangle {
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 4
+        color: resizeHandle.containsMouse || resizeHandle.pressed ? theme.accentWarm300 : "transparent"
+        radius: 2
+
+        MouseArea {
+            id: resizeHandle
+            anchors.fill: parent
+            cursorShape: Qt.SizeVerCursor
+            hoverEnabled: true
+            property real startMouseY: 0
+
+            onPressed: function(mouse) {
+                startMouseY = mapToGlobal(mouse.x, mouse.y).y
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed) return
+                const currentGlobalY = mapToGlobal(mouse.x, mouse.y).y
+                const delta = currentGlobalY - startMouseY
+                startMouseY = currentGlobalY
+                root.resizeRequested(delta)
+            }
+        }
+    }
+
     Menu {
         id: trackMenu
 
         MenuItem {
-            text: modelData.locked ? "Unlock Track" : "Lock Track"
-            onTriggered: timelineDocument.toggleTrackLocked(modelData.trackIndex)
+            text: trackData.locked ? "Unlock Track" : "Lock Track"
+            enabled: canToggleLocked
+            onTriggered: root.toggleLockedTrackState()
         }
 
         MenuItem {
-            text: modelData.targeted ? "Untarget Track" : "Target Track"
-            onTriggered: timelineDocument.toggleTrackTargeted(modelData.trackIndex)
+            text: trackData.targeted ? "Untarget Track" : "Target Track"
+            enabled: canToggleTargeted
+            onTriggered: root.toggleTargetedTrackState()
         }
 
         MenuItem {
-            visible: modelData.trackKind === "video"
-            text: modelData.visible ? "Hide Video Track" : "Show Video Track"
-            onTriggered: timelineDocument.toggleTrackVisibility(modelData.trackIndex)
+            visible: trackData.trackKind === "video"
+            text: trackData.visible ? "Hide Video Track" : "Show Video Track"
+            enabled: canToggleVisibility
+            onTriggered: root.togglePrimaryTrackState()
         }
 
         MenuItem {
-            visible: modelData.trackKind === "audio"
-            text: modelData.muted ? "Unmute Audio Track" : "Mute Audio Track"
-            onTriggered: timelineDocument.toggleTrackMuted(modelData.trackIndex)
+            visible: trackData.trackKind === "audio"
+            text: trackData.muted ? "Unmute Audio Track" : "Mute Audio Track"
+            enabled: canToggleMuted
+            onTriggered: root.togglePrimaryTrackState()
         }
 
         MenuItem {
-            visible: modelData.trackKind === "audio"
-            text: modelData.solo ? "Clear Solo" : "Solo Track"
-            onTriggered: timelineDocument.toggleTrackSolo(modelData.trackIndex)
+            visible: trackData.trackKind === "audio"
+            text: trackData.solo ? "Clear Solo" : "Solo Track"
+            enabled: canToggleSolo
+            onTriggered: root.toggleSoloTrackState()
         }
     }
 }

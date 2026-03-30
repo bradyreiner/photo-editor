@@ -45,14 +45,33 @@ struct CurveSetDefinition final {
   std::vector<CurveChannelDefinition> channels;
 };
 
-struct ColorMixerDefinition final {
-  std::string channel = "Reds";
+struct ColorMixerChannelDefinition final {
   double hue = 0.0;
   double saturation = 0.0;
   double luminance = 0.0;
 };
 
-struct ColorGradingDefinition final {};
+struct ColorMixerDefinition final {
+  std::string channel = "Reds";
+  double hue = 0.0;
+  double saturation = 0.0;
+  double luminance = 0.0;
+  // Per-channel adjustments (Reds, Oranges, Yellows, Greens, Aquas, Blues, Purples, Magentas).
+  // When non-empty, these override the single channel/hue/saturation/luminance fields.
+  std::vector<ColorMixerChannelDefinition> channels;
+};
+
+struct ColorGradingDefinition final {
+  double shadows_hue = 0.0;
+  double shadows_saturation = 0.0;
+  double shadows_luminance = 0.0;
+  double midtones_hue = 0.0;
+  double midtones_saturation = 0.0;
+  double midtones_luminance = 0.0;
+  double highlights_hue = 0.0;
+  double highlights_saturation = 0.0;
+  double highlights_luminance = 0.0;
+};
 
 struct CropTransformDefinition final {
   double x = 0.0;

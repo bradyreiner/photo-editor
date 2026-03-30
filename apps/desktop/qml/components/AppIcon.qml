@@ -188,6 +188,51 @@ Canvas {
         case "select":
             poly(ctx, [[w * 0.24, h * 0.18], [w * 0.24, h * 0.82], [w * 0.46, h * 0.62], [w * 0.62, h * 0.84], [w * 0.74, h * 0.76], [w * 0.58, h * 0.54], [w * 0.82, h * 0.54]], true)
             break
+        case "smart-select":
+            poly(ctx, [[w * 0.22, h * 0.16], [w * 0.22, h * 0.82], [w * 0.44, h * 0.60], [w * 0.60, h * 0.84], [w * 0.72, h * 0.76], [w * 0.56, h * 0.52], [w * 0.80, h * 0.52]], true)
+            line(ctx, w * 0.62, h * 0.18, w * 0.62, h * 0.34)
+            line(ctx, w * 0.54, h * 0.26, w * 0.70, h * 0.26)
+            break
+        case "lasso":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.28, h * 0.32)
+            ctx.bezierCurveTo(w * 0.16, h * 0.16, w * 0.56, h * 0.10, w * 0.72, h * 0.28)
+            ctx.bezierCurveTo(w * 0.88, h * 0.46, w * 0.76, h * 0.74, w * 0.52, h * 0.78)
+            ctx.bezierCurveTo(w * 0.26, h * 0.84, w * 0.14, h * 0.52, w * 0.28, h * 0.32)
+            ctx.stroke()
+            line(ctx, w * 0.46, h * 0.78, w * 0.40, h * 0.92)
+            circle(ctx, w * 0.38, h * 0.96, w * 0.04, true)
+            break
+        case "polygon-tool":
+            poly(ctx, [[w * 0.24, h * 0.28], [w * 0.72, h * 0.22], [w * 0.80, h * 0.66], [w * 0.40, h * 0.80]], false)
+            circle(ctx, w * 0.24, h * 0.28, w * 0.05, true)
+            circle(ctx, w * 0.72, h * 0.22, w * 0.05, true)
+            circle(ctx, w * 0.80, h * 0.66, w * 0.05, true)
+            circle(ctx, w * 0.40, h * 0.80, w * 0.05, true)
+            break
+        case "brush-tool":
+            poly(ctx, [[w * 0.24, h * 0.72], [w * 0.52, h * 0.44], [w * 0.76, h * 0.68], [w * 0.48, h * 0.90]], false)
+            line(ctx, w * 0.52, h * 0.44, w * 0.68, h * 0.28)
+            line(ctx, w * 0.68, h * 0.28, w * 0.84, h * 0.44)
+            break
+        case "brush-subtract":
+            poly(ctx, [[w * 0.24, h * 0.72], [w * 0.52, h * 0.44], [w * 0.76, h * 0.68], [w * 0.48, h * 0.90]], false)
+            line(ctx, w * 0.52, h * 0.44, w * 0.68, h * 0.28)
+            line(ctx, w * 0.68, h * 0.28, w * 0.84, h * 0.44)
+            line(ctx, w * 0.18, h * 0.22, w * 0.42, h * 0.22)
+            break
+        case "erase-tool":
+            poly(ctx, [[w * 0.24, h * 0.62], [w * 0.48, h * 0.34], [w * 0.78, h * 0.64], [w * 0.54, h * 0.88]], false)
+            line(ctx, w * 0.34, h * 0.76, w * 0.62, h * 0.48)
+            break
+        case "invert":
+            circle(ctx, midX, midY, w * 0.28, false)
+            ctx.beginPath()
+            ctx.moveTo(midX, h * 0.22)
+            ctx.bezierCurveTo(w * 0.34, h * 0.34, w * 0.34, h * 0.66, midX, h * 0.78)
+            ctx.lineTo(midX, h * 0.22)
+            ctx.fill()
+            break
         case "slip":
             line(ctx, w * 0.24, midY, w * 0.76, midY)
             line(ctx, w * 0.24, midY, w * 0.4, h * 0.34)

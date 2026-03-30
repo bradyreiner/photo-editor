@@ -4,6 +4,7 @@
 #include <QSize>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
@@ -53,6 +54,10 @@ class TimelineDocumentController final : public QObject {
   Q_PROPERTY(bool hasSourceClip READ hasSourceClip NOTIFY sourceMonitorChanged)
   Q_PROPERTY(double sourceInSeconds READ sourceInSeconds NOTIFY sourceMonitorChanged)
   Q_PROPERTY(double sourceOutSeconds READ sourceOutSeconds NOTIFY sourceMonitorChanged)
+  Q_PROPERTY(QStringList selectedClipIds READ selectedClipIds NOTIFY selectionChanged)
+  Q_PROPERTY(int selectedClipCount READ selectedClipCount NOTIFY selectionChanged)
+  Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoStateChanged)
+  Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoStateChanged)
 
  public:
   explicit TimelineDocumentController(QObject* parent = nullptr);
@@ -98,12 +103,17 @@ class TimelineDocumentController final : public QObject {
   [[nodiscard]] bool hasSourceClip() const;
   [[nodiscard]] double sourceInSeconds() const;
   [[nodiscard]] double sourceOutSeconds() const;
+  [[nodiscard]] QStringList selectedClipIds() const;
+  [[nodiscard]] int selectedClipCount() const;
+  [[nodiscard]] bool canUndo() const;
+  [[nodiscard]] bool canRedo() const;
 
   void setTimelineName(const QString& timeline_name);
   void setActiveTool(const QString& active_tool);
   void setEditMode(const QString& edit_mode);
   void setLinkedSelectionEnabled(bool enabled);
 
+  Q_INVOKABLE QVariantList recentTimelines() const;
   Q_INVOKABLE void createTimeline(const QString& timeline_name = QString());
   Q_INVOKABLE void createTimelineWithSettings(const QVariantMap& settings);
   Q_INVOKABLE void closeTimeline();
@@ -134,6 +144,10 @@ class TimelineDocumentController final : public QObject {
       const QString& poster_source = QString());
   Q_INVOKABLE void addVideoTrack();
   Q_INVOKABLE void moveSelectedClipToTrackRow(int track_row_index, double start_seconds);
+  Q_INVOKABLE void liftSelectedClip();
+  Q_INVOKABLE void extractSelectedClip();
+  Q_INVOKABLE void liftSelectedClips();
+  Q_INVOKABLE void extractSelectedClips();
   Q_INVOKABLE void removeSelectedClip();
   Q_INVOKABLE void moveSelectedBackward();
   Q_INVOKABLE void moveSelectedForward();
@@ -183,6 +197,14 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE QString addSequenceMarker(const QString& label = QString());
   Q_INVOKABLE void moveSequenceMarker(const QString& marker_id, double seconds);
   Q_INVOKABLE void renameSequenceMarker(const QString& marker_id, const QString& label);
+  Q_INVOKABLE void setSequenceMarkerNote(const QString& marker_id, const QString& note);
+  Q_INVOKABLE void setSequenceMarkerStatus(const QString& marker_id, const QString& status);
+  Q_INVOKABLE void setSequenceMarkerCompleted(const QString& marker_id, bool completed);
+  Q_INVOKABLE void seekSequenceMarker(const QString& marker_id);
+  Q_INVOKABLE bool seekNextSequenceMarker();
+  Q_INVOKABLE bool seekPreviousSequenceMarker();
+  Q_INVOKABLE bool seekNextEditPoint();
+  Q_INVOKABLE bool seekPreviousEditPoint();
   Q_INVOKABLE void removeSequenceMarker(const QString& marker_id);
   Q_INVOKABLE void playSequence();
   Q_INVOKABLE void pauseSequence();
@@ -191,6 +213,18 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void stepSequenceFrames(int direction);
   Q_INVOKABLE void syncPlaybackPosition(double clip_seconds);
   Q_INVOKABLE bool advancePlaybackAfterClipEnd();
+
+  Q_INVOKABLE void toggleClipSelection(int index);
+  Q_INVOKABLE void selectClipRange(int from_index, int to_index);
+  Q_INVOKABLE void selectAllClips();
+  Q_INVOKABLE void deselectAllClips();
+  Q_INVOKABLE void removeSelectedClips();
+
+  Q_INVOKABLE void beginContinuousEdit();
+  Q_INVOKABLE void endContinuousEdit();
+
+  Q_INVOKABLE void undo();
+  Q_INVOKABLE void redo();
 
 signals:
   void timelineStateChanged();
@@ -206,6 +240,7 @@ signals:
   void editorStateChanged();
   void sourceMonitorChanged();
   void markersChanged();
+  void undoStateChanged();
 
  private:
   enum class TrackKind {
@@ -259,6 +294,9 @@ signals:
   struct Marker final {
     QString marker_id;
     QString label;
+    QString note;
+    QString status = QStringLiteral("todo");
+    bool completed = false;
     QString color = QStringLiteral("#dfb8a8");
     double seconds = 0.0;
   };
@@ -328,6 +366,8 @@ signals:
       double trim_end_seconds,
       const QString& poster_source) const;
   void shiftTrackClipsFrom(Track* track, double sequence_seconds, double delta_seconds, const QString& excluded_clip_id = QString());
+  void shiftAllTrackClipsFrom(double sequence_seconds, double delta_seconds, const QString& excluded_clip_id = QString());
+  void shiftMarkersFrom(double sequence_seconds, double delta_seconds);
   void splitTrackClipAtSequenceSeconds(Track* track, int clip_index, double sequence_seconds);
   void overwriteTrackRange(Track* track, double range_start_seconds, double range_end_seconds);
   void initializeDefaultTracks();
@@ -343,8 +383,21 @@ signals:
   void emitEditorState();
   void emitSourceMonitorState();
   void emitMarkersState();
+  [[nodiscard]] bool isClipSelected(const QString& clip_id) const;
+  void pushUndoSnapshot();
+
+  struct Snapshot final {
+    QVector<Track> tracks;
+    QVector<Marker> markers;
+    QString selected_clip_id;
+    QStringList selected_clip_ids;
+    double sequence_playhead_seconds = 0.0;
+  };
+
+  static constexpr int kMaxUndoDepth = 50;
 
   bool has_active_timeline_ = false;
+  bool continuous_edit_active_ = false;
   QVector<Track> tracks_;
   QVector<Marker> markers_;
   QString timeline_id_;
@@ -356,6 +409,9 @@ signals:
   QString saved_poster_path_;
   QString created_at_;
   QString selected_clip_id_;
+  QStringList selected_clip_ids_;
+  QVector<Snapshot> undo_stack_;
+  QVector<Snapshot> redo_stack_;
   QSize sequence_size_ = QSize(1080, 1350);
   double sequence_frame_rate_ = 30.0;
   int audio_sample_rate_ = 48000;
@@ -366,6 +422,7 @@ signals:
   QString export_codec_ = QStringLiteral("h264");
   int current_index_ = -1;
   bool dirty_ = false;
+  QTimer autosave_timer_;
   double sequence_playhead_seconds_ = 0.0;
   double current_clip_playhead_seconds_ = 0.0;
   bool sequence_playing_ = false;

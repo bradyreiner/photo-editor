@@ -4,6 +4,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QDir>
+#include <QFile>
 #include <QImage>
 #include <QTemporaryDir>
 
@@ -26,7 +27,7 @@ QString write_image(const QDir& directory, const QString& name, const QImage& im
   return path;
 }
 
-QImage horizontal_bands(const QSize& size, const QColor& left, const QColor& right) {
+QImage split_image(const QSize& size, const QColor& left, const QColor& right) {
   QImage image(size, QImage::Format_ARGB32);
   image.fill(Qt::black);
   for (int y = 0; y < size.height(); ++y) {
@@ -37,22 +38,24 @@ QImage horizontal_bands(const QSize& size, const QColor& left, const QColor& rig
   return image;
 }
 
-QImage vertical_bands(const QSize& size, const QColor& top, const QColor& middle, const QColor& bottom) {
-  QImage image(size, QImage::Format_ARGB32);
-  image.fill(Qt::black);
-  const int band_height = size.height() / 3;
-  for (int y = 0; y < size.height(); ++y) {
-    const QColor color = y < band_height ? top : y < band_height * 2 ? middle : bottom;
-    for (int x = 0; x < size.width(); ++x) {
-      image.setPixelColor(x, y, color);
-    }
-  }
-  return image;
-}
-
 bool color_matches(const QColor& actual, const QColor& expected) {
   return actual.red() == expected.red() && actual.green() == expected.green() &&
          actual.blue() == expected.blue();
+}
+
+bool region_contains_non_background(
+    const QImage& image,
+    const QRect& region,
+    const QColor& background) {
+  const auto bounded = region.intersected(image.rect());
+  for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+    for (int x = bounded.left(); x <= bounded.right(); ++x) {
+      if (!color_matches(image.pixelColor(x, y), background)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 }  // namespace
@@ -69,101 +72,30 @@ int main(int argc, char** argv) {
 
   {
     CarouselDocumentController controller;
-    const auto source_path = write_image(
+    const auto spread_path = write_image(
         dir,
-        QStringLiteral("linked-horizontal.png"),
-        horizontal_bands(QSize(2160, 1350), QColor(QStringLiteral("#ff2d55")), QColor(QStringLiteral("#1e90ff"))));
-    if (source_path.isEmpty()) {
-      return fail("linked horizontal source image should save");
+        QStringLiteral("slot-spread.png"),
+        split_image(QSize(2160, 1350), QColor(QStringLiteral("#ff453a")), QColor(QStringLiteral("#0a84ff"))));
+    if (spread_path.isEmpty()) {
+      return fail("linked spread source image should save");
     }
 
-    controller.assignPrimaryImage(source_path, QStringLiteral("pair"));
+    controller.assignPrimaryImage(spread_path, QStringLiteral("spread"));
     controller.applyTemplateToCurrent(QStringLiteral("linked-horizontal-pair"));
 
-    const auto export_dir_path = dir.filePath(QStringLiteral("export-horizontal"));
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-linked-template"));
     QDir().mkpath(export_dir_path);
     if (!controller.exportCarouselToDirectory(export_dir_path)) {
-      return fail("linked horizontal export should succeed");
+      return fail("linked template export should succeed");
     }
 
     const QImage first_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
     const QImage second_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-02.png")));
-    if (first_slide.size() != QSize(1080, 1350) || second_slide.size() != QSize(1080, 1350)) {
-      return fail("horizontal linked export should use the 4x5 Instagram size");
-    }
     if (!color_matches(first_slide.pixelColor(first_slide.width() / 2, first_slide.height() / 2),
-                       QColor(QStringLiteral("#ff2d55"))) ||
+                       QColor(QStringLiteral("#ff453a"))) ||
         !color_matches(second_slide.pixelColor(second_slide.width() / 2, second_slide.height() / 2),
-                       QColor(QStringLiteral("#1e90ff")))) {
-      return fail("horizontal linked export should partition the source without seams");
-    }
-
-    controller.addSlide();
-    controller.selectSlide(2);
-    const auto trailing_path = write_image(
-        dir,
-        QStringLiteral("trailing-slide.png"),
-        horizontal_bands(QSize(1080, 1350), QColor(QStringLiteral("#ffffff")), QColor(QStringLiteral("#ffffff"))));
-    if (trailing_path.isEmpty()) {
-      return fail("trailing slide image should save");
-    }
-    controller.assignPrimaryImage(trailing_path, QStringLiteral("trailing"));
-    controller.selectSlide(0);
-    controller.applyTemplateToCurrent(QStringLiteral("linked-horizontal-pair"));
-
-    const auto slides_after_insert = controller.slides();
-    if (controller.slideCount() != 3) {
-      return fail("rebuilding a linked pair should preserve following slides instead of overwriting them");
-    }
-    if (slides_after_insert.at(2).toMap().value(QStringLiteral("label")).toString() != QStringLiteral("trailing")) {
-      return fail("rebuilding a linked pair should preserve the slide that was already after it");
-    }
-
-    controller.clearCurrentGroup();
-    if (controller.slideCount() != 2) {
-      return fail("clearing a linked pair should collapse it back to one slide");
-    }
-    const auto slides_after_collapse = controller.slides();
-    if (slides_after_collapse.at(1).toMap().value(QStringLiteral("label")).toString() != QStringLiteral("trailing")) {
-      return fail("collapsing a linked pair should preserve trailing slides");
-    }
-  }
-
-  {
-    CarouselDocumentController controller;
-    controller.setDocumentFormat(QStringLiteral("5x4"));
-    const auto source_path = write_image(
-        dir,
-        QStringLiteral("stacked-triptych.png"),
-        vertical_bands(
-            QSize(1350, 3240),
-            QColor(QStringLiteral("#34c759")),
-            QColor(QStringLiteral("#ffd60a")),
-            QColor(QStringLiteral("#bf5af2"))));
-    if (source_path.isEmpty()) {
-      return fail("triptych source image should save");
-    }
-
-    controller.assignPrimaryImage(source_path, QStringLiteral("stack"));
-    controller.applyTemplateToCurrent(QStringLiteral("linked-vertical-triptych"));
-
-    const auto export_dir_path = dir.filePath(QStringLiteral("export-triptych"));
-    QDir().mkpath(export_dir_path);
-    if (!controller.exportCarouselToDirectory(export_dir_path)) {
-      return fail("triptych export should succeed");
-    }
-
-    const QImage top_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
-    const QImage middle_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-02.png")));
-    const QImage bottom_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-03.png")));
-    if (top_slide.size() != QSize(1350, 1080) || middle_slide.size() != QSize(1350, 1080) ||
-        bottom_slide.size() != QSize(1350, 1080)) {
-      return fail("triptych export should use the 5x4 Instagram size");
-    }
-    if (!color_matches(top_slide.pixelColor(top_slide.width() / 2, top_slide.height() / 2), QColor(QStringLiteral("#34c759"))) ||
-        !color_matches(middle_slide.pixelColor(middle_slide.width() / 2, middle_slide.height() / 2), QColor(QStringLiteral("#ffd60a"))) ||
-        !color_matches(bottom_slide.pixelColor(bottom_slide.width() / 2, bottom_slide.height() / 2), QColor(QStringLiteral("#bf5af2")))) {
-      return fail("triptych export should preserve the top, middle, and bottom slices in order");
+                       QColor(QStringLiteral("#0a84ff")))) {
+      return fail("linked template export should still cut a slot-based spread cleanly across two canvases");
     }
   }
 
@@ -172,45 +104,166 @@ int main(int argc, char** argv) {
     controller.setDocumentFormat(QStringLiteral("5x4"));
     const auto left_path = write_image(
         dir,
-        QStringLiteral("left-half.png"),
-        QImage(QSize(675, 1080), QImage::Format_ARGB32));
+        QStringLiteral("left-template.png"),
+        QImage(QSize(700, 1080), QImage::Format_ARGB32));
     const auto right_path = write_image(
         dir,
-        QStringLiteral("right-half.png"),
-        QImage(QSize(675, 1080), QImage::Format_ARGB32));
+        QStringLiteral("right-template.png"),
+        QImage(QSize(700, 1080), QImage::Format_ARGB32));
     if (left_path.isEmpty() || right_path.isEmpty()) {
-      return fail("split-pair source images should save");
+      return fail("split template source images should save");
     }
 
     QImage left_image(left_path);
-    left_image.fill(QColor(QStringLiteral("#ff453a")));
+    left_image.fill(QColor(QStringLiteral("#34c759")));
     if (!left_image.save(left_path)) {
-      return fail("left split image should save");
+      return fail("left split template image should save");
     }
 
     QImage right_image(right_path);
-    right_image.fill(QColor(QStringLiteral("#0a84ff")));
+    right_image.fill(QColor(QStringLiteral("#ffd60a")));
     if (!right_image.save(right_path)) {
-      return fail("right split image should save");
+      return fail("right split template image should save");
     }
 
     controller.applyTemplateToCurrent(QStringLiteral("split-pair"));
     controller.assignPrimaryImage(left_path, QStringLiteral("left"));
     controller.assignSecondaryImage(right_path, QStringLiteral("right"));
 
-    const auto export_dir_path = dir.filePath(QStringLiteral("export-split-pair"));
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-split-template"));
     QDir().mkpath(export_dir_path);
     if (!controller.exportCarouselToDirectory(export_dir_path)) {
-      return fail("split-pair export should succeed");
+      return fail("split template export should succeed");
     }
 
     const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
-    if (slide.size() != QSize(1350, 1080)) {
-      return fail("split-pair export should use the 5x4 Instagram size");
+    if (!color_matches(slide.pixelColor(slide.width() / 4, slide.height() / 2), QColor(QStringLiteral("#34c759"))) ||
+        !color_matches(slide.pixelColor((slide.width() * 3) / 4, slide.height() / 2), QColor(QStringLiteral("#ffd60a")))) {
+      return fail("split template export should preserve left and right slot media");
     }
-    if (!color_matches(slide.pixelColor(slide.width() / 4, slide.height() / 2), QColor(QStringLiteral("#ff453a"))) ||
-        !color_matches(slide.pixelColor((slide.width() * 3) / 4, slide.height() / 2), QColor(QStringLiteral("#0a84ff")))) {
-      return fail("split-pair export should divide the canvas exactly in half");
+  }
+
+  {
+    CarouselDocumentController controller;
+    const auto video_path = dir.filePath(QStringLiteral("placeholder.mp4"));
+    QFile video_file(video_path);
+    if (!video_file.open(QIODevice::WriteOnly)) {
+      return fail("video placeholder file should open");
+    }
+    video_file.write("not-a-real-video");
+    video_file.close();
+
+    controller.assignPrimaryVideo(video_path, QStringLiteral("clip"));
+    const auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("mediaType")).toString() != QStringLiteral("video")) {
+      return fail("assigning a video should restore video media on the active single canvas");
+    }
+    if (!selection.value(QStringLiteral("canPlaceVideo")).toBool()) {
+      return fail("single template should continue to advertise video support");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addSlide();
+    controller.selectSlide(0);
+
+    const auto source_path = write_image(
+        dir,
+        QStringLiteral("spread.png"),
+        split_image(QSize(2160, 1350), QColor(QStringLiteral("#ff2d55")), QColor(QStringLiteral("#1e90ff"))));
+    if (source_path.isEmpty()) {
+      return fail("spread source image should save");
+    }
+
+    controller.addPhotoItem(source_path, QStringLiteral("spread"));
+    controller.setSelectedItemCenter(1080.0, 675.0);
+    controller.setSelectedItemSize(2160.0, 1350.0);
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-spread"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("spread export should succeed");
+    }
+
+    const QImage first_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    const QImage second_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-02.png")));
+    if (first_slide.size() != QSize(1080, 1350) || second_slide.size() != QSize(1080, 1350)) {
+      return fail("continuous spread export should use the active slide size");
+    }
+    if (!color_matches(first_slide.pixelColor(first_slide.width() / 2, first_slide.height() / 2),
+                       QColor(QStringLiteral("#ff2d55"))) ||
+        !color_matches(second_slide.pixelColor(second_slide.width() / 2, second_slide.height() / 2),
+                       QColor(QStringLiteral("#1e90ff")))) {
+      return fail("continuous spread export should cut a single wide photo cleanly across the slide seam");
+    }
+    if (controller.documentPixelWidth() != 2160 || controller.slideCount() != 2) {
+      return fail("adding a second canvas should extend the document into a continuous two-slide strip");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addSlide();
+    const auto green_path = write_image(
+        dir,
+        QStringLiteral("green.png"),
+        QImage(QSize(800, 800), QImage::Format_ARGB32));
+    const auto blue_path = write_image(
+        dir,
+        QStringLiteral("blue.png"),
+        QImage(QSize(800, 800), QImage::Format_ARGB32));
+    if (green_path.isEmpty() || blue_path.isEmpty()) {
+      return fail("photo layer sources should save");
+    }
+
+    QImage green_image(green_path);
+    green_image.fill(QColor(QStringLiteral("#34c759")));
+    if (!green_image.save(green_path)) {
+      return fail("green layer source should save");
+    }
+
+    QImage blue_image(blue_path);
+    blue_image.fill(QColor(QStringLiteral("#0a84ff")));
+    if (!blue_image.save(blue_path)) {
+      return fail("blue layer source should save");
+    }
+
+    controller.selectSlide(0);
+    controller.addPhotoItem(green_path, QStringLiteral("green"));
+    controller.setSelectedItemCenter(320.0, 720.0);
+    controller.setSelectedItemSize(480.0, 480.0);
+
+    controller.selectSlide(1);
+    controller.addPhotoItem(blue_path, QStringLiteral("blue"));
+    controller.setSelectedItemCenter(1620.0, 720.0);
+    controller.setSelectedItemSize(480.0, 480.0);
+
+    controller.selectSlide(0);
+    controller.addTextItem(QStringLiteral("HELLO"));
+    controller.setSelectedItemCenter(540.0, 180.0);
+    controller.setSelectedTextColor(QStringLiteral("#ff453a"));
+    controller.setSelectedTextPointSize(120.0);
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layers"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("multi-layer export should succeed");
+    }
+
+    const QImage first_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    const QImage second_slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-02.png")));
+    if (!color_matches(first_slide.pixelColor(320, 720), QColor(QStringLiteral("#34c759")))) {
+      return fail("first canvas should keep its photo layer in place");
+    }
+    if (!color_matches(second_slide.pixelColor(540, 720), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("second canvas should keep its photo layer in place");
+    }
+    if (!region_contains_non_background(
+            first_slide,
+            QRect(180, 40, 720, 260),
+            QColor(QStringLiteral("#fbf7f1")))) {
+      return fail("text layers should render into exported slides");
     }
   }
 

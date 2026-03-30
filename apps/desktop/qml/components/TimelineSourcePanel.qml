@@ -18,19 +18,30 @@ Rectangle {
 
     property string mediaSearchText: ""
     property real previewSeconds: 0
+    readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
+    readonly property var sourceState: sourceClip !== undefined && sourceClip !== null ? sourceClip : ({})
+    readonly property var assetCatalog: catalogAssets !== undefined && catalogAssets !== null ? catalogAssets : null
+    readonly property bool hasSourceClipValue: documentController !== null && documentController.hasSourceClip
+    readonly property real sourceInSecondsValue: documentController !== null ? Number(documentController.sourceInSeconds || 0) : 0
+    readonly property real sourceOutSecondsValue: documentController !== null ? Number(documentController.sourceOutSeconds || 0) : 0
+    readonly property real framesPerSecondValue: documentController !== null ? Number(documentController.framesPerSecond || 30) : 30
+    readonly property int assetCountValue: assetCatalog !== null ? Number(assetCatalog.assetCount || 0) : 0
+
+    readonly property bool hasSource: hasSourceClipValue
+                                      && sourceState.mediaType !== undefined
 
     function sourceUsesPlayer() {
-        return timelineDocument.hasSourceClip
-                && (sourceClip.mediaType === "video" || sourceClip.mediaType === "audio")
+        return hasSource
+                && (sourceState.mediaType === "video" || sourceState.mediaType === "audio")
     }
 
     function sourcePreviewImage() {
-        if (!timelineDocument.hasSourceClip)
+        if (!hasSource)
             return ""
-        if (sourceClip.mediaType === "photo")
-            return sourceClip.posterSource
-        if (sourceClip.mediaType === "audio")
-            return sourceClip.waveformSource.length > 0 ? sourceClip.waveformSource : sourceClip.posterSource
+        if (sourceState.mediaType === "photo")
+            return sourceState.posterSource || ""
+        if (sourceState.mediaType === "audio")
+            return (sourceState.waveformSource && sourceState.waveformSource.length > 0) ? sourceState.waveformSource : (sourceState.posterSource || "")
         return ""
     }
 
@@ -52,7 +63,7 @@ Rectangle {
 
     function timecodeText(seconds) {
         const safe = Math.max(0, Number(seconds || 0))
-        const fps = Math.max(1, Math.round(Number(timelineDocument.framesPerSecond || 30)))
+        const fps = Math.max(1, Math.round(framesPerSecondValue))
         const totalFrames = Math.floor(safe * fps)
         const hours = Math.floor(totalFrames / (3600 * fps))
         const minutes = Math.floor((totalFrames % (3600 * fps)) / (60 * fps))
@@ -65,16 +76,38 @@ Rectangle {
     }
 
     function seekSource(seconds) {
-        if (!timelineDocument.hasSourceClip)
+        if (!hasSourceClipValue)
             return
-        const bounded = Math.max(0, Math.min(Number(sourceClip.durationSeconds || 0), Number(seconds || 0)))
+        const bounded = Math.max(0, Math.min(Number(sourceState.durationSeconds || 0), Number(seconds || 0)))
         previewSeconds = bounded
         sourcePreviewPlayer.position = Math.round(bounded * 1000)
     }
 
     function loadIntoSource(assetId, filePath, displayLabel, thumbnailSource) {
-        timelineDocument.loadSourceClipFromGallery(assetId, filePath, displayLabel, 0, thumbnailSource)
+        if (documentController === null)
+            return
+        documentController.loadSourceClipFromGallery(assetId, filePath, displayLabel, 0, thumbnailSource)
         tabChangeRequested("source")
+    }
+
+    function syncSourceMonitor() {
+        if (!hasSourceClipValue) {
+            sourcePreviewPlayer.stop()
+            sourcePreviewPlayer.source = ""
+            previewSeconds = 0
+            return
+        }
+
+        if (!root.sourceUsesPlayer()) {
+            sourcePreviewPlayer.stop()
+            sourcePreviewPlayer.source = ""
+            previewSeconds = Math.max(0, sourceInSecondsValue)
+            return
+        }
+
+        if (String(sourcePreviewPlayer.source) !== String(sourceState.sourceUrl || ""))
+            sourcePreviewPlayer.source = sourceState.sourceUrl || ""
+        root.seekSource(Math.max(0, sourceInSecondsValue))
     }
 
     MediaPlayer {
@@ -84,7 +117,7 @@ Rectangle {
 
         onPositionChanged: root.previewSeconds = position / 1000
         onPlaybackStateChanged: {
-            if (playbackState !== MediaPlayer.PlayingState && timelineDocument.hasSourceClip)
+            if (playbackState !== MediaPlayer.PlayingState && root.hasSourceClipValue)
                 root.previewSeconds = position / 1000
         }
     }
@@ -95,28 +128,15 @@ Rectangle {
     }
 
     Connections {
-        target: timelineDocument
+        target: root.documentController
+        ignoreUnknownSignals: true
 
         function onSourceMonitorChanged() {
-            if (!timelineDocument.hasSourceClip) {
-                sourcePreviewPlayer.stop()
-                sourcePreviewPlayer.source = ""
-                root.previewSeconds = 0
-                return
-            }
-
-            if (!root.sourceUsesPlayer()) {
-                sourcePreviewPlayer.stop()
-                sourcePreviewPlayer.source = ""
-                root.previewSeconds = Math.max(0, timelineDocument.sourceInSeconds)
-                return
-            }
-
-            if (String(sourcePreviewPlayer.source) !== String(sourceClip.sourceUrl))
-                sourcePreviewPlayer.source = sourceClip.sourceUrl
-            root.seekSource(Math.max(0, timelineDocument.sourceInSeconds))
+            root.syncSourceMonitor()
         }
     }
+
+    Component.onCompleted: root.syncSourceMonitor()
 
     ColumnLayout {
         anchors.fill: parent
@@ -154,7 +174,7 @@ Rectangle {
 
             Label {
                 Layout.fillWidth: true
-                text: timelineDocument.hasSourceClip ? "READY" : "EMPTY"
+                text: root.hasSourceClipValue ? "READY" : "EMPTY"
                 color: theme.textMuted
                 font.family: theme.fontMono
                 font.pixelSize: 10
@@ -249,7 +269,7 @@ Rectangle {
                         spacing: 8
 
                         Label {
-                            text: timelineDocument.hasSourceClip ? sourceClip.displayLabel : "Source Monitor"
+                            text: root.hasSource && sourceState.displayLabel ? sourceState.displayLabel : "Source Monitor"
                             color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 12
@@ -277,7 +297,7 @@ Rectangle {
                             id: sourceVideoMonitor
                             anchors.fill: parent
                             anchors.margins: 8
-                            visible: root.sourceUsesPlayer() && sourceClip.mediaType === "video"
+                            visible: root.sourceUsesPlayer() && root.hasSource && sourceState.mediaType === "video"
                             fillMode: VideoOutput.PreserveAspectFit
                         }
 
@@ -286,14 +306,14 @@ Rectangle {
                             anchors.margins: 8
                             source: root.sourcePreviewImage()
                             fillMode: Image.PreserveAspectFit
-                            visible: timelineDocument.hasSourceClip && source.length > 0 && !root.sourceUsesPlayer()
+                            visible: root.hasSource && source.length > 0 && !root.sourceUsesPlayer()
                             cache: false
                             asynchronous: false
                         }
 
                         Label {
                             anchors.centerIn: parent
-                            visible: !timelineDocument.hasSourceClip
+                            visible: !root.hasSourceClipValue
                             text: "Load a clip into Source"
                             color: theme.textMuted
                             font.family: theme.fontUi
@@ -303,9 +323,9 @@ Rectangle {
 
                     Label {
                         Layout.fillWidth: true
-                        text: timelineDocument.hasSourceClip
-                              ? sourceClip.durationText + "  |  In " + formatSeconds(timelineDocument.sourceInSeconds)
-                                + "  |  Out " + formatSeconds(timelineDocument.sourceOutSeconds)
+                        text: root.hasSource
+                              ? (sourceState.durationText || "") + "  |  In " + formatSeconds(root.sourceInSecondsValue)
+                                + "  |  Out " + formatSeconds(root.sourceOutSecondsValue)
                               : "Load a clip to set timing and edit points."
                         color: theme.textMuted
                         font.family: theme.fontMono
@@ -322,7 +342,7 @@ Rectangle {
                             showText: false
                             compact: true
                             tooltipText: sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState ? "Pause source" : "Play source"
-                            enabled: timelineDocument.hasSourceClip
+                            enabled: root.hasSourceClipValue
                             onClicked: {
                                 if (sourcePreviewPlayer.playbackState === MediaPlayer.PlayingState)
                                     sourcePreviewPlayer.pause()
@@ -336,8 +356,8 @@ Rectangle {
                             showText: false
                             compact: true
                             tooltipText: "Step back one frame"
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: root.seekSource(root.previewSeconds - 1 / Math.max(1, timelineDocument.framesPerSecond))
+                            enabled: root.hasSourceClipValue
+                            onClicked: root.seekSource(root.previewSeconds - 1 / Math.max(1, root.framesPerSecondValue))
                         }
 
                         ActionButton {
@@ -345,33 +365,33 @@ Rectangle {
                             showText: false
                             compact: true
                             tooltipText: "Step forward one frame"
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: root.seekSource(root.previewSeconds + 1 / Math.max(1, timelineDocument.framesPerSecond))
+                            enabled: root.hasSourceClipValue
+                            onClicked: root.seekSource(root.previewSeconds + 1 / Math.max(1, root.framesPerSecondValue))
                         }
 
                         ActionButton {
                             text: "In"
                             compact: true
                             tooltipText: "Set mark in"
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.setSourceInSeconds(root.previewSeconds)
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.setSourceInSeconds(root.previewSeconds)
                         }
 
                         ActionButton {
                             text: "Out"
                             compact: true
                             tooltipText: "Set mark out"
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.setSourceOutSeconds(root.previewSeconds)
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.setSourceOutSeconds(root.previewSeconds)
                         }
                     }
 
                     Slider {
                         Layout.fillWidth: true
                         from: 0
-                        to: sourceClip.durationSeconds ? sourceClip.durationSeconds : 1
+                        to: root.hasSource && sourceState.durationSeconds ? sourceState.durationSeconds : 1
                         value: root.previewSeconds
-                        enabled: timelineDocument.hasSourceClip
+                        enabled: root.hasSource
                         onMoved: root.seekSource(value)
                     }
 
@@ -386,9 +406,9 @@ Rectangle {
                         Label {
                             anchors.fill: parent
                             anchors.margins: 8
-                            text: "In  " + Number(timelineDocument.sourceInSeconds || 0).toFixed(2)
-                                  + "s  |  Out  " + Number(timelineDocument.sourceOutSeconds || 0).toFixed(2)
-                                  + "s  |  Dur  " + formatSeconds(Math.max(0, Number(timelineDocument.sourceOutSeconds || 0) - Number(timelineDocument.sourceInSeconds || 0)))
+                            text: "In  " + root.sourceInSecondsValue.toFixed(2)
+                                  + "s  |  Out  " + root.sourceOutSecondsValue.toFixed(2)
+                                  + "s  |  Dur  " + formatSeconds(Math.max(0, root.sourceOutSecondsValue - root.sourceInSecondsValue))
                             color: theme.textMain
                             font.family: theme.fontMono
                             font.pixelSize: 9
@@ -403,30 +423,30 @@ Rectangle {
                         ActionButton {
                             text: "Clear"
                             compact: true
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.clearSourceRange()
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.clearSourceRange()
                         }
 
                         ActionButton {
                             text: "Append"
                             compact: true
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.appendSourceClipToTimeline()
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.appendSourceClipToTimeline()
                         }
 
                         ActionButton {
                             text: "Insert"
                             compact: true
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.insertSourceClipAtPlayhead()
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.insertSourceClipAtPlayhead()
                         }
 
                         ActionButton {
                             text: "Ovr"
                             compact: true
                             tooltipText: "Overwrite at playhead"
-                            enabled: timelineDocument.hasSourceClip
-                            onClicked: timelineDocument.overwriteSourceClipAtPlayhead()
+                            enabled: root.hasSourceClipValue
+                            onClicked: if (root.documentController) root.documentController.overwriteSourceClipAtPlayhead()
                         }
                     }
                 }
@@ -459,7 +479,7 @@ Rectangle {
             }
 
             Label {
-                text: catalogAssets.assetCount + " clips"
+                text: root.assetCountValue + " clips"
                 color: theme.textMuted
                 font.family: theme.fontMono
                 font.pixelSize: 10
@@ -470,7 +490,7 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
                 spacing: 8
-                model: catalogAssets
+                model: root.assetCatalog
 
                 delegate: Rectangle {
                     required property string assetId

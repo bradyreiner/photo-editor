@@ -65,25 +65,6 @@ Button {
         anchors.rightMargin: theme.space10
         spacing: theme.gapControl
 
-        Rectangle {
-            Layout.preferredWidth: 20
-            Layout.preferredHeight: 20
-            radius: theme.radiusChip
-            color: root.highlighted
-                   ? theme.alpha(root.accent, 0.18)
-                   : (root.hovered ? theme.alpha(theme.ink700, 0.56) : theme.alpha(theme.ink900, 0.7))
-            border.width: root.highlighted ? 1 : 0
-            border.color: root.highlighted ? theme.alpha(root.accent, 0.36) : "transparent"
-
-            AppIcon {
-                anchors.centerIn: parent
-                name: root.iconName
-                color: root.highlighted ? root.accent : (root.hovered ? theme.textMain : theme.textMuted)
-                width: 11
-                height: 11
-            }
-        }
-
         Text {
             Layout.fillWidth: true
             text: root.title

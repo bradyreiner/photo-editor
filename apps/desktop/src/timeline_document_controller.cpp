@@ -162,6 +162,16 @@ QString normalized_transition_edge(const QString& edge) {
   return normalized == QStringLiteral("in") ? normalized : QStringLiteral("out");
 }
 
+QString normalized_marker_status(const QString& status) {
+  const auto normalized = status.trimmed().toLower();
+  if (normalized == QStringLiteral("review") ||
+      normalized == QStringLiteral("approved") ||
+      normalized == QStringLiteral("exported")) {
+    return normalized;
+  }
+  return QStringLiteral("todo");
+}
+
 template <typename TrackContainer>
 void sort_track_clips(TrackContainer* track) {
   if (track == nullptr) {
@@ -181,7 +191,23 @@ void sort_track_clips(TrackContainer* track) {
 
 }  // namespace
 
-TimelineDocumentController::TimelineDocumentController(QObject* parent) : QObject(parent) {}
+TimelineDocumentController::TimelineDocumentController(QObject* parent) : QObject(parent) {
+  autosave_timer_.setInterval(30000);
+  connect(&autosave_timer_, &QTimer::timeout, this, [this]() {
+    if (!dirty_ || !has_active_timeline_ || saved_document_path_.isEmpty()) {
+      return;
+    }
+    const auto autosave_path = saved_document_path_ + QStringLiteral(".autosave");
+    (void)persistDocument(autosave_path);
+  });
+  connect(this, &TimelineDocumentController::dirtyChanged, this, [this]() {
+    if (dirty_ && has_active_timeline_ && !saved_document_path_.isEmpty()) {
+      autosave_timer_.start();
+    } else {
+      autosave_timer_.stop();
+    }
+  });
+}
 
 bool TimelineDocumentController::hasActiveTimeline() const {
   return has_active_timeline_;
@@ -517,6 +543,22 @@ void TimelineDocumentController::createTimelineWithSettings(const QVariantMap& s
   emitAllState();
   setDirty(false);
   setStatus(QStringLiteral("New timeline ready. Add media from the gallery."));
+}
+
+QVariantList TimelineDocumentController::recentTimelines() const {
+  QVariantList result;
+  const auto records = loadTimelineAssetRecords();
+  for (const auto& record : records) {
+    QVariantMap entry;
+    entry[QStringLiteral("timelineId")] = record.timeline_id;
+    entry[QStringLiteral("name")] = record.name;
+    entry[QStringLiteral("documentPath")] = record.document_path;
+    entry[QStringLiteral("createdAt")] = record.created_at;
+    entry[QStringLiteral("updatedAt")] = record.updated_at;
+    entry[QStringLiteral("durationSeconds")] = record.duration_seconds;
+    result.append(entry);
+  }
+  return result;
 }
 
 void TimelineDocumentController::closeTimeline() {
@@ -933,6 +975,9 @@ bool TimelineDocumentController::loadTimeline(const QString& document_path) {
       marker.marker_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
     }
     marker.label = marker_object.value(QStringLiteral("label")).toString().trimmed();
+    marker.note = marker_object.value(QStringLiteral("note")).toString().trimmed();
+    marker.status = normalized_marker_status(marker_object.value(QStringLiteral("status")).toString());
+    marker.completed = marker_object.value(QStringLiteral("completed")).toBool(false);
     marker.color = marker_object.value(QStringLiteral("color")).toString().trimmed();
     if (marker.color.isEmpty()) {
       marker.color = QStringLiteral("#dfb8a8");
@@ -1054,6 +1099,16 @@ bool TimelineDocumentController::saveTimeline() {
 }
 
 void TimelineDocumentController::selectClip(int index) {
+  if (index < 0) {
+    selected_clip_id_.clear();
+    selected_clip_ids_.clear();
+    current_index_ = -1;
+    emit selectionChanged();
+    emit clipsChanged();
+    emit sequenceChanged();
+    return;
+  }
+
   const auto ref = clipRefAt(index);
   const auto* clip = clipAt(ref);
   if (clip == nullptr) {
@@ -1061,6 +1116,8 @@ void TimelineDocumentController::selectClip(int index) {
   }
 
   selected_clip_id_ = clip->clip_id;
+  selected_clip_ids_.clear();
+  selected_clip_ids_.append(clip->clip_id);
   current_index_ = index;
   preview_source_ = clip->poster_source;
   current_clip_playhead_seconds_ = clip->trim_start_seconds;
@@ -1081,6 +1138,7 @@ void TimelineDocumentController::addClipFromGallery(
     setStatus(QStringLiteral("Create a timeline before adding media."));
     return;
   }
+  pushUndoSnapshot();
 
   auto clip = buildGalleryClip(asset_id, file_path, display_label, duration_seconds, 0.0, 0.0, poster_source);
   if (clip.duration_seconds <= 0.0) {
@@ -1120,6 +1178,7 @@ void TimelineDocumentController::insertClipFromGallery(
     double trim_start_seconds,
     double trim_end_seconds,
     const QString& poster_source) {
+  pushUndoSnapshot();
   auto clip = buildGalleryClip(
       asset_id,
       file_path,
@@ -1149,6 +1208,7 @@ void TimelineDocumentController::insertClipFromGallery(
     }
   }
   shiftTrackClipsFrom(target_track, insert_start, insert_duration);
+  shiftMarkersFrom(insert_start, insert_duration);
   clip.start_seconds = insert_start;
   target_track->clips.push_back(clip);
   sort_track_clips(target_track);
@@ -1175,6 +1235,7 @@ void TimelineDocumentController::overwriteClipFromGallery(
     double trim_start_seconds,
     double trim_end_seconds,
     const QString& poster_source) {
+  pushUndoSnapshot();
   auto clip = buildGalleryClip(
       asset_id,
       file_path,
@@ -1217,13 +1278,16 @@ void TimelineDocumentController::overwriteClipFromGallery(
 }
 
 void TimelineDocumentController::addVideoTrack() {
+  pushUndoSnapshot();
   appendTrackPair();
+  syncAudioTracks();
   emitAllState();
   setDirty(true);
   setStatus(QStringLiteral("Added V%1 / A%1 to the sequence.").arg(videoTrackCount()));
 }
 
 void TimelineDocumentController::moveSelectedClipToTrackRow(int track_row_index, double start_seconds) {
+  pushUndoSnapshot();
   const auto selected_ref = selectedClipRef();
   auto* source_track = trackAt(selected_ref.track_index);
   auto* selected_clip = clipAt(selected_ref);
@@ -1264,7 +1328,8 @@ void TimelineDocumentController::moveSelectedClipToTrackRow(int track_row_index,
                 .arg(target_track->display_label, formatDurationText(qMax(0.0, start_seconds))));
 }
 
-void TimelineDocumentController::removeSelectedClip() {
+void TimelineDocumentController::liftSelectedClip() {
+  pushUndoSnapshot();
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   if (track == nullptr || ref.clip_index < 0 || ref.clip_index >= track->clips.size()) {
@@ -1286,10 +1351,72 @@ void TimelineDocumentController::removeSelectedClip() {
   sequence_playing_ = false;
   emitAllState();
   setDirty(true);
-  setStatus(QStringLiteral("Removed the selected clip from the sequence."));
+  setStatus(QStringLiteral("Lifted the selected clip from the sequence."));
+}
+
+void TimelineDocumentController::extractSelectedClip() {
+  pushUndoSnapshot();
+  const auto ref = selectedClipRef();
+  auto* track = trackAt(ref.track_index);
+  auto* clip = clipAt(ref);
+  if (track == nullptr || clip == nullptr || ref.clip_index < 0 || ref.clip_index >= track->clips.size()) {
+    return;
+  }
+
+  const auto removal_start = clip->start_seconds;
+  const auto removal_end = clipEndSeconds(*clip);
+  const auto removal_duration = qMax(0.0, removal_end - removal_start);
+  const auto removed_label = clip->display_label;
+
+  track->clips.removeAt(ref.clip_index);
+  if (removal_duration > kBoundaryEpsilon) {
+    shiftAllTrackClipsFrom(removal_end, -removal_duration);
+    shiftMarkersFrom(removal_end, -removal_duration);
+  }
+
+  const auto refs = orderedVideoClipRefs();
+  const auto desired_selection_time = qMax(0.0, removal_start);
+  selected_clip_id_.clear();
+  for (const auto& candidate_ref : refs) {
+    const auto* candidate = clipAt(candidate_ref);
+    if (candidate == nullptr) {
+      continue;
+    }
+    if (candidate->start_seconds >= desired_selection_time - kBoundaryEpsilon) {
+      selected_clip_id_ = candidate->clip_id;
+      break;
+    }
+  }
+  if (selected_clip_id_.isEmpty() && !refs.isEmpty()) {
+    if (const auto* candidate = clipAt(refs.last()); candidate != nullptr) {
+      selected_clip_id_ = candidate->clip_id;
+    }
+  }
+
+  updateCurrentIndexFromSelection();
+  sequence_playhead_seconds_ = qMin(desired_selection_time, totalDurationSeconds());
+  if (const auto* current_clip = clipAt(selectedClipRef()); current_clip != nullptr) {
+    preview_source_ = current_clip->poster_source;
+    current_clip_playhead_seconds_ = qBound(
+        current_clip->trim_start_seconds,
+        current_clip->trim_start_seconds + qMax(0.0, sequence_playhead_seconds_ - current_clip->start_seconds),
+        current_clip->trim_end_seconds);
+  } else {
+    preview_source_.clear();
+    current_clip_playhead_seconds_ = 0.0;
+  }
+  sequence_playing_ = false;
+  emitAllState();
+  setDirty(true);
+  setStatus(QStringLiteral("Extracted '%1' and closed the gap.").arg(removed_label));
+}
+
+void TimelineDocumentController::removeSelectedClip() {
+  liftSelectedClip();
 }
 
 void TimelineDocumentController::moveSelectedBackward() {
+  pushUndoSnapshot();
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1322,6 +1449,7 @@ void TimelineDocumentController::moveSelectedBackward() {
 }
 
 void TimelineDocumentController::moveSelectedForward() {
+  pushUndoSnapshot();
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1469,6 +1597,9 @@ void TimelineDocumentController::setSelectedTrimEndSeconds(double seconds) {
 }
 
 void TimelineDocumentController::trimSelectedClipStartToSequenceSeconds(double seconds, bool ripple) {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+  }
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1485,12 +1616,25 @@ void TimelineDocumentController::trimSelectedClipStartToSequenceSeconds(double s
     return;
   }
 
-  clip->start_seconds = bounded_start;
-  clip->trim_start_seconds = qBound(
-      0.0,
-      clip->trim_start_seconds + delta,
-      qMax(0.0, clip->trim_end_seconds - kMinimumClipLength));
-  Q_UNUSED(ripple);
+  const auto previous_end_seconds = clipEndSeconds(*clip);
+  if (ripple) {
+    clip->trim_start_seconds = qBound(
+        0.0,
+        clip->trim_start_seconds + delta,
+        qMax(0.0, clip->trim_end_seconds - kMinimumClipLength));
+    clip->start_seconds = qMax(0.0, clip->start_seconds);
+    const auto ripple_delta_seconds = clipEndSeconds(*clip) - previous_end_seconds;
+    if (qAbs(ripple_delta_seconds) > kBoundaryEpsilon) {
+      shiftAllTrackClipsFrom(previous_end_seconds, ripple_delta_seconds, clip->clip_id);
+      shiftMarkersFrom(previous_end_seconds, ripple_delta_seconds);
+    }
+  } else {
+    clip->start_seconds = bounded_start;
+    clip->trim_start_seconds = qBound(
+        0.0,
+        clip->trim_start_seconds + delta,
+        qMax(0.0, clip->trim_end_seconds - kMinimumClipLength));
+  }
   sort_track_clips(track);
   syncAudioTracks();
   clampPlaybackState();
@@ -1499,6 +1643,9 @@ void TimelineDocumentController::trimSelectedClipStartToSequenceSeconds(double s
 }
 
 void TimelineDocumentController::trimSelectedClipEndToSequenceSeconds(double seconds, bool ripple) {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+  }
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1523,7 +1670,8 @@ void TimelineDocumentController::trimSelectedClipEndToSequenceSeconds(double sec
   if (ripple) {
     const auto delta_seconds = clipEndSeconds(*clip) - previous_end_seconds;
     if (qAbs(delta_seconds) > kBoundaryEpsilon) {
-      shiftTrackClipsFrom(track, previous_end_seconds, delta_seconds, clip->clip_id);
+      shiftAllTrackClipsFrom(previous_end_seconds, delta_seconds, clip->clip_id);
+      shiftMarkersFrom(previous_end_seconds, delta_seconds);
     }
   }
   syncAudioTracks();
@@ -1533,6 +1681,9 @@ void TimelineDocumentController::trimSelectedClipEndToSequenceSeconds(double sec
 }
 
 bool TimelineDocumentController::rollSelectedClipStartToSequenceSeconds(double seconds) {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+  }
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1577,6 +1728,9 @@ bool TimelineDocumentController::rollSelectedClipStartToSequenceSeconds(double s
 }
 
 bool TimelineDocumentController::rollSelectedClipEndToSequenceSeconds(double seconds) {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+  }
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -1622,6 +1776,9 @@ bool TimelineDocumentController::rollSelectedClipEndToSequenceSeconds(double sec
 }
 
 bool TimelineDocumentController::slipSelectedClipBySeconds(double delta_seconds) {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+  }
   const auto ref = selectedClipRef();
   auto* clip = clipAt(ref);
   auto* track = trackAt(ref.track_index);
@@ -1798,6 +1955,7 @@ void TimelineDocumentController::setSelectedClipPlaybackRate(double playback_rat
 }
 
 void TimelineDocumentController::addSelectedClipEffect(const QString& effect_name) {
+  pushUndoSnapshot();
   auto* clip = clipAt(selectedClipRef());
   if (clip == nullptr) {
     return;
@@ -1815,6 +1973,7 @@ void TimelineDocumentController::addSelectedClipEffect(const QString& effect_nam
 }
 
 void TimelineDocumentController::removeSelectedClipEffect(const QString& effect_name) {
+  pushUndoSnapshot();
   auto* clip = clipAt(selectedClipRef());
   if (clip == nullptr) {
     return;
@@ -1911,6 +2070,7 @@ double TimelineDocumentController::sourceDurationSecondsForFile(const QString& f
 }
 
 bool TimelineDocumentController::splitSelectedClip(double split_seconds) {
+  pushUndoSnapshot();
   const auto ref = selectedClipRef();
   auto* track = trackAt(ref.track_index);
   auto* clip = clipAt(ref);
@@ -2140,6 +2300,148 @@ void TimelineDocumentController::renameSequenceMarker(const QString& marker_id, 
   }
 }
 
+void TimelineDocumentController::setSequenceMarkerNote(const QString& marker_id, const QString& note) {
+  const auto normalized_note = note.trimmed();
+  for (auto& marker : markers_) {
+    if (marker.marker_id != marker_id) {
+      continue;
+    }
+    if (marker.note == normalized_note) {
+      return;
+    }
+    marker.note = normalized_note;
+    emitMarkersState();
+    setDirty(true);
+    return;
+  }
+}
+
+void TimelineDocumentController::setSequenceMarkerStatus(const QString& marker_id, const QString& status) {
+  const auto normalized_status = normalized_marker_status(status);
+  for (auto& marker : markers_) {
+    if (marker.marker_id != marker_id) {
+      continue;
+    }
+    if (marker.status == normalized_status) {
+      return;
+    }
+    marker.status = normalized_status;
+    emitMarkersState();
+    setDirty(true);
+    return;
+  }
+}
+
+void TimelineDocumentController::setSequenceMarkerCompleted(const QString& marker_id, bool completed) {
+  for (auto& marker : markers_) {
+    if (marker.marker_id != marker_id) {
+      continue;
+    }
+    if (marker.completed == completed) {
+      return;
+    }
+    marker.completed = completed;
+    emitMarkersState();
+    setDirty(true);
+    return;
+  }
+}
+
+void TimelineDocumentController::seekSequenceMarker(const QString& marker_id) {
+  for (const auto& marker : markers_) {
+    if (marker.marker_id != marker_id) {
+      continue;
+    }
+    seekSequenceSeconds(marker.seconds);
+    return;
+  }
+}
+
+bool TimelineDocumentController::seekNextSequenceMarker() {
+  for (const auto& marker : markers_) {
+    if (marker.seconds > sequence_playhead_seconds_ + kBoundaryEpsilon) {
+      seekSequenceSeconds(marker.seconds);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TimelineDocumentController::seekPreviousSequenceMarker() {
+  for (auto index = markers_.size() - 1; index >= 0; --index) {
+    const auto& marker = markers_.at(index);
+    if (marker.seconds < sequence_playhead_seconds_ - kBoundaryEpsilon) {
+      seekSequenceSeconds(marker.seconds);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TimelineDocumentController::seekNextEditPoint() {
+  QVector<double> boundaries;
+  for (const auto& track : tracks_) {
+    if (track.kind != TrackKind::Video) {
+      continue;
+    }
+    for (const auto& clip : track.clips) {
+      boundaries.push_back(qMax(0.0, clip.start_seconds));
+      boundaries.push_back(qMax(0.0, clipEndSeconds(clip)));
+    }
+  }
+  if (boundaries.isEmpty()) {
+    return false;
+  }
+
+  std::sort(boundaries.begin(), boundaries.end());
+  double previous_value = -1.0;
+  for (const auto value : boundaries) {
+    if (previous_value >= 0.0 && qAbs(value - previous_value) <= kBoundaryEpsilon) {
+      continue;
+    }
+    previous_value = value;
+    if (value > sequence_playhead_seconds_ + kBoundaryEpsilon) {
+      seekSequenceSeconds(value);
+      return true;
+    }
+  }
+  return false;
+}
+
+bool TimelineDocumentController::seekPreviousEditPoint() {
+  QVector<double> boundaries;
+  for (const auto& track : tracks_) {
+    if (track.kind != TrackKind::Video) {
+      continue;
+    }
+    for (const auto& clip : track.clips) {
+      boundaries.push_back(qMax(0.0, clip.start_seconds));
+      boundaries.push_back(qMax(0.0, clipEndSeconds(clip)));
+    }
+  }
+  if (boundaries.isEmpty()) {
+    return false;
+  }
+
+  std::sort(boundaries.begin(), boundaries.end());
+  double previous_value = -1.0;
+  auto candidate = -1.0;
+  for (const auto value : boundaries) {
+    if (previous_value >= 0.0 && qAbs(value - previous_value) <= kBoundaryEpsilon) {
+      continue;
+    }
+    previous_value = value;
+    if (value < sequence_playhead_seconds_ - kBoundaryEpsilon) {
+      candidate = value;
+    }
+  }
+  if (candidate < 0.0) {
+    return false;
+  }
+  seekSequenceSeconds(candidate);
+  return true;
+}
+
 void TimelineDocumentController::removeSequenceMarker(const QString& marker_id) {
   for (int index = 0; index < markers_.size(); ++index) {
     if (markers_.at(index).marker_id != marker_id) {
@@ -2276,7 +2578,7 @@ QVariantMap TimelineDocumentController::clipMap(int index) const {
     QVariantMap map;
     map.insert(QStringLiteral("clipId"), QString{});
     map.insert(QStringLiteral("index"), index);
-    map.insert(QStringLiteral("selected"), index == current_index_);
+    map.insert(QStringLiteral("selected"), false);
     map.insert(QStringLiteral("displayLabel"), QString{});
     map.insert(QStringLiteral("mediaType"), QStringLiteral("video"));
     map.insert(QStringLiteral("posterSource"), QString{});
@@ -2337,7 +2639,7 @@ QVariantMap TimelineDocumentController::clipMap(const Clip& clip, int flattened_
   QVariantMap map;
   map.insert(QStringLiteral("clipId"), clip.clip_id);
   map.insert(QStringLiteral("index"), flattened_index);
-  map.insert(QStringLiteral("selected"), selected_clip_id_ == clip.clip_id);
+  map.insert(QStringLiteral("selected"), isClipSelected(clip.clip_id));
   map.insert(QStringLiteral("assetId"), clip.asset_id);
   map.insert(QStringLiteral("mediaType"), clip.media_type);
   map.insert(QStringLiteral("filePath"), clip.file_path);
@@ -2785,6 +3087,9 @@ QVariantMap TimelineDocumentController::markerMap(const Marker& marker) const {
   QVariantMap map;
   map.insert(QStringLiteral("markerId"), marker.marker_id);
   map.insert(QStringLiteral("label"), marker.label);
+  map.insert(QStringLiteral("note"), marker.note);
+  map.insert(QStringLiteral("status"), marker.status);
+  map.insert(QStringLiteral("completed"), marker.completed);
   map.insert(QStringLiteral("color"), marker.color);
   map.insert(QStringLiteral("seconds"), marker.seconds);
   map.insert(QStringLiteral("timecode"), formatDurationText(marker.seconds));
@@ -3317,6 +3622,35 @@ void TimelineDocumentController::shiftTrackClipsFrom(
   sort_track_clips(track);
 }
 
+void TimelineDocumentController::shiftAllTrackClipsFrom(
+    double sequence_seconds,
+    double delta_seconds,
+    const QString& excluded_clip_id) {
+  if (qAbs(delta_seconds) <= kBoundaryEpsilon) {
+    return;
+  }
+
+  for (auto& track : tracks_) {
+    shiftTrackClipsFrom(&track, sequence_seconds, delta_seconds, excluded_clip_id);
+  }
+}
+
+void TimelineDocumentController::shiftMarkersFrom(double sequence_seconds, double delta_seconds) {
+  if (qAbs(delta_seconds) <= kBoundaryEpsilon) {
+    return;
+  }
+
+  for (auto& marker : markers_) {
+    if (marker.seconds >= sequence_seconds - kBoundaryEpsilon) {
+      marker.seconds = qMax(0.0, marker.seconds + delta_seconds);
+    }
+  }
+  std::sort(
+      markers_.begin(),
+      markers_.end(),
+      [](const auto& left, const auto& right) { return left.seconds < right.seconds; });
+}
+
 void TimelineDocumentController::splitTrackClipAtSequenceSeconds(Track* track, int clip_index, double sequence_seconds) {
   if (track == nullptr || clip_index < 0 || clip_index >= track->clips.size()) {
     return;
@@ -3416,6 +3750,9 @@ bool TimelineDocumentController::persistDocument(const QString& document_path) c
     QJsonObject marker_object;
     marker_object.insert(QStringLiteral("markerId"), marker.marker_id);
     marker_object.insert(QStringLiteral("label"), marker.label);
+    marker_object.insert(QStringLiteral("note"), marker.note);
+    marker_object.insert(QStringLiteral("status"), marker.status);
+    marker_object.insert(QStringLiteral("completed"), marker.completed);
     marker_object.insert(QStringLiteral("color"), marker.color);
     marker_object.insert(QStringLiteral("seconds"), marker.seconds);
     return marker_object;
@@ -3547,10 +3884,14 @@ void TimelineDocumentController::syncAudioTracks() {
       video_tracks.end(),
       [](const auto& left, const auto& right) { return left.lane_index < right.lane_index; });
 
+  // Pass 1: all video tracks grouped together
   for (auto& video_track : video_tracks) {
     sort_track_clips(&video_track);
     next_tracks.push_back(video_track);
+  }
 
+  // Pass 2: all audio tracks grouped below video tracks
+  for (const auto& video_track : video_tracks) {
     Track audio_track;
     audio_track.kind = TrackKind::Audio;
     audio_track.lane_index = video_track.lane_index;
@@ -3706,6 +4047,340 @@ void TimelineDocumentController::emitSourceMonitorState() {
 
 void TimelineDocumentController::emitMarkersState() {
   emit markersChanged();
+}
+
+QStringList TimelineDocumentController::selectedClipIds() const {
+  return selected_clip_ids_;
+}
+
+int TimelineDocumentController::selectedClipCount() const {
+  return static_cast<int>(selected_clip_ids_.size());
+}
+
+bool TimelineDocumentController::isClipSelected(const QString& clip_id) const {
+  if (selected_clip_ids_.isEmpty()) {
+    return selected_clip_id_ == clip_id;
+  }
+  return selected_clip_ids_.contains(clip_id);
+}
+
+void TimelineDocumentController::toggleClipSelection(int index) {
+  const auto ref = clipRefAt(index);
+  const auto* clip = clipAt(ref);
+  if (clip == nullptr) {
+    return;
+  }
+
+  if (selected_clip_ids_.contains(clip->clip_id)) {
+    selected_clip_ids_.removeAll(clip->clip_id);
+    if (selected_clip_ids_.isEmpty()) {
+      selected_clip_id_.clear();
+      current_index_ = -1;
+    } else {
+      selected_clip_id_ = selected_clip_ids_.last();
+      current_index_ = flattenedIndexForClipId(selected_clip_id_);
+    }
+  } else {
+    selected_clip_ids_.append(clip->clip_id);
+    selected_clip_id_ = clip->clip_id;
+    current_index_ = index;
+  }
+
+  emit selectionChanged();
+  emit clipsChanged();
+  emit sequenceChanged();
+}
+
+void TimelineDocumentController::selectClipRange(int from_index, int to_index) {
+  const int low = std::min(from_index, to_index);
+  const int high = std::max(from_index, to_index);
+  selected_clip_ids_.clear();
+
+  const auto refs = orderedVideoClipRefs();
+  for (int i = low; i <= high && i < refs.size(); ++i) {
+    const auto* clip = clipAt(refs.at(i));
+    if (clip != nullptr) {
+      selected_clip_ids_.append(clip->clip_id);
+    }
+  }
+
+  if (!selected_clip_ids_.isEmpty()) {
+    selected_clip_id_ = selected_clip_ids_.last();
+    current_index_ = to_index;
+  }
+
+  emit selectionChanged();
+  emit clipsChanged();
+  emit sequenceChanged();
+}
+
+void TimelineDocumentController::selectAllClips() {
+  selected_clip_ids_.clear();
+  const auto refs = orderedVideoClipRefs();
+  for (const auto& ref : refs) {
+    const auto* clip = clipAt(ref);
+    if (clip != nullptr) {
+      selected_clip_ids_.append(clip->clip_id);
+    }
+  }
+
+  if (!selected_clip_ids_.isEmpty()) {
+    selected_clip_id_ = selected_clip_ids_.first();
+    current_index_ = 0;
+  }
+
+  emit selectionChanged();
+  emit clipsChanged();
+  emit sequenceChanged();
+}
+
+void TimelineDocumentController::deselectAllClips() {
+  selected_clip_ids_.clear();
+  selected_clip_id_.clear();
+  current_index_ = -1;
+  emit selectionChanged();
+  emit clipsChanged();
+  emit sequenceChanged();
+}
+
+void TimelineDocumentController::liftSelectedClips() {
+  if (selected_clip_ids_.isEmpty()) {
+    return;
+  }
+  pushUndoSnapshot();
+  const auto removed_clip_count = selected_clip_ids_.size();
+
+  for (auto& track : tracks_) {
+    track.clips.erase(
+        std::remove_if(track.clips.begin(), track.clips.end(),
+                       [this](const Clip& clip) { return selected_clip_ids_.contains(clip.clip_id); }),
+        track.clips.end());
+  }
+
+  selected_clip_ids_.clear();
+  selected_clip_id_.clear();
+  current_index_ = -1;
+  syncAudioTracks();
+  preview_source_.clear();
+  current_clip_playhead_seconds_ = 0.0;
+  sequence_playing_ = false;
+  setDirty(true);
+  emitAllState();
+  setStatus(QStringLiteral("Lifted %1 selected clips from the sequence.").arg(removed_clip_count));
+}
+
+void TimelineDocumentController::extractSelectedClips() {
+  if (selected_clip_ids_.isEmpty()) {
+    return;
+  }
+
+  struct TimeRange final {
+    double start = 0.0;
+    double end = 0.0;
+  };
+
+  QVector<TimeRange> ranges;
+  ranges.reserve(selected_clip_ids_.size());
+  for (const auto& track : tracks_) {
+    for (const auto& clip : track.clips) {
+      if (!selected_clip_ids_.contains(clip.clip_id)) {
+        continue;
+      }
+      ranges.push_back({clip.start_seconds, clipEndSeconds(clip)});
+    }
+  }
+  if (ranges.isEmpty()) {
+    return;
+  }
+
+  std::sort(
+      ranges.begin(),
+      ranges.end(),
+      [](const auto& left, const auto& right) { return left.start < right.start; });
+
+  QVector<TimeRange> merged_ranges;
+  for (const auto& range : ranges) {
+    if (merged_ranges.isEmpty() || range.start > merged_ranges.last().end + kBoundaryEpsilon) {
+      merged_ranges.push_back(range);
+      continue;
+    }
+    merged_ranges.last().end = qMax(merged_ranges.last().end, range.end);
+  }
+
+  for (const auto& track : tracks_) {
+    for (const auto& clip : track.clips) {
+      if (selected_clip_ids_.contains(clip.clip_id)) {
+        continue;
+      }
+      const auto clip_start = clip.start_seconds;
+      const auto clip_end = clipEndSeconds(clip);
+      for (const auto& range : merged_ranges) {
+        if (clip_end > range.start + kBoundaryEpsilon && clip_start < range.end - kBoundaryEpsilon) {
+          setStatus(QStringLiteral("Extract supports multi-selection only when no unselected clips overlap the removed time ranges."));
+          return;
+        }
+      }
+    }
+  }
+
+  pushUndoSnapshot();
+
+  const auto removed_clip_count = selected_clip_ids_.size();
+  const auto first_range_start = merged_ranges.first().start;
+
+  for (auto& track : tracks_) {
+    track.clips.erase(
+        std::remove_if(track.clips.begin(), track.clips.end(),
+                       [this](const Clip& clip) { return selected_clip_ids_.contains(clip.clip_id); }),
+        track.clips.end());
+  }
+
+  auto cumulative_shift = 0.0;
+  for (const auto& range : merged_ranges) {
+    const auto adjusted_end = range.end + cumulative_shift;
+    const auto duration = qMax(0.0, range.end - range.start);
+    if (duration <= kBoundaryEpsilon) {
+      continue;
+    }
+    shiftAllTrackClipsFrom(adjusted_end, -duration);
+    shiftMarkersFrom(adjusted_end, -duration);
+    cumulative_shift -= duration;
+  }
+
+  const auto refs = orderedVideoClipRefs();
+  selected_clip_ids_.clear();
+  selected_clip_id_.clear();
+  for (const auto& ref : refs) {
+    const auto* candidate = clipAt(ref);
+    if (candidate == nullptr) {
+      continue;
+    }
+    if (candidate->start_seconds >= first_range_start - kBoundaryEpsilon) {
+      selected_clip_id_ = candidate->clip_id;
+      break;
+    }
+  }
+  if (selected_clip_id_.isEmpty() && !refs.isEmpty()) {
+    if (const auto* candidate = clipAt(refs.last()); candidate != nullptr) {
+      selected_clip_id_ = candidate->clip_id;
+    }
+  }
+
+  updateCurrentIndexFromSelection();
+  sequence_playhead_seconds_ = qMin(qMax(0.0, first_range_start), totalDurationSeconds());
+  if (const auto* current_clip = clipAt(selectedClipRef()); current_clip != nullptr) {
+    preview_source_ = current_clip->poster_source;
+    current_clip_playhead_seconds_ = qBound(
+        current_clip->trim_start_seconds,
+        current_clip->trim_start_seconds + qMax(0.0, sequence_playhead_seconds_ - current_clip->start_seconds),
+        current_clip->trim_end_seconds);
+  } else {
+    preview_source_.clear();
+    current_clip_playhead_seconds_ = 0.0;
+  }
+  sequence_playing_ = false;
+  setDirty(true);
+  emitAllState();
+  setStatus(QStringLiteral("Extracted %1 selected clips and closed the gaps.").arg(removed_clip_count));
+}
+
+void TimelineDocumentController::removeSelectedClips() {
+  liftSelectedClips();
+}
+
+bool TimelineDocumentController::canUndo() const {
+  return !undo_stack_.isEmpty();
+}
+
+bool TimelineDocumentController::canRedo() const {
+  return !redo_stack_.isEmpty();
+}
+
+void TimelineDocumentController::pushUndoSnapshot() {
+  Snapshot snapshot;
+  snapshot.tracks = tracks_;
+  snapshot.markers = markers_;
+  snapshot.selected_clip_id = selected_clip_id_;
+  snapshot.selected_clip_ids = selected_clip_ids_;
+  snapshot.sequence_playhead_seconds = sequence_playhead_seconds_;
+
+  undo_stack_.append(std::move(snapshot));
+  if (undo_stack_.size() > kMaxUndoDepth) {
+    undo_stack_.removeFirst();
+  }
+  redo_stack_.clear();
+  emit undoStateChanged();
+}
+
+void TimelineDocumentController::beginContinuousEdit() {
+  if (!continuous_edit_active_) {
+    pushUndoSnapshot();
+    continuous_edit_active_ = true;
+  }
+}
+
+void TimelineDocumentController::endContinuousEdit() {
+  continuous_edit_active_ = false;
+}
+
+void TimelineDocumentController::undo() {
+  if (undo_stack_.isEmpty()) {
+    return;
+  }
+
+  Snapshot redo_snapshot;
+  redo_snapshot.tracks = tracks_;
+  redo_snapshot.markers = markers_;
+  redo_snapshot.selected_clip_id = selected_clip_id_;
+  redo_snapshot.selected_clip_ids = selected_clip_ids_;
+  redo_snapshot.sequence_playhead_seconds = sequence_playhead_seconds_;
+  redo_stack_.append(std::move(redo_snapshot));
+
+  const auto snapshot = undo_stack_.takeLast();
+  tracks_ = snapshot.tracks;
+  markers_ = snapshot.markers;
+  selected_clip_id_ = snapshot.selected_clip_id;
+  selected_clip_ids_ = snapshot.selected_clip_ids;
+  sequence_playhead_seconds_ = snapshot.sequence_playhead_seconds;
+
+  updateCurrentIndexFromSelection();
+  setDirty(true);
+  emit clipsChanged();
+  emit sequenceChanged();
+  emit selectionChanged();
+  emit playbackStateChanged();
+  emit markersChanged();
+  emit undoStateChanged();
+}
+
+void TimelineDocumentController::redo() {
+  if (redo_stack_.isEmpty()) {
+    return;
+  }
+
+  Snapshot undo_snapshot;
+  undo_snapshot.tracks = tracks_;
+  undo_snapshot.markers = markers_;
+  undo_snapshot.selected_clip_id = selected_clip_id_;
+  undo_snapshot.selected_clip_ids = selected_clip_ids_;
+  undo_snapshot.sequence_playhead_seconds = sequence_playhead_seconds_;
+  undo_stack_.append(std::move(undo_snapshot));
+
+  const auto snapshot = redo_stack_.takeLast();
+  tracks_ = snapshot.tracks;
+  markers_ = snapshot.markers;
+  selected_clip_id_ = snapshot.selected_clip_id;
+  selected_clip_ids_ = snapshot.selected_clip_ids;
+  sequence_playhead_seconds_ = snapshot.sequence_playhead_seconds;
+
+  updateCurrentIndexFromSelection();
+  setDirty(true);
+  emit clipsChanged();
+  emit sequenceChanged();
+  emit selectionChanged();
+  emit playbackStateChanged();
+  emit markersChanged();
+  emit undoStateChanged();
 }
 
 }  // namespace photo_editor::desktop

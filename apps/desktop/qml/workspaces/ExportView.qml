@@ -37,9 +37,7 @@ Rectangle {
             return "Select an asset in Library to queue an export.";
 
         if (catalogAssets.selectedMediaType === "photo") {
-            return editorPreview.previewSource.length > 0
-                    ? "Photo export uses the current rendered preview for preset-based exports."
-                    : "Photo export will fall back to the source file until a preview is available.";
+            return "Photo export renders from the source image with the saved crop and edit recipe, then scales to the selected preset.";
         }
 
         if (catalogAssets.selectedMediaType === "timeline")
@@ -58,6 +56,7 @@ Rectangle {
                     currentSelectionLabel(),
                     catalogAssets.selectedFilePath,
                     editorPreview.previewSource,
+                    catalogAssets.selectedRecipeJson,
                     presetCombo.currentText,
                     destinationField.text)
     }

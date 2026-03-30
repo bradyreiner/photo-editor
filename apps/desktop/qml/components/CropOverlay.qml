@@ -22,8 +22,8 @@ Item {
 
     readonly property real minNormalizedSize: 0.05
     readonly property color frameColor: "#f4f7fa"
-    readonly property color guideColor: "#cfd6de"
-    readonly property real handleSize: 12
+    readonly property color guideColor: "#d8e0e7"
+    readonly property real handleSize: 14
     readonly property rect normalizedRect: normalizedCropRect()
     readonly property rect cropScreenRect: Qt.rect(
         imageX + normalizedRect.x * imageWidth,
@@ -307,6 +307,28 @@ Item {
         }
 
         Rectangle {
+            x: 10
+            y: 10
+            radius: 6
+            color: "#96101419"
+            border.width: 1
+            border.color: "#2ef4f7fa"
+            visible: root.visible
+            implicitWidth: cropLabel.implicitWidth + 14
+            implicitHeight: cropLabel.implicitHeight + 8
+
+            Text {
+                id: cropLabel
+                anchors.centerIn: parent
+                text: Math.round(normalizedRect.width * 100) + "% x " + Math.round(normalizedRect.height * 100) + "%"
+                color: "#f4f7fa"
+                font.family: "Avenir Next"
+                font.pixelSize: 10
+                font.weight: Font.Medium
+            }
+        }
+
+        Rectangle {
             width: 1
             height: parent.height
             x: parent.width / 3
@@ -403,6 +425,7 @@ Item {
     MouseArea {
         anchors.fill: parent
         hoverEnabled: true
+        preventStealing: true
         acceptedButtons: Qt.LeftButton
         cursorShape: cursorForMode(dragState.mode !== "" ? dragState.mode : hitMode(mouseX, mouseY))
 

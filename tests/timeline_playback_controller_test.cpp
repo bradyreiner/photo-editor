@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
 
   document.addVideoTrack();
   document.selectClip(1);
-  document.moveSelectedClipToTrackRow(2, 1.0);
+  document.moveSelectedClipToTrackRow(1, 1.0);
   playback.seekSequenceSeconds(1.5);
   if (document.currentClip().value(QStringLiteral("trackLabel")).toString() != QStringLiteral("V2") ||
       !nearly_equal(document.currentClipPlayheadSeconds(), 0.5)) {

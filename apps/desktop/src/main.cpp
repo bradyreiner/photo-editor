@@ -4,6 +4,7 @@
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QString>
+#include <QTimer>
 
 #include "app_bootstrap.h"
 #include "app_shell_controller.h"
@@ -12,6 +13,7 @@
 #include "editor_preview_controller.h"
 #include "export_job_controller.h"
 #include "macos_updater.h"
+#include "preview_backend_controller.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
 
@@ -33,6 +35,7 @@ int main(int argc, char* argv[]) {
   photo_editor::desktop::EditorPreviewController editor_preview;
   photo_editor::desktop::ExportJobController export_jobs;
   photo_editor::desktop::MacosUpdater macos_updater;
+  photo_editor::desktop::PreviewBackendController preview_backend;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
   QQmlApplicationEngine engine;
@@ -41,6 +44,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
   engine.rootContext()->setContextProperty("editorPreview", &editor_preview);
   engine.rootContext()->setContextProperty("exportJobs", &export_jobs);
+  engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 
@@ -52,6 +56,21 @@ int main(int argc, char* argv[]) {
       Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("PhotoEditor"), QStringLiteral("Main"));
   catalog_assets.refresh();
+
+  // Periodically write session state for crash recovery
+  QTimer session_timer;
+  session_timer.setInterval(5000);
+  QObject::connect(&session_timer, &QTimer::timeout, [&]() {
+    app_shell.updateSessionState(
+        catalog_assets.property("selectedAssetId").toString(),
+        timeline_document.property("savedDocumentPath").toString());
+  });
+  session_timer.start();
+
+  QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]() {
+    session_timer.stop();
+    app_shell.markCleanExit();
+  });
 
   return app.exec();
 }

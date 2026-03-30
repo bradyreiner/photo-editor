@@ -17,26 +17,34 @@ Rectangle {
 
     property string effectSearchText: ""
     property string transitionSearchText: ""
+    readonly property var documentController: timelineDocument !== undefined && timelineDocument !== null ? timelineDocument : null
+    readonly property var clipState: currentClip !== undefined && currentClip !== null ? currentClip : ({})
+    readonly property var effectLibraryItems: effectLibraryModel !== undefined && effectLibraryModel !== null ? effectLibraryModel : []
+    readonly property var transitionLibraryItems: transitionLibraryModel !== undefined && transitionLibraryModel !== null ? transitionLibraryModel : []
+    readonly property int selectedClipIndex: documentController !== null ? Number(documentController.currentIndex) : -1
+    readonly property bool hasSelection: selectedClipIndex >= 0
 
     radius: 12
     color: theme.alpha(theme.ink900, 0.82)
     border.width: 1
     border.color: theme.alpha(theme.lineSoft, 0.55)
 
+    readonly property bool hasClip: clipState.displayLabel !== undefined
+
     function currentEffectStack() {
-        return currentClip.effectStack ? currentClip.effectStack : []
+        return hasClip && clipState.effectStack ? clipState.effectStack : []
     }
 
     function addQuickEffect(effectName) {
-        if (timelineDocument.currentIndex < 0)
+        if (!hasSelection || documentController === null)
             return
-        timelineDocument.addSelectedClipEffect(effectName)
+        documentController.addSelectedClipEffect(effectName)
     }
 
     function assignTransition(edge, transitionName, durationSeconds) {
-        if (timelineDocument.currentIndex < 0)
+        if (!hasSelection || documentController === null)
             return
-        timelineDocument.assignSelectedClipTransition(edge, transitionName, durationSeconds)
+        documentController.assignSelectedClipTransition(edge, transitionName, durationSeconds)
     }
 
     ColumnLayout {
@@ -124,7 +132,7 @@ Rectangle {
 
             Label {
                 Layout.fillWidth: true
-                text: currentClip.displayLabel && currentClip.displayLabel.length > 0 ? currentClip.displayLabel : "No clip selected"
+                text: root.hasClip && clipState.displayLabel ? clipState.displayLabel : "No clip selected"
                 color: theme.textStrong
                 font.family: theme.fontUi
                 font.pixelSize: 12
@@ -133,7 +141,7 @@ Rectangle {
 
             Label {
                 Layout.fillWidth: true
-                text: currentClip.trackLabel ? currentClip.trackLabel : "Select a clip to edit"
+                text: root.hasClip && clipState.trackLabel ? clipState.trackLabel : "Select a clip to edit"
                 color: theme.textMuted
                 font.family: theme.fontMono
                 font.pixelSize: 10
@@ -207,45 +215,54 @@ Rectangle {
                         color: theme.alpha(theme.ink900, 0.84)
                         border.width: 1
                         border.color: theme.alpha(theme.lineSoft, 0.34)
-                        implicitHeight: 120
+                        Layout.preferredHeight: Math.min(200, Math.max(60, stackColumn.implicitHeight + 20))
+                        clip: true
 
-                        ColumnLayout {
+                        Flickable {
                             anchors.fill: parent
                             anchors.margins: 10
-                            spacing: 6
+                            contentHeight: stackColumn.implicitHeight
+                            boundsBehavior: Flickable.StopAtBounds
+                            clip: true
 
-                            Repeater {
-                                model: root.currentEffectStack()
+                            ColumnLayout {
+                                id: stackColumn
+                                width: parent.width
+                                spacing: 6
 
-                                delegate: RowLayout {
-                                    required property var modelData
-                                    Layout.fillWidth: true
-                                    spacing: 6
+                                Repeater {
+                                    model: root.currentEffectStack()
 
-                                    Label {
+                                    delegate: RowLayout {
+                                        required property var modelData
                                         Layout.fillWidth: true
-                                        text: modelData
-                                        color: theme.textMain
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 10
-                                        elide: Text.ElideRight
-                                    }
+                                        spacing: 6
 
-                                    ActionButton {
-                                        text: "Remove"
-                                        compact: true
-                                        enabled: timelineDocument.currentIndex >= 0
-                                        onClicked: timelineDocument.removeSelectedClipEffect(modelData)
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: modelData
+                                            color: theme.textMain
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            elide: Text.ElideRight
+                                        }
+
+                                        ActionButton {
+                                            text: "Remove"
+                                            compact: true
+                                            enabled: root.hasSelection
+                                            onClicked: if (root.documentController) root.documentController.removeSelectedClipEffect(modelData)
+                                        }
                                     }
                                 }
-                            }
 
-                            Label {
-                                visible: root.currentEffectStack().length === 0
-                                text: "No effects on this clip yet."
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
+                                Label {
+                                    visible: root.currentEffectStack().length === 0
+                                    text: "No effects on this clip yet."
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                }
                             }
                         }
                     }
@@ -255,13 +272,13 @@ Rectangle {
                         spacing: 6
 
                         Repeater {
-                            model: ["Transform", "Opacity", "Crop", "Volume"]
+                            model: ["Transform", "Opacity", "Crop", "Color Balance", "Gaussian Blur", "Levels", "Volume"]
 
                             delegate: ActionButton {
                                 required property string modelData
                                 text: modelData
                                 compact: true
-                                enabled: timelineDocument.currentIndex >= 0
+                                enabled: root.hasSelection
                                 onClicked: root.addQuickEffect(modelData)
                             }
                         }
@@ -289,7 +306,7 @@ Rectangle {
                         Layout.fillHeight: true
                         clip: true
                         spacing: 6
-                        model: effectLibraryModel
+                        model: root.effectLibraryItems
 
                         delegate: Item {
                             required property var modelData
@@ -349,7 +366,7 @@ Rectangle {
                                     ActionButton {
                                         text: "Add"
                                         compact: true
-                                        enabled: timelineDocument.currentIndex >= 0
+                                        enabled: root.hasSelection
                                         onClicked: root.addQuickEffect(modelData.name)
                                     }
                                 }
@@ -382,7 +399,7 @@ Rectangle {
                         spacing: 6
 
                         Label {
-                            text: "In  •  " + (currentClip.transitionInName ? currentClip.transitionInName : "none")
+                            text: "In  •  " + (root.hasClip && clipState.transitionInName ? clipState.transitionInName : "none")
                             color: theme.textMuted
                             font.family: theme.fontMono
                             font.pixelSize: 10
@@ -393,8 +410,8 @@ Rectangle {
                         ActionButton {
                             text: "Clear In"
                             compact: true
-                            enabled: timelineDocument.currentIndex >= 0
-                            onClicked: timelineDocument.clearSelectedClipTransition("in")
+                            enabled: root.hasSelection
+                            onClicked: if (root.documentController) root.documentController.clearSelectedClipTransition("in")
                         }
                     }
 
@@ -403,7 +420,7 @@ Rectangle {
                         spacing: 6
 
                         Label {
-                            text: "Out  •  " + (currentClip.transitionOutName ? currentClip.transitionOutName : "none")
+                            text: "Out  •  " + (root.hasClip && clipState.transitionOutName ? clipState.transitionOutName : "none")
                             color: theme.textMuted
                             font.family: theme.fontMono
                             font.pixelSize: 10
@@ -414,8 +431,8 @@ Rectangle {
                         ActionButton {
                             text: "Clear Out"
                             compact: true
-                            enabled: timelineDocument.currentIndex >= 0
-                            onClicked: timelineDocument.clearSelectedClipTransition("out")
+                            enabled: root.hasSelection
+                            onClicked: if (root.documentController) root.documentController.clearSelectedClipTransition("out")
                         }
                     }
 
@@ -441,7 +458,7 @@ Rectangle {
                         Layout.fillHeight: true
                         clip: true
                         spacing: 6
-                        model: transitionLibraryModel
+                        model: root.transitionLibraryItems
 
                         delegate: Item {
                             required property var modelData
@@ -503,14 +520,14 @@ Rectangle {
                                         ActionButton {
                                             text: "In"
                                             compact: true
-                                            enabled: timelineDocument.currentIndex >= 0
+                                            enabled: root.hasSelection
                                             onClicked: root.assignTransition("in", modelData.name, transitionTile.libraryDurationSeconds)
                                         }
 
                                         ActionButton {
                                             text: "Out"
                                             compact: true
-                                            enabled: timelineDocument.currentIndex >= 0
+                                            enabled: root.hasSelection
                                             onClicked: root.assignTransition("out", modelData.name, transitionTile.libraryDurationSeconds)
                                         }
                                     }
@@ -549,13 +566,13 @@ Rectangle {
                     ToneComboBox {
                         Layout.fillWidth: true
                         model: ["Fit", "Fill", "Stretch"]
-                        currentIndex: currentClip.frameMode === "fill" ? 1 : currentClip.frameMode === "stretch" ? 2 : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onActivated: timelineDocument.setSelectedFrameMode(currentText.toLowerCase())
+                        currentIndex: root.hasClip && clipState.frameMode === "fill" ? 1 : root.hasClip && clipState.frameMode === "stretch" ? 2 : 0
+                        enabled: root.hasSelection
+                        onActivated: if (root.documentController) root.documentController.setSelectedFrameMode(currentText.toLowerCase())
                     }
 
                     Label {
-                        text: "Scale  •  " + Number(currentClip.frameScale || 1).toFixed(2) + "x"
+                        text: "Scale  •  " + Number(root.hasClip ? (clipState.frameScale || 1) : 1).toFixed(2) + "x"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -565,13 +582,13 @@ Rectangle {
                         Layout.fillWidth: true
                         from: 1
                         to: 2.5
-                        value: currentClip.frameScale ? currentClip.frameScale : 1
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedFrameScale(value)
+                        value: root.hasClip && clipState.frameScale ? clipState.frameScale : 1
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedFrameScale(value)
                     }
 
                     Label {
-                        text: "Horizontal  •  " + Number(currentClip.frameOffsetX || 0).toFixed(2)
+                        text: "Horizontal  •  " + Number(root.hasClip ? (clipState.frameOffsetX || 0) : 0).toFixed(2)
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -581,13 +598,13 @@ Rectangle {
                         Layout.fillWidth: true
                         from: -1
                         to: 1
-                        value: currentClip.frameOffsetX ? currentClip.frameOffsetX : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedFrameOffsetX(value)
+                        value: root.hasClip && clipState.frameOffsetX ? clipState.frameOffsetX : 0
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedFrameOffsetX(value)
                     }
 
                     Label {
-                        text: "Vertical  •  " + Number(currentClip.frameOffsetY || 0).toFixed(2)
+                        text: "Vertical  •  " + Number(root.hasClip ? (clipState.frameOffsetY || 0) : 0).toFixed(2)
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -597,13 +614,13 @@ Rectangle {
                         Layout.fillWidth: true
                         from: -1
                         to: 1
-                        value: currentClip.frameOffsetY ? currentClip.frameOffsetY : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedFrameOffsetY(value)
+                        value: root.hasClip && clipState.frameOffsetY ? clipState.frameOffsetY : 0
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedFrameOffsetY(value)
                     }
 
                     Label {
-                        text: "Opacity  •  " + Math.round(Number(currentClip.opacity || 1) * 100) + "%"
+                        text: "Opacity  •  " + Math.round(Number(root.hasClip ? (clipState.opacity || 1) : 1) * 100) + "%"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -613,9 +630,9 @@ Rectangle {
                         Layout.fillWidth: true
                         from: 0
                         to: 1
-                        value: currentClip.opacity !== undefined ? currentClip.opacity : 1
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedClipOpacity(value)
+                        value: root.hasClip && clipState.opacity !== undefined ? clipState.opacity : 1
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedClipOpacity(value)
                     }
                 }
             }
@@ -642,7 +659,7 @@ Rectangle {
                     }
 
                     Label {
-                        text: "Gain  •  " + Number(currentClip.audioGainDb || 0).toFixed(1) + " dB"
+                        text: "Gain  •  " + Number(root.hasClip ? (clipState.audioGainDb || 0) : 0).toFixed(1) + " dB"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -652,13 +669,13 @@ Rectangle {
                         Layout.fillWidth: true
                         from: -36
                         to: 12
-                        value: currentClip.audioGainDb !== undefined ? currentClip.audioGainDb : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedClipAudioGain(value)
+                        value: root.hasClip && clipState.audioGainDb !== undefined ? clipState.audioGainDb : 0
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedClipAudioGain(value)
                     }
 
                     Label {
-                        text: "Fade In  •  " + Number(currentClip.fadeInSeconds || 0).toFixed(2) + "s"
+                        text: "Fade In  •  " + Number(root.hasClip ? (clipState.fadeInSeconds || 0) : 0).toFixed(2) + "s"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -667,14 +684,14 @@ Rectangle {
                     Slider {
                         Layout.fillWidth: true
                         from: 0
-                        to: currentClip.trimmedDurationSeconds ? currentClip.trimmedDurationSeconds : 1
-                        value: currentClip.fadeInSeconds !== undefined ? currentClip.fadeInSeconds : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedClipFadeInSeconds(value)
+                        to: root.hasClip && clipState.trimmedDurationSeconds ? clipState.trimmedDurationSeconds : 1
+                        value: root.hasClip && clipState.fadeInSeconds !== undefined ? clipState.fadeInSeconds : 0
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedClipFadeInSeconds(value)
                     }
 
                     Label {
-                        text: "Fade Out  •  " + Number(currentClip.fadeOutSeconds || 0).toFixed(2) + "s"
+                        text: "Fade Out  •  " + Number(root.hasClip ? (clipState.fadeOutSeconds || 0) : 0).toFixed(2) + "s"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
@@ -683,10 +700,10 @@ Rectangle {
                     Slider {
                         Layout.fillWidth: true
                         from: 0
-                        to: currentClip.trimmedDurationSeconds ? currentClip.trimmedDurationSeconds : 1
-                        value: currentClip.fadeOutSeconds !== undefined ? currentClip.fadeOutSeconds : 0
-                        enabled: timelineDocument.currentIndex >= 0
-                        onMoved: timelineDocument.setSelectedClipFadeOutSeconds(value)
+                        to: root.hasClip && clipState.trimmedDurationSeconds ? clipState.trimmedDurationSeconds : 1
+                        value: root.hasClip && clipState.fadeOutSeconds !== undefined ? clipState.fadeOutSeconds : 0
+                        enabled: root.hasSelection
+                        onMoved: if (root.documentController) root.documentController.setSelectedClipFadeOutSeconds(value)
                     }
                 }
             }
@@ -713,28 +730,28 @@ Rectangle {
                     }
 
                     Label {
-                        text: "Trim In  •  " + Number(currentClip.trimStartSeconds || 0).toFixed(2) + "s"
+                        text: "Trim In  •  " + Number(root.hasClip ? (clipState.trimStartSeconds || 0) : 0).toFixed(2) + "s"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
                     }
 
                     Label {
-                        text: "Trim Out  •  " + Number(currentClip.trimEndSeconds || 0).toFixed(2) + "s"
+                        text: "Trim Out  •  " + Number(root.hasClip ? (clipState.trimEndSeconds || 0) : 0).toFixed(2) + "s"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
                     }
 
                     Label {
-                        text: "Duration  •  " + (currentClip.trimmedDurationText || "0:00")
+                        text: "Duration  •  " + (root.hasClip && clipState.trimmedDurationText ? clipState.trimmedDurationText : "0:00")
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10
                     }
 
                     Label {
-                        text: "Playback Rate  •  " + Number(currentClip.playbackRate || 1).toFixed(2) + "x"
+                        text: "Playback Rate  •  " + Number(root.hasClip ? (clipState.playbackRate || 1) : 1).toFixed(2) + "x"
                         color: theme.textMuted
                         font.family: theme.fontMono
                         font.pixelSize: 10

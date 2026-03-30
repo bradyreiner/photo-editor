@@ -9,15 +9,21 @@ set(photo_editor_desktop_sources
   src/catalog_asset_model.cpp
   src/editor_preview_controller.cpp
   src/export_job_controller.cpp
+  src/photo_render_utils.cpp
   src/main.cpp
+  src/preview_backend_controller.cpp
   src/app_bootstrap.cpp
   src/timeline_asset_store.cpp
   src/timeline_document_controller.cpp
   src/timeline_playback_controller.cpp
   src/macos_updater_stub.cpp
+  src/vision_segmentation_stub.cpp
 )
 
 if(APPLE)
+  list(REMOVE_ITEM photo_editor_desktop_sources src/vision_segmentation_stub.cpp)
+  list(APPEND photo_editor_desktop_sources src/vision_segmentation.mm)
+
   set(PHOTO_EDITOR_MACOS_BUNDLE_IDENTIFIER "com.photoeditor.desktop")
   set(PHOTO_EDITOR_MACOS_SPARKLE_PLIST_KEYS "")
 
@@ -92,13 +98,17 @@ qt_add_qml_module(photo_editor_app
     qml/components/AppPreferencesDialog.qml
     qml/components/BrandPanel.qml
     qml/components/ColorChannelButton.qml
+    qml/components/CommandPaletteDialog.qml
     qml/components/CropOverlay.qml
     qml/components/FilterChip.qml
+    qml/components/GalleryPickerDialog.qml
+    qml/components/HistogramDisplay.qml
     qml/components/InfoPill.qml
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
     qml/components/KeyboardShortcutsDialog.qml
     qml/components/MetricCard.qml
+    qml/components/ReviewPreview.qml
     qml/components/SectionHeader.qml
     qml/components/SidebarButton.qml
     qml/components/Theme.qml
@@ -135,6 +145,21 @@ target_link_libraries(
     Qt6::Widgets
     photo_engine
     photo_rust_ffi)
+
+target_compile_definitions(photo_editor_app
+  PRIVATE
+    PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND}>
+    PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND}>)
+
+if(APPLE)
+  find_library(VISION_FRAMEWORK Vision)
+  find_library(COREIMAGE_FRAMEWORK CoreImage)
+  find_library(COREVIDEO_FRAMEWORK CoreVideo)
+  if(VISION_FRAMEWORK AND COREIMAGE_FRAMEWORK AND COREVIDEO_FRAMEWORK)
+    target_link_libraries(photo_editor_app PRIVATE ${VISION_FRAMEWORK} ${COREIMAGE_FRAMEWORK} ${COREVIDEO_FRAMEWORK})
+  endif()
+  set_source_files_properties(src/vision_segmentation.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
 
 if(APPLE AND PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)
   get_filename_component(PHOTO_EDITOR_SPARKLE_FRAMEWORK_PARENT "${PHOTO_EDITOR_SPARKLE_FRAMEWORK_DIR}" DIRECTORY)

@@ -97,3 +97,17 @@ The active build focus is:
 2. import and metadata ingestion
 3. real Library workspace data
 4. first preview-enabled edit workflow
+
+## Next-level execution order
+
+Once the current foundations are stable, the next product push should be:
+
+1. serious culling workflow
+2. batch edit sync and presets
+3. mask stack with AI-assisted selections
+4. lens/detail correction and export quality
+5. relink, offline-drive recovery, and duplicate handling
+
+This keeps the product centered on the full-shoot photo workflow instead of spreading effort across lower-leverage surfaces.
+
+See [docs/next-level-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/next-level-roadmap.md) for the concrete rationale and implementation targets.

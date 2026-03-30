@@ -155,3 +155,7 @@ Still out of scope unless video becomes the primary product focus:
 - advanced color page workflows
 - Fairlight-class audio tooling
 - Fusion or After Effects class compositing
+
+## Concrete backlog
+
+For the concrete 20-task execution sequence that turns this roadmap into an actionable build list, see [docs/timeline-state-of-the-art-backlog.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/timeline-state-of-the-art-backlog.md).

@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/build/dev"
 APP_BINARY="${BUILD_DIR}/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
+EXPECTED_CMAKE_GENERATOR="Ninja"
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required. Install it with: brew install cmake ninja rust qt"
@@ -48,6 +49,21 @@ export PHOTO_EDITOR_BACKUP_DIR
 
 mkdir -p "${PHOTO_EDITOR_APP_DATA_DIR}" "${PHOTO_EDITOR_LOG_DIR}" "${PHOTO_EDITOR_BACKUP_DIR}"
 
+if [ -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+  CURRENT_CMAKE_GENERATOR="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" | head -n 1)"
+  if [ -n "${CURRENT_CMAKE_GENERATOR}" ] && [ "${CURRENT_CMAKE_GENERATOR}" != "${EXPECTED_CMAKE_GENERATOR}" ]; then
+    echo "Resetting ${BUILD_DIR} CMake metadata because generator '${CURRENT_CMAKE_GENERATOR}' does not match '${EXPECTED_CMAKE_GENERATOR}'..."
+    rm -rf \
+      "${BUILD_DIR}/CMakeCache.txt" \
+      "${BUILD_DIR}/CMakeFiles" \
+      "${BUILD_DIR}/Makefile" \
+      "${BUILD_DIR}/build.ninja" \
+      "${BUILD_DIR}/cmake_install.cmake" \
+      "${BUILD_DIR}/.ninja_deps" \
+      "${BUILD_DIR}/.ninja_log"
+  fi
+fi
+
 echo "Building Rust catalog binaries..."
 cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins
 if [ -n "${PHOTO_EDITOR_DATABASE_URL:-}" ]; then
@@ -58,7 +74,7 @@ else
   "${REPO_ROOT}/rust/target/debug/catalog_local_db" ensure-running
 fi
 echo "Configuring desktop build..."
-cmake -S . -B "${BUILD_DIR}" -G Ninja \
+cmake -S . -B "${BUILD_DIR}" -G "${EXPECTED_CMAKE_GENERATOR}" \
   -DCMAKE_BUILD_TYPE=Debug \
   -DPHOTO_EDITOR_BUILD_DESKTOP=ON \
   -DPHOTO_EDITOR_RUST_BINARY_DIR="${REPO_ROOT}/rust/target/debug"

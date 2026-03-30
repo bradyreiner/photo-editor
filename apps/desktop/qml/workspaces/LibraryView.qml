@@ -7,6 +7,7 @@ import "../components"
 Rectangle {
     id: root
     color: "transparent"
+    focus: true
 
     Theme {
         id: theme
@@ -21,11 +22,19 @@ Rectangle {
     property string localFolderUrl: ""
     property string localFolderPath: ""
     property string localSelectedFilePath: ""
+    property string catalogViewMode: "grid"
+    property bool focusCheckEnabled: false
 
     readonly property var importFilterValues: ["all", "today", "7d", "30d", "year"]
     readonly property var importFilterLabels: ["All Imports", "Today", "Last 7 Days", "Recent", "This Year"]
     readonly property var mediaFilterValues: ["all", "photos", "videos", "timelines"]
     readonly property var mediaFilterLabels: ["All Media", "Photos", "Videos", "Timelines"]
+    readonly property var reviewFilterValues: ["all", "picked", "rejected", "unmarked", "rated"]
+    readonly property var reviewFilterLabels: ["All Review States", "Picked", "Rejected", "Unmarked", "Rated"]
+    readonly property var availabilityFilterValues: ["all", "online", "offline"]
+    readonly property var availabilityFilterLabels: ["All Availability", "Online", "Offline"]
+    readonly property var minimumRatingValues: [0, 1, 2, 3, 4, 5]
+    readonly property var minimumRatingLabels: ["Any Rating", "1+ Stars", "2+ Stars", "3+ Stars", "4+ Stars", "5 Stars"]
     readonly property var captureFilterValues: {
         const values = ["all", "unknown"];
         for (let i = 0; i < catalogAssets.captureYears.length; ++i)
@@ -58,6 +67,8 @@ Rectangle {
 
     function activeFilterSummary() {
         const parts = [];
+        if (catalogAssets.searchFilter !== "")
+            parts.push("\"" + catalogAssets.searchFilter + "\"");
         if (catalogAssets.importDateFilter !== "all")
             parts.push(importFilterLabels[indexForValue(importFilterValues, catalogAssets.importDateFilter)]);
         if (catalogAssets.captureYearFilter !== "all")
@@ -66,6 +77,12 @@ Rectangle {
             parts.push(projectFilterLabels[indexForValue(projectFilterValues, catalogAssets.projectFilter)]);
         if (catalogAssets.mediaTypeFilter !== "all")
             parts.push(mediaFilterLabels[indexForValue(mediaFilterValues, catalogAssets.mediaTypeFilter)]);
+        if (catalogAssets.reviewFilter !== "all")
+            parts.push(reviewFilterLabels[indexForValue(reviewFilterValues, catalogAssets.reviewFilter)]);
+        if (catalogAssets.availabilityFilter !== "all")
+            parts.push(availabilityFilterLabels[indexForValue(availabilityFilterValues, catalogAssets.availabilityFilter)]);
+        if (catalogAssets.minimumRatingFilter > 0)
+            parts.push(minimumRatingLabels[indexForValue(minimumRatingValues, catalogAssets.minimumRatingFilter)]);
         return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets";
     }
 
@@ -103,10 +120,180 @@ Rectangle {
     }
 
     function clearFilters() {
+        catalogAssets.searchFilter = "";
         catalogAssets.importDateFilter = "all";
         catalogAssets.captureYearFilter = "all";
         catalogAssets.projectFilter = "all";
         catalogAssets.mediaTypeFilter = "all";
+        catalogAssets.reviewFilter = "all";
+        catalogAssets.availabilityFilter = "all";
+        catalogAssets.minimumRatingFilter = 0;
+    }
+
+    function cullStatusLabel(status) {
+        if (status === "picked")
+            return "Picked"
+        if (status === "rejected")
+            return "Rejected"
+        return "Unmarked"
+    }
+
+    function ratingLabel(rating) {
+        if (rating <= 0)
+            return "Unrated"
+        return rating + (rating === 1 ? " star" : " stars")
+    }
+
+    function cullSummary() {
+        return ratingLabel(catalogAssets.selectedRating) + "  •  " + cullStatusLabel(catalogAssets.selectedCullStatus)
+    }
+
+    function availabilityLabel(online) {
+        return online ? "Online" : "Offline"
+    }
+
+    function chooseRelinkFolder(selectedOnly) {
+        const folderUrl = catalogAssets.pickFolder(selectedOnly ? "Relink Selected Asset" : "Relink Offline Assets");
+        if (folderUrl.length === 0)
+            return;
+        if (selectedOnly)
+            catalogAssets.relinkSelectedAssetToFolder(folderUrl)
+        else
+            catalogAssets.relinkOfflineAssetsToFolder(folderUrl)
+    }
+
+    function reviewShortcutsEnabled() {
+        return !root.importBrowserOpen && !catalogAssets.busy && !newProjectField.activeFocus
+    }
+
+    function syncPreviewWithSelection() {
+        if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo" || !catalogAssets.selectedOnline)
+            return
+
+        editorPreview.loadAsset(
+                    catalogAssets.selectedAssetId,
+                    catalogAssets.selectedFilePath,
+                    catalogAssets.selectedThumbnailSource,
+                    catalogAssets.selectedCameraLabel,
+                    catalogAssets.selectedCaptureDate,
+                    catalogAssets.selectedLensModel,
+                    catalogAssets.selectedRecipeJson)
+    }
+
+    function selectedAssetMap() {
+        if (catalogAssets.selectedIndex < 0)
+            return {}
+        const asset = catalogAssets.assetAt(catalogAssets.selectedIndex)
+        asset.visibleIndex = catalogAssets.selectedIndex
+        return asset
+    }
+
+    function burstTextForAsset(asset) {
+        if (!asset || !asset.burstSize || asset.burstSize <= 1)
+            return ""
+        return "B " + asset.burstPosition + "/" + asset.burstSize
+    }
+
+    function assetSubtitle(asset) {
+        if (!asset)
+            return ""
+        let parts = []
+        if (asset.captureDate && asset.captureDate.length > 0)
+            parts.push(asset.captureDate)
+        if (asset.lensModel && asset.lensModel.length > 0)
+            parts.push(asset.lensModel)
+        return parts.join("  •  ")
+    }
+
+    function compareAssetModel() {
+        let items = []
+        if (catalogAssets.selectedIndex < 0)
+            return items
+
+        let current = selectedAssetMap()
+        if (!current.assetId)
+            return items
+        items.push(current)
+
+        let compareIndex = catalogAssets.selectedIndex + 1 < catalogAssets.assetCount
+                           ? catalogAssets.selectedIndex + 1
+                           : catalogAssets.selectedIndex - 1
+        if (compareIndex >= 0) {
+            let compareAsset = catalogAssets.assetAt(compareIndex)
+            compareAsset.visibleIndex = compareIndex
+            items.push(compareAsset)
+        }
+
+        return items
+    }
+
+    function surveyAssetModel() {
+        let items = []
+        if (catalogAssets.selectedIndex < 0)
+            return items
+
+        const current = selectedAssetMap()
+        if (!current.assetId)
+            return items
+
+        if (current.burstSize && current.burstSize > 1 && current.burstKey && current.burstKey.length > 0) {
+            for (let index = 0; index < catalogAssets.assetCount; ++index) {
+                let asset = catalogAssets.assetAt(index)
+                if (asset.burstKey !== current.burstKey)
+                    continue
+                asset.visibleIndex = index
+                items.push(asset)
+                if (items.length >= 6)
+                    break
+            }
+            return items
+        }
+
+        if (current.duplicateGroupSize && current.duplicateGroupSize > 1 && current.duplicateGroupKey && current.duplicateGroupKey.length > 0) {
+            for (let index = 0; index < catalogAssets.assetCount; ++index) {
+                let asset = catalogAssets.assetAt(index)
+                if (asset.duplicateGroupKey !== current.duplicateGroupKey)
+                    continue
+                asset.visibleIndex = index
+                items.push(asset)
+                if (items.length >= 6)
+                    break
+            }
+            return items
+        }
+
+        const start = Math.max(0, catalogAssets.selectedIndex - 1)
+        const end = Math.min(catalogAssets.assetCount - 1, start + 3)
+        for (let index = start; index <= end; ++index) {
+            let asset = catalogAssets.assetAt(index)
+            asset.visibleIndex = index
+            items.push(asset)
+        }
+        return items
+    }
+
+    function advanceAfterReview() {
+        if (catalogAssets.assetCount <= 1)
+            return
+        catalogAssets.selectRelative(1)
+    }
+
+    function applyPickReview(forceAdvance) {
+        catalogAssets.toggleSelectedPick()
+        if (forceAdvance || appShell.cullingAutoAdvance)
+            advanceAfterReview()
+    }
+
+    function applyRejectReview(forceAdvance) {
+        catalogAssets.toggleSelectedReject()
+        if (forceAdvance || appShell.cullingAutoAdvance)
+            advanceAfterReview()
+    }
+
+    function applyRatingReview(rating, forceAdvance) {
+        catalogAssets.setSelectedRating(rating)
+        if (forceAdvance || appShell.cullingAutoAdvance)
+            advanceAfterReview()
     }
 
     function applyProjectSelection(projectValue) {
@@ -155,6 +342,157 @@ Rectangle {
             if (catalogAssets.importing)
                 root.importBrowserOpen = false;
         }
+
+        function onSelectedIndexChanged() {
+            root.syncPreviewWithSelection()
+        }
+    }
+
+    Shortcut {
+        sequence: "Left"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.assetCount > 0
+        onActivated: catalogAssets.selectRelative(-1)
+    }
+
+    Shortcut {
+        sequence: "Right"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.assetCount > 0
+        onActivated: catalogAssets.selectRelative(1)
+    }
+
+    Shortcut {
+        sequence: "Up"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.assetCount > galleryFlow.columns
+        onActivated: catalogAssets.selectRelative(-galleryFlow.columns)
+    }
+
+    Shortcut {
+        sequence: "Down"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.assetCount > galleryFlow.columns
+        onActivated: catalogAssets.selectRelative(galleryFlow.columns)
+    }
+
+    Shortcut {
+        sequence: "P"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyPickReview(false)
+    }
+
+    Shortcut {
+        sequence: "X"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRejectReview(false)
+    }
+
+    Shortcut {
+        sequence: "U"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: catalogAssets.clearSelectedCullState()
+    }
+
+    Shortcut {
+        sequence: "0"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(0, false)
+    }
+
+    Shortcut {
+        sequence: "1"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(1, false)
+    }
+
+    Shortcut {
+        sequence: "2"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(2, false)
+    }
+
+    Shortcut {
+        sequence: "3"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(3, false)
+    }
+
+    Shortcut {
+        sequence: "4"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(4, false)
+    }
+
+    Shortcut {
+        sequence: "5"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(5, false)
+    }
+
+    Shortcut {
+        sequence: "Shift+P"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyPickReview(true)
+    }
+
+    Shortcut {
+        sequence: "Shift+X"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRejectReview(true)
+    }
+
+    Shortcut {
+        sequence: "Shift+0"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(0, true)
+    }
+
+    Shortcut {
+        sequence: "Shift+1"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(1, true)
+    }
+
+    Shortcut {
+        sequence: "Shift+2"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(2, true)
+    }
+
+    Shortcut {
+        sequence: "Shift+3"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(3, true)
+    }
+
+    Shortcut {
+        sequence: "Shift+4"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(4, true)
+    }
+
+    Shortcut {
+        sequence: "Shift+5"
+        context: Qt.WindowShortcut
+        enabled: root.reviewShortcutsEnabled() && catalogAssets.selectedIndex >= 0
+        onActivated: root.applyRatingReview(5, true)
     }
 
     FolderListModel {
@@ -178,6 +516,100 @@ Rectangle {
         nameFilters: catalogAssets.importFileNameFilters
     }
 
+    Component {
+        id: compareView
+
+        Rectangle {
+            color: "transparent"
+
+            RowLayout {
+                anchors.fill: parent
+                spacing: 10
+
+                Repeater {
+                    model: root.compareAssetModel()
+
+                    delegate: ReviewPreview {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        title: modelData.cameraLabel
+                        subtitle: root.assetSubtitle(modelData)
+                        imageSource: modelData.thumbnailSource
+                        selected: modelData.assetId === catalogAssets.selectedAssetId
+                        focusCheckEnabled: root.focusCheckEnabled
+                        photoAsset: modelData.mediaType === "photo"
+                        rating: modelData.rating
+                        picked: modelData.picked
+                        rejected: modelData.rejected
+                        burstText: root.burstTextForAsset(modelData)
+                        showDoubleClickHint: true
+                        onActivated: root.selectCatalogAsset(
+                                         modelData.visibleIndex,
+                                         modelData.assetId,
+                                         modelData.filePath,
+                                         modelData.thumbnailSource,
+                                         modelData.cameraLabel,
+                                         modelData.captureDate,
+                                         modelData.lensModel,
+                                         modelData.recipeJson,
+                                         modelData.mediaType)
+                        onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
+                    }
+                }
+            }
+        }
+    }
+
+    Component {
+        id: surveyView
+
+        Rectangle {
+            color: "transparent"
+
+            GridLayout {
+                anchors.fill: parent
+                columns: width > 1200 ? 3 : 2
+                columnSpacing: 10
+                rowSpacing: 10
+
+                Repeater {
+                    model: root.surveyAssetModel()
+
+                    delegate: ReviewPreview {
+                        required property var modelData
+
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        Layout.minimumHeight: 240
+                        title: modelData.cameraLabel
+                        subtitle: root.assetSubtitle(modelData)
+                        imageSource: modelData.thumbnailSource
+                        selected: modelData.assetId === catalogAssets.selectedAssetId
+                        focusCheckEnabled: root.focusCheckEnabled
+                        photoAsset: modelData.mediaType === "photo"
+                        rating: modelData.rating
+                        picked: modelData.picked
+                        rejected: modelData.rejected
+                        burstText: root.burstTextForAsset(modelData)
+                        onActivated: root.selectCatalogAsset(
+                                         modelData.visibleIndex,
+                                         modelData.assetId,
+                                         modelData.filePath,
+                                         modelData.thumbnailSource,
+                                         modelData.cameraLabel,
+                                         modelData.captureDate,
+                                         modelData.lensModel,
+                                         modelData.recipeJson,
+                                         modelData.mediaType)
+                        onDoubleActivated: root.assetActivated(modelData.mediaType === "photo" ? "edit" : "timeline")
+                    }
+                }
+            }
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 8
@@ -197,7 +629,7 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 148
+                    Layout.preferredHeight: 188
                     radius: theme.radius12
                     color: theme.alpha(theme.ink900, 0.78)
                     border.width: 1
@@ -243,6 +675,29 @@ Rectangle {
                                 spacing: 8
 
                                 ActionButton {
+                                    text: "Grid"
+                                    compact: true
+                                    active: root.catalogViewMode === "grid"
+                                    onClicked: root.catalogViewMode = "grid"
+                                }
+
+                                ActionButton {
+                                    text: "Compare"
+                                    compact: true
+                                    active: root.catalogViewMode === "compare"
+                                    enabled: catalogAssets.assetCount > 0
+                                    onClicked: root.catalogViewMode = "compare"
+                                }
+
+                                ActionButton {
+                                    text: "Survey"
+                                    compact: true
+                                    active: root.catalogViewMode === "survey"
+                                    enabled: catalogAssets.assetCount > 0
+                                    onClicked: root.catalogViewMode = "survey"
+                                }
+
+                                ActionButton {
                                     text: catalogAssets.loading ? "Refreshing..." : "Reload"
                                     enabled: !catalogAssets.busy
                                     onClicked: catalogAssets.refresh()
@@ -250,15 +705,81 @@ Rectangle {
 
                                 ActionButton {
                                     text: "Clear Filters"
-                                    enabled: catalogAssets.importDateFilter !== "all" || catalogAssets.captureYearFilter !== "all" || catalogAssets.projectFilter !== "all" || catalogAssets.mediaTypeFilter !== "all"
+                                    enabled: catalogAssets.searchFilter !== ""
+                                             || catalogAssets.importDateFilter !== "all"
+                                             || catalogAssets.captureYearFilter !== "all"
+                                             || catalogAssets.projectFilter !== "all"
+                                             || catalogAssets.mediaTypeFilter !== "all"
+                                             || catalogAssets.reviewFilter !== "all"
+                                             || catalogAssets.minimumRatingFilter > 0
                                     onClicked: root.clearFilters()
                                 }
                             }
                         }
 
+                        TextField {
+                            id: searchField
+                            Layout.fillWidth: true
+                            placeholderText: "Search by filename, camera, lens, location..."
+                            placeholderTextColor: "#5a6570"
+                            color: "#e0e4e8"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 12
+                            text: catalogAssets.searchFilter
+                            onTextChanged: catalogAssets.searchFilter = text
+                            background: Rectangle {
+                                color: "#1a1f25"
+                                radius: 6
+                                border.color: searchField.activeFocus ? theme.accentWarm400 : "#2a3038"
+                                border.width: 1
+                            }
+                            leftPadding: 10
+                            rightPadding: 10
+                            topPadding: 6
+                            bottomPadding: 6
+                        }
+
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 10
+
+                            Repeater {
+                                model: [
+                                    {
+                                        text: "All " + catalogAssets.assetCount,
+                                        value: "all",
+                                        accent: theme.accentWarm400
+                                    },
+                                    {
+                                        text: "Picks " + catalogAssets.visiblePickedCount,
+                                        value: "picked",
+                                        accent: theme.success
+                                    },
+                                    {
+                                        text: "Rejects " + catalogAssets.visibleRejectedCount,
+                                        value: "rejected",
+                                        accent: theme.error
+                                    },
+                                    {
+                                        text: "Unmarked " + catalogAssets.visibleUnmarkedCount,
+                                        value: "unmarked",
+                                        accent: theme.accentCool400
+                                    }
+                                ]
+
+                                delegate: FilterChip {
+                                    required property var modelData
+
+                                    text: modelData.text
+                                    accent: modelData.accent
+                                    active: catalogAssets.reviewFilter === modelData.value
+                                    onClicked: catalogAssets.reviewFilter = modelData.value
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
 
                             Label {
                                 text: "Imported"
@@ -305,6 +826,60 @@ Rectangle {
                                 onActivated: catalogAssets.mediaTypeFilter = root.mediaFilterValues[currentIndex]
                             }
                         }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+
+                            Label {
+                                text: "Review"
+                                color: "#7f8a94"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 10
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            ToneComboBox {
+                                Layout.preferredWidth: 170
+                                model: root.reviewFilterLabels
+                                currentIndex: root.indexForValue(root.reviewFilterValues, catalogAssets.reviewFilter)
+                                onActivated: catalogAssets.reviewFilter = root.reviewFilterValues[currentIndex]
+                            }
+
+                            Label {
+                                text: "Source"
+                                color: "#7f8a94"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 10
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            ToneComboBox {
+                                Layout.preferredWidth: 160
+                                model: root.availabilityFilterLabels
+                                currentIndex: root.indexForValue(root.availabilityFilterValues, catalogAssets.availabilityFilter)
+                                onActivated: catalogAssets.availabilityFilter = root.availabilityFilterValues[currentIndex]
+                            }
+
+                            Label {
+                                text: "Rating"
+                                color: "#7f8a94"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 10
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            ToneComboBox {
+                                Layout.preferredWidth: 160
+                                model: root.minimumRatingLabels
+                                currentIndex: root.indexForValue(root.minimumRatingValues, catalogAssets.minimumRatingFilter)
+                                onActivated: catalogAssets.minimumRatingFilter = root.minimumRatingValues[currentIndex]
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+                        }
                     }
                 }
 
@@ -315,6 +890,7 @@ Rectangle {
                     Flickable {
                         id: galleryFlick
                         anchors.fill: parent
+                        visible: root.catalogViewMode === "grid" && !root.importBrowserOpen
                         clip: true
                         contentWidth: width
                         contentHeight: galleryFlow.height
@@ -347,6 +923,16 @@ Rectangle {
                                     required property string filePath
                                     required property string thumbnailSource
                                     required property string recipeJson
+                                    required property int rating
+                                    required property bool picked
+                                    required property bool rejected
+                                    required property string cullStatus
+                                    required property int burstSize
+                                    required property int burstPosition
+                                    required property int duplicateGroupSize
+                                    required property bool bestShotSuggested
+                                    required property int syncGroupSize
+                                    required property bool online
 
                                     width: galleryFlow.tileWidth
                                     height: previewFrame.height
@@ -367,7 +953,9 @@ Rectangle {
                                             asynchronous: true
                                             cache: false
                                             fillMode: Image.PreserveAspectFit
-                                            sourceSize.width: width
+                                            sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+                                            sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+                                            opacity: online ? 1.0 : 0.48
                                         }
 
                                         Rectangle {
@@ -384,6 +972,135 @@ Rectangle {
                                                 id: mediaBadge
                                                 anchors.centerIn: parent
                                                 text: mediaType === "timeline" ? "Timeline" : "Video"
+                                                color: "#f3f5f7"
+                                                font.family: "Menlo"
+                                                font.pixelSize: 9
+                                            }
+                                        }
+
+                                        Row {
+                                            anchors.right: parent.right
+                                            anchors.top: parent.top
+                                            anchors.margins: 8
+                                            spacing: 6
+
+                                            Rectangle {
+                                                visible: rating > 0
+                                                radius: 8
+                                                color: "#11161bcc"
+                                                implicitWidth: ratingBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: ratingBadge
+                                                    anchors.centerIn: parent
+                                                    text: "R" + rating
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: picked || rejected
+                                                radius: 8
+                                                color: rejected ? "#6a3530dd" : "#334d39dd"
+                                                implicitWidth: cullBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: cullBadge
+                                                    anchors.centerIn: parent
+                                                    text: rejected ? "Reject" : "Pick"
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: burstSize > 1
+                                                radius: 8
+                                                color: "#263445dd"
+                                                implicitWidth: burstBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: burstBadge
+                                                    anchors.centerIn: parent
+                                                    text: "B " + burstPosition + "/" + burstSize
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: duplicateGroupSize > 1
+                                                radius: 8
+                                                color: "#2f4152dd"
+                                                implicitWidth: duplicateBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: duplicateBadge
+                                                    anchors.centerIn: parent
+                                                    text: "D " + duplicateGroupSize
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: bestShotSuggested
+                                                radius: 8
+                                                color: "#6a5331dd"
+                                                implicitWidth: suggestionBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: suggestionBadge
+                                                    anchors.centerIn: parent
+                                                    text: "Select"
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                visible: !online
+                                                radius: 8
+                                                color: "#5d4631dd"
+                                                implicitWidth: availabilityBadge.implicitWidth + 14
+                                                implicitHeight: 22
+
+                                                Label {
+                                                    id: availabilityBadge
+                                                    anchors.centerIn: parent
+                                                    text: "Offline"
+                                                    color: "#f3f5f7"
+                                                    font.family: "Menlo"
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.bottom: parent.bottom
+                                            anchors.margins: 8
+                                            radius: 8
+                                            color: "#11161bcc"
+                                            visible: syncGroupSize > 1
+                                            implicitWidth: syncBadge.implicitWidth + 14
+                                            implicitHeight: 22
+
+                                            Label {
+                                                id: syncBadge
+                                                anchors.centerIn: parent
+                                                text: "Sync " + syncGroupSize
                                                 color: "#f3f5f7"
                                                 font.family: "Menlo"
                                                 font.pixelSize: 9
@@ -425,11 +1142,24 @@ Rectangle {
                                         radius: previewFrame.radius
                                         color: "transparent"
                                         border.width: catalogAssets.selectedIndex === index ? 2 : 1
-                                        border.color: catalogAssets.selectedIndex === index ? "#d0a157" : theme.alpha(theme.lineSoft, 0.52)
+                                        border.color: catalogAssets.selectedIndex === index
+                                                      ? "#d0a157"
+                                                      : rejected
+                                                        ? theme.alpha(theme.error, 0.78)
+                                                        : picked
+                                                          ? theme.alpha(theme.success, 0.78)
+                                                          : theme.alpha(theme.lineSoft, 0.52)
                                     }
                                 }
                             }
                         }
+                    }
+
+                    Loader {
+                        anchors.fill: parent
+                        visible: !root.importBrowserOpen && root.catalogViewMode !== "grid"
+                        active: visible
+                        sourceComponent: root.catalogViewMode === "compare" ? compareView : surveyView
                     }
 
                     Rectangle {
@@ -647,6 +1377,261 @@ Rectangle {
                     font.weight: Font.Medium
                 }
 
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: cullingColumn.implicitHeight + 20
+                    Layout.minimumHeight: Layout.preferredHeight
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink900, 0.88)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.34)
+
+                    ColumnLayout {
+                        id: cullingColumn
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 10
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                text: "Culling"
+                                color: "#f2f4f6"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                font.capitalization: Font.AllUppercase
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            Label {
+                                text: catalogAssets.selectedIndex >= 0
+                                      ? (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
+                                      : "No selection"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: catalogAssets.selectedAssetId.length > 0
+                                  ? catalogAssets.selectedCameraLabel
+                                  : "Select an asset to rate, pick, or reject it."
+                            color: "#f2f4f6"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 12
+                            font.weight: Font.Medium
+                            elide: Text.ElideRight
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: catalogAssets.selectedAssetId.length > 0
+                                  ? root.cullSummary()
+                                  : "Keys: arrows move, 1-5 rate, 0 clears rating, P picks, X rejects, U clears."
+                            color: theme.textMuted
+                            font.family: "Avenir Next"
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: catalogAssets.selectedBurstSize > 1
+                            text: "Burst group  " + catalogAssets.selectedBurstPosition + " / " + catalogAssets.selectedBurstSize
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Visible  " + catalogAssets.assetCount
+                                  + "  •  Picks " + catalogAssets.visiblePickedCount
+                                  + "  •  Rejects " + catalogAssets.visibleRejectedCount
+                                  + "  •  Rated " + catalogAssets.visibleRatedCount
+                                  + "  •  Offline " + catalogAssets.visibleOfflineCount
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            wrapMode: Text.WordWrap
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            visible: catalogAssets.selectedAssetId.length > 0
+                            radius: theme.radius8
+                            color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.12) : theme.alpha(theme.warning, 0.14)
+                            border.width: 1
+                            border.color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.28) : theme.alpha(theme.warning, 0.3)
+                            implicitHeight: availabilityColumn.implicitHeight + 20
+
+                            ColumnLayout {
+                                id: availabilityColumn
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: "Source"
+                                        color: "#f2f4f6"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        font.capitalization: Font.AllUppercase
+                                    }
+
+                                    Item {
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Label {
+                                        text: root.availabilityLabel(catalogAssets.selectedOnline)
+                                        color: catalogAssets.selectedOnline ? theme.success : theme.warning
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : "No file path recorded."
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WrapAnywhere
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedOnline
+                                          ? "Source is available on disk."
+                                          : "Source is offline. Recheck mounted drives or relink it to a matching folder."
+                                    color: theme.textMuted
+                                    font.family: "Avenir Next"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: "Recheck"
+                                        onClicked: catalogAssets.refreshOnlineState()
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: "Relink Selected"
+                                        enabled: !catalogAssets.selectedOnline
+                                        onClicked: root.chooseRelinkFolder(true)
+                                    }
+                                }
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: catalogAssets.visibleOfflineCount > 0
+                                          ? "Relink " + catalogAssets.visibleOfflineCount + " Offline Assets"
+                                          : "Relink Offline Assets"
+                                    enabled: catalogAssets.visibleOfflineCount > 0
+                                    onClicked: root.chooseRelinkFolder(false)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Pick"
+                                compact: true
+                                accent: theme.success
+                                active: catalogAssets.selectedPicked
+                                enabled: catalogAssets.selectedIndex >= 0
+                                onClicked: root.applyPickReview(false)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Reject"
+                                compact: true
+                                accent: theme.error
+                                active: catalogAssets.selectedRejected
+                                enabled: catalogAssets.selectedIndex >= 0
+                                onClicked: root.applyRejectReview(false)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Clear"
+                                compact: true
+                                enabled: catalogAssets.selectedIndex >= 0
+                                onClicked: catalogAssets.clearSelectedCullState()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Repeater {
+                                model: 5
+
+                                delegate: ActionButton {
+                                    required property int index
+
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: String(index + 1)
+                                    accent: theme.warning
+                                    active: catalogAssets.selectedRating >= index + 1
+                                    enabled: catalogAssets.selectedIndex >= 0
+                                    tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
+                                    onClicked: root.applyRatingReview(index + 1, false)
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            compact: true
+                            text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
+                            accent: theme.accentCool400
+                            active: appShell.cullingAutoAdvance
+                            onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            compact: true
+                            text: root.focusCheckEnabled ? "Focus Check On" : "Focus Check Off"
+                            accent: theme.warning
+                            active: root.focusCheckEnabled
+                            onClicked: root.focusCheckEnabled = !root.focusCheckEnabled
+                        }
+                    }
+                }
+
                 Label {
                     Layout.fillWidth: true
                     text: catalogAssets.projectNames.length > 0 ? "Choose a project from the list to filter the gallery." : "Create a project to start organizing the gallery."
@@ -824,6 +1809,72 @@ Rectangle {
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     onClicked: root.applyProjectSelection(modelData)
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            visible: catalogAssets.selectedAssetId.length > 0
+                            radius: theme.radius8
+                            color: theme.alpha(theme.accentCool400, 0.08)
+                            border.width: 1
+                            border.color: theme.alpha(theme.accentCool400, 0.2)
+                            implicitHeight: intelligenceColumn.implicitHeight + 20
+
+                            ColumnLayout {
+                                id: intelligenceColumn
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: "Intelligence"
+                                        color: "#f2f4f6"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        font.capitalization: Font.AllUppercase
+                                    }
+
+                                    Item {
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Label {
+                                        text: catalogAssets.selectedBestShotSuggested ? "Suggested Select" : "Cluster Context"
+                                        color: theme.accentCool300
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedBurstSize > 1
+                                          ? "Burst group " + catalogAssets.selectedBurstPosition + " / " + catalogAssets.selectedBurstSize + " with a suggested keeper."
+                                          : catalogAssets.selectedDuplicateGroupSize > 1
+                                            ? "Duplicate cluster of " + catalogAssets.selectedDuplicateGroupSize + " related frames."
+                                            : "No duplicate or burst cluster detected for this frame."
+                                    color: theme.textMuted
+                                    font.family: "Avenir Next"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedSyncGroupSize > 1
+                                          ? "Suggested sync group: " + catalogAssets.selectedSyncGroupSize + " frames with the same camera, lens, and day."
+                                          : "No sync cohort suggestion yet for this frame."
+                                    color: theme.textMuted
+                                    font.family: "Avenir Next"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
                                 }
                             }
                         }

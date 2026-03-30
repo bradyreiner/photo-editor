@@ -268,14 +268,14 @@ int main(int argc, char** argv) {
   layered_controller.addClipFromGallery(QStringLiteral("video:fg"), second_video, QStringLiteral("Foreground"), 5.0, QStringLiteral("poster://fg"));
   layered_controller.addVideoTrack();
   layered_controller.selectClip(1);
-  layered_controller.moveSelectedClipToTrackRow(2, 1.0);
+  layered_controller.moveSelectedClipToTrackRow(1, 1.0);
   if (layered_controller.trackCount() != 4 || layered_controller.videoTrackCount() != 2 || layered_controller.audioTrackCount() != 2) {
     return fail("adding a video track should create a paired video and audio lane");
   }
   const auto layered_tracks = layered_controller.sequenceTracks();
   if (layered_tracks.size() != 4 ||
       layered_tracks.at(0).toMap().value(QStringLiteral("clipCount")).toInt() != 1 ||
-      layered_tracks.at(2).toMap().value(QStringLiteral("clipCount")).toInt() != 1) {
+      layered_tracks.at(1).toMap().value(QStringLiteral("clipCount")).toInt() != 1) {
     return fail("moving a clip to a new video lane should preserve clip counts across paired tracks");
   }
   layered_controller.seekSequenceSeconds(1.5);
@@ -284,16 +284,16 @@ int main(int argc, char** argv) {
       !nearly_equal(layered_controller.currentClipPlayheadSeconds(), 0.5)) {
     return fail("sequence seeking should resolve the topmost active clip after moving it to a higher track");
   }
-  layered_controller.toggleTrackTargeted(2);
-  layered_controller.toggleTrackLocked(2);
-  layered_controller.toggleTrackVisibility(2);
-  const auto targeted_track_state = layered_controller.sequenceTracks().at(2).toMap();
+  layered_controller.toggleTrackTargeted(1);
+  layered_controller.toggleTrackLocked(1);
+  layered_controller.toggleTrackVisibility(1);
+  const auto targeted_track_state = layered_controller.sequenceTracks().at(1).toMap();
   if (!targeted_track_state.value(QStringLiteral("targeted")).toBool() ||
       !targeted_track_state.value(QStringLiteral("locked")).toBool() ||
       targeted_track_state.value(QStringLiteral("visible")).toBool()) {
     return fail("track state toggles should persist on the selected lane");
   }
-  layered_controller.toggleTrackVisibility(2);
+  layered_controller.toggleTrackVisibility(1);
   layered_controller.toggleTrackMuted(3);
   layered_controller.seekSequenceSeconds(1.5);
   if (layered_controller.currentClip().value(QStringLiteral("trackLabel")).toString() != QStringLiteral("V2") ||
@@ -312,12 +312,44 @@ int main(int argc, char** argv) {
   source_controller.setSourceInSeconds(1.0);
   source_controller.setSourceOutSeconds(3.0);
   source_controller.appendSourceClipToTimeline();
-  source_controller.addSequenceMarker(QStringLiteral("Beat"));
+  source_controller.seekSequenceSeconds(0.75);
+  const auto beat_marker_id = source_controller.addSequenceMarker(QStringLiteral("Beat"));
+  source_controller.setSequenceMarkerNote(beat_marker_id, QStringLiteral("Review this cut"));
+  source_controller.setSequenceMarkerStatus(beat_marker_id, QStringLiteral("review"));
+  source_controller.setSequenceMarkerCompleted(beat_marker_id, true);
+  source_controller.seekSequenceSeconds(1.5);
+  source_controller.addSequenceMarker(QStringLiteral("Outro"));
   if (source_controller.clipCount() != 1 ||
       !nearly_equal(source_controller.currentClip().value(QStringLiteral("trimStartSeconds")).toDouble(), 1.0) ||
       !nearly_equal(source_controller.currentClip().value(QStringLiteral("trimEndSeconds")).toDouble(), 3.0) ||
-      source_controller.sequenceMarkers().size() != 1) {
+      source_controller.sequenceMarkers().size() != 2) {
     return fail("source monitor edits and sequence markers should persist in controller state");
+  }
+  const auto source_markers = source_controller.sequenceMarkers();
+  if (source_markers.at(0).toMap().value(QStringLiteral("note")).toString() != QStringLiteral("Review this cut") ||
+      source_markers.at(0).toMap().value(QStringLiteral("status")).toString() != QStringLiteral("review") ||
+      !source_markers.at(0).toMap().value(QStringLiteral("completed")).toBool()) {
+    return fail("marker notes, status, and completion state should persist in controller state");
+  }
+  source_controller.seekSequenceSeconds(0.0);
+  if (!source_controller.seekNextSequenceMarker() ||
+      !nearly_equal(source_controller.sequencePlayheadSeconds(), 0.75)) {
+    return fail("next marker navigation should seek to the next marker after the current playhead");
+  }
+  source_controller.seekSequenceSeconds(1.6);
+  if (!source_controller.seekPreviousSequenceMarker() ||
+      !nearly_equal(source_controller.sequencePlayheadSeconds(), 1.5)) {
+    return fail("previous marker navigation should seek to the prior marker before the current playhead");
+  }
+  source_controller.seekSequenceSeconds(0.1);
+  if (!source_controller.seekNextEditPoint() ||
+      !nearly_equal(source_controller.sequencePlayheadSeconds(), 2.0)) {
+    return fail("next edit navigation should seek to the next clip boundary in sequence time");
+  }
+  source_controller.seekSequenceSeconds(1.9);
+  if (!source_controller.seekPreviousEditPoint() ||
+      !nearly_equal(source_controller.sequencePlayheadSeconds(), 0.0)) {
+    return fail("previous edit navigation should seek to the prior clip boundary in sequence time");
   }
 
   TimelineDocumentController photo_controller;
@@ -356,6 +388,8 @@ int main(int argc, char** argv) {
   edit_controller.createTimeline(QStringLiteral("Edit Timeline"));
   edit_controller.addClipFromGallery(QStringLiteral("video:a"), first_video, QStringLiteral("Alpha"), 4.0, QStringLiteral("poster://a"));
   edit_controller.addClipFromGallery(QStringLiteral("video:b"), second_video, QStringLiteral("Beta"), 4.0, QStringLiteral("poster://b"));
+  edit_controller.seekSequenceSeconds(3.0);
+  edit_controller.addSequenceMarker(QStringLiteral("Insert Beat"));
   edit_controller.seekSequenceSeconds(1.5);
   edit_controller.insertClipFromGallery(
       QStringLiteral("video:insert"),
@@ -374,12 +408,22 @@ int main(int argc, char** argv) {
       !nearly_equal(inserted_clips.at(3).toMap().value(QStringLiteral("startSeconds")).toDouble(), 6.0)) {
     return fail("insert edits should preserve later clip order while shifting their sequence starts");
   }
+  if (!nearly_equal(edit_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("seconds")).toDouble(), 5.0)) {
+    return fail("insert edits should ripple later sequence markers forward with the inserted duration");
+  }
 
+  edit_controller.selectClip(0);
+  edit_controller.seekSequenceSeconds(6.0);
+  edit_controller.addSequenceMarker(QStringLiteral("Trim Beat"));
   edit_controller.selectClip(0);
   edit_controller.trimSelectedClipEndToSequenceSeconds(1.0, true);
   const auto ripple_clips = edit_controller.clips();
   if (!nearly_equal(ripple_clips.at(1).toMap().value(QStringLiteral("startSeconds")).toDouble(), 1.0)) {
     return fail("ripple trims should close downstream timing after a trim-out change");
+  }
+  if (!nearly_equal(edit_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("seconds")).toDouble(), 4.5) ||
+      !nearly_equal(edit_controller.sequenceMarkers().at(1).toMap().value(QStringLiteral("seconds")).toDouble(), 5.5)) {
+    return fail("ripple trims should move later sequence markers with the rippled timeline");
   }
   edit_controller.selectClip(1);
   const auto slipped_before = edit_controller.currentClip();
@@ -394,6 +438,68 @@ int main(int argc, char** argv) {
       !nearly_equal(slipped_after.value(QStringLiteral("startSeconds")).toDouble(),
                     slipped_before.value(QStringLiteral("startSeconds")).toDouble())) {
     return fail("slipping should change source trim without moving the clip on the timeline");
+  }
+
+  TimelineDocumentController extract_controller;
+  extract_controller.createTimeline(QStringLiteral("Extract Timeline"));
+  extract_controller.addClipFromGallery(QStringLiteral("video:e1"), first_video, QStringLiteral("First"), 4.0, QStringLiteral("poster://e1"));
+  extract_controller.addClipFromGallery(QStringLiteral("video:e2"), second_video, QStringLiteral("Second"), 4.0, QStringLiteral("poster://e2"));
+  extract_controller.seekSequenceSeconds(5.0);
+  const auto extract_marker_id = extract_controller.addSequenceMarker(QStringLiteral("After First"));
+  extract_controller.selectClip(0);
+  extract_controller.extractSelectedClip();
+  if (extract_controller.clipCount() != 1 ||
+      !nearly_equal(extract_controller.clips().at(0).toMap().value(QStringLiteral("startSeconds")).toDouble(), 0.0) ||
+      !nearly_equal(extract_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("seconds")).toDouble(), 1.0) ||
+      extract_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("markerId")).toString() != extract_marker_id) {
+    return fail("extracting a clip should close the gap and ripple later markers earlier");
+  }
+  extract_controller.selectClip(0);
+  extract_controller.liftSelectedClip();
+  if (extract_controller.clipCount() != 0) {
+    return fail("lifting a clip should remove it without requiring ripple behavior");
+  }
+
+  TimelineDocumentController ripple_head_controller;
+  ripple_head_controller.createTimeline(QStringLiteral("Ripple Head Timeline"));
+  ripple_head_controller.addClipFromGallery(QStringLiteral("video:r1"), first_video, QStringLiteral("Head"), 4.0, QStringLiteral("poster://r1"));
+  ripple_head_controller.addClipFromGallery(QStringLiteral("video:r2"), second_video, QStringLiteral("Tail"), 4.0, QStringLiteral("poster://r2"));
+  ripple_head_controller.seekSequenceSeconds(5.0);
+  ripple_head_controller.addSequenceMarker(QStringLiteral("After Head Trim"));
+  ripple_head_controller.selectClip(0);
+  ripple_head_controller.trimSelectedClipStartToSequenceSeconds(1.0, true);
+  if (!nearly_equal(ripple_head_controller.currentClip().value(QStringLiteral("startSeconds")).toDouble(), 0.0) ||
+      !nearly_equal(ripple_head_controller.currentClip().value(QStringLiteral("trimStartSeconds")).toDouble(), 1.0) ||
+      !nearly_equal(ripple_head_controller.clips().at(1).toMap().value(QStringLiteral("startSeconds")).toDouble(), 3.0) ||
+      !nearly_equal(ripple_head_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("seconds")).toDouble(), 4.0)) {
+    return fail("ripple trims on the clip head should shorten the clip and pull later timeline items earlier");
+  }
+
+  TimelineDocumentController multi_extract_controller;
+  multi_extract_controller.createTimeline(QStringLiteral("Multi Extract Timeline"));
+  multi_extract_controller.addClipFromGallery(QStringLiteral("video:m1"), first_video, QStringLiteral("One"), 4.0, QStringLiteral("poster://m1"));
+  multi_extract_controller.addClipFromGallery(QStringLiteral("video:m2"), second_video, QStringLiteral("Two"), 4.0, QStringLiteral("poster://m2"));
+  multi_extract_controller.addClipFromGallery(QStringLiteral("video:m3"), first_video, QStringLiteral("Three"), 4.0, QStringLiteral("poster://m3"));
+  multi_extract_controller.seekSequenceSeconds(10.0);
+  multi_extract_controller.addSequenceMarker(QStringLiteral("After Multi"));
+  multi_extract_controller.selectClipRange(0, 1);
+  multi_extract_controller.extractSelectedClips();
+  if (multi_extract_controller.clipCount() != 1 ||
+      !nearly_equal(multi_extract_controller.clips().at(0).toMap().value(QStringLiteral("startSeconds")).toDouble(), 0.0) ||
+      !nearly_equal(multi_extract_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("seconds")).toDouble(), 2.0)) {
+    return fail("extracting a multi-selection should close all removed ranges and ripple later markers");
+  }
+
+  TimelineDocumentController multi_lift_controller;
+  multi_lift_controller.createTimeline(QStringLiteral("Multi Lift Timeline"));
+  multi_lift_controller.addClipFromGallery(QStringLiteral("video:l1"), first_video, QStringLiteral("One"), 4.0, QStringLiteral("poster://l1"));
+  multi_lift_controller.addClipFromGallery(QStringLiteral("video:l2"), second_video, QStringLiteral("Two"), 4.0, QStringLiteral("poster://l2"));
+  multi_lift_controller.addClipFromGallery(QStringLiteral("video:l3"), first_video, QStringLiteral("Three"), 4.0, QStringLiteral("poster://l3"));
+  multi_lift_controller.selectClipRange(0, 1);
+  multi_lift_controller.liftSelectedClips();
+  if (multi_lift_controller.clipCount() != 1 ||
+      !nearly_equal(multi_lift_controller.clips().at(0).toMap().value(QStringLiteral("startSeconds")).toDouble(), 8.0)) {
+    return fail("lifting a multi-selection should remove the clips without closing the remaining gap");
   }
 
   TimelineDocumentController overwrite_controller;
@@ -434,7 +540,9 @@ int main(int argc, char** argv) {
   overwrite_controller.addSelectedClipEffect(QStringLiteral("Opacity"));
   overwrite_controller.assignSelectedClipTransition(QStringLiteral("in"), QStringLiteral("Fade In"), 0.30);
   overwrite_controller.assignSelectedClipTransition(QStringLiteral("out"), QStringLiteral("Cross Dissolve"), 0.45);
-  overwrite_controller.addSequenceMarker(QStringLiteral("Start"));
+  const auto overwrite_marker_id = overwrite_controller.addSequenceMarker(QStringLiteral("Start"));
+  overwrite_controller.setSequenceMarkerNote(overwrite_marker_id, QStringLiteral("Lock this cut"));
+  overwrite_controller.setSequenceMarkerStatus(overwrite_marker_id, QStringLiteral("approved"));
   const auto transformed_clip = overwrite_controller.currentClip();
   const auto transformed_effects = transformed_clip.value(QStringLiteral("effectStack")).toList();
   if (transformed_clip.value(QStringLiteral("frameMode")).toString() != QStringLiteral("fill") ||
@@ -455,6 +563,9 @@ int main(int argc, char** argv) {
       !nearly_equal(transformed_clip.value(QStringLiteral("transitionOutSeconds")).toDouble(), 0.45) ||
       overwrite_controller.sequenceMarkers().size() != 1) {
     return fail("extended clip controls, effects, transitions, and markers should persist on the selected clip");
+  }
+  if (overwrite_controller.sequenceMarkers().at(0).toMap().value(QStringLiteral("status")).toString() != QStringLiteral("approved")) {
+    return fail("marker status should update independently of clip controls");
   }
   overwrite_controller.selectClip(1);
   const auto roll_target = overwrite_controller.currentClip().value(QStringLiteral("startSeconds")).toDouble() - 0.5;
@@ -495,7 +606,10 @@ int main(int argc, char** argv) {
     render_controller.setSelectedTrimStartSeconds(0.20);
     render_controller.setSelectedTrimEndSeconds(0.80);
     render_controller.setSelectedClipPlaybackRate(1.1);
-    render_controller.addSequenceMarker(QStringLiteral("Cut"));
+    const auto render_marker_id = render_controller.addSequenceMarker(QStringLiteral("Cut"));
+    render_controller.setSequenceMarkerNote(render_marker_id, QStringLiteral("Render-ready"));
+    render_controller.setSequenceMarkerStatus(render_marker_id, QStringLiteral("exported"));
+    render_controller.setSequenceMarkerCompleted(render_marker_id, true);
 
     if (!render_controller.saveTimeline()) {
       return fail("saving a rendered timeline should succeed when ffmpeg is available");
@@ -605,6 +719,12 @@ int main(int argc, char** argv) {
         loaded_clips.at(1).toMap().value(QStringLiteral("playbackRate")).toDouble() != 1.1 ||
         load_controller.sequenceMarkers().size() != 1) {
       return fail("loading a saved timeline should preserve extended clip and marker state");
+    }
+    const auto loaded_marker = load_controller.sequenceMarkers().at(0).toMap();
+    if (loaded_marker.value(QStringLiteral("note")).toString() != QStringLiteral("Render-ready") ||
+        loaded_marker.value(QStringLiteral("status")).toString() != QStringLiteral("exported") ||
+        !loaded_marker.value(QStringLiteral("completed")).toBool()) {
+      return fail("loading a saved timeline should preserve marker review metadata");
     }
 
     load_controller.selectClip(0);

@@ -1,5 +1,7 @@
 #include "export_job_controller.h"
 
+#include <QImage>
+#include <QImageWriter>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -11,9 +13,17 @@
 #include <QUuid>
 #include <QUrl>
 
+#include "edit_recipe_state.h"
+#include "photo_render_utils.h"
+
 namespace photo_editor::desktop {
 
 namespace {
+
+struct ExportImageOptions final {
+  int max_edge = 0;
+  int jpeg_quality = 95;
+};
 
 QString iso_now() {
   return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -71,6 +81,48 @@ bool is_original_copy_preset(const QString& preset) {
   return preset.trimmed().compare(QStringLiteral("Original Copy"), Qt::CaseInsensitive) == 0;
 }
 
+bool should_render_photo_job(const QString& media_type, const QString& preset) {
+  return is_photo_media(media_type) && !is_original_copy_preset(preset);
+}
+
+ExportImageOptions export_image_options_for_preset(const QString& preset) {
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+    return {.max_edge = 1440, .jpeg_quality = 82};
+  }
+  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
+    return {.max_edge = 2048, .jpeg_quality = 86};
+  }
+  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+    return {.max_edge = 2560, .jpeg_quality = 88};
+  }
+  return {.max_edge = 0, .jpeg_quality = 95};
+}
+
+bool render_photo_export(
+    const QString& source_path,
+    const QString& recipe_json,
+    const QString& preset,
+    const QString& output_path) {
+  QImage image;
+  if (!decode_source_image(source_path, &image)) {
+    return false;
+  }
+
+  const auto state = parse_edit_recipe_json(recipe_json);
+  image = apply_crop(image, state);
+  apply_color_adjustments(&image, state);
+
+  const auto options = export_image_options_for_preset(preset);
+  if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
+    image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  }
+
+  QImageWriter writer(output_path, "jpg");
+  writer.setQuality(options.jpeg_quality);
+  return writer.write(image);
+}
+
 }  // namespace
 
 ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {}
@@ -117,6 +169,7 @@ bool ExportJobController::queueExport(
     const QString& display_label,
     const QString& source_path,
     const QString& edited_preview_source,
+    const QString& recipe_json,
     const QString& preset,
     const QString& destination_directory) {
   const auto normalized_destination = normalized_local_path(destination_directory);
@@ -136,16 +189,24 @@ bool ExportJobController::queueExport(
   job.media_type = media_type.trimmed().toLower();
   job.source_path = normalized_local_path(source_path);
   job.edited_preview_source = edited_preview_source.trimmed();
+  job.recipe_json = recipe_json.trimmed();
   job.preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
   job.destination_directory = normalized_destination;
   job.display_label = display_label_for_job(display_label, job.source_path);
   job.created_at = iso_now();
   job.updated_at = job.created_at;
 
-  bool uses_preview = false;
-  if (resolvedSourcePath(job, &uses_preview).isEmpty()) {
-    setStatus(QStringLiteral("No export source is available for the current selection."));
-    return false;
+  if (should_render_photo_job(job.media_type, job.preset)) {
+    if (job.source_path.isEmpty() || !QFileInfo::exists(job.source_path) || !preview_supported(job.source_path)) {
+      setStatus(QStringLiteral("The selected photo source is unavailable for rendered export."));
+      return false;
+    }
+  } else {
+    bool uses_preview = false;
+    if (resolvedSourcePath(job, &uses_preview).isEmpty()) {
+      setStatus(QStringLiteral("No export source is available for the current selection."));
+      return false;
+    }
   }
 
   jobs_.push_back(job);
@@ -275,12 +336,12 @@ QString ExportJobController::resolvedSourcePath(const ExportJob& job, bool* uses
 QString ExportJobController::outputFilePathForJob(
     const ExportJob& job,
     const QString& source_path,
-    bool uses_preview) const {
+    bool rendered_output) const {
   const QFileInfo source_info(source_path);
   const auto safe_label =
       sanitize_token(display_label_for_job(job.display_label, source_path), QStringLiteral("export"));
   const auto suffix =
-      uses_preview ? QStringLiteral("jpg") : source_info.suffix().toLower();
+      rendered_output ? QStringLiteral("jpg") : source_info.suffix().toLower();
   const auto extension = suffix.isEmpty() ? QString{} : QStringLiteral(".%1").arg(suffix);
 
   auto stem = safe_label;
@@ -328,14 +389,15 @@ void ExportJobController::processNextQueuedJob() {
   job.updated_at = iso_now();
   emit jobsChanged();
 
+  const auto render_photo = should_render_photo_job(job.media_type, job.preset);
   bool uses_preview = false;
-  const auto source_path = resolvedSourcePath(job, &uses_preview);
+  const auto source_path = render_photo ? normalized_local_path(job.source_path) : resolvedSourcePath(job, &uses_preview);
   if (source_path.isEmpty()) {
     failJob(next_index, QStringLiteral("The export source is no longer available."));
     return;
   }
 
-  const auto output_path = outputFilePathForJob(job, source_path, uses_preview);
+  const auto output_path = outputFilePathForJob(job, source_path, render_photo || uses_preview);
   if (output_path.isEmpty()) {
     failJob(next_index, QStringLiteral("Unable to allocate an export file name."));
     return;
@@ -343,7 +405,12 @@ void ExportJobController::processNextQueuedJob() {
 
   QDir().mkpath(QFileInfo(output_path).absolutePath());
   QFile::remove(output_path);
-  if (!QFile::copy(source_path, output_path)) {
+  if (render_photo) {
+    if (!render_photo_export(source_path, job.recipe_json, job.preset, output_path)) {
+      failJob(next_index, QStringLiteral("Unable to render the exported photo."));
+      return;
+    }
+  } else if (!QFile::copy(source_path, output_path)) {
     failJob(next_index, QStringLiteral("Unable to write the exported file."));
     return;
   }

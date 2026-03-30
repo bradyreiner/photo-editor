@@ -39,11 +39,15 @@ int main(int argc, char** argv) {
   if (!controller.defaultTimelineSnapping() || !controller.defaultTimelineRipple()) {
     return fail("timeline defaults should start enabled");
   }
+  if (!controller.cullingAutoAdvance()) {
+    return fail("culling auto-advance should default to enabled");
+  }
 
   controller.setStartupWorkspace(3);
   controller.setReopenLastWorkspace(true);
   controller.setDefaultTimelineSnapping(false);
   controller.setDefaultTimelineRipple(false);
+  controller.setCullingAutoAdvance(false);
   controller.setCurrentWorkspace(4);
 
   photo_editor::desktop::AppShellController persisted_controller;
@@ -58,6 +62,9 @@ int main(int argc, char** argv) {
   }
   if (persisted_controller.defaultTimelineSnapping() || persisted_controller.defaultTimelineRipple()) {
     return fail("timeline preference values should persist");
+  }
+  if (persisted_controller.cullingAutoAdvance()) {
+    return fail("culling auto-advance preference should persist");
   }
 
   {
@@ -78,7 +85,8 @@ int main(int argc, char** argv) {
 
   persisted_controller.restoreDefaults();
   if (persisted_controller.startupWorkspace() != 0 || persisted_controller.reopenLastWorkspace() ||
-      !persisted_controller.defaultTimelineSnapping() || !persisted_controller.defaultTimelineRipple()) {
+      !persisted_controller.defaultTimelineSnapping() || !persisted_controller.defaultTimelineRipple() ||
+      !persisted_controller.cullingAutoAdvance()) {
     return fail("restore defaults should restore the built-in preference values");
   }
 

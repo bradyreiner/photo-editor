@@ -16,6 +16,14 @@ Current production direction in code:
 - app-owned runtime directories for logs, backups, and local support files
 - app-managed local Postgres bootstrap when `PHOTO_EDITOR_DATABASE_URL` is not provided
 
+Near-term product focus:
+
+- complete the professional photo workflow around `import -> cull -> batch edit -> export`
+- deepen library and batch workflow speed before broadening adjacent workspaces
+- use masking, image quality, and catalog reliability as the main product differentiators
+
+See [docs/next-level-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/next-level-roadmap.md) for the prioritized roadmap.
+
 ## Repo layout
 
 - `apps/desktop`: desktop application shell and QML workspaces

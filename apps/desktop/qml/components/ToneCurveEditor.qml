@@ -12,7 +12,7 @@ Item {
     signal pointsEdited(var points)
     signal channelSelected(string channel)
 
-    implicitHeight: 260
+    implicitHeight: 272
 
     function clampUnit(value) {
         return Math.max(0, Math.min(1, value));
@@ -200,10 +200,13 @@ Item {
             }
 
             Label {
-                text: "Click to add, drag to shape, double-click to remove"
+                Layout.maximumWidth: 180
+                text: "Add points, drag smoothly, double-click to remove"
                 color: "#78828c"
                 font.family: "Avenir Next"
                 font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignRight
             }
         }
 
@@ -217,7 +220,7 @@ Item {
                 delegate: Rectangle {
                     required property var modelData
 
-                    Layout.preferredWidth: 54
+                    Layout.preferredWidth: 58
                     Layout.preferredHeight: 26
                     radius: 7
                     color: root.selectedChannel === modelData ? root.accent : "#151b22"
@@ -326,6 +329,7 @@ Item {
                     id: interaction
                     anchors.fill: parent
                     hoverEnabled: true
+                    preventStealing: true
                     acceptedButtons: Qt.LeftButton
                     cursorShape: Qt.CrossCursor
 

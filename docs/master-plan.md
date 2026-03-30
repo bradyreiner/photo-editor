@@ -18,6 +18,23 @@ Deliver a native professional photo editor that competes on:
 - stabilize native build, Docker, Compose, and developer workflow
 - establish PostgreSQL-backed catalog service boundaries
 
+## Immediate product focus
+
+The highest-leverage near-term path is not broad feature coverage across every workspace.
+
+It is one complete professional photo workflow:
+
+`import -> cull -> batch edit -> export`
+
+That means:
+
+- prioritize library speed and culling depth before adding adjacent editing tools
+- treat batch operations as a core product feature, not a later convenience
+- turn masking into a real stack-based workflow rather than adding isolated local tools
+- harden catalog recovery and export reliability as product features
+
+For the prioritized breakdown, see [docs/next-level-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/next-level-roadmap.md).
+
 ### Core workflow
 
 - ingest files from multiple drives
@@ -44,6 +61,10 @@ Deliver a native professional photo editor that competes on:
 - diagnostics and crash handling
 - performance tuning
 - beta validation with real photographer workloads
+
+## Scope discipline
+
+The repository can continue to host carousel and timeline experiments, but they should not outrank the core photo workflow unless the product direction explicitly changes.
 
 ## Non-negotiables
 

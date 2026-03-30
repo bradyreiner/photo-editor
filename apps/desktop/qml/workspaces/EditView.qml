@@ -12,9 +12,17 @@ Rectangle {
     property real manualZoom: 1.0
     property bool fitToView: true
     property bool inspectorCollapsed: false
+    property bool objectPickArmed: false
+    property bool objectPickCreateNew: false
+    property bool polygonDrawArmed: false
+    property bool lassoDrawArmed: false
+    property bool cloneSourcePickArmed: false
+    property real selectionOutlinePhase: 0
     property string cropGuideMode: "Thirds"
     property string editedDisplaySource: ""
     property string referenceDisplaySource: ""
+    property string presetDraftName: ""
+    property string selectedPresetName: ""
     property var hslChannels: [
         {
             name: "Reds",
@@ -49,9 +57,130 @@ Rectangle {
             color: "#c85ac1"
         }
     ]
+    property var adjustmentGroups: [
+        { "key": "tone", "label": "Tone" },
+        { "key": "color", "label": "Color" },
+        { "key": "crop", "label": "Crop" },
+        { "key": "masks", "label": "Masks" },
+        { "key": "detail", "label": "Detail" }
+    ]
+    property var selectedAdjustmentGroups: ["tone", "color", "crop", "masks", "detail"]
 
     function clampZoom(value) {
         return Math.max(0.25, Math.min(4.0, value));
+    }
+
+    function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    function clearTransientTools() {
+        objectPickArmed = false
+        objectPickCreateNew = false
+        polygonDrawArmed = false
+        lassoDrawArmed = false
+        cloneSourcePickArmed = false
+        editorPreview.clearSmartSelectPreview()
+    }
+
+    function selectTool(mode) {
+        clearTransientTools()
+        if (mode === "smart")
+            objectPickArmed = true
+        else if (mode === "smart-new") {
+            objectPickArmed = true
+            objectPickCreateNew = true
+        } else if (mode === "polygon")
+            polygonDrawArmed = true
+        else if (mode === "lasso")
+            lassoDrawArmed = true
+    }
+
+    function activeToolLabel() {
+        if (lassoDrawArmed)
+            return "Lasso"
+        if (cloneSourcePickArmed)
+            return "Pick Clone Source"
+        if (polygonDrawArmed)
+            return "Polygon"
+        if (objectPickArmed && objectPickCreateNew)
+            return "New Smart Selection"
+        if (objectPickArmed)
+            return "Smart Select"
+        if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "clone")
+            return "Clone Stamp"
+        if (editorPreview.activeMaskKind === "polygon")
+            return "Polygon Selection"
+        if (editorPreview.activeMaskKind === "object")
+            return "Smart Selection"
+        if (editorPreview.activeMaskKind === "subject")
+            return "Subject Selection"
+        if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskOperation === "subtract")
+            return "Refine Subtract"
+        if (editorPreview.activeMaskKind === "brush")
+            return "Refine Add"
+        return "Adjust"
+    }
+
+    function activeMaskHasAdjustments() {
+        return Math.abs(editorPreview.activeMaskExposure) > 0.001 ||
+               Math.abs(editorPreview.activeMaskTemperature) > 0.001 ||
+               Math.abs(editorPreview.activeMaskHueShift) > 0.001 ||
+               Math.abs(editorPreview.activeMaskSaturationShift) > 0.001 ||
+               Math.abs(editorPreview.activeMaskColorizeStrength) > 0.001 ||
+               Math.abs(editorPreview.activeMaskRemoveStrength) > 0.001
+    }
+
+    function activeMaskSupportsSelectionRefine() {
+        return editorPreview.hasActiveMask &&
+               (editorPreview.activeMaskKind === "linear" ||
+                editorPreview.activeMaskKind === "radial" ||
+                editorPreview.activeMaskKind === "brush" ||
+                editorPreview.activeMaskKind === "polygon" ||
+                editorPreview.activeMaskKind === "subject" ||
+                editorPreview.activeMaskKind === "object" ||
+                editorPreview.activeMaskKind === "luminance" ||
+                editorPreview.activeMaskKind === "color")
+    }
+
+    function maskAccent(mask) {
+        if (!mask)
+            return "#8ab8d8"
+        if (mask.operation === "subtract")
+            return "#d36a5e"
+        if (mask.operation === "intersect")
+            return "#6fa96d"
+        if (mask.kind === "radial")
+            return "#8ab8d8"
+        if (mask.kind === "brush")
+            return "#cf8f4d"
+        if (mask.kind === "polygon")
+            return "#7ec97a"
+        if (mask.kind === "luminance")
+            return "#d8d27a"
+        if (mask.kind === "color")
+            return "#c77dd8"
+        if (mask.kind === "subject")
+            return "#5fc9b5"
+        if (mask.kind === "object")
+            return "#5e95d3"
+        return "#c99a52"
+    }
+
+    function activeMaskResetFeather() {
+        if (editorPreview.activeMaskKind === "radial")
+            return 0.25
+        if (editorPreview.activeMaskKind === "brush")
+            return 0.75
+        if (editorPreview.activeMaskKind === "polygon")
+            return 0.06
+        if (editorPreview.activeMaskKind === "subject" || editorPreview.activeMaskKind === "object")
+            return 0.5
+        return 0.22
+    }
+
+    function nudgeActiveSelectionExpand(delta) {
+        editorPreview.activeMaskSelectionExpand = clamp(editorPreview.activeMaskSelectionExpand + delta, -100, 100)
     }
 
     function maxPanX() {
@@ -70,6 +199,14 @@ Rectangle {
     function centerZoomPreview() {
         zoomPreviewFlick.contentX = maxPanX() / 2;
         zoomPreviewFlick.contentY = maxPanY() / 2;
+    }
+
+    function updatePreviewTargetEdge() {
+        const viewportWidth = Math.max(1, previewSurface.width - 4);
+        const viewportHeight = Math.max(1, previewSurface.height - 4);
+        const compareWidth = editorPreview.compareMode ? Math.max(1, (viewportWidth - 8) / 2) : viewportWidth;
+        const zoomMultiplier = fitToView ? 1.0 : Math.min(2.0, Math.max(1.0, manualZoom));
+        editorPreview.previewTargetEdge = Math.round(Math.max(compareWidth, viewportHeight) * Screen.devicePixelRatio * zoomMultiplier);
     }
 
     function imagePixelWidth(image) {
@@ -95,6 +232,24 @@ Rectangle {
 
     function currentZoomLevel() {
         return fitToView ? fitZoomLevel() : manualZoom;
+    }
+
+    NumberAnimation on selectionOutlinePhase {
+        from: 0
+        to: 24
+        duration: 900
+        loops: Animation.Infinite
+        running: editorPreview.hasActiveMask || editorPreview.smartSelectPreviewActive
+    }
+
+    onManualZoomChanged: updatePreviewTargetEdge()
+    onFitToViewChanged: updatePreviewTargetEdge()
+
+    Connections {
+        target: editorPreview
+        function onCompareModeChanged() {
+            updatePreviewTargetEdge();
+        }
     }
 
     function contentWidthForZoom(zoomLevel) {
@@ -162,6 +317,88 @@ Rectangle {
         return hslColorForChannel(editorPreview.hslChannel);
     }
 
+    function rainbowTrack() {
+        return ["#d45a62", "#dd8a39", "#d7bd42", "#61b56f", "#49b8c4", "#4e86d9", "#8b6be3", "#c85ac1", "#d45a62"];
+    }
+
+    function gradingPreviewColor(hueValue, saturationValue, luminanceValue) {
+        const hue = ((hueValue / 100.0) % 1.0 + 1.0) % 1.0;
+        const saturation = Math.max(0.18, Math.min(1.0, Math.abs(saturationValue) / 100.0));
+        const lightness = Math.max(0.38, Math.min(0.76, 0.56 + luminanceValue / 280.0));
+        return Qt.hsla(hue, saturation, lightness, 1.0);
+    }
+
+    function activeAdjustmentGroups() {
+        return selectedAdjustmentGroups.slice(0);
+    }
+
+    function hasAdjustmentGroup(groupKey) {
+        return selectedAdjustmentGroups.indexOf(groupKey) >= 0;
+    }
+
+    function toggleAdjustmentGroup(groupKey) {
+        let nextGroups = selectedAdjustmentGroups.slice(0);
+        const existingIndex = nextGroups.indexOf(groupKey);
+        if (existingIndex >= 0) {
+            if (nextGroups.length === 1)
+                return;
+            nextGroups.splice(existingIndex, 1);
+        } else {
+            nextGroups.push(groupKey);
+        }
+        selectedAdjustmentGroups = nextGroups;
+    }
+
+    function selectedBatchAssetIds() {
+        return catalogAssets.selectedAssetIds;
+    }
+
+    function copyCurrentAdjustments() {
+        editorPreview.copyCurrentSettings();
+    }
+
+    function pasteCopiedAdjustments() {
+        const groups = activeAdjustmentGroups();
+        const targetIds = selectedBatchAssetIds();
+        const recipeJson = editorPreview.copiedSettingsRecipeJson();
+        if (recipeJson.length === 0)
+            return;
+        editorPreview.pasteCopiedSettings(groups);
+        catalogAssets.applyRecipeJsonToAssetIds(targetIds, recipeJson, groups);
+    }
+
+    function syncCurrentAdjustments() {
+        const targetIds = selectedBatchAssetIds();
+        if (targetIds.length === 0)
+            return;
+        catalogAssets.applyRecipeJsonToAssetIds(targetIds, editorPreview.currentRecipeJson(), activeAdjustmentGroups());
+    }
+
+    function applyPresetToSelection(presetName) {
+        if (!presetName || presetName.length === 0)
+            return;
+
+        const groups = activeAdjustmentGroups();
+        const targetIds = selectedBatchAssetIds();
+        const recipeJson = editorPreview.presetRecipeJson(presetName);
+        if (recipeJson.length === 0)
+            return;
+
+        editorPreview.applyPreset(presetName, groups);
+        catalogAssets.applyRecipeJsonToAssetIds(targetIds, recipeJson, groups);
+        selectedPresetName = presetName;
+    }
+
+    function saveCurrentPreset() {
+        const presetName = presetDraftName.trim();
+        if (presetName.length === 0)
+            return;
+        if (editorPreview.savePreset(presetName, true)) {
+            presetDraftName = presetName;
+            selectedPresetName = presetName;
+        }
+    }
+
     function selectAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson) {
         catalogAssets.selectIndex(index);
     }
@@ -190,6 +427,15 @@ Rectangle {
             if (!fitToView)
                 centerZoomPreview();
         }
+
+        function onPresetsChanged() {
+            if (selectedPresetName.length > 0 && editorPreview.presetNames.indexOf(selectedPresetName) >= 0)
+                return
+
+            selectedPresetName = editorPreview.presetNames.length > 0 ? editorPreview.presetNames[0] : ""
+            if (presetDraftName.length === 0 || selectedPresetName.length === 0)
+                presetDraftName = selectedPresetName
+        }
     }
 
     Connections {
@@ -216,8 +462,13 @@ Rectangle {
     }
 
     Component.onCompleted: {
+        updatePreviewTargetEdge();
         editedDisplaySource = editorPreview.previewSource;
         referenceDisplaySource = editorPreview.referencePreviewSource;
+        if (editorPreview.presetNames.length > 0) {
+            selectedPresetName = editorPreview.presetNames[0];
+            presetDraftName = selectedPresetName;
+        }
     }
 
     RowLayout {
@@ -239,6 +490,8 @@ Rectangle {
                     radius: theme.radius12
                     color: theme.ink900
                     clip: true
+                    onWidthChanged: updatePreviewTargetEdge()
+                    onHeightChanged: updatePreviewTargetEdge()
 
                     Item {
                         id: fitPreviewRow
@@ -300,6 +553,16 @@ Rectangle {
                         onRectEdited: function(x, y, width, height) {
                             editorPreview.updateCropRect(x, y, width, height);
                         }
+                    }
+
+                    MaskCanvasOverlay {
+                        anchors.fill: parent
+                        visible: fitToView && !editorPreview.compareMode && !editorPreview.cropEditing && editedPreviewFit.visible
+                        editRoot: root
+                        imageX: editedPreviewFit.x + (editedPreviewFit.width - editedPreviewFit.paintedWidth) / 2
+                        imageY: editedPreviewFit.y + (editedPreviewFit.height - editedPreviewFit.paintedHeight) / 2
+                        imageWidth: Math.max(0, editedPreviewFit.paintedWidth)
+                        imageHeight: Math.max(0, editedPreviewFit.paintedHeight)
                     }
                 }
 
@@ -401,6 +664,16 @@ Rectangle {
                                 editorPreview.updateCropRect(x, y, width, height);
                             }
                         }
+
+                        MaskCanvasOverlay {
+                            anchors.fill: parent
+                            visible: !fitToView && !editorPreview.compareMode && !editorPreview.cropEditing && editedPreviewZoom.visible
+                            editRoot: root
+                            imageX: editedPreviewZoom.x
+                            imageY: editedPreviewZoom.y
+                            imageWidth: editedPreviewZoom.width
+                            imageHeight: editedPreviewZoom.height
+                        }
                     }
                 }
 
@@ -461,7 +734,7 @@ Rectangle {
                         Label {
                             text: catalogAssets.selectedAssetId.length > 0 ? "Preview unavailable for this asset" : "Select an image in Library"
                             color: "#f2f4f6"
-                            font.family: "Avenir Next"
+                            font.family: theme.fontUi
                             font.pixelSize: 18
                             font.weight: Font.Medium
                             horizontalAlignment: Text.AlignHCenter
@@ -470,7 +743,7 @@ Rectangle {
                         Label {
                             text: catalogAssets.selectedAssetId.length > 0 ? "RAW decode is not wired yet for this source path." : "The editor is selection-driven. Pick an image in Library to load the preview and recipe."
                             color: "#8f98a2"
-                            font.family: "Avenir Next"
+                            font.family: theme.fontUi
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
                             width: 420
@@ -602,7 +875,11 @@ Rectangle {
                             width: 52
                             height: filmstripView.height
                             radius: 5
-                            color: catalogAssets.selectedIndex === index ? "#1d2228" : "#15191e"
+                            color: catalogAssets.selectedIndex === index
+                                   ? "#1d2228"
+                                   : (catalogAssets.assetSelected(assetId) ? "#192127" : "#15191e")
+                            border.width: catalogAssets.assetSelected(assetId) ? (catalogAssets.selectedIndex === index ? 2 : 1) : 0
+                            border.color: catalogAssets.selectedIndex === index ? "#d0a157" : "#5d7282"
 
                             Rectangle {
                                 anchors.fill: parent
@@ -629,7 +906,12 @@ Rectangle {
 
                             MouseArea {
                                 anchors.fill: parent
-                                onClicked: catalogAssets.selectIndex(index)
+                                onClicked: function(mouse) {
+                                    if (mouse.modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                                        catalogAssets.toggleSelectionIndex(index)
+                                    else
+                                        catalogAssets.selectIndex(index)
+                                }
                             }
                         }
 
@@ -724,11 +1006,11 @@ Rectangle {
                             }
 
                             ActionButton {
-                                text: editorPreview.whiteBalanceSampling ? "Cancel" : "WB"
+                                text: editorPreview.whiteBalanceSampling ? "Cancel" : "Pick WB"
                                 active: editorPreview.whiteBalanceSampling
                                 enabled: editorPreview.hasAsset
                                 font.pixelSize: 10
-                                implicitWidth: 58
+                                implicitWidth: 76
                                 implicitHeight: 28
                                 onClicked: editorPreview.whiteBalanceSampling = !editorPreview.whiteBalanceSampling
                             }
@@ -795,10 +1077,155 @@ Rectangle {
                                     }
 
                                     Label {
-                                        text: editorPreview.linearMaskEnabled ? "Mask On" : "Mask Off"
+                                        text: editorPreview.maskCount > 0 ? "Mask On" : "Mask Off"
                                         color: theme.textMuted
                                         font.family: theme.fontMono
                                         font.pixelSize: 9
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 7
+                            color: theme.alpha(theme.ink900, 0.72)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.28)
+                            implicitHeight: batchToolsColumn.implicitHeight + 18
+
+                            ColumnLayout {
+                                id: batchToolsColumn
+                                anchors.fill: parent
+                                anchors.margins: 9
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: catalogAssets.selectedAssetCount > 1
+                                              ? catalogAssets.selectedAssetCount + " photos selected"
+                                              : "Single-photo selection"
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        font.weight: Font.Medium
+                                    }
+
+                                    Item {
+                                        Layout.fillWidth: true
+                                    }
+
+                                    ActionButton {
+                                        text: "Clear"
+                                        compact: true
+                                        enabled: catalogAssets.selectedAssetCount > 1
+                                        onClicked: catalogAssets.clearSecondarySelection()
+                                    }
+                                }
+
+                                Flow {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Repeater {
+                                        model: adjustmentGroups
+
+                                        delegate: ActionButton {
+                                            required property var modelData
+
+                                            text: modelData.label
+                                            compact: true
+                                            active: hasAdjustmentGroup(modelData.key)
+                                            onClicked: toggleAdjustmentGroup(modelData.key)
+                                        }
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "Copy"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset
+                                        onClicked: copyCurrentAdjustments()
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "Paste"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset && editorPreview.hasCopiedSettings
+                                        onClicked: pasteCopiedAdjustments()
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: catalogAssets.selectedAssetCount > 1 ? "Sync Selected" : "Sync"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset && catalogAssets.selectedAssetCount > 0
+                                        onClicked: syncCurrentAdjustments()
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    ToneTextField {
+                                        Layout.fillWidth: true
+                                        placeholderText: "Preset name"
+                                        text: presetDraftName
+                                        onTextEdited: presetDraftName = text
+                                        onAccepted: saveCurrentPreset()
+                                    }
+
+                                    ActionButton {
+                                        text: "Save"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset && presetDraftName.trim().length > 0
+                                        onClicked: saveCurrentPreset()
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    ToneComboBox {
+                                        Layout.fillWidth: true
+                                        model: editorPreview.presetNames
+                                        currentIndex: selectedPresetName.length > 0
+                                                      ? editorPreview.presetNames.indexOf(selectedPresetName)
+                                                      : (editorPreview.presetNames.length > 0 ? 0 : -1)
+                                        onActivated: {
+                                            selectedPresetName = currentText
+                                            presetDraftName = currentText
+                                        }
+                                    }
+
+                                    ActionButton {
+                                        text: "Apply"
+                                        compact: true
+                                        enabled: selectedPresetName.length > 0 && editorPreview.presetRecipeJson(selectedPresetName).length > 0
+                                        onClicked: applyPresetToSelection(selectedPresetName)
+                                    }
+
+                                    ActionButton {
+                                        text: "Delete"
+                                        compact: true
+                                        enabled: selectedPresetName.length > 0 && editorPreview.presetRecipeJson(selectedPresetName).length > 0
+                                        onClicked: {
+                                            if (editorPreview.deletePreset(selectedPresetName)) {
+                                                selectedPresetName = ""
+                                                presetDraftName = ""
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -816,6 +1243,20 @@ Rectangle {
                     Column {
                         width: inspectorScroll.availableWidth
                         spacing: 10
+
+                        HistogramDisplay {
+                            width: parent.width
+                            height: 80
+                            redData: editorPreview.histogramRed
+                            greenData: editorPreview.histogramGreen
+                            blueData: editorPreview.histogramBlue
+                            luminanceData: editorPreview.histogramLuminance
+                        }
+
+                        MaskInspectorSections {
+                            width: parent.width
+                            editRoot: root
+                        }
 
                         InspectorSection {
                             width: parent.width
@@ -892,47 +1333,8 @@ Rectangle {
 
                         InspectorSection {
                             width: parent.width
-                            title: "Presence"
-                            expandable: true
-                            expanded: true
-
-                            InspectorSlider {
-                                Layout.fillWidth: true
-                                label: "Texture"
-                                valueText: Math.round(editorPreview.texture).toString()
-                                from: -100
-                                to: 100
-                                value: editorPreview.texture
-                                onValueDragged: editorPreview.texture = value
-                                onResetRequested: editorPreview.texture = 0
-                            }
-
-                            InspectorSlider {
-                                Layout.fillWidth: true
-                                label: "Clarity"
-                                valueText: Math.round(editorPreview.clarity).toString()
-                                from: -100
-                                to: 100
-                                value: editorPreview.clarity
-                                onValueDragged: editorPreview.clarity = value
-                                onResetRequested: editorPreview.clarity = 0
-                            }
-
-                            InspectorSlider {
-                                Layout.fillWidth: true
-                                label: "Dehaze"
-                                valueText: Math.round(editorPreview.dehaze).toString()
-                                from: -100
-                                to: 100
-                                value: editorPreview.dehaze
-                                onValueDragged: editorPreview.dehaze = value
-                                onResetRequested: editorPreview.dehaze = 0
-                            }
-                        }
-
-                        InspectorSection {
-                            width: parent.width
                             title: "Color"
+                            subtitle: "White balance and global color intensity."
                             expandable: true
                             expanded: true
 
@@ -985,7 +1387,154 @@ Rectangle {
 
                         InspectorSection {
                             width: parent.width
+                            title: "Presence"
+                            subtitle: "Texture, local contrast, and atmosphere."
+                            expandable: true
+                            expanded: true
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Texture"
+                                valueText: Math.round(editorPreview.texture).toString()
+                                from: -100
+                                to: 100
+                                value: editorPreview.texture
+                                onValueDragged: editorPreview.texture = value
+                                onResetRequested: editorPreview.texture = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Clarity"
+                                valueText: Math.round(editorPreview.clarity).toString()
+                                from: -100
+                                to: 100
+                                value: editorPreview.clarity
+                                onValueDragged: editorPreview.clarity = value
+                                onResetRequested: editorPreview.clarity = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Dehaze"
+                                valueText: Math.round(editorPreview.dehaze).toString()
+                                from: -100
+                                to: 100
+                                value: editorPreview.dehaze
+                                onValueDragged: editorPreview.dehaze = value
+                                onResetRequested: editorPreview.dehaze = 0
+                            }
+                        }
+
+                        InspectorSection {
+                            width: parent.width
+                            title: "Detail"
+                            subtitle: "Sharpening and noise cleanup. Judge at 1:1."
+                            expandable: true
+                            expanded: false
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Sharpening"
+                                valueText: Math.round(editorPreview.sharpening).toString()
+                                from: 0
+                                to: 100
+                                value: editorPreview.sharpening
+                                onValueDragged: editorPreview.sharpening = value
+                                onResetRequested: editorPreview.sharpening = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Masking"
+                                valueText: Math.round(editorPreview.sharpenMasking).toString()
+                                from: 0
+                                to: 100
+                                value: editorPreview.sharpenMasking
+                                onValueDragged: editorPreview.sharpenMasking = value
+                                onResetRequested: editorPreview.sharpenMasking = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Luma NR"
+                                valueText: Math.round(editorPreview.luminanceNr).toString()
+                                from: 0
+                                to: 100
+                                value: editorPreview.luminanceNr
+                                onValueDragged: editorPreview.luminanceNr = value
+                                onResetRequested: editorPreview.luminanceNr = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Color NR"
+                                valueText: Math.round(editorPreview.colorNr).toString()
+                                from: 0
+                                to: 100
+                                value: editorPreview.colorNr
+                                onValueDragged: editorPreview.colorNr = value
+                                onResetRequested: editorPreview.colorNr = 0
+                            }
+                        }
+
+                        InspectorSection {
+                            width: parent.width
+                            title: "Optics"
+                            subtitle: "Lens cleanup and edge behavior."
+                            expandable: true
+                            expanded: false
+
+                            Label {
+                                visible: editorPreview.lensModel.length > 0
+                                text: "Lens: " + editorPreview.lensModel
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                wrapMode: Text.Wrap
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Distortion"
+                                valueText: Math.round(editorPreview.lensDistortion).toString()
+                                trackColors: ["#5d6a77", "#c7d0d7", "#d0a157"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.lensDistortion
+                                onValueDragged: editorPreview.lensDistortion = value
+                                onResetRequested: editorPreview.lensDistortion = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Edge Light"
+                                valueText: Math.round(editorPreview.lensVignette).toString()
+                                trackColors: ["#13181d", "#7c8792", "#f1f5f8"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.lensVignette
+                                onValueDragged: editorPreview.lensVignette = value
+                                onResetRequested: editorPreview.lensVignette = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Defringe"
+                                valueText: Math.round(editorPreview.chromaticAberration).toString()
+                                trackColors: ["#4d6074", "#d7dde2", "#d0a157"]
+                                from: 0
+                                to: 100
+                                value: editorPreview.chromaticAberration
+                                onValueDragged: editorPreview.chromaticAberration = value
+                                onResetRequested: editorPreview.chromaticAberration = 0
+                            }
+                        }
+
+                        InspectorSection {
+                            width: parent.width
                             title: "Tone Curve"
+                            subtitle: "Point curves now drag continuously across the graph."
                             expandable: true
                             expanded: true
 
@@ -1008,6 +1557,7 @@ Rectangle {
                         InspectorSection {
                             width: parent.width
                             title: "Color Mixer"
+                            subtitle: "Target specific hue ranges without shifting the whole frame."
                             expandable: true
                             expanded: true
 
@@ -1068,7 +1618,139 @@ Rectangle {
 
                         InspectorSection {
                             width: parent.width
+                            title: "Color Grading"
+                            subtitle: "Tint shadows, midtones, and highlights separately."
+                            expandable: true
+                            expanded: true
+
+                            SectionHeader {
+                                Layout.fillWidth: true
+                                title: "Shadows"
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Hue"
+                                valueText: Math.round(editorPreview.gradingShadowsHue).toString()
+                                trackColors: rainbowTrack()
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingShadowsHue
+                                onValueDragged: editorPreview.gradingShadowsHue = value
+                                onResetRequested: editorPreview.gradingShadowsHue = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Saturation"
+                                valueText: Math.round(editorPreview.gradingShadowsSaturation).toString()
+                                trackColors: ["#505963", gradingPreviewColor(editorPreview.gradingShadowsHue, 100, editorPreview.gradingShadowsLuminance), "#ffffff"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingShadowsSaturation
+                                onValueDragged: editorPreview.gradingShadowsSaturation = value
+                                onResetRequested: editorPreview.gradingShadowsSaturation = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Luminance"
+                                valueText: Math.round(editorPreview.gradingShadowsLuminance).toString()
+                                trackColors: ["#101419", gradingPreviewColor(editorPreview.gradingShadowsHue, editorPreview.gradingShadowsSaturation, 0), "#eff3f6"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingShadowsLuminance
+                                onValueDragged: editorPreview.gradingShadowsLuminance = value
+                                onResetRequested: editorPreview.gradingShadowsLuminance = 0
+                            }
+
+                            SectionHeader {
+                                Layout.fillWidth: true
+                                title: "Midtones"
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Hue"
+                                valueText: Math.round(editorPreview.gradingMidtonesHue).toString()
+                                trackColors: rainbowTrack()
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingMidtonesHue
+                                onValueDragged: editorPreview.gradingMidtonesHue = value
+                                onResetRequested: editorPreview.gradingMidtonesHue = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Saturation"
+                                valueText: Math.round(editorPreview.gradingMidtonesSaturation).toString()
+                                trackColors: ["#505963", gradingPreviewColor(editorPreview.gradingMidtonesHue, 100, editorPreview.gradingMidtonesLuminance), "#ffffff"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingMidtonesSaturation
+                                onValueDragged: editorPreview.gradingMidtonesSaturation = value
+                                onResetRequested: editorPreview.gradingMidtonesSaturation = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Luminance"
+                                valueText: Math.round(editorPreview.gradingMidtonesLuminance).toString()
+                                trackColors: ["#101419", gradingPreviewColor(editorPreview.gradingMidtonesHue, editorPreview.gradingMidtonesSaturation, 0), "#eff3f6"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingMidtonesLuminance
+                                onValueDragged: editorPreview.gradingMidtonesLuminance = value
+                                onResetRequested: editorPreview.gradingMidtonesLuminance = 0
+                            }
+
+                            SectionHeader {
+                                Layout.fillWidth: true
+                                title: "Highlights"
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Hue"
+                                valueText: Math.round(editorPreview.gradingHighlightsHue).toString()
+                                trackColors: rainbowTrack()
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingHighlightsHue
+                                onValueDragged: editorPreview.gradingHighlightsHue = value
+                                onResetRequested: editorPreview.gradingHighlightsHue = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Saturation"
+                                valueText: Math.round(editorPreview.gradingHighlightsSaturation).toString()
+                                trackColors: ["#505963", gradingPreviewColor(editorPreview.gradingHighlightsHue, 100, editorPreview.gradingHighlightsLuminance), "#ffffff"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingHighlightsSaturation
+                                onValueDragged: editorPreview.gradingHighlightsSaturation = value
+                                onResetRequested: editorPreview.gradingHighlightsSaturation = 0
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Luminance"
+                                valueText: Math.round(editorPreview.gradingHighlightsLuminance).toString()
+                                trackColors: ["#101419", gradingPreviewColor(editorPreview.gradingHighlightsHue, editorPreview.gradingHighlightsSaturation, 0), "#eff3f6"]
+                                from: -100
+                                to: 100
+                                value: editorPreview.gradingHighlightsLuminance
+                                onValueDragged: editorPreview.gradingHighlightsLuminance = value
+                                onResetRequested: editorPreview.gradingHighlightsLuminance = 0
+                            }
+                        }
+
+                        InspectorSection {
+                            width: parent.width
                             title: "Crop"
+                            subtitle: "Ratio, guides, and crop zoom."
                             expandable: true
                             expanded: true
 

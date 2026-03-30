@@ -1,11 +1,14 @@
 #pragma once
 
-#include <QObject>
 #include <QImage>
+#include <QObject>
 #include <QPainter>
 #include <QPoint>
+#include <QPointF>
 #include <QRect>
+#include <QRectF>
 #include <QSize>
+#include <QSizeF>
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -19,13 +22,17 @@ namespace photo_editor::desktop {
 class CarouselDocumentController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(QVariantList slides READ slides NOTIFY slidesChanged)
+  Q_PROPERTY(QVariantList canvasItems READ canvasItems NOTIFY itemsChanged)
   Q_PROPERTY(QVariantMap selectionDetails READ selectionDetails NOTIFY selectionChanged)
   Q_PROPERTY(int slideCount READ slideCount NOTIFY slidesChanged)
   Q_PROPERTY(int currentIndex READ currentIndex NOTIFY selectionChanged)
+  Q_PROPERTY(int documentPixelWidth READ documentPixelWidth NOTIFY slidesChanged)
+  Q_PROPERTY(int documentPixelHeight READ documentPixelHeight NOTIFY documentFormatChanged)
   Q_PROPERTY(QString documentFormat READ documentFormat WRITE setDocumentFormat NOTIFY documentFormatChanged)
   Q_PROPERTY(bool canAddSlide READ canAddSlide NOTIFY slidesChanged)
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(bool exportBusy READ exportBusy NOTIFY exportBusyChanged)
+  Q_PROPERTY(QString selectedItemId READ selectedItemId NOTIFY selectionChanged)
   Q_PROPERTY(QStringList templateOptions READ templateOptions CONSTANT)
   Q_PROPERTY(QStringList fitModeOptions READ fitModeOptions CONSTANT)
   Q_PROPERTY(QStringList slotOptions READ slotOptions CONSTANT)
@@ -33,14 +40,54 @@ class CarouselDocumentController final : public QObject {
  public:
   explicit CarouselDocumentController(QObject* parent = nullptr);
 
+  enum class MediaType { Empty, Image, Video };
+  enum class FitMode { Cover, Contain };
+  enum class SlideTemplate { Single, SplitPair, StackedTriptych };
+  enum class GroupKind { None, HorizontalPair };
+  enum class ItemKind { Image, Text };
+
+  using RecipeState = EditRecipeState;
+
+  struct MediaItem final {
+    MediaType type = MediaType::Empty;
+    QString file_path;
+    QString display_label;
+    QString recipe_json;
+    RecipeState recipe_state;
+    FitMode fit_mode = FitMode::Cover;
+    double scale = 1.0;
+    double offset_x = 0.0;
+    double offset_y = 0.0;
+  };
+
+  struct CanvasItem final {
+    QString id;
+    ItemKind kind = ItemKind::Image;
+    QString file_path;
+    QString display_label;
+    QString recipe_json;
+    RecipeState recipe_state;
+    QString text = QStringLiteral("New Text");
+    QString text_color = QStringLiteral("#1e1a17");
+    double text_point_size = 72.0;
+    QRectF bounds;
+    double rotation_degrees = 0.0;
+    FitMode fit_mode = FitMode::Cover;
+    QSizeF source_size;
+  };
+
   [[nodiscard]] QVariantList slides() const;
+  [[nodiscard]] QVariantList canvasItems() const;
   [[nodiscard]] QVariantMap selectionDetails() const;
   [[nodiscard]] int slideCount() const;
   [[nodiscard]] int currentIndex() const;
+  [[nodiscard]] int documentPixelWidth() const;
+  [[nodiscard]] int documentPixelHeight() const;
   [[nodiscard]] QString documentFormat() const;
   [[nodiscard]] bool canAddSlide() const;
   [[nodiscard]] QString status() const;
   [[nodiscard]] bool exportBusy() const;
+  [[nodiscard]] QString selectedItemId() const;
   [[nodiscard]] QStringList templateOptions() const;
   [[nodiscard]] QStringList fitModeOptions() const;
   [[nodiscard]] QStringList slotOptions() const;
@@ -52,6 +99,26 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void removeCurrentSlide();
   Q_INVOKABLE void moveCurrentBackward();
   Q_INVOKABLE void moveCurrentForward();
+
+  Q_INVOKABLE void addPhotoItem(
+      const QString& file_path,
+      const QString& display_label = QString(),
+      const QString& recipe_json = QString());
+  Q_INVOKABLE void addTextItem(const QString& text = QStringLiteral("New Text"));
+  Q_INVOKABLE void pickPhotoItem();
+  Q_INVOKABLE void selectItem(const QString& item_id);
+  Q_INVOKABLE void clearSelection();
+  Q_INVOKABLE void removeSelectedItem();
+  Q_INVOKABLE void bringSelectedForward();
+  Q_INVOKABLE void sendSelectedBackward();
+  Q_INVOKABLE void moveSelectedItemByPixels(double delta_x, double delta_y);
+  Q_INVOKABLE void setSelectedItemCenter(double center_x, double center_y);
+  Q_INVOKABLE void setSelectedItemSize(double width, double height);
+  Q_INVOKABLE void setSelectedItemRotation(double rotation_degrees);
+  Q_INVOKABLE void setSelectedText(const QString& text);
+  Q_INVOKABLE void setSelectedTextColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedTextPointSize(double point_size);
+
   Q_INVOKABLE void applyTemplateToCurrent(const QString& template_kind);
   Q_INVOKABLE void setActiveSlot(const QString& slot_name);
   Q_INVOKABLE void setCurrentFitMode(const QString& fit_mode);
@@ -68,6 +135,10 @@ class CarouselDocumentController final : public QObject {
       const QString& file_path,
       const QString& display_label = QString(),
       const QString& recipe_json = QString());
+  Q_INVOKABLE void assignTertiaryImage(
+      const QString& file_path,
+      const QString& display_label = QString(),
+      const QString& recipe_json = QString());
   Q_INVOKABLE void assignPrimaryVideo(
       const QString& file_path,
       const QString& display_label = QString());
@@ -79,35 +150,18 @@ class CarouselDocumentController final : public QObject {
 
  signals:
   void slidesChanged();
+  void itemsChanged();
   void selectionChanged();
   void documentFormatChanged();
   void statusChanged();
   void exportBusyChanged();
 
- public:
-  enum class MediaType { Empty, Image, Video };
-  enum class FitMode { Cover, Contain };
-  enum class SlideTemplate { Single, SplitPair };
-  enum class GroupKind { None, HorizontalPair, VerticalTriptych };
-
-  using RecipeState = EditRecipeState;
-
-  struct MediaItem final {
-    MediaType type = MediaType::Empty;
-    QString file_path;
-    QString display_label;
-    QString recipe_json;
-    RecipeState recipe_state;
-    FitMode fit_mode = FitMode::Cover;
-    double scale = 1.0;
-    double offset_x = 0.0;
-    double offset_y = 0.0;
-  };
-
+ private:
   struct Slide final {
     SlideTemplate template_kind = SlideTemplate::Single;
     MediaItem primary;
     MediaItem secondary;
+    MediaItem tertiary;
     QString linked_group_id;
     QString preview_source;
   };
@@ -120,21 +174,25 @@ class CarouselDocumentController final : public QObject {
     MediaItem media;
   };
 
- private:
   [[nodiscard]] Slide* slideAt(int index);
   [[nodiscard]] const Slide* slideAt(int index) const;
   [[nodiscard]] LinkedGroup* groupForIndex(int index);
   [[nodiscard]] const LinkedGroup* groupForIndex(int index) const;
   [[nodiscard]] LinkedGroup* groupById(const QString& group_id);
   [[nodiscard]] const LinkedGroup* groupById(const QString& group_id) const;
+  [[nodiscard]] CanvasItem* currentItem();
+  [[nodiscard]] const CanvasItem* currentItem() const;
   [[nodiscard]] MediaItem* currentEditableMedia();
   [[nodiscard]] const MediaItem* currentEditableMedia() const;
-  [[nodiscard]] bool currentSelectionIsLinked() const;
-  [[nodiscard]] QString currentActiveSlot() const;
+  [[nodiscard]] int indexOfItem(const QString& item_id) const;
+  [[nodiscard]] QRectF slideRectInDocument(int index) const;
+  [[nodiscard]] int slideIndexForX(double x) const;
+  [[nodiscard]] int slideIndexForItem(const CanvasItem& item) const;
   [[nodiscard]] QSize exportPixelSize() const;
   [[nodiscard]] QString previewsRoot() const;
   [[nodiscard]] QString previewPathForSlide(int index) const;
   [[nodiscard]] QString versionedLocalFile(const QString& file_path, int revision) const;
+  [[nodiscard]] QString fileUrlForPath(const QString& file_path) const;
   [[nodiscard]] RecipeState recipeStateFromJson(const QString& recipe_json) const;
   [[nodiscard]] bool isImageFile(const QString& file_path) const;
   [[nodiscard]] bool isVideoFile(const QString& file_path) const;
@@ -142,6 +200,7 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QString videoFileFilter() const;
   [[nodiscard]] QString displayNameForPath(const QString& file_path, const QString& fallback) const;
   [[nodiscard]] QVariantMap slideMapForIndex(int index) const;
+  [[nodiscard]] QVariantMap itemMap(const CanvasItem& item) const;
   [[nodiscard]] QVariantMap selectionMap() const;
   [[nodiscard]] QString templateNameForIndex(int index) const;
   [[nodiscard]] QString fitModeName(FitMode fit_mode) const;
@@ -149,15 +208,26 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QString groupKindName(GroupKind kind) const;
   [[nodiscard]] int spanForGroupKind(GroupKind kind) const;
   [[nodiscard]] GroupKind groupKindFromTemplate(const QString& template_kind) const;
+  [[nodiscard]] bool currentSelectionIsLinked() const;
+  [[nodiscard]] QString currentActiveSlot() const;
+  [[nodiscard]] qreal normalizedAspectRatio(const CanvasItem& item) const;
+  [[nodiscard]] qreal measuredTextHeight(const CanvasItem& item) const;
   [[nodiscard]] QSize probeVideoSize(const QString& file_path) const;
+  [[nodiscard]] bool hasFreeformItemsOnSlide(int index) const;
   [[nodiscard]] bool exportVideoSlide(
       const MediaItem& media,
       const QString& output_path,
       const QSize& target_size) const;
+  [[nodiscard]] QImage renderSlideBaseImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderSlideImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderVideoPlaceholder(const MediaItem& media, const QSize& size) const;
   [[nodiscard]] bool decodeEditedImage(
       const MediaItem& media,
+      QImage* image,
+      bool preview,
+      int max_edge = 0) const;
+  [[nodiscard]] bool decodeEditedImage(
+      const CanvasItem& item,
       QImage* image,
       bool preview,
       int max_edge = 0) const;
@@ -168,26 +238,45 @@ class CarouselDocumentController final : public QObject {
       const QSize& virtual_canvas_size,
       const QPoint& segment_origin,
       bool preview) const;
+  void renderItemIntoSlide(
+      QPainter* painter,
+      const CanvasItem& item,
+      int slide_index,
+      const QSize& slide_size,
+      bool preview) const;
+  void renderPhotoItem(
+      QPainter* painter,
+      const CanvasItem& item,
+      const QRectF& frame_rect,
+      bool preview) const;
+  void renderTextItem(QPainter* painter, const CanvasItem& item, const QRectF& frame_rect) const;
+  void adjustItemsForFormatChange(const QSize& old_slide_size, const QSize& new_slide_size);
+  void adjustItemsForSlidesShifted(int start_index, int delta_slides);
+  void adjustItemsForSlideSwap(int first_index, int second_index);
+  void adjustItemsForBlockMove(int start_index, int span, int destination_index);
   void ensureCurrentIndexValid();
   void refreshPreviews();
-  void emitSelectionAndSlidesChanged();
+  void refreshPreviewAt(int index);
+  void refreshCurrentSelectionPreviews();
+  void emitCanvasStateChanged(bool slides_changed = true);
+  void setSelectedItemId(const QString& item_id);
   void setStatus(const QString& status);
   void setExportBusy(bool export_busy);
   void assignImageToCurrentSlot(
       const QString& file_path,
       const QString& display_label,
       const QString& recipe_json,
-      bool secondary);
+      const QString& slot_name);
   void removeGroupAtIndex(int index, bool keep_current_media);
   void clearGroupIndices(const LinkedGroup& group);
   void rebuildGroupIndices();
   bool ensureCapacityForGroup(int start_index, int span);
-  void resetSlideForSingle(int index);
   void normalizeForCurrentTemplate();
   void writePreviewForSlide(int index, const QImage& image);
 
   QVector<Slide> slides_;
   QVector<LinkedGroup> groups_;
+  QVector<CanvasItem> items_;
   int current_index_ = 0;
   QString document_format_ = QStringLiteral("4x5");
   QString active_slot_ = QStringLiteral("primary");
@@ -195,6 +284,7 @@ class CarouselDocumentController final : public QObject {
   bool export_busy_ = false;
   int preview_revision_ = 0;
   QString session_id_;
+  QString selected_item_id_;
 };
 
 }  // namespace photo_editor::desktop

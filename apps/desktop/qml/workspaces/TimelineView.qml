@@ -18,6 +18,8 @@ Rectangle {
     property real sequencePlayheadSeconds: timelineDocument.sequencePlayheadSeconds
     property bool sequencePlaying: timelineDocument.sequencePlaying
     property real timelineZoom: 84
+    property real timelineZoomMin: 12
+    property real timelineZoomMax: 600
     property real minimumClipWidth: 48
     property real snapThresholdPixels: 10
     property bool snappingEnabled: true
@@ -45,8 +47,17 @@ Rectangle {
     property string setupDataLevels: "Legal"
     property string setupExportContainer: "mp4"
     property string setupExportCodec: "h264"
+    property var recentTimelineRecords: []
+    property string timelineSearchQuery: ""
+    property string markerStatusFilter: "all"
+    property string markerEditorId: ""
+    property string markerEditorLabel: ""
+    property string markerEditorNote: ""
+    property string markerEditorStatus: "todo"
+    property bool markerEditorCompleted: false
     property string inspectorTab: "effects"
     property bool sourcePanelCollapsed: false
+    property bool sourcePanelHidden: false
     property bool effectsPanelCollapsed: false
     property string sourceRailTab: "source"
     property real sourcePanelWidth: 320
@@ -56,27 +67,35 @@ Rectangle {
     property real marqueeStartY: 0
     property real marqueeCurrentX: 0
     property real marqueeCurrentY: 0
-    property bool dragPreviewVisible: false
-    property real dragPreviewX: 0
-    property real dragPreviewY: 0
-    property real dragPreviewWidth: 0
-    property color dragPreviewColor: theme.alpha(theme.accentWarm300, 0.22)
-    property bool snapGuideVisible: false
-    property real snapGuideSeconds: 0
-    property string snapGuideLabel: ""
+    property var dragPreviewState: ({"visible": false, "x": 0, "y": 0, "width": 0})
+    property var snapGuideState: ({"visible": false, "seconds": 0, "label": ""})
+    property var cachedSnapPoints: []
+    property real lastSnapCalcTime: 0
     readonly property var sequenceTrackModel: timelineDocument.sequenceTracks ? timelineDocument.sequenceTracks : []
     readonly property var sequenceMarkerModel: timelineDocument.sequenceMarkers ? timelineDocument.sequenceMarkers : []
+    readonly property bool timelineSearchActive: timelineSearchQuery.trim().length > 0 || markerStatusFilter !== "all"
     readonly property var effectLibraryModel: [
         {"name": "Transform", "category": "Motion", "description": "Position, scale, and framing controls."},
         {"name": "Opacity", "category": "Composite", "description": "Animate transparency and blends."},
         {"name": "Crop", "category": "Motion", "description": "Trim frame edges."},
+        {"name": "Ken Burns", "category": "Motion", "description": "Animated pan and zoom."},
         {"name": "Color Balance", "category": "Color", "description": "Primary warmth and tint balance."},
         {"name": "Contrast", "category": "Color", "description": "Punch up midtones."},
+        {"name": "Levels", "category": "Color", "description": "Black, midtone, and white point control."},
+        {"name": "HSL", "category": "Color", "description": "Hue, saturation, and luminance per channel."},
+        {"name": "Color Wheels", "category": "Color", "description": "Lift, gamma, and gain three-way correction."},
         {"name": "Sharpen", "category": "Detail", "description": "Restore edge definition."},
+        {"name": "Noise Reduction", "category": "Detail", "description": "Temporal and spatial denoise."},
         {"name": "Gaussian Blur", "category": "Stylize", "description": "Soft blur for focus pulls."},
         {"name": "Vignette", "category": "Stylize", "description": "Darken frame edges."},
+        {"name": "Letterbox", "category": "Stylize", "description": "Cinematic black bars."},
+        {"name": "Speed Ramp", "category": "Time", "description": "Variable speed with easing."},
         {"name": "Volume", "category": "Audio", "description": "Clip gain and loudness."},
-        {"name": "Pan", "category": "Audio", "description": "Stereo position."}
+        {"name": "Pan", "category": "Audio", "description": "Stereo position."},
+        {"name": "EQ", "category": "Audio", "description": "Three-band equalizer."},
+        {"name": "Compressor", "category": "Audio", "description": "Dynamic range compression."},
+        {"name": "Echo", "category": "Audio", "description": "Delay-based audio effect."},
+        {"name": "Reverb", "category": "Audio", "description": "Room ambience simulation."}
     ]
     readonly property var transitionLibraryModel: [
         {"name": "Cut", "description": "Direct clip boundary."},
@@ -87,14 +106,43 @@ Rectangle {
         {"name": "Wipe", "description": "Directional reveal between clips."}
     ]
     readonly property real laneHeaderWidth: 128
-    readonly property real laneHeight: 52
+    readonly property real defaultLaneHeight: 52
     readonly property real rulerHeight: 24
     readonly property real trackSpacing: 4
+    property var trackHeights: ({})
     readonly property real timelineContentWidth: Math.max(
                                                     timelineViewport.width,
                                                     Math.max(1, sequenceDurationSeconds()) * timelineZoom + 140)
-    readonly property real timelineContentHeight: rulerHeight
-                                                  + Math.max(1, sequenceTrackModel.length) * (laneHeight + trackSpacing)
+    readonly property real timelineContentHeight: totalTrackHeight()
+
+    function trackHeight(trackId) {
+        return trackHeights[trackId] || defaultLaneHeight
+    }
+
+    function setTrackHeight(trackId, height) {
+        const clamped = Math.max(28, Math.min(200, height))
+        let updated = Object.assign({}, trackHeights)
+        updated[trackId] = clamped
+        trackHeights = updated
+    }
+
+    function trackTopY(trackIndex) {
+        let y = rulerHeight
+        for (let i = 0; i < trackIndex; i++) {
+            const track = sequenceTrackModel[i]
+            y += trackHeight(track ? track.trackId : "") + trackSpacing
+        }
+        return y
+    }
+
+    function totalTrackHeight() {
+        let total = rulerHeight
+        for (let i = 0; i < Math.max(1, sequenceTrackModel.length); i++) {
+            const track = sequenceTrackModel[i]
+            total += (track ? trackHeight(track.trackId) : defaultLaneHeight) + trackSpacing
+        }
+        return total
+    }
     readonly property var resolutionPresetLabels: [
         "1080 x 1350",
         "1920 x 1080",
@@ -107,6 +155,7 @@ Rectangle {
         id: timelineWorkspaceSettings
         category: "TimelineWorkspace"
         property bool sourcePanelCollapsed: false
+        property bool sourcePanelHidden: false
         property bool effectsPanelCollapsed: false
         property string sourceRailTab: "source"
         property string inspectorTab: "effects"
@@ -118,6 +167,7 @@ Rectangle {
 
     Component.onCompleted: {
         sourcePanelCollapsed = timelineWorkspaceSettings.sourcePanelCollapsed
+        sourcePanelHidden = timelineWorkspaceSettings.sourcePanelHidden
         effectsPanelCollapsed = timelineWorkspaceSettings.effectsPanelCollapsed
         sourceRailTab = timelineWorkspaceSettings.sourceRailTab
         inspectorTab = timelineWorkspaceSettings.inspectorTab
@@ -131,6 +181,7 @@ Rectangle {
     Component.onDestruction: timelinePlayback.attachVideoOutput(null)
 
     onSourcePanelCollapsedChanged: timelineWorkspaceSettings.sourcePanelCollapsed = sourcePanelCollapsed
+    onSourcePanelHiddenChanged: timelineWorkspaceSettings.sourcePanelHidden = sourcePanelHidden
     onEffectsPanelCollapsedChanged: timelineWorkspaceSettings.effectsPanelCollapsed = effectsPanelCollapsed
     onSourceRailTabChanged: timelineWorkspaceSettings.sourceRailTab = sourceRailTab
     onInspectorTabChanged: timelineWorkspaceSettings.inspectorTab = inspectorTab
@@ -185,7 +236,9 @@ Rectangle {
     }
 
     function canLoadPickedMedia() {
-        return mediaPickerMediaType !== "timeline" && mediaPickerFilePath.length > 0 && mediaPickerOnline
+        return mediaPickerDialog.selectedMediaType !== "timeline"
+                && mediaPickerDialog.selectedFilePath.length > 0
+                && mediaPickerDialog.selectedOnline
     }
 
     function preferredMediaPickerProject() {
@@ -203,21 +256,6 @@ Rectangle {
     function refreshMediaPickerAssets() {
         mediaPickerProjectName = mediaPickerScope === "project" ? preferredMediaPickerProject() : ""
         mediaPickerAssets = catalogAssets.timelinePickerAssets(mediaPickerProjectName)
-        if (mediaPickerAssets.length > 0) {
-            const first = mediaPickerAssets[0]
-            selectMediaPickerAsset(
-                        0,
-                        first.assetId || "",
-                        first.filePath || "",
-                        first.cameraLabel || "",
-                        first.thumbnailSource || "",
-                        first.mediaType || "",
-                        first.timelineDocumentPath || "",
-                        first.durationText || "",
-                        Boolean(first.online))
-        } else {
-            clearMediaPickerSelection()
-        }
     }
 
     function mediaPickerSubtitle() {
@@ -273,6 +311,7 @@ Rectangle {
         setupDataLevels = "Legal"
         setupExportContainer = "mp4"
         setupExportCodec = "h264"
+        recentTimelineRecords = timelineDocument.recentTimelines()
     }
 
     function createTimelineFromSetup() {
@@ -339,15 +378,209 @@ Rectangle {
                 + ":" + String(frames).padStart(2, "0")
     }
 
+    function shortcutsEnabled() {
+        return timelineDocument.hasActiveTimeline
+                && !timelineNameField.activeFocus
+                && !timelineSearchField.activeFocus
+                && !markerEditorPopup.visible
+    }
+
+    function normalizedSearchText(value) {
+        return String(value === undefined || value === null ? "" : value).trim().toLowerCase()
+    }
+
+    function markerStatusLabel(status, completed) {
+        if (completed)
+            return "done"
+        const normalized = normalizedSearchText(status)
+        if (normalized === "review" || normalized === "approved" || normalized === "exported")
+            return normalized
+        return "todo"
+    }
+
+    function markerAccentColor(marker) {
+        if (marker && marker.completed)
+            return theme.accentCool400
+        const status = markerStatusLabel(marker ? marker.status : "", false)
+        if (status === "review")
+            return theme.warning
+        if (status === "approved")
+            return theme.accentCool400
+        if (status === "exported")
+            return theme.accentCool500
+        return marker && marker.color ? marker.color : theme.accentWarm300
+    }
+
+    function markerMatchesFilters(marker) {
+        if (!marker)
+            return false
+        const filter = normalizedSearchText(markerStatusFilter)
+        if (filter === "open" && marker.completed)
+            return false
+        if (filter !== "" && filter !== "all" && filter !== "open" && normalizedSearchText(marker.status) !== filter)
+            return false
+
+        const query = normalizedSearchText(timelineSearchQuery)
+        if (query.length === 0)
+            return true
+        const haystack = [
+            marker.label || "",
+            marker.note || "",
+            marker.status || "",
+            marker.timecode || ""
+        ].join(" ").toLowerCase()
+        return haystack.indexOf(query) >= 0
+    }
+
+    function clipMatchesSearch(clip) {
+        const query = normalizedSearchText(timelineSearchQuery)
+        if (query.length === 0)
+            return true
+        if (!clip)
+            return false
+        const effectStack = clip.effectStack && clip.effectStack.join ? clip.effectStack.join(" ") : ""
+        const haystack = [
+            clip.displayLabel || "",
+            clip.trackLabel || "",
+            clip.mediaType || "",
+            clip.transitionInName || "",
+            clip.transitionOutName || "",
+            effectStack
+        ].join(" ").toLowerCase()
+        return haystack.indexOf(query) >= 0
+    }
+
+    function searchMatchCount() {
+        let total = 0
+        for (let markerIndex = 0; markerIndex < sequenceMarkerModel.length; ++markerIndex) {
+            if (markerMatchesFilters(sequenceMarkerModel[markerIndex]))
+                total += 1
+        }
+        for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
+            const track = sequenceTrackModel[trackIndex]
+            if (!track || !track.clips)
+                continue
+            for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
+                if (clipMatchesSearch(track.clips[clipIndex]))
+                    total += 1
+            }
+        }
+        return total
+    }
+
+    function collectSearchResultTimes() {
+        let values = []
+        for (let markerIndex = 0; markerIndex < sequenceMarkerModel.length; ++markerIndex) {
+            const marker = sequenceMarkerModel[markerIndex]
+            if (markerMatchesFilters(marker))
+                values.push(Number(marker.seconds || 0))
+        }
+        for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
+            const track = sequenceTrackModel[trackIndex]
+            if (!track || !track.clips)
+                continue
+            for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
+                const clip = track.clips[clipIndex]
+                if (clipMatchesSearch(clip))
+                    values.push(Number(clip.startSeconds || 0))
+            }
+        }
+        values.sort(function(left, right) { return left - right })
+        let deduped = []
+        for (let index = 0; index < values.length; ++index) {
+            if (deduped.length === 0 || Math.abs(values[index] - deduped[deduped.length - 1]) > 0.001)
+                deduped.push(values[index])
+        }
+        return deduped
+    }
+
+    function jumpToSearchResult(direction) {
+        const values = collectSearchResultTimes()
+        if (values.length === 0)
+            return
+
+        const current = Number(sequencePlayheadSeconds || 0)
+        if (direction >= 0) {
+            for (let index = 0; index < values.length; ++index) {
+                if (values[index] > current + 0.001) {
+                    timelinePlayback.seekSequenceSeconds(values[index])
+                    return
+                }
+            }
+            timelinePlayback.seekSequenceSeconds(values[0])
+            return
+        }
+
+        for (let reverseIndex = values.length - 1; reverseIndex >= 0; --reverseIndex) {
+            if (values[reverseIndex] < current - 0.001) {
+                timelinePlayback.seekSequenceSeconds(values[reverseIndex])
+                return
+            }
+        }
+        timelinePlayback.seekSequenceSeconds(values[values.length - 1])
+    }
+
+    function openMarkerEditor(marker) {
+        if (!marker)
+            return
+        markerEditorId = marker.markerId || ""
+        markerEditorLabel = marker.label || ""
+        markerEditorNote = marker.note || ""
+        markerEditorStatus = marker.status || "todo"
+        markerEditorCompleted = Boolean(marker.completed)
+        markerEditorPopup.open()
+    }
+
+    function saveMarkerEditor() {
+        if (!markerEditorId || markerEditorId.length === 0)
+            return
+        timelineDocument.renameSequenceMarker(markerEditorId, markerEditorLabel)
+        timelineDocument.setSequenceMarkerNote(markerEditorId, markerEditorNote)
+        timelineDocument.setSequenceMarkerStatus(markerEditorId, markerEditorStatus)
+        timelineDocument.setSequenceMarkerCompleted(markerEditorId, markerEditorCompleted)
+        markerEditorPopup.close()
+    }
+
+    function deleteSelectedTimelineClip() {
+        if (timelineDocument.selectedClipCount > 1) {
+            if (rippleModeEnabled)
+                timelineDocument.extractSelectedClips()
+            else
+                timelineDocument.liftSelectedClips()
+            return
+        }
+        if (rippleModeEnabled)
+            timelineDocument.extractSelectedClip()
+        else
+            timelineDocument.liftSelectedClip()
+    }
+
     function clipWidth(durationSeconds) {
         return Math.max(minimumClipWidth, Number(durationSeconds || 0) * timelineZoom)
+    }
+
+    function buildSnapPointsCache(excludedClipId) {
+        const points = [sequencePlayheadSeconds]
+        for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
+            const track = sequenceTrackModel[trackIndex]
+            if (!track || track.trackKind !== "video" || !track.clips)
+                continue
+            for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
+                const clip = track.clips[clipIndex]
+                if (!clip || clip.clipId === excludedClipId)
+                    continue
+                points.push(Number(clip.startSeconds || 0))
+                points.push(Number(clip.endSeconds || 0))
+            }
+        }
+        cachedSnapPoints = points
     }
 
     function snapSequenceSeconds(proposedSeconds, excludedClipId) {
         return snapSequenceResult(proposedSeconds, excludedClipId).seconds
     }
 
-    function snapSequenceResult(proposedSeconds, excludedClipId) {
+    function snapSequenceResult(proposedSeconds, excludedClipId, useCache) {
         if (!snappingEnabled)
             return {
                 "seconds": Math.max(0, Number(proposedSeconds || 0)),
@@ -357,18 +590,23 @@ Rectangle {
         const thresholdSeconds = snapThresholdPixels / Math.max(1, timelineZoom)
         let snappedSeconds = Math.max(0, Number(proposedSeconds || 0))
         let nearestDistance = thresholdSeconds + 1
-        const snapPoints = [sequencePlayheadSeconds]
+        let snapPoints
 
-        for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
-            const track = sequenceTrackModel[trackIndex]
-            if (!track || track.trackKind !== "video" || !track.clips)
-                continue
-            for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
-                const clip = track.clips[clipIndex]
-                if (!clip || clip.clipId === excludedClipId)
+        if (useCache && cachedSnapPoints.length > 0) {
+            snapPoints = cachedSnapPoints
+        } else {
+            snapPoints = [sequencePlayheadSeconds]
+            for (let trackIndex = 0; trackIndex < sequenceTrackModel.length; ++trackIndex) {
+                const track = sequenceTrackModel[trackIndex]
+                if (!track || track.trackKind !== "video" || !track.clips)
                     continue
-                snapPoints.push(Number(clip.startSeconds || 0))
-                snapPoints.push(Number(clip.endSeconds || 0))
+                for (let clipIndex = 0; clipIndex < track.clips.length; ++clipIndex) {
+                    const clip = track.clips[clipIndex]
+                    if (!clip || clip.clipId === excludedClipId)
+                        continue
+                    snapPoints.push(Number(clip.startSeconds || 0))
+                    snapPoints.push(Number(clip.endSeconds || 0))
+                }
             }
         }
 
@@ -391,6 +629,48 @@ Rectangle {
     function seekTimelineFromX(xPos) {
         timelinePlayback.pause()
         timelinePlayback.seekSequenceSeconds(Math.max(0, Math.min(sequenceDurationSeconds(), xPos / timelineZoom)))
+    }
+
+    function setTimelineZoom(newZoom, anchorX) {
+        const oldZoom = timelineZoom
+        const clampedZoom = Math.max(timelineZoomMin, Math.min(timelineZoomMax, newZoom))
+        if (Math.abs(clampedZoom - oldZoom) < 0.01)
+            return
+        const ratio = clampedZoom / oldZoom
+        timelineZoom = clampedZoom
+        timelineViewport.contentX = Math.max(0, anchorX * ratio - (anchorX - timelineViewport.contentX))
+    }
+
+    function zoomToFit() {
+        const duration = sequenceDurationSeconds()
+        if (duration <= 0)
+            return
+        const availableWidth = timelineViewport.width - 40
+        timelineZoom = Math.max(timelineZoomMin, Math.min(timelineZoomMax, availableWidth / duration))
+        timelineViewport.contentX = 0
+    }
+
+    function rulerInterval() {
+        const fps = Math.max(1, Math.round(Number(timelineDocument.framesPerSecond || 30)))
+        if (timelineZoom >= 300) return 1.0 / fps
+        if (timelineZoom >= 120) return 0.5
+        if (timelineZoom >= 60)  return 1
+        if (timelineZoom >= 30)  return 5
+        if (timelineZoom >= 15)  return 10
+        return 30
+    }
+
+    function rulerLabel(seconds) {
+        const interval = rulerInterval()
+        const fps = Math.max(1, Math.round(Number(timelineDocument.framesPerSecond || 30)))
+        if (interval < 1) {
+            const totalFrames = Math.round(seconds * fps)
+            const s = Math.floor(totalFrames / fps)
+            const f = totalFrames % fps
+            const m = Math.floor(s / 60)
+            return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0") + ":" + String(f).padStart(2, "0")
+        }
+        return formatSeconds(seconds)
     }
 
     function splitAtPlayhead() {
@@ -423,6 +703,7 @@ Rectangle {
 
     function restoreDefaultLayout() {
         sourcePanelCollapsed = false
+        sourcePanelHidden = false
         effectsPanelCollapsed = false
         sourceRailTab = "source"
         inspectorTab = "effects"
@@ -454,23 +735,10 @@ Rectangle {
         }
     }
 
-    function clearMediaPickerSelection() {
-        mediaPickerSelectedIndex = -1
-        mediaPickerAssetId = ""
-        mediaPickerFilePath = ""
-        mediaPickerDisplayLabel = ""
-        mediaPickerThumbnailSource = ""
-        mediaPickerMediaType = ""
-        mediaPickerTimelineDocumentPath = ""
-        mediaPickerDurationText = ""
-        mediaPickerOnline = false
-    }
-
     function openMediaPicker() {
-        clearMediaPickerSelection()
         mediaPickerScope = hasProjectScopedMediaPicker() ? "project" : "all"
         refreshMediaPickerAssets()
-        mediaPickerDialog.open()
+        mediaPickerDialog.openDialog()
     }
 
     function setMediaPickerScope(scope) {
@@ -480,28 +748,16 @@ Rectangle {
         refreshMediaPickerAssets()
     }
 
-    function selectMediaPickerAsset(index, assetId, filePath, displayLabel, thumbnailSource, mediaType, timelineDocumentPath, durationText, online) {
-        mediaPickerSelectedIndex = index
-        mediaPickerAssetId = assetId
-        mediaPickerFilePath = filePath
-        mediaPickerDisplayLabel = displayLabel
-        mediaPickerThumbnailSource = thumbnailSource
-        mediaPickerMediaType = mediaType
-        mediaPickerTimelineDocumentPath = timelineDocumentPath
-        mediaPickerDurationText = durationText
-        mediaPickerOnline = online
-    }
-
     function addPickedMedia() {
         if (!canLoadPickedMedia())
             return
 
         timelineDocument.loadSourceClipFromGallery(
-                    mediaPickerAssetId,
-                    mediaPickerFilePath,
-                    mediaPickerDisplayLabel,
+                    mediaPickerDialog.selectedAssetId,
+                    mediaPickerDialog.selectedFilePath,
+                    mediaPickerDialog.selectedDisplayLabel,
                     0,
-                    mediaPickerThumbnailSource)
+                    mediaPickerDialog.selectedThumbnailSource)
         mediaPickerDialog.close()
     }
 
@@ -520,18 +776,15 @@ Rectangle {
     }
 
     function resetTimelinePreviewState() {
-        dragPreviewVisible = false
-        snapGuideVisible = false
+        dragPreviewState = {"visible": false, "x": 0, "y": 0, "width": 0}
+        snapGuideState = {"visible": false, "seconds": 0, "label": ""}
     }
 
     function updateSnapGuide(seconds, snapped, labelPrefix) {
         if (snapped) {
-            snapGuideVisible = true
-            snapGuideSeconds = seconds
-            snapGuideLabel = labelPrefix + " " + timecodeText(seconds)
+            snapGuideState = {"visible": true, "seconds": seconds, "label": labelPrefix + " " + timecodeText(seconds)}
         } else {
-            snapGuideVisible = false
-            snapGuideLabel = ""
+            snapGuideState = {"visible": false, "seconds": 0, "label": ""}
         }
     }
 
@@ -572,8 +825,8 @@ Rectangle {
             const track = sequenceTrackModel[trackIndex]
             if (!track || !track.clips)
                 continue
-            const laneTop = rulerHeight + trackIndex * (laneHeight + trackSpacing)
-            const laneBottom = laneTop + laneHeight
+            const laneTop = root.trackTopY(trackIndex)
+            const laneBottom = laneTop + root.trackHeight(track.trackId)
             if (bottom < laneTop || top > laneBottom)
                 continue
 
@@ -594,334 +847,134 @@ Rectangle {
             timelineDocument.selectClip(bestClipIndex)
     }
 
-    Dialog {
+    GalleryPickerDialog {
         id: mediaPickerDialog
-        parent: Overlay.overlay
+        theme: theme
+        dialogTitle: "Gallery"
+        subtitle: root.mediaPickerSubtitle()
+        emptyStateText: root.mediaPickerEmptyStateText()
+        selectionHintText: "Choose media"
+        showProjectScopeToggle: root.hasProjectScopedMediaPicker()
+        scope: root.mediaPickerScope
+        assets: root.mediaPickerAssets
+        onProjectScopeRequested: root.setMediaPickerScope("project")
+        onAllMediaScopeRequested: root.setMediaPickerScope("all")
+        onAssetActivated: {
+            if (root.canLoadPickedMedia())
+                root.addPickedMedia()
+        }
+        sidePanelFooter: Component {
+            ColumnLayout {
+                width: parent ? parent.width : undefined
+                spacing: 8
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Load To Source"
+                    tone: "primary"
+                    enabled: root.canLoadPickedMedia()
+                    onClicked: root.addPickedMedia()
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Insert"
+                    enabled: root.canLoadPickedMedia()
+                    onClicked: root.insertPickedMedia()
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    text: "Overwrite"
+                    enabled: root.canLoadPickedMedia()
+                    onClicked: root.overwritePickedMedia()
+                }
+            }
+        }
+    }
+
+    Popup {
+        id: markerEditorPopup
         modal: true
-        width: Math.min(root.width - 32, 1080)
-        height: Math.min(root.height - 32, 760)
-        x: (parent.width - width) / 2
-        y: (parent.height - height) / 2
+        focus: true
+        width: 360
+        x: (root.width - width) / 2
+        y: Math.max(24, (root.height - height) / 2)
         padding: 0
-        closePolicy: Popup.CloseOnEscape
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+
         background: Rectangle {
-            radius: 22
+            radius: 12
             color: theme.ink900
             border.width: 1
-            border.color: theme.alpha(theme.lineStrong, 0.46)
+            border.color: theme.alpha(theme.lineStrong, 0.55)
         }
 
-        contentItem: RowLayout {
-            spacing: 0
+        contentItem: ColumnLayout {
+            spacing: 10
 
-            Rectangle {
+            Label {
+                text: "Edit Marker"
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: 14
+                font.weight: Font.DemiBold
+            }
+
+            ToneTextField {
+                id: markerLabelField
                 Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: "transparent"
+                placeholderText: "Marker label"
+                text: root.markerEditorLabel
+                onTextChanged: root.markerEditorLabel = text
+            }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 18
-                    spacing: 12
+            ToneTextField {
+                Layout.fillWidth: true
+                placeholderText: "Review note"
+                text: root.markerEditorNote
+                onTextChanged: root.markerEditorNote = text
+            }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 10
+            Flow {
+                Layout.fillWidth: true
+                spacing: 6
 
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
+                Repeater {
+                    model: ["todo", "review", "approved", "exported"]
 
-                            Label {
-                                text: "Gallery"
-                                color: theme.textStrong
-                                font.family: theme.fontDisplay
-                                font.pixelSize: 26
-                                font.weight: Font.DemiBold
-                            }
-
-                            Label {
-                                text: root.mediaPickerSubtitle()
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                            }
-                        }
-
-                        ActionButton {
-                            text: "Current Project"
-                            compact: true
-                            active: root.mediaPickerScope === "project"
-                            visible: root.hasProjectScopedMediaPicker()
-                            onClicked: root.setMediaPickerScope("project")
-                        }
-
-                        ActionButton {
-                            text: "All Media"
-                            compact: true
-                            active: root.mediaPickerScope === "all"
-                            onClicked: root.setMediaPickerScope("all")
-                        }
-
-                        ActionButton {
-                            text: "Close"
-                            onClicked: mediaPickerDialog.close()
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        radius: 18
-                        color: theme.alpha(theme.ink950, 0.76)
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.4)
-                        clip: true
-
-                        GridView {
-                            id: mediaPickerGrid
-                            anchors.fill: parent
-                            anchors.margins: 12
-                            clip: true
-                            cellWidth: 176
-                            cellHeight: 212
-                            model: root.mediaPickerAssets
-
-                            delegate: Rectangle {
-                                required property int index
-                                required property var modelData
-
-                                readonly property string assetId: String(modelData.assetId || "")
-                                readonly property string cameraLabel: String(modelData.cameraLabel || "")
-                                readonly property string filePath: String(modelData.filePath || "")
-                                readonly property string thumbnailSource: String(modelData.thumbnailSource || "")
-                                readonly property string mediaType: String(modelData.mediaType || "")
-                                readonly property string durationText: String(modelData.durationText || "")
-                                readonly property string timelineDocumentPath: String(modelData.timelineDocumentPath || "")
-                                readonly property bool online: Boolean(modelData.online)
-
-                                radius: 14
-                                color: root.mediaPickerAssetId === assetId ? theme.alpha(theme.accentWarm500, 0.16) : theme.alpha(theme.ink900, 0.88)
-                                border.width: 1
-                                border.color: root.mediaPickerAssetId === assetId
-                                              ? theme.accentWarm300
-                                              : theme.alpha(theme.lineSoft, 0.34)
-                                opacity: online ? 1 : 0.56
-
-                                ColumnLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 8
-
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 132
-                                        radius: 10
-                                        color: "#0b1014"
-                                        clip: true
-
-                                        Image {
-                                            anchors.fill: parent
-                                            source: thumbnailSource
-                                            fillMode: Image.PreserveAspectCrop
-                                            asynchronous: true
-                                            cache: false
-                                            visible: source.length > 0
-                                        }
-
-                                        Label {
-                                            anchors.centerIn: parent
-                                            visible: thumbnailSource.length === 0
-                                            text: mediaType === "timeline" ? "Timeline" : "Preview"
-                                            color: theme.textMuted
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 11
-                                        }
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: cameraLabel.length > 0 ? cameraLabel : assetId
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 12
-                                        font.weight: Font.Medium
-                                        elide: Text.ElideRight
-                                    }
-
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 6
-
-                                        Label {
-                                            text: mediaType === "photo"
-                                                  ? "Photo"
-                                                  : mediaType === "audio"
-                                                    ? "Audio"
-                                                  : mediaType === "timeline"
-                                                    ? "Timeline"
-                                                    : "Video"
-                                            color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 10
-                                        }
-
-                                        Item { Layout.fillWidth: true }
-
-                                        Label {
-                                            text: durationText
-                                            visible: durationText.length > 0
-                                            color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 10
-                                        }
-                                    }
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: root.selectMediaPickerAsset(
-                                                   index,
-                                                   assetId,
-                                                   filePath,
-                                                   cameraLabel,
-                                                   thumbnailSource,
-                                                   mediaType,
-                                                   timelineDocumentPath,
-                                                   durationText,
-                                                   online)
-                                }
-                            }
-                        }
-
-                        Label {
-                            anchors.centerIn: parent
-                            visible: root.mediaPickerAssets.length === 0
-                            text: root.mediaPickerEmptyStateText()
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 12
-                        }
+                    delegate: FilterChip {
+                        required property var modelData
+                        text: String(modelData).charAt(0).toUpperCase() + String(modelData).slice(1)
+                        active: root.markerEditorStatus === modelData
+                        onClicked: root.markerEditorStatus = modelData
                     }
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 280
-                Layout.fillHeight: true
-                color: theme.alpha(theme.ink950, 0.84)
-                border.width: 0
+            ActionButton {
+                text: root.markerEditorCompleted ? "Completed" : "Mark Complete"
+                compact: true
+                active: root.markerEditorCompleted
+                onClicked: root.markerEditorCompleted = !root.markerEditorCompleted
+            }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 18
-                    spacing: 12
+            RowLayout {
+                Layout.fillWidth: true
 
-                    Label {
-                        text: "Selection"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 15
-                        font.weight: Font.DemiBold
-                    }
+                Item { Layout.fillWidth: true }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 170
-                        radius: 14
-                        color: "#0b1014"
-                        border.width: 1
-                        border.color: theme.alpha(theme.lineSoft, 0.34)
-                        clip: true
+                ActionButton {
+                    text: "Cancel"
+                    compact: true
+                    onClicked: markerEditorPopup.close()
+                }
 
-                        Image {
-                            anchors.fill: parent
-                            source: root.mediaPickerThumbnailSource
-                            fillMode: Image.PreserveAspectFit
-                            asynchronous: false
-                            cache: false
-                            visible: source.length > 0
-                        }
-
-                        Label {
-                            anchors.centerIn: parent
-                            visible: root.mediaPickerThumbnailSource.length === 0
-                            text: "Choose media"
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.mediaPickerDisplayLabel.length > 0 ? root.mediaPickerDisplayLabel : "No media selected"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 16
-                        font.weight: Font.Medium
-                        wrapMode: Text.Wrap
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.mediaPickerMediaType === "video"
-                              ? "Video clip ready for source, insert, or overwrite."
-                              : root.mediaPickerMediaType === "audio"
-                                ? "Standalone audio will route to the targeted audio lane."
-                              : root.mediaPickerMediaType === "photo"
-                                ? "Stills will load as timed clips on the targeted video lane."
-                              : root.mediaPickerMediaType === "timeline"
-                                  ? "Saved timelines stay visible in the project gallery."
-                                  : "Select media from the gallery and click Add."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        wrapMode: Text.Wrap
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: root.mediaPickerDisplayLabel.length > 0 && !root.mediaPickerOnline
-                        text: "This media is offline and cannot be loaded until the source path is available."
-                        color: "#f4b7af"
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        wrapMode: Text.Wrap
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.mediaPickerDurationText
-                        visible: text.length > 0
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Item { Layout.fillHeight: true }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Load To Source"
-                        tone: "primary"
-                        enabled: root.canLoadPickedMedia()
-                        onClicked: root.addPickedMedia()
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Insert"
-                        enabled: root.canLoadPickedMedia()
-                        onClicked: root.insertPickedMedia()
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: "Overwrite"
-                        enabled: root.canLoadPickedMedia()
-                        onClicked: root.overwritePickedMedia()
-                    }
+                ActionButton {
+                    text: "Save"
+                    tone: "primary"
+                    compact: true
+                    onClicked: root.saveMarkerEditor()
                 }
             }
         }
@@ -930,33 +983,38 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent
         visible: !timelineDocument.hasActiveTimeline
-        spacing: 18
+        spacing: 0
 
         Item { Layout.fillHeight: true }
 
         RowLayout {
             Layout.alignment: Qt.AlignHCenter
             Layout.fillWidth: true
-            Layout.maximumWidth: 1260
+            Layout.maximumWidth: 940
+            Layout.leftMargin: 32
+            Layout.rightMargin: 32
             spacing: 16
 
-            BrandPanel {
-                Layout.preferredWidth: 440
-                Layout.fillHeight: false
-                title: "Create Timeline"
-                subtitle: "Start with sequence settings instead of an implicit default timeline."
-                accent: theme.warning
+            Rectangle {
+                Layout.preferredWidth: 480
+                Layout.minimumWidth: 340
+                Layout.fillWidth: true
+                implicitHeight: newTimelineColumn.implicitHeight + 32
+                radius: 12
+                color: theme.alpha(theme.ink850, 0.92)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.42)
 
-                Label {
-                    Layout.fillWidth: true
-                    text: "This setup defines the sequence format, audio base, color pipeline defaults, and render container before you start cutting."
-                    color: theme.textMain
-                    wrapMode: Text.WordWrap
-                }
+                ColumnLayout {
+                    id: newTimelineColumn
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 12
 
-                InspectorSection {
-                    Layout.fillWidth: true
-                    title: "Sequence"
+                    SectionHeader {
+                        title: "New Timeline"
+                        accent: theme.warning
+                    }
 
                     ToneTextField {
                         Layout.fillWidth: true
@@ -974,6 +1032,7 @@ Rectangle {
 
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
 
                         ToneComboBox {
                             Layout.fillWidth: true
@@ -986,13 +1045,20 @@ Rectangle {
                         }
 
                         ToneTextField {
-                            Layout.preferredWidth: 110
+                            Layout.preferredWidth: 80
                             text: root.setupWidth
                             onTextChanged: root.setupWidth = text
                         }
 
+                        Label {
+                            text: "x"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 11
+                        }
+
                         ToneTextField {
-                            Layout.preferredWidth: 110
+                            Layout.preferredWidth: 80
                             text: root.setupHeight
                             onTextChanged: root.setupHeight = text
                         }
@@ -1000,12 +1066,27 @@ Rectangle {
 
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "FPS"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
 
                         ToneComboBox {
                             Layout.fillWidth: true
                             model: ["23.976", "24", "25", "29.97", "30", "60"]
                             currentIndex: Math.max(0, model.indexOf(root.setupFrameRate))
                             onActivated: root.setupFrameRate = model[currentIndex]
+                        }
+
+                        Label {
+                            text: "Audio"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
                         }
 
                         ToneComboBox {
@@ -1015,41 +1096,43 @@ Rectangle {
                             onActivated: root.setupAudioSampleRate = model[currentIndex]
                         }
                     }
-                }
-            }
-
-            BrandPanel {
-                Layout.preferredWidth: 440
-                Layout.fillHeight: false
-                title: "Color + Delivery"
-                subtitle: "Professional core defaults for sequence and export."
-                accent: theme.accentCool400
-
-                InspectorSection {
-                    Layout.fillWidth: true
-                    title: "Color Pipeline"
-
-                    ToneComboBox {
-                        Layout.fillWidth: true
-                        model: ["Rec.709", "Display P3", "sRGB"]
-                        currentIndex: Math.max(0, model.indexOf(root.setupColorSpace))
-                        onActivated: root.setupColorSpace = model[currentIndex]
-                    }
-
-                    ToneComboBox {
-                        Layout.fillWidth: true
-                        model: ["Legal", "Full"]
-                        currentIndex: Math.max(0, model.indexOf(root.setupDataLevels))
-                        onActivated: root.setupDataLevels = model[currentIndex]
-                    }
-                }
-
-                InspectorSection {
-                    Layout.fillWidth: true
-                    title: "Export Defaults"
 
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Color"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        ToneComboBox {
+                            Layout.fillWidth: true
+                            model: ["Rec.709", "Display P3", "sRGB"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupColorSpace))
+                            onActivated: root.setupColorSpace = model[currentIndex]
+                        }
+
+                        ToneComboBox {
+                            Layout.preferredWidth: 100
+                            model: ["Legal", "Full"]
+                            currentIndex: Math.max(0, model.indexOf(root.setupDataLevels))
+                            onActivated: root.setupDataLevels = model[currentIndex]
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Export"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
 
                         ToneComboBox {
                             Layout.fillWidth: true
@@ -1065,32 +1148,123 @@ Rectangle {
                             onActivated: root.setupExportCodec = model[currentIndex]
                         }
                     }
-                }
 
-                Label {
-                    Layout.fillWidth: true
-                    text: "Project-bound timelines save back into the active project by default. Media can be added after creation from the Timeline media browser."
-                    color: theme.textMuted
-                    wrapMode: Text.WordWrap
-                }
-
-                Item { Layout.fillHeight: true }
-
-                RowLayout {
-                    Layout.fillWidth: true
-
-                    ActionButton {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: "Use Active Project"
-                        enabled: catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
-                        onClicked: root.setupProjectBinding = catalogAssets.projectFilter
+                        Layout.topMargin: 4
+                        spacing: 8
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Use Active Project"
+                            enabled: catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                            onClicked: root.setupProjectBinding = catalogAssets.projectFilter
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Create Timeline"
+                            tone: "primary"
+                            onClicked: root.createTimelineFromSetup()
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth: 340
+                Layout.minimumWidth: 260
+                Layout.fillWidth: true
+                implicitHeight: recentColumn.implicitHeight + 32
+                Layout.alignment: Qt.AlignTop
+                radius: 12
+                color: theme.alpha(theme.ink850, 0.92)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.42)
+
+                ColumnLayout {
+                    id: recentColumn
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 10
+
+                    SectionHeader {
+                        title: "Recent Timelines"
+                        accent: theme.accentCool400
                     }
 
-                    ActionButton {
+                    ListView {
+                        id: recentTimelinesList
                         Layout.fillWidth: true
-                        text: "Create Timeline"
-                        tone: "primary"
-                        onClicked: root.createTimelineFromSetup()
+                        Layout.preferredHeight: Math.min(320, Math.max(48, count * 52))
+                        clip: true
+                        model: root.recentTimelineRecords
+                        spacing: 4
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+
+                            width: recentTimelinesList.width
+                            height: 48
+                            radius: 8
+                            color: recentHover.containsMouse
+                                   ? theme.alpha(theme.accentCool400, 0.16)
+                                   : theme.alpha(theme.ink900, 0.62)
+                            border.width: 1
+                            border.color: recentHover.containsMouse
+                                          ? theme.alpha(theme.accentCool400, 0.42)
+                                          : theme.alpha(theme.lineSoft, 0.24)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                anchors.topMargin: 6
+                                anchors.bottomMargin: 6
+                                spacing: 2
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.name || "Untitled"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.updatedAt || modelData.createdAt || ""
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            MouseArea {
+                                id: recentHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (modelData.documentPath && modelData.documentPath.length > 0)
+                                        timelineDocument.loadTimeline(modelData.documentPath)
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: recentTimelinesList.count === 0
+                        text: "No saved timelines yet."
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
                     }
                 }
             }
@@ -1103,6 +1277,109 @@ Rectangle {
         anchors.fill: parent
         visible: timelineDocument.hasActiveTimeline
         spacing: 8
+
+        Shortcut {
+            sequence: "V"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.activeTool = "select"
+        }
+        Shortcut {
+            sequence: "C"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.activeTool = "razor"
+        }
+        Shortcut {
+            sequence: "Y"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.activeTool = "slip"
+        }
+        Shortcut {
+            sequence: "N"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.activeTool = "roll"
+        }
+        Shortcut {
+            sequence: "S"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: snappingEnabled = !snappingEnabled
+        }
+        Shortcut {
+            sequence: "B"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled() && root.hasPlayableClip()
+            onActivated: splitAtPlayhead()
+        }
+        Shortcut {
+            sequence: "M"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.addSequenceMarker()
+        }
+        Shortcut {
+            sequence: StandardKey.Delete
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled() && timelineDocument.currentIndex >= 0
+            onActivated: root.deleteSelectedTimelineClip()
+        }
+        Shortcut {
+            sequence: "Ctrl+F"
+            context: Qt.WindowShortcut
+            enabled: timelineDocument.hasActiveTimeline && !markerEditorPopup.visible
+            onActivated: timelineSearchField.forceActiveFocus()
+        }
+        Shortcut {
+            sequence: "Space"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled() && root.hasPlayableClip()
+            onActivated: sequencePlaying ? timelinePlayback.pause() : timelinePlayback.play()
+        }
+        Shortcut {
+            sequence: "J"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled() && root.hasPlayableClip()
+            onActivated: timelinePlayback.stepFrames(-1)
+        }
+        Shortcut {
+            sequence: "K"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelinePlayback.pause()
+        }
+        Shortcut {
+            sequence: "L"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled() && root.hasPlayableClip()
+            onActivated: timelinePlayback.play()
+        }
+        Shortcut {
+            sequence: "Alt+Right"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.seekNextEditPoint()
+        }
+        Shortcut {
+            sequence: "Alt+Left"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.seekPreviousEditPoint()
+        }
+        Shortcut {
+            sequence: "Alt+Down"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.seekNextSequenceMarker()
+        }
+        Shortcut {
+            sequence: "Alt+Up"
+            context: Qt.WindowShortcut
+            enabled: root.shortcutsEnabled()
+            onActivated: timelineDocument.seekPreviousSequenceMarker()
+        }
 
         RowLayout {
             Layout.fillWidth: true
@@ -1212,6 +1489,14 @@ Rectangle {
 
             Item { Layout.fillWidth: true }
 
+            ActionButton {
+                text: sourcePanelHidden ? "Show Source" : "Hide Source"
+                compact: true
+                tooltipText: sourcePanelHidden ? "Show source panel" : "Hide source panel"
+                active: !sourcePanelHidden
+                onClicked: sourcePanelHidden = !sourcePanelHidden
+            }
+
             Label {
                 text: timelineDocument.dirty ? "Unsaved changes" : timelineDocument.status
                 color: timelineDocument.dirty ? theme.accentWarm300 : theme.textMuted
@@ -1227,9 +1512,10 @@ Rectangle {
 
             TimelineSourcePanel {
                 id: sourceRail
-                SplitView.preferredWidth: sourcePanelCollapsed ? 56 : sourcePanelWidth
-                SplitView.minimumWidth: sourcePanelCollapsed ? 56 : 260
-                SplitView.maximumWidth: sourcePanelCollapsed ? 56 : 460
+                visible: !sourcePanelHidden
+                SplitView.preferredWidth: sourcePanelHidden ? 0 : (sourcePanelCollapsed ? 56 : sourcePanelWidth)
+                SplitView.minimumWidth: sourcePanelHidden ? 0 : (sourcePanelCollapsed ? 56 : 260)
+                SplitView.maximumWidth: sourcePanelHidden ? 0 : (sourcePanelCollapsed ? 56 : 460)
                 theme: theme
                 timelineDocument: timelineDocument
                 sourceClip: sourceClip
@@ -1503,9 +1789,9 @@ Rectangle {
                                     iconName: "delete"
                                     showText: false
                                     compact: true
-                                    tooltipText: "Delete selected clip"
+                                    tooltipText: rippleModeEnabled ? "Extract selected clip and close gap" : "Lift selected clip and leave gap"
                                     enabled: timelineDocument.currentIndex >= 0
-                                    onClicked: timelineDocument.removeSelectedClip()
+                                    onClicked: root.deleteSelectedTimelineClip()
                                 }
 
                                 Item { Layout.fillWidth: true }
@@ -1559,7 +1845,7 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 286
+            Layout.preferredHeight: 378
             radius: 12
             color: theme.alpha(theme.ink900, 0.84)
             border.width: 1
@@ -1622,6 +1908,75 @@ Rectangle {
                     }
                 }
 
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    ToneTextField {
+                        id: timelineSearchField
+                        Layout.fillWidth: true
+                        implicitHeight: theme.controlHeightDense
+                        placeholderText: "Search clips and markers"
+                        text: root.timelineSearchQuery
+                        onTextChanged: root.timelineSearchQuery = text
+                        onAccepted: root.jumpToSearchResult(1)
+                    }
+
+                    Label {
+                        text: root.searchMatchCount() + " matches"
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                    }
+
+                    ActionButton {
+                        text: "Prev"
+                        compact: true
+                        enabled: root.searchMatchCount() > 0
+                        onClicked: root.jumpToSearchResult(-1)
+                    }
+
+                    ActionButton {
+                        text: "Next"
+                        compact: true
+                        enabled: root.searchMatchCount() > 0
+                        onClicked: root.jumpToSearchResult(1)
+                    }
+
+                    ActionButton {
+                        text: "Clear"
+                        compact: true
+                        enabled: root.timelineSearchActive
+                        onClicked: {
+                            root.timelineSearchQuery = ""
+                            root.markerStatusFilter = "all"
+                        }
+                    }
+                }
+
+                Flow {
+                    Layout.fillWidth: true
+                    spacing: 6
+
+                    Repeater {
+                        model: [
+                            {"label": "All", "value": "all"},
+                            {"label": "Open", "value": "open"},
+                            {"label": "Todo", "value": "todo"},
+                            {"label": "Review", "value": "review"},
+                            {"label": "Approved", "value": "approved"},
+                            {"label": "Exported", "value": "exported"}
+                        ]
+
+                        delegate: FilterChip {
+                            required property var modelData
+                            text: modelData.label
+                            active: root.markerStatusFilter === modelData.value
+                            onClicked: root.markerStatusFilter = modelData.value
+                        }
+                    }
+                }
+
                 Flow {
                     Layout.fillWidth: true
                     spacing: 6
@@ -1630,7 +1985,7 @@ Rectangle {
                         iconName: "select"
                         showText: false
                         compact: true
-                        tooltipText: "Select tool"
+                        tooltipText: "Select tool (V)"
                         active: timelineDocument.activeTool === "select"
                         onClicked: timelineDocument.activeTool = "select"
                     }
@@ -1639,7 +1994,7 @@ Rectangle {
                         iconName: "cut"
                         showText: false
                         compact: true
-                        tooltipText: "Razor tool"
+                        tooltipText: "Razor tool (C)"
                         active: timelineDocument.activeTool === "razor"
                         onClicked: timelineDocument.activeTool = "razor"
                     }
@@ -1648,7 +2003,7 @@ Rectangle {
                         iconName: "slip"
                         showText: false
                         compact: true
-                        tooltipText: "Slip tool"
+                        tooltipText: "Slip tool (Y)"
                         active: timelineDocument.activeTool === "slip"
                         onClicked: timelineDocument.activeTool = "slip"
                     }
@@ -1657,7 +2012,7 @@ Rectangle {
                         iconName: "roll"
                         showText: false
                         compact: true
-                        tooltipText: "Roll tool"
+                        tooltipText: "Roll tool (N)"
                         active: timelineDocument.activeTool === "roll"
                         onClicked: timelineDocument.activeTool = "roll"
                     }
@@ -1691,7 +2046,7 @@ Rectangle {
                         iconName: "snap"
                         showText: false
                         compact: true
-                        tooltipText: snappingEnabled ? "Disable snapping" : "Enable snapping"
+                        tooltipText: snappingEnabled ? "Disable snapping (S)" : "Enable snapping (S)"
                         active: snappingEnabled
                         onClicked: snappingEnabled = !snappingEnabled
                     }
@@ -1719,9 +2074,213 @@ Rectangle {
                         iconName: "delete"
                         showText: false
                         compact: true
-                        tooltipText: "Delete selected clip"
+                        tooltipText: rippleModeEnabled ? "Extract selected clip and close gap" : "Lift selected clip and leave gap"
                         enabled: timelineDocument.currentIndex >= 0
-                        onClicked: timelineDocument.removeSelectedClip()
+                        onClicked: root.deleteSelectedTimelineClip()
+                    }
+
+                    Rectangle {
+                        width: 1
+                        height: 18
+                        color: theme.alpha(theme.lineSoft, 0.78)
+                    }
+
+                    Slider {
+                        id: zoomSlider
+                        implicitWidth: 120
+                        from: Math.log2(root.timelineZoomMin)
+                        to: Math.log2(root.timelineZoomMax)
+                        value: Math.log2(root.timelineZoom)
+                        onMoved: root.setTimelineZoom(Math.pow(2, value), timelineViewport.contentX + timelineViewport.width / 2)
+                    }
+
+                    Label {
+                        text: Math.round(root.timelineZoom / 84 * 100) + "%"
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 9
+                    }
+
+                    ActionButton {
+                        text: "Fit"
+                        compact: true
+                        tooltipText: "Zoom to fit all clips"
+                        onClicked: root.zoomToFit()
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 88
+                    radius: 10
+                    color: theme.alpha(theme.ink950, 0.56)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.3)
+                    visible: sequenceMarkerModel.length > 0
+
+                    ListView {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        orientation: ListView.Horizontal
+                        spacing: 8
+                        clip: true
+                        model: sequenceMarkerModel
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            visible: root.markerMatchesFilters(modelData)
+                            width: visible ? 254 : 0
+                            height: parent.height - 4
+                            radius: 8
+                            color: theme.alpha(root.markerAccentColor(modelData), 0.12)
+                            border.width: 1
+                            border.color: theme.alpha(root.markerAccentColor(modelData), 0.42)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 4
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: modelData.label
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+
+                                    Label {
+                                        text: root.markerStatusLabel(modelData.status, modelData.completed)
+                                        color: theme.ink950
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        padding: 4
+                                        background: Rectangle {
+                                            radius: 5
+                                            color: root.markerAccentColor(modelData)
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.note && modelData.note.length > 0 ? modelData.note : "No note"
+                                    color: modelData.note && modelData.note.length > 0 ? theme.textMain : theme.textFaint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: modelData.timecode
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    ActionButton {
+                                        text: "Jump"
+                                        compact: true
+                                        onClicked: timelineDocument.seekSequenceMarker(modelData.markerId)
+                                    }
+
+                                    ActionButton {
+                                        text: "Edit"
+                                        compact: true
+                                        onClicked: root.openMarkerEditor(modelData)
+                                    }
+
+                                    ActionButton {
+                                        text: modelData.completed ? "Undo" : "Done"
+                                        compact: true
+                                        active: modelData.completed
+                                        onClicked: timelineDocument.setSequenceMarkerCompleted(modelData.markerId, !modelData.completed)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: minimapBar
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    Layout.leftMargin: laneHeaderWidth
+                    radius: 4
+                    color: theme.alpha(theme.ink950, 0.78)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.32)
+                    clip: true
+                    visible: sequenceDurationSeconds() > 0
+
+                    readonly property real barDuration: Math.max(1, sequenceDurationSeconds())
+                    readonly property real barScale: (width - 4) / barDuration
+
+                    Repeater {
+                        model: sequenceTrackModel
+
+                        delegate: Repeater {
+                            id: minimapTrackRepeater
+                            required property var modelData
+                            required property int index
+                            model: modelData.clips
+
+                            delegate: Rectangle {
+                                required property var modelData
+
+                                x: 2 + Number(modelData.startSeconds || 0) * minimapBar.barScale
+                                y: 2
+                                width: Math.max(2, Number(modelData.trimmedDurationSeconds || 0) * minimapBar.barScale)
+                                height: minimapBar.height - 4
+                                radius: 2
+                                color: modelData.trackKind === "audio"
+                                       ? theme.alpha(theme.accentCool400, 0.5)
+                                       : theme.alpha(theme.accentWarm400, 0.5)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        x: 2 + (timelineViewport.contentX / timelineZoom) * minimapBar.barScale
+                        y: 0
+                        width: Math.max(20, (timelineViewport.width / timelineZoom) * minimapBar.barScale)
+                        height: parent.height
+                        radius: 3
+                        color: theme.alpha(theme.textStrong, 0.12)
+                        border.width: 1
+                        border.color: theme.alpha(theme.textStrong, 0.4)
+                    }
+
+                    Rectangle {
+                        x: 2 + sequencePlayheadSeconds * minimapBar.barScale
+                        y: 0
+                        width: 1
+                        height: parent.height
+                        color: theme.accentWarm500
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        onPressed: function(mouse) {
+                            timelineViewport.contentX = Math.max(0, (mouse.x - 2) / minimapBar.barScale * timelineZoom - timelineViewport.width / 2)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return
+                            timelineViewport.contentX = Math.max(0, (mouse.x - 2) / minimapBar.barScale * timelineZoom - timelineViewport.width / 2)
+                        }
                     }
                 }
 
@@ -1730,27 +2289,53 @@ Rectangle {
                     Layout.fillHeight: true
                     spacing: 0
 
-                    Column {
-                        id: trackHeaders
+                    Item {
                         Layout.preferredWidth: laneHeaderWidth
-                        spacing: trackSpacing
+                        Layout.fillHeight: true
+                        clip: true
 
-                        Rectangle {
-                            width: laneHeaderWidth
-                            height: rulerHeight
-                            color: "transparent"
-                        }
+                        Column {
+                            id: trackHeaders
+                            y: -timelineViewport.contentY
+                            spacing: trackSpacing
 
-                        Repeater {
-                            model: sequenceTrackModel
-
-                            delegate: TimelineTrackHeader {
-                                required property var modelData
-
+                            Rectangle {
                                 width: laneHeaderWidth
-                                height: laneHeight
-                                theme: theme
-                                timelineDocument: timelineDocument
+                                height: rulerHeight
+                                color: "transparent"
+                            }
+
+                            Repeater {
+                                model: sequenceTrackModel
+
+                                delegate: Column {
+                                    required property var modelData
+                                    required property int index
+
+                                    width: laneHeaderWidth
+                                    spacing: 0
+
+                                    Rectangle {
+                                        visible: index > 0 && modelData.trackKind === "audio"
+                                                 && index < sequenceTrackModel.length
+                                                 && sequenceTrackModel[index - 1] !== undefined
+                                                 && sequenceTrackModel[index - 1].trackKind === "video"
+                                        width: parent.width
+                                        height: 2
+                                        color: theme.alpha(theme.accentWarm400, 0.5)
+                                    }
+
+                                    TimelineTrackHeader {
+                                        trackData: parent.modelData
+                                        width: laneHeaderWidth
+                                        height: root.trackHeight(trackData.trackId)
+                                        theme: theme
+                                        timelineDocument: timelineDocument
+                                        onResizeRequested: function(delta) {
+                                            root.setTrackHeight(trackData.trackId, height + delta)
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1773,6 +2358,22 @@ Rectangle {
                                 policy: ScrollBar.AsNeeded
                             }
 
+                            ScrollBar.vertical: ScrollBar {
+                                policy: ScrollBar.AsNeeded
+                            }
+
+                            WheelHandler {
+                                target: null
+                                enabled: timelineDocument.hasActiveTimeline
+                                onWheel: function(event) {
+                                    if (event.modifiers & Qt.ControlModifier || event.modifiers & Qt.MetaModifier) {
+                                        const step = event.angleDelta.y > 0 ? 1.15 : (1.0 / 1.15)
+                                        root.setTimelineZoom(timelineZoom * step, timelineViewport.contentX + event.x)
+                                        event.accepted = true
+                                    }
+                                }
+                            }
+
                             Rectangle {
                                 width: timelineContentWidth
                                 height: timelineContentHeight
@@ -1789,6 +2390,10 @@ Rectangle {
                                             mouse.accepted = true
                                             return
                                         }
+                                        if (mouse.y < rulerHeight) {
+                                            root.seekTimelineFromX(mouse.x)
+                                            return
+                                        }
                                         if (mouse.modifiers & Qt.ShiftModifier) {
                                             root.marqueeActive = true
                                             root.marqueeStartX = mouse.x
@@ -1798,7 +2403,7 @@ Rectangle {
                                             return
                                         }
                                         root.resetTimelinePreviewState()
-                                        root.seekTimelineFromX(mouse.x)
+                                        timelineDocument.selectClip(-1)
                                     }
                                     onPositionChanged: function(mouse) {
                                         if (root.marqueeActive) {
@@ -1806,7 +2411,7 @@ Rectangle {
                                             root.marqueeCurrentY = mouse.y
                                             return
                                         }
-                                        if (pressed)
+                                        if (pressed && mouse.y < rulerHeight)
                                             root.seekTimelineFromX(mouse.x)
                                     }
                                     onReleased: function(mouse) {
@@ -1840,34 +2445,102 @@ Rectangle {
                                     }
                                 }
 
-                                Repeater {
-                                    model: Math.max(2, Math.ceil(sequenceDurationSeconds()) + 1)
+                                Rectangle {
+                                    width: timelineContentWidth
+                                    height: rulerHeight
+                                    color: theme.alpha(theme.ink950, 0.62)
 
-                                    delegate: Item {
+                                    Rectangle {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        height: 1
+                                        color: theme.alpha(theme.lineSoft, 0.55)
+                                    }
+
+                                    Repeater {
+                                        readonly property real interval: root.rulerInterval()
+                                        model: interval > 0 ? Math.max(2, Math.ceil(sequenceDurationSeconds() / interval) + 1) : 0
+
+                                        delegate: Item {
+                                            required property int index
+
+                                            readonly property real seconds: index * parent.interval
+                                            readonly property bool isMajor: {
+                                                const iv = parent.interval
+                                                if (iv < 1) return (index % Math.max(1, Math.round(Number(timelineDocument.framesPerSecond || 30)))) === 0
+                                                if (iv <= 1) return index % 5 === 0
+                                                if (iv <= 5) return index % 2 === 0
+                                                return index % 3 === 0
+                                            }
+
+                                            x: seconds * timelineZoom
+                                            y: 0
+                                            width: 1
+                                            height: rulerHeight
+
+                                            Rectangle {
+                                                anchors.bottom: parent.bottom
+                                                width: 1
+                                                height: isMajor ? rulerHeight - 4 : rulerHeight / 2 - 2
+                                                color: isMajor ? theme.alpha(theme.lineStrong, 0.46) : theme.alpha(theme.lineSoft, 0.28)
+                                            }
+
+                                            Label {
+                                                visible: isMajor
+                                                anchors.top: parent.top
+                                                anchors.topMargin: 3
+                                                anchors.left: parent.left
+                                                anchors.leftMargin: 4
+                                                text: root.rulerLabel(seconds)
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 9
+                                            }
+                                        }
+                                    }
+
+                                    Canvas {
+                                        id: playheadTriangle
+                                        x: sequencePlayheadSeconds * timelineZoom - 6
+                                        y: 0
+                                        width: 13
+                                        height: rulerHeight
+                                        onXChanged: requestPaint()
+                                        onPaint: {
+                                            var ctx = getContext("2d")
+                                            ctx.reset()
+                                            ctx.fillStyle = theme.accentWarm500
+                                            ctx.beginPath()
+                                            ctx.moveTo(0, 0)
+                                            ctx.lineTo(13, 0)
+                                            ctx.lineTo(6.5, rulerHeight - 2)
+                                            ctx.closePath()
+                                            ctx.fill()
+                                        }
+                                    }
+                                }
+
+                                Repeater {
+                                    readonly property real interval: root.rulerInterval()
+                                    model: interval >= 1 ? Math.max(2, Math.ceil(sequenceDurationSeconds() / interval) + 1) : 0
+
+                                    delegate: Rectangle {
                                         required property int index
 
-                                        x: index * timelineZoom
-                                        y: 0
+                                        readonly property real seconds: index * parent.interval
+                                        readonly property bool isMajor: {
+                                            const iv = parent.interval
+                                            if (iv <= 1) return index % 5 === 0
+                                            if (iv <= 5) return index % 2 === 0
+                                            return index % 3 === 0
+                                        }
+
+                                        x: seconds * timelineZoom
+                                        y: rulerHeight
                                         width: 1
-                                        height: timelineContentHeight
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            width: 1
-                                            height: timelineContentHeight
-                                            color: index % 5 === 0 ? theme.alpha(theme.lineStrong, 0.34) : theme.alpha(theme.lineSoft, 0.18)
-                                        }
-
-                                        Label {
-                                            anchors.top: parent.top
-                                            anchors.topMargin: 4
-                                            anchors.left: parent.left
-                                            anchors.leftMargin: 4
-                                            text: root.formatSeconds(index)
-                                            color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 9
-                                        }
+                                        height: timelineContentHeight - rulerHeight
+                                        color: isMajor ? theme.alpha(theme.lineStrong, 0.22) : theme.alpha(theme.lineSoft, 0.12)
                                     }
                                 }
 
@@ -1876,6 +2549,7 @@ Rectangle {
 
                                     delegate: Item {
                                         required property var modelData
+                                        visible: root.markerMatchesFilters(modelData)
 
                                         x: Number(modelData.seconds || 0) * timelineZoom
                                         y: 0
@@ -1886,7 +2560,7 @@ Rectangle {
                                             anchors.top: parent.top
                                             width: 2
                                             height: timelineContentHeight
-                                            color: modelData.color ? modelData.color : theme.accentWarm300
+                                            color: root.markerAccentColor(modelData)
                                             opacity: 0.7
                                         }
 
@@ -1895,7 +2569,7 @@ Rectangle {
                                             anchors.topMargin: 2
                                             anchors.horizontalCenter: parent.horizontalCenter
                                             radius: 6
-                                            color: modelData.color ? modelData.color : theme.accentWarm300
+                                            color: root.markerAccentColor(modelData)
                                             implicitWidth: markerLabel.implicitWidth + 12
                                             implicitHeight: markerLabel.implicitHeight + 6
 
@@ -1907,6 +2581,13 @@ Rectangle {
                                                 font.family: theme.fontMono
                                                 font.pixelSize: 8
                                             }
+                                        }
+
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: timelineDocument.seekSequenceMarker(modelData.markerId)
+                                            onDoubleClicked: root.openMarkerEditor(modelData)
                                         }
                                     }
                                 }
@@ -1922,9 +2603,9 @@ Rectangle {
                                         property int trackRowIndex: index
 
                                         x: 0
-                                        y: rulerHeight + index * (laneHeight + trackSpacing)
+                                        y: root.trackTopY(index)
                                         width: timelineContentWidth
-                                        height: laneHeight
+                                        height: root.trackHeight(modelData.trackId)
 
                                         Rectangle {
                                             anchors.fill: parent
@@ -1940,13 +2621,14 @@ Rectangle {
                                             delegate: Rectangle {
                                                 id: clipBlock
                                                 required property var modelData
+                                                readonly property bool searchMatch: root.clipMatchesSearch(modelData)
 
                                                 property real committedX: Number(modelData.startSeconds || 0) * timelineZoom + 3
                                                 property real dragOffsetX: 0
                                                 property real dragOffsetY: 0
                                                 property real pressX: 0
                                                 property real pressY: 0
-                                                property real trimHandleWidth: modelData.trackKind === "video" ? 12 : 0
+                                                property real trimHandleWidth: modelData.trackKind === "video" ? 18 : 0
                                                 property real fadeHandleWidth: 18
 
                                                 x: committedX + dragOffsetX
@@ -1954,22 +2636,37 @@ Rectangle {
                                                 width: root.clipWidth(modelData.trimmedDurationSeconds) - 6
                                                 height: parent.height - 12
                                                 radius: 8
-                                                color: modelData.trackKind === "audio"
-                                                       ? (modelData.silentPlaceholder
-                                                          ? theme.alpha(theme.ink700, 0.78)
-                                                          : theme.alpha(theme.accentCool400, 0.26))
-                                                       : (modelData.selected
-                                                          ? theme.alpha(theme.accentWarm500, Math.max(0.35, Number(modelData.opacity || 1) * 0.82))
-                                                          : theme.alpha(theme.accentWarm400, Math.max(0.18, Number(modelData.opacity || 1) * 0.34)))
+                                                color: {
+                                                    if (modelData.trackKind === "audio") {
+                                                        if (modelData.silentPlaceholder)
+                                                            return theme.alpha(theme.ink700, 0.78)
+                                                        return modelData.selected
+                                                            ? theme.alpha(theme.accentCool400, 0.42)
+                                                            : theme.alpha(theme.accentCool400, 0.26)
+                                                    }
+                                                    const baseColor = modelData.mediaType === "photo"
+                                                        ? theme.accentCool500
+                                                        : modelData.mediaType === "audio"
+                                                            ? theme.warning
+                                                            : theme.accentWarm500
+                                                    const opacityScale = Math.max(0.18, Number(modelData.opacity || 1))
+                                                    return modelData.selected
+                                                        ? theme.alpha(baseColor, opacityScale * 0.82)
+                                                        : theme.alpha(baseColor, opacityScale * 0.34)
+                                                }
                                                 border.width: modelData.selected ? 2 : 1
                                                 border.color: modelData.selected
                                                               ? theme.textStrong
+                                                              : clipBlock.searchMatch && root.timelineSearchQuery.trim().length > 0
+                                                                ? theme.accentWarm300
                                                               : theme.alpha(theme.lineStrong, 0.4)
+                                                opacity: root.timelineSearchActive ? (clipBlock.searchMatch ? 1 : 0.22) : 1
 
                                                 MouseArea {
                                                     id: clipMouseArea
                                                     anchors.fill: parent
                                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                    preventStealing: true
                                                     cursorShape: modelData.trackKind !== "video"
                                                                  ? Qt.PointingHandCursor
                                                                  : timelineDocument.activeTool === "razor"
@@ -1986,12 +2683,25 @@ Rectangle {
                                                         }
                                                         if (modelData.trackKind === "video" && timelineDocument.activeTool === "razor") {
                                                             timelineDocument.selectClip(modelData.index)
-                                                            timelineDocument.splitSelectedClip(root.clipSequenceTime(modelData, mouse.x))
+                                                            if (!timelineDocument.splitSelectedClip(root.clipSequenceTime(modelData, mouse.x)))
+                                                                splitFailFlash.restart()
                                                             return
                                                         }
                                                         clipBlock.pressX = mouse.x
                                                         clipBlock.pressY = mouse.y
+                                                        if (mouse.modifiers & Qt.ControlModifier || mouse.modifiers & Qt.MetaModifier) {
+                                                            timelineDocument.toggleClipSelection(modelData.index)
+                                                            return
+                                                        }
+                                                        if (mouse.modifiers & Qt.ShiftModifier) {
+                                                            timelineDocument.selectClipRange(timelineDocument.currentIndex, modelData.index)
+                                                            return
+                                                        }
                                                         timelineDocument.selectClip(modelData.index)
+                                                        if (modelData.trackKind === "video" && timelineDocument.activeTool === "select")
+                                                            root.buildSnapPointsCache(modelData.clipId)
+                                                        if (modelData.trackKind === "video" && timelineDocument.activeTool === "slip")
+                                                            timelineDocument.beginContinuousEdit()
                                                     }
                                                     onPositionChanged: function(mouse) {
                                                         if (!pressed || modelData.trackKind !== "video"
@@ -2000,18 +2710,24 @@ Rectangle {
                                                         if (timelineDocument.activeTool === "select") {
                                                             clipBlock.dragOffsetX = mouse.x - clipBlock.pressX
                                                             clipBlock.dragOffsetY = mouse.y - clipBlock.pressY
+                                                            const now = Date.now()
+                                                            if (now - root.lastSnapCalcTime < 16)
+                                                                return
+                                                            root.lastSnapCalcTime = now
                                                             const targetRow = Math.max(
                                                                         0,
                                                                         Math.min(
                                                                             sequenceTrackModel.length - 1,
-                                                                            trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (laneHeight + trackSpacing))))
+                                                                            trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (root.trackHeight(trackLane.modelData.trackId) + trackSpacing))))
                                                             const snapResult = root.snapSequenceResult(
                                                                         Math.max(0, (clipBlock.committedX + clipBlock.dragOffsetX - 3) / timelineZoom),
-                                                                        modelData.clipId)
-                                                            root.dragPreviewVisible = true
-                                                            root.dragPreviewWidth = clipBlock.width
-                                                            root.dragPreviewX = snapResult.seconds * timelineZoom + 3
-                                                            root.dragPreviewY = rulerHeight + targetRow * (laneHeight + trackSpacing) + 6
+                                                                        modelData.clipId, true)
+                                                            root.dragPreviewState = {
+                                                                "visible": true,
+                                                                "width": clipBlock.width,
+                                                                "x": snapResult.seconds * timelineZoom + 3,
+                                                                "y": root.trackTopY(targetRow) + 6
+                                                            }
                                                             root.updateSnapGuide(snapResult.seconds, snapResult.snapped, "Snap")
                                                         } else if (timelineDocument.activeTool === "slip") {
                                                             const deltaSeconds = (mouse.x - clipBlock.pressX) / timelineZoom
@@ -2032,12 +2748,14 @@ Rectangle {
                                                                         0,
                                                                         Math.min(
                                                                             sequenceTrackModel.length - 1,
-                                                                            trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (laneHeight + trackSpacing))))
+                                                                            trackLane.trackRowIndex + Math.round(clipBlock.dragOffsetY / (root.trackHeight(trackLane.modelData.trackId) + trackSpacing))))
                                                             const snapResult = root.snapSequenceResult(
                                                                         Math.max(0, (clipBlock.committedX + clipBlock.dragOffsetX - 3) / timelineZoom),
-                                                                        modelData.clipId)
+                                                                        modelData.clipId, false)
                                                             timelineDocument.moveSelectedClipToTrackRow(targetRow, snapResult.seconds)
                                                         }
+                                                        if (modelData.trackKind === "video" && timelineDocument.activeTool === "slip")
+                                                            timelineDocument.endContinuousEdit()
                                                         clipBlock.dragOffsetX = 0
                                                         clipBlock.dragOffsetY = 0
                                                         root.resetTimelinePreviewState()
@@ -2086,20 +2804,45 @@ Rectangle {
                                                     }
 
                                                     MenuItem {
-                                                        text: "Delete Clip"
+                                                        text: rippleModeEnabled ? "Extract Clip" : "Lift Clip"
                                                         enabled: timelineDocument.currentIndex >= 0
-                                                        onTriggered: timelineDocument.removeSelectedClip()
+                                                        onTriggered: root.deleteSelectedTimelineClip()
+                                                    }
+                                                }
+
+                                                Row {
+                                                    id: posterStrip
+                                                    anchors.fill: parent
+                                                    anchors.margins: 2
+                                                    clip: true
+                                                    visible: modelData.trackKind === "video"
+                                                             && (modelData.posterSource || "").length > 0
+                                                    z: -1
+                                                    spacing: 1
+
+                                                    Repeater {
+                                                        model: Math.max(1, Math.floor(clipBlock.width / Math.max(1, clipBlock.height - 4)))
+
+                                                        delegate: Image {
+                                                            required property int index
+                                                            width: clipBlock.height - 4
+                                                            height: posterStrip.height
+                                                            source: modelData.posterSource || ""
+                                                            fillMode: Image.PreserveAspectCrop
+                                                            asynchronous: true
+                                                            cache: true
+                                                            opacity: 0.28
+                                                        }
                                                     }
                                                 }
 
                                                 Image {
                                                     anchors.fill: parent
                                                     anchors.margins: 4
-                                                    source: modelData.trackKind === "audio" ? modelData.waveformSource : ""
+                                                    source: (modelData.waveformSource || "").length > 0 ? modelData.waveformSource : ""
                                                     fillMode: Image.Stretch
-                                                    opacity: 0.42
-                                                    visible: modelData.trackKind === "audio"
-                                                             && !modelData.silentPlaceholder
+                                                    opacity: modelData.trackKind === "audio" ? 0.42 : 0.22
+                                                    visible: !modelData.silentPlaceholder
                                                              && source.length > 0
                                                     cache: false
                                                     asynchronous: true
@@ -2112,7 +2855,9 @@ Rectangle {
                                                     anchors.bottom: parent.bottom
                                                     width: clipBlock.trimHandleWidth
                                                     radius: 8
-                                                    color: theme.alpha(theme.textStrong, 0.16)
+                                                    color: leftTrimHandle.containsMouse || leftTrimHandle.pressed
+                                                           ? theme.alpha(theme.accentWarm300, 0.32)
+                                                           : theme.alpha(theme.textStrong, 0.16)
 
                                                     DropArea {
                                                         anchors.fill: parent
@@ -2132,11 +2877,17 @@ Rectangle {
                                                         anchors.fill: parent
                                                         cursorShape: Qt.SizeHorCursor
                                                         preventStealing: true
+                                                        hoverEnabled: true
                                                         onPressed: function(mouse) {
+                                                            if (timelineDocument.activeTool === "razor") {
+                                                                mouse.accepted = false
+                                                                return
+                                                            }
                                                             if (trackLane.modelData.locked)
                                                                 return
                                                             timelinePlayback.pause()
                                                             timelineDocument.selectClip(modelData.index)
+                                                            timelineDocument.beginContinuousEdit()
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
                                                             if (timelineDocument.activeTool === "roll")
@@ -2157,6 +2908,7 @@ Rectangle {
                                                             root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
                                                         }
                                                         onReleased: {
+                                                            timelineDocument.endContinuousEdit()
                                                             root.resetTimelinePreviewState()
                                                         }
                                                     }
@@ -2169,7 +2921,9 @@ Rectangle {
                                                     anchors.bottom: parent.bottom
                                                     width: clipBlock.trimHandleWidth
                                                     radius: 8
-                                                    color: theme.alpha(theme.textStrong, 0.16)
+                                                    color: rightTrimHandle.containsMouse || rightTrimHandle.pressed
+                                                           ? theme.alpha(theme.accentWarm300, 0.32)
+                                                           : theme.alpha(theme.textStrong, 0.16)
 
                                                     DropArea {
                                                         anchors.fill: parent
@@ -2189,11 +2943,17 @@ Rectangle {
                                                         anchors.fill: parent
                                                         cursorShape: Qt.SizeHorCursor
                                                         preventStealing: true
+                                                        hoverEnabled: true
                                                         onPressed: function(mouse) {
+                                                            if (timelineDocument.activeTool === "razor") {
+                                                                mouse.accepted = false
+                                                                return
+                                                            }
                                                             if (trackLane.modelData.locked)
                                                                 return
                                                             timelinePlayback.pause()
                                                             timelineDocument.selectClip(modelData.index)
+                                                            timelineDocument.beginContinuousEdit()
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
                                                             if (timelineDocument.activeTool === "roll")
@@ -2214,6 +2974,7 @@ Rectangle {
                                                             root.updateSnapGuide(snapResult.seconds, snapResult.snapped, timelineDocument.activeTool === "roll" ? "Roll" : "Trim")
                                                         }
                                                         onReleased: {
+                                                            timelineDocument.endContinuousEdit()
                                                             root.resetTimelinePreviewState()
                                                         }
                                                     }
@@ -2284,6 +3045,28 @@ Rectangle {
                                                 }
 
                                                 Rectangle {
+                                                    visible: modelData.trackKind === "video"
+                                                             && Math.abs(Number(modelData.playbackRate || 1) - 1.0) > 0.01
+                                                    anchors.right: parent.right
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.margins: 4
+                                                    radius: 6
+                                                    color: theme.alpha(theme.warning, 0.9)
+                                                    implicitWidth: speedBadgeLabel.implicitWidth + 10
+                                                    implicitHeight: speedBadgeLabel.implicitHeight + 4
+
+                                                    Label {
+                                                        id: speedBadgeLabel
+                                                        anchors.centerIn: parent
+                                                        text: Number(modelData.playbackRate || 1).toFixed(1) + "x"
+                                                        color: theme.ink950
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                        font.weight: Font.Bold
+                                                    }
+                                                }
+
+                                                Rectangle {
                                                     anchors.left: parent.left
                                                     anchors.leftMargin: 4
                                                     anchors.bottom: parent.bottom
@@ -2334,6 +3117,22 @@ Rectangle {
                                                             timelineDocument.setSelectedClipFadeOutSeconds(durationSeconds)
                                                             inspectorTab = "audio"
                                                         }
+                                                    }
+                                                }
+
+                                                Rectangle {
+                                                    id: splitFailOverlay
+                                                    anchors.fill: parent
+                                                    color: theme.alpha(theme.error, 0.3)
+                                                    radius: clipBlock.radius
+                                                    visible: false
+                                                    opacity: 0
+
+                                                    SequentialAnimation {
+                                                        id: splitFailFlash
+                                                        PropertyAction { target: splitFailOverlay; property: "visible"; value: true }
+                                                        NumberAnimation { target: splitFailOverlay; property: "opacity"; from: 0.6; to: 0; duration: 400 }
+                                                        PropertyAction { target: splitFailOverlay; property: "visible"; value: false }
                                                     }
                                                 }
 
@@ -2407,13 +3206,13 @@ Rectangle {
                                 }
 
                                 Rectangle {
-                                    visible: root.dragPreviewVisible
-                                    x: root.dragPreviewX
-                                    y: root.dragPreviewY
-                                    width: root.dragPreviewWidth
-                                    height: laneHeight - 12
+                                    visible: root.dragPreviewState.visible
+                                    x: root.dragPreviewState.x
+                                    y: root.dragPreviewState.y
+                                    width: root.dragPreviewState.width
+                                    height: defaultLaneHeight - 12
                                     radius: 8
-                                    color: root.dragPreviewColor
+                                    color: theme.alpha(theme.accentWarm300, 0.22)
                                     border.width: 1
                                     border.color: theme.alpha(theme.accentWarm300, 0.7)
                                 }
@@ -2430,8 +3229,8 @@ Rectangle {
                                 }
 
                                 Rectangle {
-                                    visible: root.snapGuideVisible
-                                    x: root.snapGuideSeconds * timelineZoom
+                                    visible: root.snapGuideState.visible
+                                    x: root.snapGuideState.seconds * timelineZoom
                                     y: 0
                                     width: 2
                                     height: timelineContentHeight
@@ -2439,8 +3238,8 @@ Rectangle {
                                 }
 
                                 Rectangle {
-                                    visible: root.snapGuideVisible
-                                    x: Math.max(0, root.snapGuideSeconds * timelineZoom - snapGuideBubble.implicitWidth / 2)
+                                    visible: root.snapGuideState.visible
+                                    x: Math.max(0, root.snapGuideState.seconds * timelineZoom - snapGuideBubble.implicitWidth / 2)
                                     y: 2
                                     radius: 8
                                     color: theme.alpha(theme.ink950, 0.94)
@@ -2452,7 +3251,7 @@ Rectangle {
                                     Label {
                                         id: snapGuideBubble
                                         anchors.centerIn: parent
-                                        text: root.snapGuideLabel
+                                        text: root.snapGuideState.label
                                         color: theme.textStrong
                                         font.family: theme.fontMono
                                         font.pixelSize: 8

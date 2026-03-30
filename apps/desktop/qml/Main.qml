@@ -2,13 +2,16 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import "components"
 import "workspaces"
 
 ApplicationWindow {
     id: window
-    width: 1600
-    height: 980
+    width: Math.min(1600, Screen.desktopAvailableWidth * 0.85)
+    height: Math.min(980, Screen.desktopAvailableHeight * 0.85)
+    minimumWidth: 1024
+    minimumHeight: 720
     visible: true
     title: "PhotoEditor"
     color: theme.ink950
@@ -40,13 +43,6 @@ ApplicationWindow {
         "Cut video on a dedicated editing timeline.",
         "Prepare deliveries and export jobs."
     ]
-    readonly property var workspaceDetails: [
-        "Catalog and intake",
-        "Adjust and mask",
-        "Carousel composer",
-        "Timeline editor",
-        "Delivery pipeline"
-    ]
 
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
@@ -69,37 +65,6 @@ ApplicationWindow {
         if (kind === "export")
             return theme.accentCool300
         return theme.textMuted
-    }
-
-    function headerActionVisible() {
-        return currentWorkspace === libraryWorkspaceIndex
-                || (currentWorkspace === timelineWorkspaceIndex && timelineDocument.clipCount > 0)
-    }
-
-    function headerActionText() {
-        if (currentWorkspace === libraryWorkspaceIndex)
-            return "Import"
-        if (currentWorkspace === timelineWorkspaceIndex)
-            return "Save"
-        return ""
-    }
-
-    function headerActionIcon() {
-        if (currentWorkspace === libraryWorkspaceIndex)
-            return "plus"
-        if (currentWorkspace === timelineWorkspaceIndex)
-            return "save"
-        return ""
-    }
-
-    function triggerHeaderAction() {
-        if (currentWorkspace === libraryWorkspaceIndex) {
-            beginImportWorkspace()
-            return
-        }
-
-        if (currentWorkspace === timelineWorkspaceIndex)
-            saveCurrentTimeline()
     }
 
     function activeWorkspaceItem() {
@@ -183,7 +148,8 @@ ApplicationWindow {
                 "mediaType": "timeline",
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": timelineDocument.savedRenderPath,
-                "editedPreviewSource": ""
+                "editedPreviewSource": "",
+                "recipeJson": ""
             }
         }
 
@@ -193,7 +159,22 @@ ApplicationWindow {
                 "mediaType": "photo",
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": localEditorFilePath,
-                "editedPreviewSource": editorPreview.previewSource
+                "editedPreviewSource": editorPreview.previewSource,
+                "recipeJson": editorPreview.currentRecipeJson()
+            }
+        }
+
+        if (currentWorkspace === editWorkspaceIndex
+                && catalogAssets.selectedAssetId.length > 0
+                && catalogAssets.selectedMediaType === "photo"
+                && catalogAssets.selectedFilePath.length > 0) {
+            return {
+                "assetId": catalogAssets.selectedAssetId,
+                "mediaType": catalogAssets.selectedMediaType,
+                "displayLabel": currentSelectionLabel(),
+                "sourcePath": catalogAssets.selectedFilePath,
+                "editedPreviewSource": editorPreview.previewSource,
+                "recipeJson": editorPreview.currentRecipeJson()
             }
         }
 
@@ -203,7 +184,8 @@ ApplicationWindow {
                 "mediaType": catalogAssets.selectedMediaType,
                 "displayLabel": currentSelectionLabel(),
                 "sourcePath": catalogAssets.selectedFilePath,
-                "editedPreviewSource": editorPreview.previewSource
+                "editedPreviewSource": editorPreview.previewSource,
+                "recipeJson": catalogAssets.selectedRecipeJson
             }
         }
 
@@ -230,6 +212,7 @@ ApplicationWindow {
                     payload.displayLabel,
                     payload.sourcePath,
                     payload.editedPreviewSource,
+                    payload.recipeJson,
                     preset,
                     destinationFolder))
             currentWorkspace = exportWorkspaceIndex
@@ -396,16 +379,28 @@ ApplicationWindow {
         id: undoEditAction
         text: "Undo"
         shortcut: StandardKey.Undo
-        enabled: window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo
-        onTriggered: editorPreview.undo()
+        enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo)
+                 || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canUndo)
+        onTriggered: {
+            if (window.currentWorkspace === window.timelineWorkspaceIndex)
+                timelineDocument.undo()
+            else
+                editorPreview.undo()
+        }
     }
 
     Action {
         id: redoEditAction
         text: "Redo"
         shortcut: StandardKey.Redo
-        enabled: window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo
-        onTriggered: editorPreview.redo()
+        enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo)
+                 || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canRedo)
+        onTriggered: {
+            if (window.currentWorkspace === window.timelineWorkspaceIndex)
+                timelineDocument.redo()
+            else
+                editorPreview.redo()
+        }
     }
 
     Action {
@@ -517,6 +512,122 @@ ApplicationWindow {
         shortcut: window.primaryShiftShortcut("T")
         enabled: window.currentWorkspace === window.timelineWorkspaceIndex
         onTriggered: timelineDocument.addVideoTrack()
+    }
+
+    Action {
+        id: zoomInTimelineAction
+        text: "Zoom In Timeline"
+        shortcut: window.primaryShortcut("=")
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: {
+            const tv = window.activeTimelineView()
+            if (tv) tv.setTimelineZoom(tv.timelineZoom * 1.25, tv.timelineZoom * 0)
+        }
+    }
+
+    Action {
+        id: zoomOutTimelineAction
+        text: "Zoom Out Timeline"
+        shortcut: window.primaryShortcut("-")
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: {
+            const tv = window.activeTimelineView()
+            if (tv) tv.setTimelineZoom(tv.timelineZoom / 1.25, 0)
+        }
+    }
+
+    Action {
+        id: zoomToFitTimelineAction
+        text: "Zoom To Fit Timeline"
+        shortcut: window.primaryShortcut("0")
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: {
+            const tv = window.activeTimelineView()
+            if (tv) tv.zoomToFit()
+        }
+    }
+
+    Action {
+        id: timelineSelectToolAction
+        text: "Select Tool"
+        shortcut: "V"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelineDocument.activeTool = "select"
+    }
+
+    Action {
+        id: timelineRazorToolAction
+        text: "Razor Tool"
+        shortcut: "B"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelineDocument.activeTool = "razor"
+    }
+
+    Action {
+        id: timelineSlipToolAction
+        text: "Slip Tool"
+        shortcut: "Y"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelineDocument.activeTool = "slip"
+    }
+
+    Action {
+        id: timelineRollToolAction
+        text: "Roll Tool"
+        shortcut: "N"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelineDocument.activeTool = "roll"
+    }
+
+    Action {
+        id: timelineToggleSnapAction
+        text: "Toggle Snapping"
+        shortcut: "S"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: {
+            const tv = window.activeTimelineView()
+            if (tv) tv.snappingEnabled = !tv.snappingEnabled
+        }
+    }
+
+    Action {
+        id: timelineGoToStartAction
+        text: "Go To Start"
+        shortcut: "Home"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelinePlayback.seekSequenceSeconds(0)
+    }
+
+    Action {
+        id: timelineGoToEndAction
+        text: "Go To End"
+        shortcut: "End"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex
+        onTriggered: timelinePlayback.seekSequenceSeconds(timelineDocument.totalDurationSeconds)
+    }
+
+    Action {
+        id: timelineDeleteClipAction
+        text: "Delete Selected Clip"
+        shortcut: "Backspace"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.currentIndex >= 0
+        onTriggered: timelineDocument.removeSelectedClip()
+    }
+
+    Action {
+        id: timelineDropMarkerAction
+        text: "Drop Marker"
+        shortcut: "M"
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.hasActiveTimeline
+        onTriggered: timelineDocument.addSequenceMarker()
+    }
+
+    Action {
+        id: timelineSelectAllAction
+        text: "Select All Clips"
+        shortcut: window.primaryShortcut("A")
+        enabled: window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.clipCount > 0
+        onTriggered: timelineDocument.selectAllClips()
     }
 
     Action {
@@ -718,6 +829,19 @@ ApplicationWindow {
     }
 
     Action {
+        id: toggleDarkModeAction
+        text: appShell.darkMode ? "Switch to Light Theme" : "Switch to Dark Theme"
+        onTriggered: appShell.darkMode = !appShell.darkMode
+    }
+
+    Action {
+        id: commandPaletteAction
+        text: "Command Palette"
+        shortcut: window.primaryShortcut("K")
+        onTriggered: commandPaletteDialog.open()
+    }
+
+    Action {
         id: aboutAction
         text: "About PhotoEditor"
         onTriggered: aboutDialog.open()
@@ -844,6 +968,12 @@ ApplicationWindow {
         }
 
         Menu {
+            title: "&View"
+            MenuItem { action: toggleDarkModeAction }
+            MenuItem { action: commandPaletteAction }
+        }
+
+        Menu {
             title: "&Help"
             MenuItem { action: keyboardShortcutsAction }
             MenuSeparator {}
@@ -895,172 +1025,75 @@ ApplicationWindow {
         }
     }
 
-    ColumnLayout {
+    RowLayout {
         anchors.fill: parent
         anchors.margins: 8
         spacing: 6
 
         Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 54
+            Layout.preferredWidth: 112
+            Layout.fillHeight: true
             radius: theme.radius12
-            color: theme.alpha(theme.ink900, 0.84)
+            color: theme.ink850
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.42)
 
-            RowLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 10
+                anchors.margins: 8
+                spacing: 8
 
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 1
-
-                    Label {
-                        text: workspaceTitles[currentWorkspace]
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 13
-                        font.weight: Font.DemiBold
-                    }
-
-                    Label {
-                        text: workspaceSubtitles[currentWorkspace]
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                        Layout.fillWidth: true
-                    }
+                Label {
+                    text: "PhotoEditor"
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
                 }
 
                 Rectangle {
-                    visible: window.currentSelectionLabel().length > 0
-                    radius: 6
-                    color: theme.alpha(theme.ink850, 0.9)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.5)
-                    implicitWidth: selectionLabel.implicitWidth + 16
-                    implicitHeight: 26
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: theme.alpha(theme.lineSoft, 0.72)
+                }
 
-                    Label {
-                        id: selectionLabel
-                        anchors.centerIn: parent
-                        text: window.currentSelectionLabel()
-                        color: theme.textMain
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        font.weight: Font.Medium
+                Repeater {
+                    model: workspaceTitles
+
+                    delegate: SidebarButton {
+                        required property int index
+                        required property string modelData
+
+                        Layout.fillWidth: true
+                        title: modelData
+                        tooltipText: modelData + "  •  " + workspaceSubtitles[index]
+                        badgeText: ""
+                        badgeEmphasis: false
+                        compact: false
+                        kind: window.workspaceKinds[index]
+                        accent: window.workspaceAccent(index)
+                        highlighted: index === window.currentWorkspace
+                        onClicked: window.currentWorkspace = index
                     }
                 }
 
-                Label {
-                    text: workspaceDetails[currentWorkspace]
-                    color: theme.textFaint
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                }
-
-                ActionButton {
-                    visible: window.headerActionVisible()
-                    text: window.headerActionText()
-                    iconName: window.headerActionIcon()
-                    compact: true
-                    tone: currentWorkspace === timelineWorkspaceIndex ? "primary" : "secondary"
-                    tooltipText: currentWorkspace === timelineWorkspaceIndex ? "Save current timeline" : "Open import workspace"
-                    onClicked: window.triggerHeaderAction()
-                }
+                Item { Layout.fillHeight: true }
             }
         }
 
-        RowLayout {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 6
+            radius: theme.radius12
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(theme.lineSoft, 0.34)
 
-            Rectangle {
-                Layout.preferredWidth: 122
-                Layout.fillHeight: true
-                radius: theme.radius12
-                color: theme.ink850
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.42)
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 8
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 8
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 0
-
-                            Label {
-                                text: "PhotoEditor"
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.DemiBold
-                            }
-
-                            Label {
-                                text: workspaceTitles[currentWorkspace]
-                                color: theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: theme.alpha(theme.lineSoft, 0.72)
-                    }
-
-                    Repeater {
-                        model: workspaceTitles
-
-                        delegate: SidebarButton {
-                            required property int index
-                            required property string modelData
-
-                            Layout.fillWidth: true
-                            title: modelData
-                            tooltipText: modelData + "  •  " + workspaceSubtitles[index]
-                            badgeText: ""
-                            badgeEmphasis: false
-                            compact: false
-                            kind: window.workspaceKinds[index]
-                            accent: window.workspaceAccent(index)
-                            highlighted: index === window.currentWorkspace
-                            onClicked: window.currentWorkspace = index
-                        }
-                    }
-
-                    Item { Layout.fillHeight: true }
-                }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: theme.radius12
-                color: theme.ink900
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                Loader {
-                    id: workspaceLoader
-                    anchors.fill: parent
-                    anchors.margins: 3
-                    sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
-                }
+            Loader {
+                id: workspaceLoader
+                anchors.fill: parent
+                anchors.margins: 3
+                sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
             }
         }
     }
@@ -1073,6 +1106,58 @@ ApplicationWindow {
     KeyboardShortcutsDialog {
         id: keyboardShortcutsDialog
         parent: Overlay.overlay
+    }
+
+    CommandPaletteDialog {
+        id: commandPaletteDialog
+        parent: Overlay.overlay
+        commands: [
+            { action: switchToLibraryAction, category: "Navigate", shortcutHint: "" },
+            { action: switchToEditAction, category: "Navigate", shortcutHint: "" },
+            { action: switchToCarouselAction, category: "Navigate", shortcutHint: "" },
+            { action: switchToTimelineAction, category: "Navigate", shortcutHint: "" },
+            { action: switchToExportAction, category: "Navigate", shortcutHint: "" },
+            { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
+            { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
+            { action: openSelectedInEditAction, category: "File", shortcutHint: macStyle ? "⌘E" : "Ctrl+E" },
+            { action: openSelectedTimelineAction, category: "File", shortcutHint: "" },
+            { action: saveTimelineAction, category: "File", shortcutHint: macStyle ? "⌘S" : "Ctrl+S" },
+            { action: importFolderAction, category: "File", shortcutHint: macStyle ? "⌘O" : "Ctrl+O" },
+            { action: refreshLibraryAction, category: "Library", shortcutHint: macStyle ? "⌘R" : "Ctrl+R" },
+            { action: queueExportAction, category: "Export", shortcutHint: macStyle ? "⇧⌘E" : "Ctrl+Shift+E" },
+            { action: undoEditAction, category: "Edit", shortcutHint: macStyle ? "⌘Z" : "Ctrl+Z" },
+            { action: redoEditAction, category: "Edit", shortcutHint: macStyle ? "⇧⌘Z" : "Ctrl+Shift+Z" },
+            { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
+            { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
+            { action: toggleCropAction, category: "Edit", shortcutHint: "" },
+            { action: splitAtPlayheadAction, category: "Timeline", shortcutHint: macStyle ? "⌘\\" : "Ctrl+\\" },
+            { action: removeSelectedClipAction, category: "Timeline", shortcutHint: "" },
+            { action: openTimelineMediaBrowserAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘M" : "Ctrl+Shift+M" },
+            { action: addTimelineVideoTrackAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘T" : "Ctrl+Shift+T" },
+            { action: zoomInTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘=" : "Ctrl+=" },
+            { action: zoomOutTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘-" : "Ctrl+-" },
+            { action: zoomToFitTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘0" : "Ctrl+0" },
+            { action: timelineSelectToolAction, category: "Timeline", shortcutHint: "V" },
+            { action: timelineRazorToolAction, category: "Timeline", shortcutHint: "B" },
+            { action: timelineSlipToolAction, category: "Timeline", shortcutHint: "Y" },
+            { action: timelineRollToolAction, category: "Timeline", shortcutHint: "N" },
+            { action: toggleSnappingAction, category: "Timeline", shortcutHint: "S" },
+            { action: toggleRippleAction, category: "Timeline", shortcutHint: "" },
+            { action: restoreTimelineLayoutAction, category: "Timeline", shortcutHint: "" },
+            { action: carouselAddSlideAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
+            { action: carouselRemoveSlideAction, category: "Carousel", shortcutHint: "" },
+            { action: carouselExportAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘C" : "Ctrl+Shift+C" },
+            { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
+            { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
+            { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
+            { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
+            { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
+            { action: aboutAction, category: "Help", shortcutHint: "" },
+            { action: clearFinishedExportsAction, category: "Export", shortcutHint: "" },
+            { action: minimizeWindowAction, category: "Window", shortcutHint: "" },
+            { action: zoomWindowAction, category: "Window", shortcutHint: "" },
+            { action: quitAction, category: "App", shortcutHint: macStyle ? "⌘Q" : "Ctrl+Q" }
+        ]
     }
 
     Dialog {

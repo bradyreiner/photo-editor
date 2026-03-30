@@ -54,6 +54,31 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   add_test(NAME app_bootstrap_test COMMAND app_bootstrap_test)
 
   add_executable(
+    catalog_asset_model_test
+    catalog_asset_model_test.cpp
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/catalog_asset_model.h
+    ../apps/desktop/src/catalog_asset_model.cpp
+    ../apps/desktop/src/timeline_asset_store.h
+    ../apps/desktop/src/timeline_asset_store.cpp)
+  set_target_properties(catalog_asset_model_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    catalog_asset_model_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    catalog_asset_model_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Widgets)
+  photo_editor_apply_warnings(catalog_asset_model_test)
+
+  add_test(NAME catalog_asset_model_test COMMAND catalog_asset_model_test)
+
+  add_executable(
     desktop_shell_smoke_test
     desktop_shell_smoke_test.cpp
     ../apps/desktop/src/app_bootstrap.h
@@ -66,8 +91,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/catalog_asset_model.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp
     ../apps/desktop/src/export_job_controller.h
     ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
     ../apps/desktop/src/timeline_asset_store.h
     ../apps/desktop/src/timeline_asset_store.cpp
     ../apps/desktop/src/timeline_document_controller.h
@@ -134,7 +163,9 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ../apps/desktop/src/editor_preview_controller.h
-    ../apps/desktop/src/editor_preview_controller.cpp)
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
   set_target_properties(editor_preview_controller_test PROPERTIES AUTOMOC ON)
   target_include_directories(
     editor_preview_controller_test
@@ -150,6 +181,29 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   photo_editor_apply_warnings(editor_preview_controller_test)
 
   add_test(NAME editor_preview_controller_test COMMAND editor_preview_controller_test)
+
+  add_executable(
+    export_job_controller_test
+    export_job_controller_test.cpp
+    ../apps/desktop/src/export_job_controller.h
+    ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp)
+  set_target_properties(export_job_controller_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    export_job_controller_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    export_job_controller_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Widgets
+      photo_engine)
+  photo_editor_apply_warnings(export_job_controller_test)
+
+  add_test(NAME export_job_controller_test COMMAND export_job_controller_test)
 
   add_executable(
     carousel_document_controller_test
