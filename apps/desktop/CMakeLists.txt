@@ -125,6 +125,8 @@ qt_add_qml_module(photo_editor_app
     qml/workspaces/ImportView.qml
     qml/workspaces/LibraryView.qml
     qml/workspaces/LibraryWorkspace.qml
+    qml/workspaces/MaskCanvasOverlay.qml
+    qml/workspaces/MaskInspectorSections.qml
     qml/workspaces/MaskView.qml
     qml/workspaces/SequenceWorkspace.qml
     qml/workspaces/TimelineView.qml
