@@ -11,6 +11,8 @@
 
 #include "edit_recipe_state.h"
 #include "export_job_controller.h"
+#include "job_runner.h"
+#include "job_store.h"
 
 namespace {
 
@@ -38,17 +40,45 @@ bool wait_for_job(
   return false;
 }
 
+bool wait_for_job_id(
+    photo_editor::desktop::ExportJobController* controller,
+    const QString& job_id,
+    int timeout_ms = 5000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    const auto jobs = controller->jobs();
+    for (const auto& value : jobs) {
+      const auto job = value.toMap();
+      if (job.value(QStringLiteral("jobId")).toString() != job_id) {
+        continue;
+      }
+      const auto status = job.value(QStringLiteral("status")).toString();
+      if (status == QStringLiteral("Completed") || status == QStringLiteral("Failed")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-  QCoreApplication app(argc, argv);
-  QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
-  QCoreApplication::setApplicationName(QStringLiteral("ExportJobControllerTest"));
-
   QTemporaryDir temp_dir;
   if (!temp_dir.isValid()) {
     return fail("temporary export test directory should be created");
   }
+
+  qputenv("HOME", temp_dir.path().toUtf8());
+  qputenv("XDG_DATA_HOME", temp_dir.filePath(QStringLiteral("data")).toUtf8());
+  qputenv("XDG_CACHE_HOME", temp_dir.filePath(QStringLiteral("cache")).toUtf8());
+  qputenv("PHOTO_EDITOR_APP_DATA_ROOT", temp_dir.filePath(QStringLiteral("app-data")).toUtf8());
+
+  QCoreApplication app(argc, argv);
+  QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
+  QCoreApplication::setApplicationName(QStringLiteral("ExportJobControllerTest"));
 
   const auto source_path = temp_dir.filePath(QStringLiteral("source.png"));
   const auto export_dir = temp_dir.filePath(QStringLiteral("exports"));
@@ -72,7 +102,9 @@ int main(int argc, char** argv) {
   crop_state.crop_rect_height = 1.0;
   const auto recipe_json = photo_editor::desktop::serialize_edit_recipe_json(crop_state);
 
+  photo_editor::desktop::JobRunner runner;
   photo_editor::desktop::ExportJobController controller;
+  const auto crop_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-crop"),
           QStringLiteral("photo"),
@@ -85,11 +117,11 @@ int main(int argc, char** argv) {
     return fail("photo export should queue successfully");
   }
 
-  if (!wait_for_job(&controller, 0)) {
+  if (!wait_for_job(&controller, crop_job_index)) {
     return fail("rendered photo export should finish");
   }
 
-  const auto rendered_job = controller.jobs().at(0).toMap();
+  const auto rendered_job = controller.jobs().at(crop_job_index).toMap();
   if (rendered_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
     return fail("rendered photo export should complete successfully");
   }
@@ -113,6 +145,7 @@ int main(int argc, char** argv) {
     return fail("rendered photo export should contain the cropped right-half content");
   }
 
+  const auto copy_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-copy"),
           QStringLiteral("photo"),
@@ -125,11 +158,11 @@ int main(int argc, char** argv) {
     return fail("original copy export should queue successfully");
   }
 
-  if (!wait_for_job(&controller, 1)) {
+  if (!wait_for_job(&controller, copy_job_index)) {
     return fail("original copy export should finish");
   }
 
-  const auto copied_job = controller.jobs().at(1).toMap();
+  const auto copied_job = controller.jobs().at(copy_job_index).toMap();
   if (copied_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
     return fail("original copy export should complete successfully");
   }
@@ -147,6 +180,54 @@ int main(int argc, char** argv) {
   }
   if (source_file.readAll() != copied_file.readAll()) {
     return fail("original copy export should preserve the original file bytes");
+  }
+
+  controller.clearFinishedJobs();
+  if (controller.jobCount() != 0) {
+    return fail("clearFinishedJobs should empty the queue before recovery testing");
+  }
+
+  photo_editor::desktop::PersistentJobRecord recovered_record;
+  recovered_record.job_id = QStringLiteral("recovered-export");
+  recovered_record.job_kind = QStringLiteral("asset_export");
+  recovered_record.asset_id = QStringLiteral("asset-recovered");
+  recovered_record.media_type = QStringLiteral("photo");
+  recovered_record.display_label = QStringLiteral("Recovered Export");
+  recovered_record.source_path = source_path;
+  recovered_record.preset_name = QStringLiteral("Original Copy");
+  recovered_record.destination_path = export_dir;
+  recovered_record.status = QStringLiteral("Running");
+  recovered_record.created_at = QStringLiteral("2026-03-31T00:00:00Z");
+  recovered_record.updated_at = recovered_record.created_at;
+  if (!photo_editor::desktop::upsertPersistedJobRecord(recovered_record, nullptr)) {
+    return fail("recovered export job should be persisted");
+  }
+
+  photo_editor::desktop::JobRunner recovered_runner;
+  photo_editor::desktop::ExportJobController recovered_controller;
+  if (recovered_controller.jobCount() < 1) {
+    return fail("recovered export jobs should load into the queue");
+  }
+  if (!wait_for_job_id(&recovered_controller, QStringLiteral("recovered-export"), 8000)) {
+    return fail("recovered queued export should resume automatically");
+  }
+
+  QVariantMap recovered_job;
+  for (const auto& value : recovered_controller.jobs()) {
+    const auto job = value.toMap();
+    if (job.value(QStringLiteral("jobId")).toString() == QStringLiteral("recovered-export")) {
+      recovered_job = job;
+      break;
+    }
+  }
+  if (recovered_job.isEmpty()) {
+    return fail("recovered export should remain visible in the controller");
+  }
+  if (recovered_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
+    return fail("recovered export should complete successfully");
+  }
+  if (!QFileInfo::exists(recovered_job.value(QStringLiteral("outputPath")).toString())) {
+    return fail("recovered export should write its output file");
   }
 
   const auto subject_source_path = temp_dir.filePath(QStringLiteral("subject-source.png"));
@@ -172,6 +253,7 @@ int main(int argc, char** argv) {
   subject_state.mask_stack = {subject_mask};
   const auto subject_recipe_json = photo_editor::desktop::serialize_edit_recipe_json(subject_state);
 
+  const auto subject_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-subject"),
           QStringLiteral("photo"),
@@ -184,11 +266,11 @@ int main(int argc, char** argv) {
     return fail("subject mask export should queue successfully");
   }
 
-  if (!wait_for_job(&controller, 2)) {
+  if (!wait_for_job(&controller, subject_job_index)) {
     return fail("subject mask export should finish");
   }
 
-  const auto subject_job = controller.jobs().at(2).toMap();
+  const auto subject_job = controller.jobs().at(subject_job_index).toMap();
   if (subject_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
     return fail("subject mask export should complete successfully");
   }
@@ -231,6 +313,7 @@ int main(int argc, char** argv) {
   removal_state.mask_stack = {removal_mask};
   const auto removal_recipe_json = photo_editor::desktop::serialize_edit_recipe_json(removal_state);
 
+  const auto removal_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-remove"),
           QStringLiteral("photo"),
@@ -243,11 +326,11 @@ int main(int argc, char** argv) {
     return fail("removal export should queue successfully");
   }
 
-  if (!wait_for_job(&controller, 3)) {
+  if (!wait_for_job(&controller, removal_job_index)) {
     return fail("removal export should finish");
   }
 
-  const auto removal_job = controller.jobs().at(3).toMap();
+  const auto removal_job = controller.jobs().at(removal_job_index).toMap();
   if (removal_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
     return fail("removal export should complete successfully");
   }

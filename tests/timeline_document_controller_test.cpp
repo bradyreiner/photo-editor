@@ -3,7 +3,10 @@
 #include <iostream>
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -13,12 +16,15 @@
 #include <QStandardPaths>
 #include <QTemporaryDir>
 
+#include "job_runner.h"
+#include "job_store.h"
 #include "timeline_asset_store.h"
 #include "timeline_document_controller.h"
 
 namespace {
 
 using photo_editor::desktop::loadTimelineAssetRecords;
+using photo_editor::desktop::loadPersistedJobRecords;
 using photo_editor::desktop::TimelineDocumentController;
 
 int fail(const char* message) {
@@ -28,6 +34,23 @@ int fail(const char* message) {
 
 bool nearly_equal(double left, double right, double tolerance = 0.0001) {
   return std::abs(left - right) <= tolerance;
+}
+
+bool wait_for_persisted_job(const QString& job_id, int timeout_ms = 120000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    for (const auto& job : loadPersistedJobRecords()) {
+      if (job.job_id != job_id) {
+        continue;
+      }
+      if (job.status == QStringLiteral("Completed") || job.status == QStringLiteral("Failed")) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 QString touch_file(const QString& path) {
@@ -579,6 +602,7 @@ int main(int argc, char** argv) {
   const auto ffmpeg = QStandardPaths::findExecutable(QStringLiteral("ffmpeg"));
   const auto ffprobe = QStandardPaths::findExecutable(QStringLiteral("ffprobe"));
   if (!ffmpeg.isEmpty() && !ffprobe.isEmpty()) {
+    photo_editor::desktop::JobRunner runner;
     const auto render_video_one = create_test_video(
         ffmpeg,
         workspace.filePath(QStringLiteral("render-01.mp4")),
@@ -613,6 +637,12 @@ int main(int argc, char** argv) {
 
     if (!render_controller.saveTimeline()) {
       return fail("saving a rendered timeline should succeed when ffmpeg is available");
+    }
+
+    const auto render_job_id =
+        QStringLiteral("timeline-render-%1").arg(render_controller.timelineAssetId().section(':', 1));
+    if (!wait_for_persisted_job(render_job_id)) {
+      return fail("queued timeline renders should complete through the shared job runner");
     }
 
     if (!QFileInfo::exists(render_controller.savedDocumentPath()) ||
@@ -696,6 +726,21 @@ int main(int argc, char** argv) {
       return fail("timeline index should contain the newly saved timeline asset");
     }
 
+    const auto persisted_jobs = loadPersistedJobRecords();
+    bool found_timeline_render_job = false;
+    for (const auto& job : persisted_jobs) {
+      if (job.job_kind == QStringLiteral("timeline_render") &&
+          job.asset_id == render_controller.timelineAssetId() &&
+          job.status == QStringLiteral("Completed") &&
+          job.output_path == render_controller.savedRenderPath()) {
+        found_timeline_render_job = true;
+        break;
+      }
+    }
+    if (!found_timeline_render_job) {
+      return fail("saving a timeline should persist a completed shared render job record");
+    }
+
     TimelineDocumentController load_controller;
     if (!load_controller.loadTimeline(render_controller.savedDocumentPath())) {
       return fail("saved timeline documents should load successfully");
@@ -733,6 +778,20 @@ int main(int argc, char** argv) {
     if (load_controller.currentClip().value(QStringLiteral("effectStack")).toList().size() != 1 ||
         load_controller.currentClip().value(QStringLiteral("transitionOutName")).toString() != QStringLiteral("Fade Out")) {
       return fail("loaded timelines should accept new effects and transitions on selected clips");
+    }
+
+    if (!QFile::remove(render_controller.savedDocumentPath())) {
+      return fail("saved timeline document should be removable for recovery testing");
+    }
+
+    TimelineDocumentController recovery_controller;
+    if (!recovery_controller.loadTimeline(render_controller.savedDocumentPath())) {
+      return fail("timeline recovery should load from the persisted backup when the document file is missing");
+    }
+    if (recovery_controller.timelineName() != QStringLiteral("Rendered Timeline") ||
+        recovery_controller.clipCount() != 2 ||
+        recovery_controller.sequenceMarkers().size() != 1) {
+      return fail("timeline recovery should restore timeline state from the persisted backup");
     }
   }
 

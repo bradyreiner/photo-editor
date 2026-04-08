@@ -1,9 +1,12 @@
 #pragma once
 
 #include <QObject>
+#include <QJsonObject>
 #include <QString>
 #include <QVariantList>
 #include <QVector>
+
+#include "job_store.h"
 
 namespace photo_editor::desktop {
 
@@ -65,13 +68,12 @@ class ExportJobController final : public QObject {
   [[nodiscard]] QVariantMap jobMap(const ExportJob& job) const;
   [[nodiscard]] int jobIndexById(const QString& job_id) const;
   [[nodiscard]] QString resolvedSourcePath(const ExportJob& job, bool* uses_preview) const;
-  [[nodiscard]] QString outputFilePathForJob(
-      const ExportJob& job,
-      const QString& source_path,
-      bool rendered_output) const;
-  void processNextQueuedJob();
-  void finishJob(int index, const QString& output_path);
-  void failJob(int index, const QString& error_message);
+  [[nodiscard]] ExportJob jobFromRecord(const PersistentJobRecord& record) const;
+  void loadPersistedJobs(bool emit_signal = true);
+  void persistJob(const ExportJob& job) const;
+  void removePersistedJob(const QString& job_id) const;
+  void refreshJobs();
+  void updateBusyState();
   void setBusy(bool busy);
   void setStatus(const QString& status);
 

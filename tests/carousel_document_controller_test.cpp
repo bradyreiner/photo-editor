@@ -145,6 +145,45 @@ int main(int argc, char** argv) {
 
   {
     CarouselDocumentController controller;
+    controller.setDocumentFormat(QStringLiteral("5x4"));
+    const auto slot_drag_path = write_image(
+        dir,
+        QStringLiteral("slot-drag-source.png"),
+        QImage(QSize(1600, 1080), QImage::Format_ARGB32));
+    if (slot_drag_path.isEmpty()) {
+      return fail("slot drag source image should save");
+    }
+
+    QImage slot_drag_image(slot_drag_path);
+    slot_drag_image.fill(QColor(QStringLiteral("#64d2ff")));
+    if (!slot_drag_image.save(slot_drag_path)) {
+      return fail("slot drag source image should save after fill");
+    }
+
+    controller.applyTemplateToCurrent(QStringLiteral("split-pair"));
+    controller.assignPrimaryImage(slot_drag_path, QStringLiteral("slot drag"));
+
+    const auto slides = controller.slides();
+    if (slides.isEmpty() || !slides.at(0).toMap().value(QStringLiteral("primaryHasMedia")).toBool() ||
+        slides.at(0).toMap().value(QStringLiteral("secondaryHasMedia")).toBool()) {
+      return fail("slide metadata should expose which template slots currently contain media");
+    }
+
+    controller.moveCurrentMediaByPixels(10000.0, 0.0);
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("offsetX")).toDouble() != -1.0) {
+      return fail("slot media dragging should clamp to the right edge of the crop range");
+    }
+
+    controller.moveCurrentMediaByPixels(-20000.0, 0.0);
+    selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("offsetX")).toDouble() != 1.0) {
+      return fail("slot media dragging should clamp to the left edge of the crop range");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
     const auto video_path = dir.filePath(QStringLiteral("placeholder.mp4"));
     QFile video_file(video_path);
     if (!video_file.open(QIODevice::WriteOnly)) {
@@ -160,6 +199,57 @@ int main(int argc, char** argv) {
     }
     if (!selection.value(QStringLiteral("canPlaceVideo")).toBool()) {
       return fail("single template should continue to advertise video support");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    const auto video_path = dir.filePath(QStringLiteral("layer-placeholder.mp4"));
+    QFile video_file(video_path);
+    if (!video_file.open(QIODevice::WriteOnly)) {
+      return fail("video layer placeholder file should open");
+    }
+    video_file.write("not-a-real-video");
+    video_file.close();
+
+    controller.addVideoItem(video_path, QStringLiteral("layer clip"));
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("itemType")).toString() != QStringLiteral("video") ||
+        !selection.value(QStringLiteral("isVideo")).toBool()) {
+      return fail("adding a video layer should select it as a video item");
+    }
+
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(420.0, 760.0);
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-video-layer"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("video layer placeholder export should succeed");
+    }
+
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!region_contains_non_background(
+            slide,
+            QRect(300, 220, 480, 900),
+            QColor(QStringLiteral("#fbf7f1")))) {
+      return fail("video layers should render a visible placeholder into exported slides");
+    }
+
+    controller.setDocumentName(QStringLiteral("Video Layer Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("video layer carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("video layer carousel should load");
+    }
+
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("type")).toString() != QStringLiteral("video")) {
+      return fail("saved carousel documents should restore video layer items");
     }
   }
 
@@ -264,6 +354,269 @@ int main(int argc, char** argv) {
             QRect(180, 40, 720, 260),
             QColor(QStringLiteral("#fbf7f1")))) {
       return fail("text layers should render into exported slides");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addTextItem(QStringLiteral("Resize me wider because this sentence needs to wrap across multiple lines."));
+    controller.setSelectedItemSize(720.0, 180.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("width")).toDouble() != 720.0) {
+      return fail("resizing a text layer should apply the requested width");
+    }
+
+    const auto resized_height = selection.value(QStringLiteral("height")).toDouble();
+    controller.setSelectedItemSize(320.0, 180.0);
+    selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("width")).toDouble() != 320.0) {
+      return fail("text layer resize should continue to track subsequent width changes");
+    }
+    if (selection.value(QStringLiteral("height")).toDouble() <= resized_height) {
+      return fail("narrowing a text layer should recompute its wrapped text height");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    const auto original_path = write_image(
+        dir,
+        QStringLiteral("duplicate-original.png"),
+        QImage(QSize(800, 800), QImage::Format_ARGB32));
+    const auto replacement_path = write_image(
+        dir,
+        QStringLiteral("duplicate-replacement.png"),
+        QImage(QSize(800, 800), QImage::Format_ARGB32));
+    if (original_path.isEmpty() || replacement_path.isEmpty()) {
+      return fail("duplicate/replace sources should save");
+    }
+
+    QImage original_image(original_path);
+    original_image.fill(QColor(QStringLiteral("#34c759")));
+    if (!original_image.save(original_path)) {
+      return fail("original duplicate source should save");
+    }
+
+    QImage replacement_image(replacement_path);
+    replacement_image.fill(QColor(QStringLiteral("#ff453a")));
+    if (!replacement_image.save(replacement_path)) {
+      return fail("replacement duplicate source should save");
+    }
+
+    controller.addPhotoItem(original_path, QStringLiteral("original"));
+    controller.setSelectedItemCenter(320.0, 720.0);
+    controller.setSelectedItemSize(320.0, 320.0);
+    controller.duplicateSelectedItem();
+
+    const auto duplicated_items = controller.canvasItems();
+    if (duplicated_items.size() != 2) {
+      return fail("duplicating a selected layer should create a second layer");
+    }
+
+    controller.replaceSelectedPhotoItem(replacement_path, QStringLiteral("replacement"), QString{});
+    const auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("displayLabel")).toString() != QStringLiteral("replacement")) {
+      return fail("replacing a selected photo layer should update its media");
+    }
+
+    controller.setSelectedItemLocked(true);
+    controller.moveSelectedItemByPixels(100.0, 0.0);
+    const auto locked_selection = controller.selectionDetails();
+    if (locked_selection.value(QStringLiteral("x")).toDouble() != selection.value(QStringLiteral("x")).toDouble()) {
+      return fail("locked layers should ignore move commands");
+    }
+
+    controller.setSelectedItemHidden(true);
+    const auto hidden_selection = controller.selectionDetails();
+    if (!hidden_selection.value(QStringLiteral("hidden")).toBool()) {
+      return fail("hidden state should be exposed for selected layers");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    const auto multi_path = write_image(
+        dir,
+        QStringLiteral("multi-select.png"),
+        QImage(QSize(400, 400), QImage::Format_ARGB32));
+    if (multi_path.isEmpty()) {
+      return fail("multi-select layer source should save");
+    }
+
+    QImage multi_image(multi_path);
+    multi_image.fill(QColor(QStringLiteral("#64d2ff")));
+    if (!multi_image.save(multi_path)) {
+      return fail("multi-select layer source image should save");
+    }
+
+    controller.addPhotoItem(multi_path, QStringLiteral("one"));
+    const auto first_id = controller.selectedItemId();
+    controller.setSelectedItemCenter(120.0, 240.0);
+    controller.setSelectedItemSize(120.0, 120.0);
+
+    controller.addPhotoItem(multi_path, QStringLiteral("two"));
+    const auto second_id = controller.selectedItemId();
+    controller.setSelectedItemCenter(220.0, 240.0);
+    controller.setSelectedItemSize(120.0, 120.0);
+
+    controller.addPhotoItem(multi_path, QStringLiteral("three"));
+    const auto third_id = controller.selectedItemId();
+    controller.setSelectedItemCenter(720.0, 240.0);
+    controller.setSelectedItemSize(120.0, 120.0);
+
+    controller.selectItem(first_id);
+    controller.addItemToSelection(second_id);
+    controller.addItemToSelection(third_id);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("selectedCount")).toInt() != 3 ||
+        !selection.value(QStringLiteral("hasMultipleSelection")).toBool()) {
+      return fail("adding items to the selection should preserve a multi-layer selection set");
+    }
+
+    const auto selected_ids = selection.value(QStringLiteral("selectedItemIds")).toList();
+    if (selected_ids.size() != 3) {
+      return fail("selection details should expose all selected item ids");
+    }
+
+    controller.distributeSelectionHorizontally();
+    auto items = controller.canvasItems();
+    double middle_x = -1.0;
+    for (const auto& value : items) {
+      const auto item = value.toMap();
+      if (item.value(QStringLiteral("itemId")).toString() == second_id) {
+        middle_x = item.value(QStringLiteral("x")).toDouble();
+      }
+    }
+    if (middle_x != 360.0) {
+      return fail("horizontal distribution should evenly space selected layers");
+    }
+
+    controller.alignSelectionLeft();
+    items = controller.canvasItems();
+    int left_aligned_count = 0;
+    int selected_count = 0;
+    for (const auto& value : items) {
+      const auto item = value.toMap();
+      if (item.value(QStringLiteral("selected")).toBool()) {
+        ++selected_count;
+        if (item.value(QStringLiteral("x")).toDouble() == 0.0) {
+          ++left_aligned_count;
+        }
+      }
+    }
+    if (selected_count != 3 || left_aligned_count != 3) {
+      return fail("aligning left should move every selected layer to the canvas edge");
+    }
+
+    controller.toggleItemSelection(second_id);
+    selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("selectedCount")).toInt() != 2) {
+      return fail("toggling a selected item should remove it from the selection set");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setDocumentFormat(QStringLiteral("5x4"));
+
+    const auto persisted_left = write_image(
+        dir,
+        QStringLiteral("persist-left.png"),
+        QImage(QSize(700, 1080), QImage::Format_ARGB32));
+    const auto persisted_right = write_image(
+        dir,
+        QStringLiteral("persist-right.png"),
+        QImage(QSize(700, 1080), QImage::Format_ARGB32));
+    if (persisted_left.isEmpty() || persisted_right.isEmpty()) {
+      return fail("persistence source images should save");
+    }
+
+    QImage persisted_left_image(persisted_left);
+    persisted_left_image.fill(QColor(QStringLiteral("#ff9f0a")));
+    if (!persisted_left_image.save(persisted_left)) {
+      return fail("left persistence source should save");
+    }
+
+    QImage persisted_right_image(persisted_right);
+    persisted_right_image.fill(QColor(QStringLiteral("#64d2ff")));
+    if (!persisted_right_image.save(persisted_right)) {
+      return fail("right persistence source should save");
+    }
+
+    controller.applyTemplateToCurrent(QStringLiteral("split-pair"));
+    controller.assignPrimaryImage(persisted_left, QStringLiteral("persist-left"));
+    controller.assignSecondaryImage(persisted_right, QStringLiteral("persist-right"));
+    controller.addSlide();
+    controller.selectSlide(1);
+    controller.addTextItem(QStringLiteral("SAVE"));
+    controller.setSelectedItemCenter(2025.0, 180.0);
+    controller.setSelectedTextColor(QStringLiteral("#ff453a"));
+    controller.setDocumentName(QStringLiteral("Persisted Carousel"));
+
+    if (!controller.saveDocument()) {
+      std::cerr << controller.status().toStdString() << '\n';
+      return fail("carousel documents should save successfully");
+    }
+    if (controller.savedDocumentId().isEmpty()) {
+      return fail("saving a carousel should assign a saved document id");
+    }
+
+    const auto recent_documents = controller.recentDocuments();
+    bool found_saved_document = false;
+    for (const auto& value : recent_documents) {
+      const auto item = value.toMap();
+      if (item.value(QStringLiteral("documentId")).toString() == controller.savedDocumentId() &&
+          item.value(QStringLiteral("name")).toString() == QStringLiteral("Persisted Carousel")) {
+        found_saved_document = true;
+        break;
+      }
+    }
+    if (!found_saved_document) {
+      return fail("saved carousel documents should appear in recent documents");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      std::cerr << restored.status().toStdString() << '\n';
+      return fail("saved carousel documents should load successfully");
+    }
+
+    if (restored.documentName() != QStringLiteral("Persisted Carousel") ||
+        restored.savedDocumentId() != controller.savedDocumentId()) {
+      return fail("loaded carousel documents should restore document identity and naming");
+    }
+    if (restored.documentFormat() != QStringLiteral("5x4") || restored.slideCount() != 2) {
+      return fail("loaded carousel documents should restore the document format and canvas count");
+    }
+
+    const auto restored_slides = restored.slides();
+    if (restored_slides.size() != 2 ||
+        restored_slides.at(0).toMap().value(QStringLiteral("templateKind")).toString() != QStringLiteral("split-pair") ||
+        restored_slides.at(1).toMap().value(QStringLiteral("templateKind")).toString() != QStringLiteral("single")) {
+      return fail("loaded carousel documents should restore slide templates");
+    }
+
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("type")).toString() != QStringLiteral("text") ||
+        restored_items.at(0).toMap().value(QStringLiteral("slideIndex")).toInt() != 1) {
+      return fail("loaded carousel documents should restore freeform layer items");
+    }
+
+    const auto restored_export_dir = dir.filePath(QStringLiteral("export-restored-document"));
+    QDir().mkpath(restored_export_dir);
+    if (!restored.exportCarouselToDirectory(restored_export_dir)) {
+      return fail("loaded carousel documents should still export successfully");
+    }
+
+    const QImage restored_first_slide(QDir(restored_export_dir).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(restored_first_slide.pixelColor(restored_first_slide.width() / 4, restored_first_slide.height() / 2),
+                       QColor(QStringLiteral("#ff9f0a"))) ||
+        !color_matches(restored_first_slide.pixelColor((restored_first_slide.width() * 3) / 4, restored_first_slide.height() / 2),
+                       QColor(QStringLiteral("#64d2ff")))) {
+      return fail("loaded carousel documents should preserve assigned slot media");
     }
   }
 

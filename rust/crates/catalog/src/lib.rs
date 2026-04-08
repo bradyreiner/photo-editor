@@ -1,5 +1,6 @@
 mod importer;
 mod local_database;
+pub mod observability;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -86,6 +87,73 @@ pub struct CatalogAssetSnapshot {
     pub asset: CatalogAssetRecord,
     pub edit_recipe: Option<Value>,
     pub imported_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedProject {
+    pub name: String,
+    pub created_at: String,
+    pub asset_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetReviewStateRecord {
+    pub asset_id: String,
+    pub rating: i32,
+    pub picked: bool,
+    pub rejected: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AssetRelinkRecord {
+    pub asset_id: String,
+    pub relinked_file_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedExportJob {
+    pub job_id: String,
+    pub job_kind: String,
+    pub asset_id: String,
+    pub media_type: String,
+    pub display_label: String,
+    pub source_path: String,
+    pub edited_preview_source: String,
+    pub recipe_json: Option<Value>,
+    pub metadata_json: Option<Value>,
+    pub preset_name: String,
+    pub destination_path: String,
+    pub output_path: String,
+    pub status: String,
+    pub error_message: String,
+    pub progress: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedTimelineDocument {
+    pub timeline_id: String,
+    pub asset_id: String,
+    pub name: String,
+    pub document_path: String,
+    pub render_path: String,
+    pub poster_path: String,
+    pub duration_seconds: f64,
+    pub document_json: Option<Value>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PersistedCarouselDocument {
+    pub document_id: String,
+    pub name: String,
+    pub document_format: String,
+    pub slide_count: i32,
+    pub document_json: Value,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -391,6 +459,635 @@ impl CatalogService {
                 online: row.get("is_online"),
             })
             .collect())
+    }
+
+    pub async fn list_projects(&self) -> Result<Vec<PersistedProject>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                p.name,
+                TO_CHAR(p.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                COALESCE(
+                    JSONB_AGG(pa.asset_id ORDER BY pa.asset_id) FILTER (WHERE pa.asset_id IS NOT NULL),
+                    '[]'::jsonb
+                ) AS asset_ids
+            FROM projects p
+            LEFT JOIN project_assets pa ON pa.project_name = p.name
+            GROUP BY p.name, p.created_at
+            ORDER BY p.name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedProject {
+                name: row.get("name"),
+                created_at: row.get("created_at"),
+                asset_ids: row
+                    .get::<Value, _>("asset_ids")
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                    .collect(),
+            })
+            .collect())
+    }
+
+    pub async fn upsert_project(&self, name: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO projects (name, created_at)
+            VALUES ($1, NOW())
+            ON CONFLICT (name) DO NOTHING
+            "#,
+        )
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn add_asset_to_project(
+        &self,
+        asset_id: &str,
+        project_name: &str,
+    ) -> Result<(), sqlx::Error> {
+        self.upsert_project(project_name).await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO project_assets (project_name, asset_id, created_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (project_name, asset_id) DO NOTHING
+            "#,
+        )
+        .bind(project_name)
+        .bind(asset_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_asset_from_project(
+        &self,
+        asset_id: &str,
+        project_name: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM project_assets
+            WHERE project_name = $1 AND asset_id = $2
+            "#,
+        )
+        .bind(project_name)
+        .bind(asset_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_asset_review_states(
+        &self,
+    ) -> Result<Vec<AssetReviewStateRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT asset_id, rating, picked, rejected
+            FROM asset_review_states
+            ORDER BY asset_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| AssetReviewStateRecord {
+                asset_id: row.get("asset_id"),
+                rating: row.get("rating"),
+                picked: row.get("picked"),
+                rejected: row.get("rejected"),
+            })
+            .collect())
+    }
+
+    pub async fn upsert_asset_review_state(
+        &self,
+        state: &AssetReviewStateRecord,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_review_states (asset_id, rating, picked, rejected, updated_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (asset_id) DO UPDATE SET
+                rating = EXCLUDED.rating,
+                picked = EXCLUDED.picked,
+                rejected = EXCLUDED.rejected,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&state.asset_id)
+        .bind(state.rating)
+        .bind(state.picked)
+        .bind(state.rejected)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_asset_relinks(&self) -> Result<Vec<AssetRelinkRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT asset_id, relinked_file_path
+            FROM asset_relinks
+            ORDER BY asset_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| AssetRelinkRecord {
+                asset_id: row.get("asset_id"),
+                relinked_file_path: row.get("relinked_file_path"),
+            })
+            .collect())
+    }
+
+    pub async fn set_asset_relink(
+        &self,
+        asset_id: &str,
+        relinked_file_path: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO asset_relinks (asset_id, relinked_file_path, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (asset_id) DO UPDATE SET
+                relinked_file_path = EXCLUDED.relinked_file_path,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(asset_id)
+        .bind(relinked_file_path)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn remove_asset_relink(&self, asset_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM asset_relinks
+            WHERE asset_id = $1
+            "#,
+        )
+        .bind(asset_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_export_jobs(&self) -> Result<Vec<PersistedExportJob>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                job_id,
+                job_kind,
+                asset_id,
+                media_type,
+                display_label,
+                source_path,
+                edited_preview_source,
+                recipe_json,
+                metadata_json,
+                preset_name,
+                destination_path,
+                output_path,
+                status,
+                error_message,
+                progress,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM export_jobs
+            ORDER BY created_at ASC, job_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedExportJob {
+                job_id: row.get("job_id"),
+                job_kind: row.get("job_kind"),
+                asset_id: row.get("asset_id"),
+                media_type: row.get("media_type"),
+                display_label: row.get("display_label"),
+                source_path: row.get("source_path"),
+                edited_preview_source: row.get("edited_preview_source"),
+                recipe_json: row.get("recipe_json"),
+                metadata_json: row.get("metadata_json"),
+                preset_name: row.get("preset_name"),
+                destination_path: row.get("destination_path"),
+                output_path: row.get("output_path"),
+                status: row.get("status"),
+                error_message: row.get("error_message"),
+                progress: row.get("progress"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn upsert_export_job(&self, job: &PersistedExportJob) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO export_jobs (
+                job_id,
+                job_kind,
+                asset_id,
+                media_type,
+                display_label,
+                source_path,
+                edited_preview_source,
+                recipe_json,
+                metadata_json,
+                preset_name,
+                destination_path,
+                output_path,
+                status,
+                error_message,
+                progress,
+                asset_ids,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                CASE WHEN $3 = '' THEN '[]'::jsonb ELSE to_jsonb(ARRAY[$3]) END,
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (job_id) DO UPDATE SET
+                job_kind = EXCLUDED.job_kind,
+                asset_id = EXCLUDED.asset_id,
+                media_type = EXCLUDED.media_type,
+                display_label = EXCLUDED.display_label,
+                source_path = EXCLUDED.source_path,
+                edited_preview_source = EXCLUDED.edited_preview_source,
+                recipe_json = EXCLUDED.recipe_json,
+                metadata_json = EXCLUDED.metadata_json,
+                preset_name = EXCLUDED.preset_name,
+                destination_path = EXCLUDED.destination_path,
+                output_path = EXCLUDED.output_path,
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message,
+                progress = EXCLUDED.progress,
+                asset_ids = EXCLUDED.asset_ids,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&job.job_id)
+        .bind(&job.job_kind)
+        .bind(&job.asset_id)
+        .bind(&job.media_type)
+        .bind(&job.display_label)
+        .bind(&job.source_path)
+        .bind(&job.edited_preview_source)
+        .bind(&job.recipe_json)
+        .bind(&job.metadata_json)
+        .bind(&job.preset_name)
+        .bind(&job.destination_path)
+        .bind(&job.output_path)
+        .bind(&job.status)
+        .bind(&job.error_message)
+        .bind(job.progress)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_export_job(&self, job_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            DELETE FROM export_jobs
+            WHERE job_id = $1
+            "#,
+        )
+        .bind(job_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn list_timeline_documents(
+        &self,
+    ) -> Result<Vec<PersistedTimelineDocument>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                timeline_id,
+                asset_id,
+                name,
+                document_path,
+                render_path,
+                poster_path,
+                duration_seconds,
+                document_json,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM timeline_documents
+            ORDER BY updated_at DESC, timeline_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedTimelineDocument {
+                timeline_id: row.get("timeline_id"),
+                asset_id: row.get("asset_id"),
+                name: row.get("name"),
+                document_path: row.get("document_path"),
+                render_path: row.get("render_path"),
+                poster_path: row.get("poster_path"),
+                duration_seconds: row.get("duration_seconds"),
+                document_json: row.get("document_json"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn get_timeline_document(
+        &self,
+        timeline_id: &str,
+    ) -> Result<Option<PersistedTimelineDocument>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                timeline_id,
+                asset_id,
+                name,
+                document_path,
+                render_path,
+                poster_path,
+                duration_seconds,
+                document_json,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM timeline_documents
+            WHERE timeline_id = $1
+            "#,
+        )
+        .bind(timeline_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| PersistedTimelineDocument {
+            timeline_id: row.get("timeline_id"),
+            asset_id: row.get("asset_id"),
+            name: row.get("name"),
+            document_path: row.get("document_path"),
+            render_path: row.get("render_path"),
+            poster_path: row.get("poster_path"),
+            duration_seconds: row.get("duration_seconds"),
+            document_json: row.get("document_json"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
+    pub async fn upsert_timeline_document(
+        &self,
+        document: &PersistedTimelineDocument,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO timeline_documents (
+                timeline_id,
+                asset_id,
+                name,
+                document_path,
+                render_path,
+                poster_path,
+                duration_seconds,
+                document_json,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5, $6, $7, COALESCE($8, '{}'::jsonb),
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (timeline_id) DO UPDATE SET
+                asset_id = EXCLUDED.asset_id,
+                name = EXCLUDED.name,
+                document_path = EXCLUDED.document_path,
+                render_path = EXCLUDED.render_path,
+                poster_path = EXCLUDED.poster_path,
+                duration_seconds = EXCLUDED.duration_seconds,
+                document_json = EXCLUDED.document_json,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&document.timeline_id)
+        .bind(&document.asset_id)
+        .bind(&document.name)
+        .bind(&document.document_path)
+        .bind(&document.render_path)
+        .bind(&document.poster_path)
+        .bind(document.duration_seconds)
+        .bind(&document.document_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn replace_timeline_documents(
+        &self,
+        documents: &[PersistedTimelineDocument],
+    ) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM timeline_documents
+            "#,
+        )
+        .execute(&mut *transaction)
+        .await?;
+
+        for document in documents {
+            let created_at = if document.created_at.trim().is_empty() {
+                None
+            } else {
+                Some(document.created_at.as_str())
+            };
+            let updated_at = if document.updated_at.trim().is_empty() {
+                None
+            } else {
+                Some(document.updated_at.as_str())
+            };
+
+            sqlx::query(
+                r#"
+                INSERT INTO timeline_documents (
+                    timeline_id,
+                    asset_id,
+                    name,
+                    document_path,
+                    render_path,
+                    poster_path,
+                    duration_seconds,
+                    document_json,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, COALESCE($8, '{}'::jsonb),
+                    COALESCE($9::timestamptz, NOW()),
+                    COALESCE($10::timestamptz, NOW())
+                )
+                "#,
+            )
+            .bind(&document.timeline_id)
+            .bind(&document.asset_id)
+            .bind(&document.name)
+            .bind(&document.document_path)
+            .bind(&document.render_path)
+            .bind(&document.poster_path)
+            .bind(document.duration_seconds)
+            .bind(&document.document_json)
+            .bind(created_at)
+            .bind(updated_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn list_carousel_documents(
+        &self,
+    ) -> Result<Vec<PersistedCarouselDocument>, sqlx::Error> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                document_id,
+                name,
+                document_format,
+                slide_count,
+                document_json,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM carousel_documents
+            ORDER BY updated_at DESC, document_id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| PersistedCarouselDocument {
+                document_id: row.get("document_id"),
+                name: row.get("name"),
+                document_format: row.get("document_format"),
+                slide_count: row.get("slide_count"),
+                document_json: row.get("document_json"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+            })
+            .collect())
+    }
+
+    pub async fn get_carousel_document(
+        &self,
+        document_id: &str,
+    ) -> Result<Option<PersistedCarouselDocument>, sqlx::Error> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                document_id,
+                name,
+                document_format,
+                slide_count,
+                document_json,
+                TO_CHAR(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS created_at,
+                TO_CHAR(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS updated_at
+            FROM carousel_documents
+            WHERE document_id = $1
+            "#,
+        )
+        .bind(document_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|row| PersistedCarouselDocument {
+            document_id: row.get("document_id"),
+            name: row.get("name"),
+            document_format: row.get("document_format"),
+            slide_count: row.get("slide_count"),
+            document_json: row.get("document_json"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        }))
+    }
+
+    pub async fn upsert_carousel_document(
+        &self,
+        document: &PersistedCarouselDocument,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            INSERT INTO carousel_documents (
+                document_id,
+                name,
+                document_format,
+                slide_count,
+                document_json,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                $1, $2, $3, $4, $5,
+                NOW(),
+                NOW()
+            )
+            ON CONFLICT (document_id) DO UPDATE SET
+                name = EXCLUDED.name,
+                document_format = EXCLUDED.document_format,
+                slide_count = EXCLUDED.slide_count,
+                document_json = EXCLUDED.document_json,
+                updated_at = NOW()
+            "#,
+        )
+        .bind(&document.document_id)
+        .bind(&document.name)
+        .bind(&document.document_format)
+        .bind(document.slide_count)
+        .bind(&document.document_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

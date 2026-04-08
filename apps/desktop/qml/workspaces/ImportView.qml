@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import Qt.labs.folderlistmodel
 import "../components"
 
@@ -155,6 +156,22 @@ Rectangle {
         if (currentFolderPath.length === 0)
             return
         catalogAssets.importSelection(currentFolderPath, [], projectTarget)
+    }
+
+    function hasActiveImportJobs() {
+        return jobQueue && jobQueue.activeJobCountForKind("catalog_import") > 0
+    }
+
+    function importJobStatus() {
+        return jobQueue
+                ? jobQueue.statusForKind("catalog_import", catalogAssets.status)
+                : catalogAssets.status
+    }
+
+    function openJobsWorkspace() {
+        const appWindow = root.Window.window
+        if (appWindow)
+            appWindow.currentWorkspace = appWindow.exportWorkspaceIndex
     }
 
     Component.onCompleted: {
@@ -329,7 +346,7 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 144
+                    Layout.preferredHeight: 198
                     radius: theme.radiusSurface
                     color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
@@ -352,7 +369,7 @@ Rectangle {
                                     text: "Import"
                                     color: theme.textStrong
                                     font.family: theme.fontDisplay
-                                    font.pixelSize: 30
+                                    font.pixelSize: 32
                                     font.weight: Font.DemiBold
                                 }
 
@@ -402,34 +419,38 @@ Rectangle {
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: theme.space10
 
-                            Rectangle {
-                                radius: theme.radiusChip
-                                color: theme.alpha(theme.accentWarm500, 0.14)
-                                border.width: 1
-                                border.color: theme.alpha(theme.accentWarm400, 0.3)
-                                implicitWidth: statusLabel.implicitWidth + theme.space12 * 2
-                                implicitHeight: 24
-
-                                Label {
-                                    id: statusLabel
-                                    anchors.centerIn: parent
-                                    text: catalogAssets.status
-                                    color: theme.textMain
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    font.weight: Font.Medium
-                                }
+                            MetricCard {
+                                Layout.fillWidth: true
+                                label: "Source"
+                                value: root.sourceLabel.length > 0 ? root.sourceLabel : "Waiting"
+                                detail: root.hasSource ? "Mounted intake location" : "Choose a source to start browsing"
+                                accent: theme.accentCool400
                             }
 
-                            Item { Layout.fillWidth: true }
+                            MetricCard {
+                                Layout.fillWidth: true
+                                label: "Visible"
+                                value: String(fileModel.count)
+                                detail: "Supported files in the current folder"
+                                accent: theme.accentWarm400
+                            }
 
-                            Label {
-                                text: catalogAssets.driveCount + " drives"
-                                color: theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
+                            MetricCard {
+                                Layout.fillWidth: true
+                                label: "Selected"
+                                value: String(root.selectedFileCount)
+                                detail: root.selectedFileCount > 0 ? "Ready for a targeted import" : "Nothing staged yet"
+                                accent: theme.success
+                            }
+
+                            MetricCard {
+                                Layout.fillWidth: true
+                                label: "Status"
+                                value: root.hasActiveImportJobs() ? "Running" : "Idle"
+                                detail: catalogAssets.status.length > 0 ? catalogAssets.status : (catalogAssets.driveCount + " drives available")
+                                accent: root.hasActiveImportJobs() ? theme.accentWarm400 : theme.accentCool400
                             }
                         }
                     }
@@ -535,7 +556,7 @@ Rectangle {
                                     }
 
                                     width: 180
-                                    height: 214
+                                    height: 196
                                     radius: theme.radius12
                                     color: selected
                                            ? theme.alpha(theme.accentCool500, 0.09)
@@ -552,7 +573,7 @@ Rectangle {
 
                                         Rectangle {
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 154
+                                            Layout.preferredHeight: 150
                                             radius: theme.radius10
                                             color: theme.ink950
                                             clip: true
@@ -629,15 +650,6 @@ Rectangle {
                                             font.weight: Font.Medium
                                             elide: Text.ElideRight
                                         }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: root.parentPathForFile(delegateFilePath)
-                                            color: theme.textFaint
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 10
-                                            elide: Text.ElideMiddle
-                                        }
                                     }
 
                                     MouseArea {
@@ -702,11 +714,46 @@ Rectangle {
         BrandPanel {
             Layout.preferredWidth: 322
             Layout.fillHeight: true
-            title: "Import Queue"
+            title: "Intake Desk"
             subtitle: root.selectedFileCount > 0
                       ? root.selectedFileCount + " files staged from " + (root.sourceLabel.length > 0 ? root.sourceLabel : "the current source")
-                      : "Select files for a targeted import, or ingest the current folder recursively."
+                      : "Stage a tight selection or ingest the current folder without cluttering the browser."
             accent: theme.accentWarm400
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: theme.space8
+                rowSpacing: theme.space8
+
+                InfoPill {
+                    Layout.fillWidth: true
+                    label: "Selected"
+                    value: String(root.selectedFileCount)
+                    accent: theme.success
+                }
+
+                InfoPill {
+                    Layout.fillWidth: true
+                    label: "Folder"
+                    value: root.currentFolderPath.length > 0 ? "Ready" : "Waiting"
+                    accent: theme.accentCool400
+                }
+
+                InfoPill {
+                    Layout.fillWidth: true
+                    label: "Project"
+                    value: root.projectTarget.length > 0 ? root.projectTarget : "None"
+                    accent: theme.accentWarm400
+                }
+
+                InfoPill {
+                    Layout.fillWidth: true
+                    label: "Jobs"
+                    value: root.hasActiveImportJobs() ? "Running" : "Idle"
+                    accent: root.hasActiveImportJobs() ? theme.accentWarm400 : theme.accentCool400
+                }
+            }
 
             Label {
                 Layout.fillWidth: true
@@ -769,7 +816,7 @@ Rectangle {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: catalogAssets.importing ? "Importing..." : "Import Selection"
+                text: root.hasActiveImportJobs() ? "Importing..." : "Import Selection"
                 tone: "primary"
                 enabled: root.selectedFileCount > 0 && !catalogAssets.busy
                 onClicked: root.importSelected()
@@ -777,9 +824,26 @@ Rectangle {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: catalogAssets.importing ? "Importing..." : "Import Folder"
+                text: root.hasActiveImportJobs() ? "Importing..." : "Import Folder"
                 enabled: root.currentFolderPath.length > 0 && !catalogAssets.busy
                 onClicked: root.importCurrentFolder()
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: root.importJobStatus()
+                color: root.hasActiveImportJobs() ? theme.accentWarm300 : theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Open Background Jobs"
+                compact: true
+                visible: jobQueue && jobQueue.totalJobCountForKind("catalog_import") > 0
+                onClicked: root.openJobsWorkspace()
             }
 
             ActionButton {
@@ -855,7 +919,7 @@ Rectangle {
                         Label {
                             visible: root.selectedFileCount === 0
                             Layout.fillWidth: true
-                            text: "Selected photos and videos will appear here. Project assignment stays optional."
+                            text: "Selected files appear here. The browser stays visual; the staging list carries the detail."
                             color: theme.textMuted
                             font.family: theme.fontUi
                             font.pixelSize: 12

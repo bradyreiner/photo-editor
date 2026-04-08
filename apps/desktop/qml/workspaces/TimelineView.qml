@@ -3,6 +3,7 @@ import QtQuick
 import QtCore
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import QtMultimedia
 import "../components"
 
@@ -691,6 +692,22 @@ Rectangle {
             catalogAssets.addAssetToProject(timelineDocument.timelineAssetId, timelineDocument.projectBinding)
         catalogAssets.refresh()
         return true
+    }
+
+    function hasActiveTimelineRenderJobs() {
+        return jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0
+    }
+
+    function timelineRenderStatus() {
+        return jobQueue
+                ? jobQueue.statusForKind("timeline_render", timelineDocument.status)
+                : timelineDocument.status
+    }
+
+    function openJobsWorkspace() {
+        const appWindow = root.Window.window
+        if (appWindow)
+            appWindow.currentWorkspace = appWindow.exportWorkspaceIndex
     }
 
     function toggleSourcePanel() {
@@ -1433,13 +1450,20 @@ Rectangle {
             }
 
             ActionButton {
-                text: "Save"
+                text: root.hasActiveTimelineRenderJobs() ? "Rendering..." : "Save"
                 iconName: "save"
                 compact: true
                 tooltipText: "Save timeline to the library"
                 tone: "primary"
-                enabled: timelineDocument.clipCount > 0
+                enabled: timelineDocument.clipCount > 0 && !root.hasActiveTimelineRenderJobs()
                 onClicked: root.saveTimelineToLibrary()
+            }
+
+            ActionButton {
+                text: "Jobs"
+                compact: true
+                visible: jobQueue && jobQueue.totalJobCountForKind("timeline_render") > 0
+                onClicked: root.openJobsWorkspace()
             }
         }
 
@@ -1498,7 +1522,7 @@ Rectangle {
             }
 
             Label {
-                text: timelineDocument.dirty ? "Unsaved changes" : timelineDocument.status
+                text: timelineDocument.dirty ? "Unsaved changes" : root.timelineRenderStatus()
                 color: timelineDocument.dirty ? theme.accentWarm300 : theme.textMuted
                 font.family: theme.fontMono
                 font.pixelSize: 10

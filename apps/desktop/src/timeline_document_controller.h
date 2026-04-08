@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QObject>
 #include <QSize>
 #include <QString>
@@ -119,6 +120,8 @@ class TimelineDocumentController final : public QObject {
   Q_INVOKABLE void closeTimeline();
   Q_INVOKABLE bool loadTimeline(const QString& document_path);
   Q_INVOKABLE bool saveTimeline();
+  [[nodiscard]] bool renderCurrentTimeline(const QString& output_path) const;
+  [[nodiscard]] QString generateVideoPoster(const QString& file_path, const QString& cache_key = QString()) const;
   Q_INVOKABLE void selectClip(int index);
   Q_INVOKABLE void addClipFromGallery(
       const QString& asset_id,
@@ -355,6 +358,7 @@ signals:
   [[nodiscard]] QString ensureAudioWaveform(const QString& file_path, const QString& cache_key = QString()) const;
   [[nodiscard]] QSize probeVideoSize(const QString& file_path) const;
   [[nodiscard]] bool renderTimelineVideo(const QString& output_path) const;
+  [[nodiscard]] QJsonObject documentObject() const;
   [[nodiscard]] bool persistDocument(const QString& document_path) const;
   [[nodiscard]] QString clipVideoFilter(const Clip& clip, int input_index, int output_index, const QSize& target_size) const;
   [[nodiscard]] Clip buildGalleryClip(

@@ -2,7 +2,7 @@
 
 #include "app_bootstrap.h"
 #include "edit_recipe_state.h"
-
+#include "raw_image_decoder.h"
 #include "timeline_asset_store.h"
 
 #include <algorithm>
@@ -121,9 +121,18 @@ const QStringList& supported_import_extensions() {
 
 QStringList supported_import_name_filters() {
   QStringList filters;
-  filters.reserve(supported_import_extensions().size());
+  filters.reserve(supported_import_extensions().size() * 2);
   for (const auto& extension : supported_import_extensions()) {
-    filters.push_back(QStringLiteral("*.%1").arg(extension));
+    const auto lowercase_filter = QStringLiteral("*.%1").arg(extension);
+    filters.push_back(lowercase_filter);
+
+    const auto uppercase_extension = extension.toUpper();
+    if (uppercase_extension != extension) {
+      const auto uppercase_filter = QStringLiteral("*.%1").arg(uppercase_extension);
+      if (!filters.contains(uppercase_filter)) {
+        filters.push_back(uppercase_filter);
+      }
+    }
   }
   return filters;
 }
@@ -344,7 +353,8 @@ QString filesystem_path(const QJsonObject& asset) {
 bool preview_supported(const QString& file_path) {
   const QFileInfo file_info(file_path);
   const auto suffix = file_info.suffix().toLower().toUtf8();
-  return QImageReader::supportedImageFormats().contains(suffix);
+  return QImageReader::supportedImageFormats().contains(suffix) || raw_image_supported(file_path) ||
+         native_image_supported(file_path);
 }
 
 QString media_type_for_path(const QString& file_path) {
@@ -479,25 +489,46 @@ QString ensure_thumbnail(const QString& file_path) {
 
   QDir().mkpath(thumbnail_cache_root());
 
-  QImageReader reader(file_path);
-  reader.setAutoTransform(true);
-  if (!reader.canRead()) {
-    return {};
-  }
-
+  const auto source_size = raw_image_supported(file_path)
+                               ? raw_image_size(file_path)
+                               : (native_image_supported(file_path) ? native_image_size(file_path)
+                                                                    : QSize{});
   QSize target_size;
-  const auto original_size = reader.size();
+  const auto original_size = source_size.isValid() || native_image_supported(file_path) ? source_size : [&]() {
+    QImageReader reader(file_path);
+    reader.setAutoTransform(true);
+    return reader.canRead() ? reader.size() : QSize{};
+  }();
   if (original_size.isValid()) {
     target_size = scaled_size_for_edge(original_size, kThumbnailEdge);
-    const auto decode_size = scaled_size_for_edge(
-        original_size,
-        std::min(kThumbnailDecodeCeiling, kThumbnailEdge + 256));
+  }
+
+  auto image = QImage{};
+  const auto decode_edge = std::min(kThumbnailDecodeCeiling, kThumbnailEdge + 256);
+  const auto suffix = QFileInfo(file_path).suffix().toLower().toUtf8();
+  if (native_image_supported(file_path)) {
+    if (!decode_native_image(file_path, &image, decode_edge)) {
+      return {};
+    }
+  } else if (QImageReader::supportedImageFormats().contains(suffix)) {
+    QImageReader reader(file_path);
+    reader.setAutoTransform(true);
+    if (!reader.canRead()) {
+      return {};
+    }
+
+    const auto decode_size = scaled_size_for_edge(original_size, decode_edge);
     if (decode_size.isValid() && decode_size != original_size) {
       reader.setScaledSize(decode_size);
     }
+
+    image = reader.read();
+  } else {
+    if (!decode_raw_image(file_path, &image, decode_edge)) {
+      return {};
+    }
   }
 
-  auto image = reader.read();
   if (image.isNull()) {
     return {};
   }
@@ -990,6 +1021,8 @@ CatalogAssetModel::CatalogAssetModel(QObject* parent) : QAbstractListModel(paren
       &QProcess::finished,
       this,
       &CatalogAssetModel::handleImportFinished);
+
+  connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &CatalogAssetModel::pollActiveImportJob);
 
   connect(&thumbnail_watcher_, &QFutureWatcher<ThumbnailTaskResult>::finished, this, &CatalogAssetModel::handleThumbnailFinished);
 }
@@ -1610,24 +1643,17 @@ void CatalogAssetModel::startImport(
       normalized_project_name.isEmpty()
           ? QStringList{}
           : (selected_file_paths.isEmpty() ? collect_importable_file_paths(normalized_path) : selected_file_paths);
+  beginImportJob(
+      normalized_path,
+      normalized_project_name,
+      selected_file_paths,
+      static_cast<int>(selected_file_paths.size()));
 
   setImporting(true);
   setErrorMessage({});
   setStatus(selected_file_paths.isEmpty()
-                ? QStringLiteral("Importing source into catalog...")
-                : QStringLiteral("Importing selected photos into catalog..."));
-
-  import_process_.setWorkingDirectory(QDir::currentPath());
-  QProcessEnvironment environment;
-  QString environment_error;
-  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
-    setImporting(false);
-    setErrorMessage(environment_error);
-    setStatus(QStringLiteral("Import failed"));
-    return;
-  }
-  import_process_.setProcessEnvironment(environment);
-  import_process_.start(importProgram(), importArguments(normalized_path));
+                ? QStringLiteral("Queued source import...")
+                : QStringLiteral("Queued selected photo import..."));
 }
 
 void CatalogAssetModel::selectIndex(int index) {
@@ -1711,11 +1737,17 @@ void CatalogAssetModel::createProject(const QString& name) {
     return;
   }
 
+  QString error_message;
+  const auto persisted_to_catalog =
+      runCatalogStateCommand({QStringLiteral("create-project"), trimmed_name}, &error_message);
+
   ProjectRecord project;
   project.name = trimmed_name;
   project.created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
   projects_.push_back(project);
-  saveProjects();
+  if (!persisted_to_catalog) {
+    saveProjects();
+  }
   emit projectNamesChanged();
   bumpProjectStatsRevision();
   setProjectFilter(trimmed_name);
@@ -1787,8 +1819,15 @@ void CatalogAssetModel::removeAssetFromProject(const QString& asset_id, const QS
     return;
   }
 
+  QString error_message;
+  const auto persisted_to_catalog = runCatalogStateCommand(
+      {QStringLiteral("remove-asset-from-project"), asset_id, trimmed_name},
+      &error_message);
+
   project->asset_ids.remove(asset_id);
-  saveProjects();
+  if (!persisted_to_catalog) {
+    saveProjects();
+  }
   rebuildProjectMetadata();
   bumpProjectStatsRevision();
   applyFilters(asset_id);
@@ -1973,6 +2012,7 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
   const auto source_state = parse_edit_recipe_json(recipe_json);
   QHash<QString, QString> updated_recipe_jsons;
   auto updated_count = 0;
+  auto persisted_all = true;
 
   for (auto& item : all_assets_) {
     if (!target_asset_ids.contains(item.asset_id) || item.media_type != QStringLiteral("photo")) {
@@ -1988,7 +2028,13 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
 
     item.recipe_json = next_recipe_json;
     updated_recipe_jsons.insert(item.asset_id, next_recipe_json);
-    recipe_overrides_.insert(item.asset_id, next_recipe_json);
+    QString error_message;
+    if (!runCatalogStateCommand(
+            {QStringLiteral("set-edit-recipe"), item.asset_id, next_recipe_json},
+            &error_message)) {
+      recipe_overrides_.insert(item.asset_id, next_recipe_json);
+      persisted_all = false;
+    }
     ++updated_count;
   }
 
@@ -2008,7 +2054,9 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
     emit dataChanged(this->index(model_index, 0), this->index(model_index, 0), {RecipeJsonRole});
   }
 
-  saveProjects();
+  if (!persisted_all) {
+    saveProjects();
+  }
 
   if (target_asset_ids.contains(selectedAssetId())) {
     emit selectedAssetChanged();
@@ -2205,6 +2253,7 @@ void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStat
   }
 
   const auto root = payload.object();
+  loadPersistedLibraryState(root);
   updateAssets(parse_assets(root.value("assets").toArray()));
   setDriveCount(static_cast<int>(root.value("drives").toArray().size()));
   setStatus(QStringLiteral("Loaded %1 assets across %2 drives.").arg(all_assets_.size()).arg(drive_count_));
@@ -2212,6 +2261,37 @@ void CatalogAssetModel::handleSnapshotFinished(int exit_code, QProcess::ExitStat
 }
 
 void CatalogAssetModel::handleImportFinished(int exit_code, QProcess::ExitStatus exit_status) {
+  Q_UNUSED(exit_code);
+  Q_UNUSED(exit_status);
+}
+
+void CatalogAssetModel::pollActiveImportJob() {
+  if (active_import_job_.job_id.isEmpty()) {
+    return;
+  }
+
+  const auto records = loadPersistedJobRecords();
+  const auto iterator = std::find_if(
+      records.cbegin(),
+      records.cend(),
+      [&](const auto& record) { return record.job_id == active_import_job_.job_id; });
+  if (iterator == records.cend()) {
+    return;
+  }
+
+  const auto job = *iterator;
+  if (job.status == QStringLiteral("Queued")) {
+    setImporting(true);
+    setStatus(QStringLiteral("Queued source import..."));
+    return;
+  }
+
+  if (job.status == QStringLiteral("Running")) {
+    setImporting(true);
+    setStatus(QStringLiteral("Importing source into catalog..."));
+    return;
+  }
+
   setImporting(false);
 
   if (!import_selection_manifest_path_.isEmpty()) {
@@ -2219,15 +2299,23 @@ void CatalogAssetModel::handleImportFinished(int exit_code, QProcess::ExitStatus
     import_selection_manifest_path_.clear();
   }
 
-  if (exit_status != QProcess::NormalExit || exit_code != 0) {
+  if (job.status == QStringLiteral("Failed")) {
     pending_import_file_paths_.clear();
     pending_import_project_name_.clear();
-    setErrorMessage(QString::fromUtf8(import_process_.readAllStandardOutput()).trimmed());
+    const auto failure_message = job.error_message.trimmed().isEmpty() ? QStringLiteral("Import failed.") : job.error_message.trimmed();
+    setErrorMessage(failure_message);
+    active_import_job_ = PersistentJobRecord{};
     setStatus(QStringLiteral("Import failed"));
     return;
   }
 
-  setStatus(QString::fromUtf8(import_process_.readAllStandardOutput()).trimmed());
+  if (job.status != QStringLiteral("Completed")) {
+    return;
+  }
+
+  active_import_job_ = PersistentJobRecord{};
+  const auto success_message = job.metadata_json.value(QStringLiteral("resultMessage")).toString().trimmed();
+  setStatus(success_message.isEmpty() ? QStringLiteral("Import completed.") : success_message);
   refresh();
 }
 
@@ -2269,6 +2357,49 @@ void CatalogAssetModel::setImporting(bool importing) {
   emit busyChanged();
 }
 
+void CatalogAssetModel::beginImportJob(
+    const QString& folder_path,
+    const QString& project_name,
+    const QStringList& selected_file_paths,
+    int selection_count) {
+  active_import_job_ = PersistentJobRecord{};
+  active_import_job_.job_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  active_import_job_.job_kind = QStringLiteral("catalog_import");
+  active_import_job_.display_label = QFileInfo(folder_path).fileName().trimmed().isEmpty()
+                                         ? folder_path
+                                         : QFileInfo(folder_path).fileName().trimmed();
+  active_import_job_.source_path = folder_path;
+  active_import_job_.preset_name = QStringLiteral("referenced");
+  active_import_job_.status = QStringLiteral("Queued");
+  active_import_job_.progress = 0;
+  active_import_job_.created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+  active_import_job_.updated_at = active_import_job_.created_at;
+  QJsonArray selected_paths;
+  for (const auto& file_path : selected_file_paths) {
+    selected_paths.push_back(file_path);
+  }
+  active_import_job_.metadata_json = QJsonObject{
+      {QStringLiteral("projectName"), project_name},
+      {QStringLiteral("selectionCount"), selection_count},
+      {QStringLiteral("importMode"), QStringLiteral("referenced")},
+      {QStringLiteral("selectedPaths"), selected_paths},
+  };
+  (void)upsertPersistedJobRecord(active_import_job_, nullptr);
+}
+
+void CatalogAssetModel::finishImportJob(bool success, const QString& message) {
+  if (active_import_job_.job_id.isEmpty()) {
+    return;
+  }
+
+  active_import_job_.status = success ? QStringLiteral("Completed") : QStringLiteral("Failed");
+  active_import_job_.progress = success ? 100 : 0;
+  active_import_job_.error_message = success ? QString{} : message;
+  active_import_job_.updated_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+  (void)upsertPersistedJobRecord(active_import_job_, nullptr);
+  active_import_job_ = PersistentJobRecord{};
+}
+
 void CatalogAssetModel::setDriveCount(int drive_count) {
   if (drive_count_ == drive_count) {
     return;
@@ -2286,6 +2417,109 @@ void CatalogAssetModel::rebuildImportSources() {
 
   import_sources_ = next_sources;
   emit importSourcesChanged();
+}
+
+bool CatalogAssetModel::runCatalogStateCommand(
+    const QStringList& command_arguments,
+    QString* error_message) const {
+  QProcess process;
+  process.setWorkingDirectory(QDir::currentPath());
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    if (error_message != nullptr) {
+      *error_message = environment_error;
+    }
+    return false;
+  }
+
+  process.setProcessEnvironment(environment);
+  process.setProcessChannelMode(QProcess::MergedChannels);
+  process.start(stateProgram(), stateArguments(command_arguments));
+  if (!process.waitForStarted(5000)) {
+    if (error_message != nullptr) {
+      *error_message = QStringLiteral("Unable to start catalog state helper.");
+    }
+    return false;
+  }
+
+  if (!process.waitForFinished(15000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    if (error_message != nullptr) {
+      const auto output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+      *error_message = output.isEmpty() ? QStringLiteral("Catalog state update failed.") : output;
+    }
+    return false;
+  }
+
+  return true;
+}
+
+void CatalogAssetModel::loadPersistedLibraryState(const QJsonObject& root) {
+  const auto has_projects = root.contains(QStringLiteral("projects"));
+  const auto has_review_states = root.contains(QStringLiteral("review_states"));
+  const auto has_relinked_paths = root.contains(QStringLiteral("relinked_paths"));
+  if (!has_projects && !has_review_states && !has_relinked_paths) {
+    return;
+  }
+
+  projects_.clear();
+  culling_states_.clear();
+  relinked_file_paths_.clear();
+
+  const auto project_array = root.value(QStringLiteral("projects")).toArray();
+  for (const auto& project_value : project_array) {
+    if (!project_value.isObject()) {
+      continue;
+    }
+
+    const auto project_object = project_value.toObject();
+    ProjectRecord project;
+    project.name = normalizedProjectName(project_object.value(QStringLiteral("name")).toString());
+    project.created_at = project_object.value(QStringLiteral("created_at")).toString().trimmed();
+    if (project.created_at.isEmpty()) {
+      project.created_at = project_object.value(QStringLiteral("createdAt")).toString().trimmed();
+    }
+    const auto asset_ids = project_object.value(QStringLiteral("asset_ids")).toArray();
+    for (const auto& asset_id_value : asset_ids) {
+      const auto asset_id = asset_id_value.toString().trimmed();
+      if (!asset_id.isEmpty()) {
+        project.asset_ids.insert(asset_id);
+      }
+    }
+
+    if (!project.name.isEmpty()) {
+      projects_.push_back(project);
+    }
+  }
+
+  const auto culling_object = root.value(QStringLiteral("review_states")).toObject();
+  for (auto iterator = culling_object.begin(); iterator != culling_object.end(); ++iterator) {
+    const auto asset_id = iterator.key().trimmed();
+    if (asset_id.isEmpty() || !iterator.value().isObject()) {
+      continue;
+    }
+
+    const auto value = iterator.value().toObject();
+    const auto state = normalized_culling_state(
+        {
+            .rating = value.value(QStringLiteral("rating")).toInt(),
+            .picked = value.value(QStringLiteral("picked")).toBool(),
+            .rejected = value.value(QStringLiteral("rejected")).toBool(),
+        });
+    if (!culling_state_is_default(state)) {
+      culling_states_.insert(asset_id, state);
+    }
+  }
+
+  const auto relinked_paths_object = root.value(QStringLiteral("relinked_paths")).toObject();
+  for (auto iterator = relinked_paths_object.begin(); iterator != relinked_paths_object.end(); ++iterator) {
+    const auto asset_id = iterator.key().trimmed();
+    const auto file_path = normalize_local_path(iterator.value().toString());
+    if (asset_id.isEmpty() || file_path.isEmpty()) {
+      continue;
+    }
+    relinked_file_paths_.insert(asset_id, file_path);
+  }
 }
 
 void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
@@ -2914,6 +3148,23 @@ void CatalogAssetModel::addAssetsToProject(
     return;
   }
 
+  auto persisted_to_catalog = true;
+  QString error_message;
+  if (findProject(trimmed_name) == nullptr &&
+      !runCatalogStateCommand({QStringLiteral("create-project"), trimmed_name}, &error_message)) {
+    persisted_to_catalog = false;
+  }
+  for (const auto& asset_id : asset_ids) {
+    if (asset_id.isEmpty()) {
+      continue;
+    }
+    if (!runCatalogStateCommand(
+            {QStringLiteral("add-asset-to-project"), asset_id, trimmed_name},
+            &error_message)) {
+      persisted_to_catalog = false;
+    }
+  }
+
   auto* project = findProject(trimmed_name);
   auto created_project = false;
   if (project == nullptr) {
@@ -2939,7 +3190,9 @@ void CatalogAssetModel::addAssetsToProject(
     return;
   }
 
-  saveProjects();
+  if (!persisted_to_catalog) {
+    saveProjects();
+  }
   if (created_project) {
     emit projectNamesChanged();
   }
@@ -3006,6 +3259,17 @@ void CatalogAssetModel::setAssetCullingState(const QString& asset_id, const Cull
     return;
   }
 
+  QString error_message;
+  const auto persisted_to_catalog = runCatalogStateCommand(
+      {
+          QStringLiteral("set-review-state"),
+          asset_id,
+          QString::number(normalized_state.rating),
+          normalized_state.picked ? QStringLiteral("true") : QStringLiteral("false"),
+          normalized_state.rejected ? QStringLiteral("true") : QStringLiteral("false"),
+      },
+      &error_message);
+
   if (culling_state_is_default(normalized_state)) {
     culling_states_.remove(asset_id);
   } else {
@@ -3029,7 +3293,9 @@ void CatalogAssetModel::setAssetCullingState(const QString& asset_id, const Cull
     break;
   }
 
-  saveProjects();
+  if (!persisted_to_catalog) {
+    saveProjects();
+  }
 
   if (visible_index >= 0) {
     emit dataChanged(
@@ -3277,6 +3543,7 @@ int CatalogAssetModel::relinkAssetsToFolder(const QString& folder_url, bool sele
   }
 
   auto updated_count = 0;
+  auto persisted_all = true;
   for (const auto& target : targets) {
     const auto candidate = best_relink_candidate(target, candidates_by_name);
     if (candidate.isEmpty()) {
@@ -3298,6 +3565,13 @@ int CatalogAssetModel::relinkAssetsToFolder(const QString& folder_url, bool sele
       continue;
     }
 
+    QString error_message;
+    if (!runCatalogStateCommand(
+            {QStringLiteral("set-relink-path"), target.asset_id, candidate},
+            &error_message)) {
+      persisted_all = false;
+    }
+
     relinked_file_paths_.insert(target.asset_id, candidate);
     ++updated_count;
   }
@@ -3312,7 +3586,9 @@ int CatalogAssetModel::relinkAssetsToFolder(const QString& folder_url, bool sele
     emit filtersChanged();
   }
 
-  saveProjects();
+  if (!persisted_all) {
+    saveProjects();
+  }
   applyFilters(selectedAssetId());
   setStatus(
       QStringLiteral("Relinked %1 offline %2 from %3.")
@@ -3397,6 +3673,34 @@ QStringList CatalogAssetModel::importArguments(const QString& folder_path) const
   return arguments;
 }
 
+QString CatalogAssetModel::stateProgram() const {
+  if (useBuiltStateBinary()) {
+    return builtBinaryPath(QStringLiteral("catalog_state"));
+  }
+
+  return QStringLiteral("cargo");
+}
+
+QStringList CatalogAssetModel::stateArguments(const QStringList& command_arguments) const {
+  if (useBuiltStateBinary()) {
+    return command_arguments;
+  }
+
+  QStringList arguments = {
+      QStringLiteral("run"),
+      QStringLiteral("--quiet"),
+      QStringLiteral("--manifest-path"),
+      QStringLiteral("rust/Cargo.toml"),
+      QStringLiteral("-p"),
+      QStringLiteral("photo-catalog"),
+      QStringLiteral("--bin"),
+      QStringLiteral("catalog_state"),
+      QStringLiteral("--"),
+  };
+  arguments.append(command_arguments);
+  return arguments;
+}
+
 bool CatalogAssetModel::useBuiltSnapshotBinary() const {
   const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_snapshot")));
   return binary.exists() && binary.isExecutable();
@@ -3404,6 +3708,11 @@ bool CatalogAssetModel::useBuiltSnapshotBinary() const {
 
 bool CatalogAssetModel::useBuiltImportBinary() const {
   const QFileInfo binary(builtBinaryPath(QStringLiteral("import_catalog")));
+  return binary.exists() && binary.isExecutable();
+}
+
+bool CatalogAssetModel::useBuiltStateBinary() const {
+  const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_state")));
   return binary.exists() && binary.isExecutable();
 }
 

@@ -1,29 +1,22 @@
 #include "export_job_controller.h"
 
-#include <QImage>
-#include <QImageWriter>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
 
-#include "edit_recipe_state.h"
+#include <algorithm>
+
 #include "photo_render_utils.h"
 
 namespace photo_editor::desktop {
 
 namespace {
-
-struct ExportImageOptions final {
-  int max_edge = 0;
-  int jpeg_quality = 95;
-};
 
 QString iso_now() {
   return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -41,18 +34,6 @@ QString normalized_local_path(const QString& path) {
   }
 
   return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
-}
-
-QString sanitize_token(const QString& value, const QString& fallback) {
-  auto cleaned = value.trimmed();
-  cleaned.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("-"));
-  cleaned.replace(QRegularExpression(QStringLiteral("-{2,}")), QStringLiteral("-"));
-  cleaned.remove(QRegularExpression(QStringLiteral("^-+|-+$")));
-  return cleaned.isEmpty() ? fallback : cleaned;
-}
-
-QString preset_token(const QString& preset) {
-  return sanitize_token(preset.toLower(), QStringLiteral("export"));
 }
 
 QString display_label_for_job(const QString& display_label, const QString& source_path) {
@@ -85,47 +66,12 @@ bool should_render_photo_job(const QString& media_type, const QString& preset) {
   return is_photo_media(media_type) && !is_original_copy_preset(preset);
 }
 
-ExportImageOptions export_image_options_for_preset(const QString& preset) {
-  const auto normalized = preset.trimmed();
-  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 1440, .jpeg_quality = 82};
-  }
-  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2048, .jpeg_quality = 86};
-  }
-  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2560, .jpeg_quality = 88};
-  }
-  return {.max_edge = 0, .jpeg_quality = 95};
-}
-
-bool render_photo_export(
-    const QString& source_path,
-    const QString& recipe_json,
-    const QString& preset,
-    const QString& output_path) {
-  QImage image;
-  if (!decode_source_image(source_path, &image)) {
-    return false;
-  }
-
-  const auto state = parse_edit_recipe_json(recipe_json);
-  image = apply_crop(image, state);
-  apply_color_adjustments(&image, state);
-
-  const auto options = export_image_options_for_preset(preset);
-  if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
-    image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-  }
-
-  QImageWriter writer(output_path, "jpg");
-  writer.setQuality(options.jpeg_quality);
-  return writer.write(image);
-}
-
 }  // namespace
 
-ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {}
+ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {
+  connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &ExportJobController::refreshJobs);
+  loadPersistedJobs(false);
+}
 
 QVariantList ExportJobController::jobs() const {
   QVariantList values;
@@ -210,12 +156,9 @@ bool ExportJobController::queueExport(
   }
 
   jobs_.push_back(job);
-  emit jobsChanged();
+  persistJob(job);
+  loadPersistedJobs();
   setStatus(QStringLiteral("Queued '%1' for export.").arg(job.display_label));
-
-  if (!busy_) {
-    QTimer::singleShot(0, this, &ExportJobController::processNextQueuedJob);
-  }
 
   return true;
 }
@@ -226,21 +169,21 @@ void ExportJobController::retryJob(const QString& job_id) {
     return;
   }
 
-  auto& job = jobs_[index];
-  if (job.status != QStringLiteral("Failed")) {
+  if (jobs_[index].status != QStringLiteral("Failed")) {
+    return;
+  }
+  const auto label = jobs_[index].display_label;
+
+  QString error_message;
+  if (!retryPersistedJobRecord(job_id, &error_message)) {
+    if (!error_message.isEmpty()) {
+      setStatus(error_message);
+    }
     return;
   }
 
-  job.status = QStringLiteral("Queued");
-  job.error_message.clear();
-  job.progress = 0;
-  job.updated_at = iso_now();
-  emit jobsChanged();
-  setStatus(QStringLiteral("Retrying '%1'.").arg(job.display_label));
-
-  if (!busy_) {
-    QTimer::singleShot(0, this, &ExportJobController::processNextQueuedJob);
-  }
+  loadPersistedJobs();
+  setStatus(QStringLiteral("Retrying '%1'.").arg(label));
 }
 
 void ExportJobController::removeJob(const QString& job_id) {
@@ -249,13 +192,14 @@ void ExportJobController::removeJob(const QString& job_id) {
     return;
   }
 
-  if (jobs_[index].status == QStringLiteral("Running")) {
+  if (jobs_[index].status == QStringLiteral("Running") ||
+      jobs_[index].status == QStringLiteral("Canceling")) {
     setStatus(QStringLiteral("Wait for the running export to finish before removing it."));
     return;
   }
 
-  jobs_.removeAt(index);
-  emit jobsChanged();
+  removePersistedJob(job_id);
+  loadPersistedJobs();
 
   if (jobs_.isEmpty()) {
     setStatus(QStringLiteral("Export queue ready."));
@@ -265,12 +209,14 @@ void ExportJobController::removeJob(const QString& job_id) {
 void ExportJobController::clearFinishedJobs() {
   for (qsizetype index = jobs_.size(); index > 0; --index) {
     const auto& job = jobs_.at(index - 1);
-    if (job.status == QStringLiteral("Completed") || job.status == QStringLiteral("Failed")) {
-      jobs_.removeAt(index - 1);
+    if (job.status == QStringLiteral("Completed") ||
+        job.status == QStringLiteral("Failed") ||
+        job.status == QStringLiteral("Canceled")) {
+      removePersistedJob(job.job_id);
     }
   }
 
-  emit jobsChanged();
+  loadPersistedJobs();
   if (jobs_.isEmpty()) {
     setStatus(QStringLiteral("Export queue ready."));
   }
@@ -303,6 +249,103 @@ int ExportJobController::jobIndexById(const QString& job_id) const {
   return -1;
 }
 
+ExportJobController::ExportJob ExportJobController::jobFromRecord(const PersistentJobRecord& record) const {
+  ExportJob job;
+  job.job_id = record.job_id;
+  job.asset_id = record.asset_id;
+  job.media_type = record.media_type;
+  job.display_label = record.display_label;
+  job.source_path = record.source_path;
+  job.edited_preview_source = record.edited_preview_source;
+  job.recipe_json = record.recipe_json;
+  job.preset = record.preset_name;
+  job.destination_directory = record.destination_path;
+  job.output_path = record.output_path;
+  job.status = record.status;
+  job.error_message = record.error_message;
+  job.progress = record.progress;
+  job.created_at = record.created_at;
+  job.updated_at = record.updated_at;
+  if (job.preset.isEmpty()) {
+    job.preset = QStringLiteral("Full Resolution");
+  }
+  if (job.status.isEmpty()) {
+    job.status = QStringLiteral("Queued");
+  }
+  return job;
+}
+
+void ExportJobController::loadPersistedJobs(bool emit_signal) {
+  const auto previous_jobs = jobs_;
+  QVector<ExportJob> next_jobs;
+  const auto records = loadPersistedJobRecords();
+  next_jobs.reserve(records.size());
+  for (const auto& record : records) {
+    if (record.job_kind != QStringLiteral("asset_export")) {
+      continue;
+    }
+    auto job = jobFromRecord(record);
+    if (job.job_id.isEmpty()) {
+      continue;
+    }
+    next_jobs.push_back(job);
+  }
+
+  const auto jobs_changed = [&]() {
+    if (previous_jobs.size() != next_jobs.size()) {
+      return true;
+    }
+    for (int index = 0; index < previous_jobs.size(); ++index) {
+      const auto& lhs = previous_jobs.at(index);
+      const auto& rhs = next_jobs.at(index);
+      if (lhs.job_id != rhs.job_id || lhs.asset_id != rhs.asset_id || lhs.media_type != rhs.media_type ||
+          lhs.display_label != rhs.display_label || lhs.source_path != rhs.source_path ||
+          lhs.edited_preview_source != rhs.edited_preview_source || lhs.recipe_json != rhs.recipe_json ||
+          lhs.preset != rhs.preset || lhs.destination_directory != rhs.destination_directory ||
+          lhs.output_path != rhs.output_path || lhs.status != rhs.status ||
+          lhs.error_message != rhs.error_message || lhs.created_at != rhs.created_at ||
+          lhs.updated_at != rhs.updated_at || lhs.progress != rhs.progress) {
+        return true;
+      }
+    }
+    return false;
+  }();
+
+  jobs_ = next_jobs;
+  updateBusyState();
+  if (emit_signal && jobs_changed) {
+    emit jobsChanged();
+  }
+}
+
+void ExportJobController::persistJob(const ExportJob& job) const {
+  PersistentJobRecord record;
+  record.job_id = job.job_id;
+  record.job_kind = QStringLiteral("asset_export");
+  record.asset_id = job.asset_id;
+  record.media_type = job.media_type;
+  record.display_label = job.display_label;
+  record.source_path = job.source_path;
+  record.edited_preview_source = job.edited_preview_source;
+  record.recipe_json = job.recipe_json;
+  record.preset_name = job.preset;
+  record.destination_path = job.destination_directory;
+  record.output_path = job.output_path;
+  record.status = job.status;
+  record.error_message = job.error_message;
+  record.progress = job.progress;
+  record.created_at = job.created_at;
+  record.updated_at = job.updated_at;
+  [[maybe_unused]] const auto persisted = upsertPersistedJobRecord(record, nullptr);
+}
+
+void ExportJobController::removePersistedJob(const QString& job_id) const {
+  if (job_id.trimmed().isEmpty()) {
+    return;
+  }
+  [[maybe_unused]] const auto removed = removePersistedJobRecord(job_id, nullptr);
+}
+
 QString ExportJobController::resolvedSourcePath(const ExportJob& job, bool* uses_preview) const {
   const auto preview_path = normalized_local_path(job.edited_preview_source);
   const auto source_path = normalized_local_path(job.source_path);
@@ -333,122 +376,36 @@ QString ExportJobController::resolvedSourcePath(const ExportJob& job, bool* uses
   return {};
 }
 
-QString ExportJobController::outputFilePathForJob(
-    const ExportJob& job,
-    const QString& source_path,
-    bool rendered_output) const {
-  const QFileInfo source_info(source_path);
-  const auto safe_label =
-      sanitize_token(display_label_for_job(job.display_label, source_path), QStringLiteral("export"));
-  const auto suffix =
-      rendered_output ? QStringLiteral("jpg") : source_info.suffix().toLower();
-  const auto extension = suffix.isEmpty() ? QString{} : QStringLiteral(".%1").arg(suffix);
-
-  auto stem = safe_label;
-  if (!is_original_copy_preset(job.preset)) {
-    stem += QStringLiteral("-%1").arg(preset_token(job.preset));
-  }
-
-  const QDir output_dir(job.destination_directory);
-  auto candidate = output_dir.filePath(stem + extension);
-  if (!QFileInfo::exists(candidate)) {
-    return candidate;
-  }
-
-  for (int attempt = 2; attempt < 1000; ++attempt) {
-    const auto numbered = output_dir.filePath(QStringLiteral("%1-%2%3").arg(stem).arg(attempt).arg(extension));
-    if (!QFileInfo::exists(numbered)) {
-      return numbered;
-    }
-  }
-
-  return {};
+void ExportJobController::refreshJobs() {
+  loadPersistedJobs();
 }
 
-void ExportJobController::processNextQueuedJob() {
-  auto next_index = -1;
-  for (int index = 0; index < jobs_.size(); ++index) {
-    if (jobs_.at(index).status == QStringLiteral("Queued")) {
-      next_index = index;
-      break;
-    }
-  }
+void ExportJobController::updateBusyState() {
+  const auto has_active_jobs = std::any_of(
+      jobs_.cbegin(),
+      jobs_.cend(),
+      [](const auto& job) {
+        return job.status == QStringLiteral("Queued") ||
+               job.status == QStringLiteral("Running") ||
+               job.status == QStringLiteral("Canceling");
+      });
+  setBusy(has_active_jobs);
 
-  if (next_index < 0) {
-    setBusy(false);
-    if (!jobs_.isEmpty()) {
-      setStatus(QStringLiteral("Export queue idle."));
-    }
+  if (jobs_.isEmpty()) {
+    setStatus(QStringLiteral("Export queue ready."));
     return;
   }
 
-  setBusy(true);
-  auto& job = jobs_[next_index];
-  job.status = QStringLiteral("Running");
-  job.progress = 20;
-  job.updated_at = iso_now();
-  emit jobsChanged();
-
-  const auto render_photo = should_render_photo_job(job.media_type, job.preset);
-  bool uses_preview = false;
-  const auto source_path = render_photo ? normalized_local_path(job.source_path) : resolvedSourcePath(job, &uses_preview);
-  if (source_path.isEmpty()) {
-    failJob(next_index, QStringLiteral("The export source is no longer available."));
+  if (has_active_jobs) {
+    setStatus(QStringLiteral("Export queue active."));
     return;
   }
 
-  const auto output_path = outputFilePathForJob(job, source_path, render_photo || uses_preview);
-  if (output_path.isEmpty()) {
-    failJob(next_index, QStringLiteral("Unable to allocate an export file name."));
-    return;
-  }
-
-  QDir().mkpath(QFileInfo(output_path).absolutePath());
-  QFile::remove(output_path);
-  if (render_photo) {
-    if (!render_photo_export(source_path, job.recipe_json, job.preset, output_path)) {
-      failJob(next_index, QStringLiteral("Unable to render the exported photo."));
-      return;
-    }
-  } else if (!QFile::copy(source_path, output_path)) {
-    failJob(next_index, QStringLiteral("Unable to write the exported file."));
-    return;
-  }
-
-  finishJob(next_index, output_path);
-}
-
-void ExportJobController::finishJob(int index, const QString& output_path) {
-  if (index < 0 || index >= jobs_.size()) {
-    return;
-  }
-
-  auto& job = jobs_[index];
-  job.output_path = output_path;
-  job.status = QStringLiteral("Completed");
-  job.error_message.clear();
-  job.progress = 100;
-  job.updated_at = iso_now();
-  emit jobsChanged();
-  setStatus(QStringLiteral("Exported '%1'.").arg(job.display_label));
-
-  QTimer::singleShot(0, this, &ExportJobController::processNextQueuedJob);
-}
-
-void ExportJobController::failJob(int index, const QString& error_message) {
-  if (index < 0 || index >= jobs_.size()) {
-    return;
-  }
-
-  auto& job = jobs_[index];
-  job.status = QStringLiteral("Failed");
-  job.error_message = error_message;
-  job.progress = 0;
-  job.updated_at = iso_now();
-  emit jobsChanged();
-  setStatus(error_message);
-
-  QTimer::singleShot(0, this, &ExportJobController::processNextQueuedJob);
+  const auto has_failures = std::any_of(
+      jobs_.cbegin(),
+      jobs_.cend(),
+      [](const auto& job) { return job.status == QStringLiteral("Failed"); });
+  setStatus(has_failures ? QStringLiteral("Export queue needs attention.") : QStringLiteral("Export queue idle."));
 }
 
 void ExportJobController::setBusy(bool busy) {

@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::env;
 
 use photo_catalog::{
-    AppRuntimePaths, CatalogAssetSnapshot, CatalogService, DriveRecord, PostgresCatalogConfig,
+    AppRuntimePaths, AssetReviewStateRecord, CatalogAssetSnapshot, CatalogService, DriveRecord,
+    PersistedProject, PostgresCatalogConfig,
 };
 use serde::Serialize;
 
@@ -9,6 +11,16 @@ use serde::Serialize;
 struct Snapshot {
     assets: Vec<CatalogAssetSnapshot>,
     drives: Vec<DriveRecord>,
+    projects: Vec<PersistedProject>,
+    review_states: BTreeMap<String, ReviewState>,
+    relinked_paths: BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct ReviewState {
+    rating: i32,
+    picked: bool,
+    rejected: bool,
 }
 
 #[tokio::main]
@@ -24,6 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let snapshot = Snapshot {
         assets: catalog.list_asset_snapshots(limit).await?,
         drives: catalog.list_drives().await?,
+        projects: catalog.list_projects().await?,
+        review_states: review_state_map(catalog.list_asset_review_states().await?),
+        relinked_paths: catalog
+            .list_asset_relinks()
+            .await?
+            .into_iter()
+            .map(|record| (record.asset_id, record.relinked_file_path))
+            .collect(),
     };
 
     println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -36,4 +56,20 @@ fn parse_limit(argument: Option<&str>) -> i64 {
         Some(limit) if limit > 0 => limit,
         _ => 0,
     }
+}
+
+fn review_state_map(records: Vec<AssetReviewStateRecord>) -> BTreeMap<String, ReviewState> {
+    records
+        .into_iter()
+        .map(|record| {
+            (
+                record.asset_id,
+                ReviewState {
+                    rating: record.rating,
+                    picked: record.picked,
+                    rejected: record.rejected,
+                },
+            )
+        })
+        .collect()
 }

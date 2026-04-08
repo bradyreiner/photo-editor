@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QJsonObject>
 #include <QString>
 #include <QVector>
 
@@ -24,5 +25,9 @@ struct TimelineAssetRecord final {
 [[nodiscard]] QString timelineIndexPath();
 [[nodiscard]] QVector<TimelineAssetRecord> loadTimelineAssetRecords();
 [[nodiscard]] bool saveTimelineAssetRecords(const QVector<TimelineAssetRecord>& records);
+[[nodiscard]] QJsonObject loadTimelineDocumentBackup(const QString& timeline_id);
+[[nodiscard]] bool saveTimelineDocumentBackup(
+    const TimelineAssetRecord& record,
+    const QJsonObject& document);
 
 }  // namespace photo_editor::desktop

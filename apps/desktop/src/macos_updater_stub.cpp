@@ -2,7 +2,7 @@
 
 namespace photo_editor::desktop {
 
-MacosUpdater::MacosUpdater() = default;
+MacosUpdater::MacosUpdater(QObject* parent) : QObject(parent) {}
 MacosUpdater::~MacosUpdater() = default;
 
 bool MacosUpdater::available() const { return controller_ != nullptr; }

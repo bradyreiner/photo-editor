@@ -1,14 +1,24 @@
 use std::env;
+use std::time::Instant;
 
-use photo_catalog::LocalCatalogDatabaseManager;
+use photo_catalog::{observability::Logger, LocalCatalogDatabaseManager};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let logger = Logger::from_env("catalog_local_db")?;
+    let started_at = Instant::now();
     let arguments: Vec<String> = env::args().collect();
     let command = arguments.get(1).map(String::as_str).unwrap_or("help");
     let manager = LocalCatalogDatabaseManager::from_env();
+    logger.info(
+        "catalog_local_db.started",
+        serde_json::json!({
+            "command": command,
+            "run_directory": logger.run_directory().display().to_string(),
+        }),
+    );
 
-    match command {
+    let result = match command {
         "ensure-running" => {
             let database_url = manager.ensure_ready_database_url().await?;
             println!(
@@ -39,9 +49,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("Catalog database stopped.");
         }
         _ => print_usage(&arguments[0]),
-    }
+    };
 
-    Ok(())
+    logger.info(
+        "catalog_local_db.completed",
+        serde_json::json!({
+            "command": command,
+            "elapsed_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    );
+
+    Ok(result)
 }
 
 fn print_usage(program_name: &str) {

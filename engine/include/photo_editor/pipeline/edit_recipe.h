@@ -84,7 +84,15 @@ struct CropTransformDefinition final {
 
 struct MaskAdjustments final {
   double exposure = 0.0;
+  double contrast = 0.0;
+  double highlights = 0.0;
+  double shadows = 0.0;
+  double whites = 0.0;
+  double blacks = 0.0;
   double temperature = 0.0;
+  double tint = 0.0;
+  double vibrance = 0.0;
+  double saturation = 0.0;
 };
 
 struct MaskGeometryDefinition final {

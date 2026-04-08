@@ -1,14 +1,17 @@
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use photo_catalog::{
-    discover_assets, AppRuntimePaths, CatalogService, ImportMode, ImportRequest,
-    PostgresCatalogConfig,
+    discover_assets, observability::Logger, AppRuntimePaths, CatalogService, ImportMode,
+    ImportRequest, PostgresCatalogConfig,
 };
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let logger = Logger::from_env("import_catalog")?;
+    let started_at = Instant::now();
     let arguments: Vec<String> = env::args().collect();
     if arguments.len() < 4 {
         print_usage(&arguments[0]);
@@ -20,10 +23,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let drive_name = arguments[3].clone();
     let import_mode = parse_import_mode(arguments.get(4).map(String::as_str));
     let selected_paths = load_selected_paths(arguments.get(5).map(String::as_str))?;
+    logger.info(
+        "catalog_import.started",
+        serde_json::json!({
+            "mount_path": mount_path.display().to_string(),
+            "drive_id": drive_id,
+            "selected_path_count": selected_paths.len(),
+        }),
+    );
 
     let request = ImportRequest {
-        drive_id,
-        drive_name,
+        drive_id: drive_id.clone(),
+        drive_name: drive_name.clone(),
         mount_path,
         import_mode,
         selected_paths,
@@ -42,6 +53,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         summary.drive.display_name,
         summary.skipped_unsupported
     );
+    logger.info(
+        "catalog_import.completed",
+        serde_json::json!({
+            "drive_id": drive_id,
+            "drive_name": drive_name,
+            "imported_assets": summary.assets.len(),
+            "skipped_unsupported": summary.skipped_unsupported,
+            "elapsed_ms": started_at.elapsed().as_millis() as u64,
+        }),
+    );
 
     Ok(())
 }
@@ -59,7 +80,9 @@ fn print_usage(program_name: &str) {
     );
 }
 
-fn load_selected_paths(path: Option<&str>) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+fn load_selected_paths(
+    path: Option<&str>,
+) -> Result<Vec<PathBuf>, Box<dyn std::error::Error + Send + Sync>> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };

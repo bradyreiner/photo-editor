@@ -49,6 +49,35 @@ Rectangle {
         return "The current selection can be queued for export.";
     }
 
+    function jobKindLabel(jobKind) {
+        if (jobKind === "catalog_import")
+            return "Import";
+        if (jobKind === "timeline_render")
+            return "Timeline Render";
+        return "Export";
+    }
+
+    function jobDestination(outputPath, destinationPath, sourcePath) {
+        if (outputPath && outputPath.length > 0)
+            return outputPath;
+        if (destinationPath && destinationPath.length > 0)
+            return destinationPath;
+        return sourcePath || "";
+    }
+
+    function canRetryJob(status, jobKind) {
+        return status === "Failed"
+                && (jobKind === "asset_export" || jobKind === "timeline_render");
+    }
+
+    function canCancelJob(status, jobKind) {
+        if (status === "Queued")
+            return true;
+        if (status === "Running" || status === "Canceling")
+            return jobKind === "asset_export" || jobKind === "timeline_render";
+        return false;
+    }
+
     function queueCurrentSelection() {
         exportJobs.queueExport(
                     catalogAssets.selectedAssetId,
@@ -73,15 +102,15 @@ Rectangle {
         BrandPanel {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            title: "Export Queue"
-            subtitle: exportJobs.busy ? "Processing queued exports." : exportJobs.status
+            title: "Background Jobs"
+            subtitle: jobQueue.status
 
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 8
 
                 Label {
-                    text: exportJobs.jobCount + (exportJobs.jobCount === 1 ? " job" : " jobs")
+                    text: jobQueue.jobCount + (jobQueue.jobCount === 1 ? " job" : " jobs")
                     color: theme.textMuted
                     font.family: theme.fontMono
                     font.pixelSize: 10
@@ -91,8 +120,8 @@ Rectangle {
 
                 ActionButton {
                     text: "Clear Finished"
-                    enabled: exportJobs.jobCount > 0
-                    onClicked: exportJobs.clearFinishedJobs()
+                    enabled: jobQueue.jobCount > 0
+                    onClicked: jobQueue.clearFinishedJobs()
                 }
             }
 
@@ -107,7 +136,7 @@ Rectangle {
 
                     Rectangle {
                         Layout.fillWidth: true
-                        visible: exportJobs.jobCount === 0
+                        visible: jobQueue.jobCount === 0
                         implicitHeight: 132
                         radius: theme.radius12
                         color: theme.ink900
@@ -119,7 +148,7 @@ Rectangle {
                             spacing: 8
 
                             Label {
-                                text: "No queued exports"
+                                text: "No background jobs"
                                 color: theme.textStrong
                                 font.family: theme.fontUi
                                 font.pixelSize: 16
@@ -128,7 +157,7 @@ Rectangle {
                             }
 
                             Label {
-                                text: "Choose a destination and queue the current Library selection."
+                                text: "Queue exports, imports, and timeline renders all land here."
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: 12
@@ -138,19 +167,28 @@ Rectangle {
                     }
 
                     Repeater {
-                        model: exportJobs.jobs
+                        model: jobQueue
 
                         delegate: Rectangle {
-                            required property var modelData
+                            required property string jobId
+                            required property string jobKind
+                            required property string displayLabel
+                            required property string sourcePath
+                            required property string presetName
+                            required property string destinationPath
+                            required property string outputPath
+                            required property string status
+                            required property string errorMessage
+                            required property int progress
 
                             Layout.fillWidth: true
                             implicitHeight: detailsColumn.implicitHeight + 22
                             radius: theme.radius12
                             color: theme.ink900
                             border.width: 1
-                            border.color: modelData.status === "Completed"
+                            border.color: status === "Completed"
                                           ? theme.alpha(theme.accentCool500, 0.55)
-                                          : modelData.status === "Failed"
+                                          : status === "Failed"
                                             ? theme.alpha("#d96a5b", 0.68)
                                             : theme.lineSoft
 
@@ -169,7 +207,7 @@ Rectangle {
                                         spacing: 2
 
                                         Label {
-                                            text: modelData.displayLabel
+                                            text: displayLabel
                                             color: theme.textStrong
                                             font.family: theme.fontUi
                                             font.pixelSize: 14
@@ -178,7 +216,9 @@ Rectangle {
                                         }
 
                                         Label {
-                                            text: modelData.preset + "  •  " + modelData.status
+                                            text: jobKindLabel(jobKind)
+                                                  + (presetName && presetName.length > 0 ? "  •  " + presetName : "")
+                                                  + "  •  " + status
                                             color: theme.textMuted
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
@@ -188,21 +228,27 @@ Rectangle {
 
                                     ActionButton {
                                         text: "Retry"
-                                        visible: modelData.status === "Failed"
-                                        onClicked: exportJobs.retryJob(modelData.jobId)
+                                        visible: canRetryJob(status, jobKind)
+                                        onClicked: jobQueue.retryJob(jobId)
+                                    }
+
+                                    ActionButton {
+                                        text: status === "Canceling" ? "Canceling" : "Cancel"
+                                        visible: canCancelJob(status, jobKind)
+                                        enabled: status !== "Canceling"
+                                        onClicked: jobQueue.cancelJob(jobId)
                                     }
 
                                     ActionButton {
                                         text: "Remove"
-                                        enabled: modelData.status !== "Running"
-                                        onClicked: exportJobs.removeJob(modelData.jobId)
+                                        enabled: status !== "Running" && status !== "Canceling"
+                                        onClicked: jobQueue.removeJob(jobId)
                                     }
                                 }
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: modelData.outputPath.length > 0 ? modelData.outputPath
-                                                                          : modelData.destinationDirectory
+                                    text: jobDestination(outputPath, destinationPath, sourcePath)
                                     color: theme.textMuted
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
@@ -214,20 +260,31 @@ Rectangle {
                                     implicitHeight: 6
                                     radius: 3
                                     color: theme.alpha(theme.ink750, 0.92)
-                                    visible: modelData.status === "Running" || modelData.status === "Completed"
+                                    visible: status === "Queued"
+                                             || status === "Running"
+                                             || status === "Canceling"
+                                             || status === "Completed"
 
                                     Rectangle {
-                                        width: parent.width * Math.max(0.05, Math.min(1.0, modelData.progress / 100.0))
+                                        width: parent.width * (status === "Queued"
+                                                               ? 0.08
+                                                               : Math.max(0.05, Math.min(1.0, progress / 100.0)))
                                         height: parent.height
                                         radius: parent.radius
-                                        color: modelData.status === "Completed" ? theme.accentCool500 : theme.accentWarm500
+                                        color: status === "Completed"
+                                               ? theme.accentCool500
+                                               : status === "Canceling"
+                                                 ? theme.alpha("#d96a5b", 0.88)
+                                               : status === "Failed"
+                                                 ? "#d96a5b"
+                                                 : theme.accentWarm500
                                     }
                                 }
 
                                 Label {
                                     Layout.fillWidth: true
-                                    visible: modelData.errorMessage.length > 0
-                                    text: modelData.errorMessage
+                                    visible: errorMessage.length > 0
+                                    text: errorMessage
                                     color: "#f4b7af"
                                     font.family: theme.fontUi
                                     font.pixelSize: 11

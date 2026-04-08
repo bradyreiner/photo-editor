@@ -138,6 +138,11 @@ struct PreToneUniforms {
   float radial_wb_red;
   float radial_wb_green;
   float radial_wb_blue;
+  int has_local_mask;
+  float local_exposure;
+  float local_wb_red;
+  float local_wb_green;
+  float local_wb_blue;
   int width;
   int height;
 };
@@ -1014,13 +1019,22 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
-    const ColorAdjustmentState& state) {
-  if (!available() || pixels == nullptr || width <= 0 || height <= 0 || !state.local_masks.empty()) {
+    const ColorAdjustmentState& state,
+    const std::vector<float>* local_mask_weights,
+    double local_mask_exposure,
+    double local_mask_temperature) {
+  if (!available() || pixels == nullptr || width <= 0 || height <= 0) {
     return false;
   }
 
   const auto pixel_count = static_cast<std::size_t>(width * height);
   if (pixels->size() != pixel_count) {
+    return false;
+  }
+  if (!state.local_masks.empty() && local_mask_weights == nullptr) {
+    return false;
+  }
+  if (local_mask_weights != nullptr && local_mask_weights->size() != pixel_count) {
     return false;
   }
 
@@ -1050,9 +1064,11 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
                                                             options:MTLResourceStorageModeShared];
     id<MTLBuffer> target_luminance_buffer = [impl_->device newBufferWithLength:scalar_buffer_size
                                                                        options:MTLResourceStorageModeShared];
+    id<MTLBuffer> local_mask_buffer = [impl_->device newBufferWithLength:scalar_buffer_size
+                                                                 options:MTLResourceStorageModeShared];
     id<MTLBuffer> curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
                                                             options:MTLResourceStorageModeShared];
-    if (!pixel_buffer || !target_luminance_buffer || !curve_buffer) {
+    if (!pixel_buffer || !target_luminance_buffer || !local_mask_buffer || !curve_buffer) {
       return false;
     }
 
@@ -1064,10 +1080,18 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
       pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
     }
     std::copy(parametric_curve_lut.begin(), parametric_curve_lut.end(), static_cast<float*>([curve_buffer contents]));
+    auto* local_mask_data = static_cast<float*>([local_mask_buffer contents]);
+    if (local_mask_weights != nullptr) {
+      std::copy(local_mask_weights->begin(), local_mask_weights->end(), local_mask_data);
+    } else {
+      std::fill(local_mask_data, local_mask_data + pixel_count, 0.0F);
+    }
 
     const auto global_wb = wb_multipliers(state.temperature, state.tint);
     const auto linear_wb = wb_multipliers(state.linear_mask_temperature, 0.0);
     const auto radial_wb = wb_multipliers(state.radial_mask_temperature, 0.0);
+    const auto local_wb = wb_multipliers(local_mask_temperature, 0.0);
+    const auto use_legacy_masks = state.local_masks.empty();
 
     PreToneUniforms uniforms{};
     uniforms.exposure_gain = static_cast<float>(std::pow(2.0, state.exposure));
@@ -1082,7 +1106,7 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     uniforms.shoulder_threshold = 1.0F;
     uniforms.use_parametric_curve = use_parametric_curve ? 1 : 0;
     uniforms.curve_lut_size = kCurveLutSize;
-    uniforms.has_linear_mask = state.linear_mask_enabled ? 1 : 0;
+    uniforms.has_linear_mask = use_legacy_masks && state.linear_mask_enabled ? 1 : 0;
     uniforms.linear_exposure = static_cast<float>(state.linear_mask_exposure);
     uniforms.linear_feather = static_cast<float>(state.linear_mask_feather);
     uniforms.linear_position = static_cast<float>(state.linear_mask_position);
@@ -1090,7 +1114,7 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     uniforms.linear_wb_red = linear_wb[0];
     uniforms.linear_wb_green = linear_wb[1];
     uniforms.linear_wb_blue = linear_wb[2];
-    uniforms.has_radial_mask = state.radial_mask_enabled ? 1 : 0;
+    uniforms.has_radial_mask = use_legacy_masks && state.radial_mask_enabled ? 1 : 0;
     uniforms.radial_exposure = static_cast<float>(state.radial_mask_exposure);
     uniforms.radial_feather = static_cast<float>(state.radial_mask_feather);
     uniforms.radial_center_x = static_cast<float>(state.radial_mask_center_x);
@@ -1101,6 +1125,11 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     uniforms.radial_wb_red = radial_wb[0];
     uniforms.radial_wb_green = radial_wb[1];
     uniforms.radial_wb_blue = radial_wb[2];
+    uniforms.has_local_mask = local_mask_weights != nullptr ? 1 : 0;
+    uniforms.local_exposure = static_cast<float>(local_mask_exposure);
+    uniforms.local_wb_red = local_wb[0];
+    uniforms.local_wb_green = local_wb[1];
+    uniforms.local_wb_blue = local_wb[2];
     uniforms.width = width;
     uniforms.height = height;
 
@@ -1128,8 +1157,8 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
 
     dispatch_pipeline(
         impl_->pre_tone_input_pipeline,
-        {pixel_buffer, target_luminance_buffer},
-        2,
+        {pixel_buffer, target_luminance_buffer, local_mask_buffer},
+        3,
         &uniforms,
         sizeof(uniforms));
 

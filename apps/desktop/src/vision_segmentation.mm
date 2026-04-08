@@ -1,4 +1,5 @@
 #include "vision_segmentation.h"
+#include "prompt_mask_engine.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreImage/CoreImage.h>
@@ -280,6 +281,12 @@ ForegroundInstanceMap generate_foreground_instance_map(const QImage& source_imag
 SegmentationResult generate_object_mask_for_instance(
     const QImage& source_image,
     int instance_id) {
+  return generate_object_mask_for_instances(source_image, QVector<int>{instance_id});
+}
+
+SegmentationResult generate_object_mask_for_instances(
+    const QImage& source_image,
+    const QVector<int>& instance_ids) {
   SegmentationResult result;
 
   if (source_image.isNull() || source_image.width() < 2 || source_image.height() < 2) {
@@ -287,7 +294,15 @@ SegmentationResult generate_object_mask_for_instance(
     return result;
   }
 
-  if (instance_id <= 0) {
+  QVector<int> normalized_ids;
+  normalized_ids.reserve(instance_ids.size());
+  for (const auto instance_id : instance_ids) {
+    if (instance_id > 0 && !normalized_ids.contains(instance_id)) {
+      normalized_ids.append(instance_id);
+    }
+  }
+
+  if (normalized_ids.isEmpty()) {
     result.error_message = QStringLiteral("No selectable object at that point");
     return result;
   }
@@ -300,7 +315,14 @@ SegmentationResult generate_object_mask_for_instance(
         return result;
       }
 
-      if (![context.observation.allInstances containsIndex:static_cast<NSUInteger>(instance_id)]) {
+      NSMutableIndexSet* selected_instances = [[NSMutableIndexSet alloc] init];
+      for (const auto instance_id : normalized_ids) {
+        if ([context.observation.allInstances containsIndex:static_cast<NSUInteger>(instance_id)]) {
+          [selected_instances addIndex:static_cast<NSUInteger>(instance_id)];
+        }
+      }
+
+      if (selected_instances.count == 0) {
         release_instance_mask_context(&context);
         result.error_message = QStringLiteral("No selectable object at that point");
         return result;
@@ -309,7 +331,7 @@ SegmentationResult generate_object_mask_for_instance(
       NSError* mask_error = nil;
       CVPixelBufferRef pixel_buffer =
           [context.observation
-              generateScaledMaskForImageForInstances:[NSIndexSet indexSetWithIndex:static_cast<NSUInteger>(instance_id)]
+              generateScaledMaskForImageForInstances:selected_instances
                                    fromRequestHandler:context.handler
                                                 error:&mask_error];
       if (!pixel_buffer || mask_error) {
@@ -333,39 +355,35 @@ SegmentationResult generate_object_mask(
     const QImage& source_image,
     double normalized_x,
     double normalized_y) {
-  const auto instance_map = generate_foreground_instance_map(source_image);
-  if (!instance_map.success) {
-    SegmentationResult result;
-    result.error_message = instance_map.error_message;
-    return result;
-  }
+  QVector<SmartSelectPrompt> prompts;
+  prompts.append(SmartSelectPrompt{
+      .x = normalized_x,
+      .y = normalized_y,
+      .negative = false,
+  });
+  return generate_smart_select_mask(source_image, prompts);
+}
 
-  const auto sample_instance = [&](double sample_y) {
-    const auto x = std::clamp(
-        static_cast<int>(std::lround(std::clamp(normalized_x, 0.0, 1.0) *
-                                     std::max(instance_map.width - 1, 0))),
-        0,
-        std::max(instance_map.width - 1, 0));
-    const auto y = std::clamp(
-        static_cast<int>(std::lround(std::clamp(sample_y, 0.0, 1.0) *
-                                     std::max(instance_map.height - 1, 0))),
-        0,
-        std::max(instance_map.height - 1, 0));
-    return static_cast<int>(
-        static_cast<unsigned char>(instance_map.instance_data.at(y * instance_map.width + x)));
+SegmentationResult generate_smart_select_mask(
+    const QImage& source_image,
+    const QVector<SmartSelectPrompt>& prompts) {
+  QVector<prompt_mask_engine::PromptPoint> normalized_prompts;
+  normalized_prompts.reserve(prompts.size());
+  for (const auto& prompt : prompts) {
+    normalized_prompts.push_back(prompt_mask_engine::PromptPoint{
+        .x = prompt.x,
+        .y = prompt.y,
+        .negative = prompt.negative,
+    });
+  }
+  const auto result = prompt_mask_engine::generate_mask(source_image, normalized_prompts);
+  return SegmentationResult{
+      .mask_data = result.mask_data,
+      .width = result.width,
+      .height = result.height,
+      .success = result.success,
+      .error_message = result.error_message,
   };
-
-  const auto direct_instance = sample_instance(normalized_y);
-  const auto flipped_instance = sample_instance(1.0 - normalized_y);
-  auto selected_instance = direct_instance;
-  if (selected_instance == 0 && flipped_instance > 0) {
-    selected_instance = flipped_instance;
-  } else if (selected_instance > 0 && flipped_instance > 0 &&
-             selected_instance != flipped_instance) {
-    selected_instance = flipped_instance;
-  }
-
-  return generate_object_mask_for_instance(source_image, selected_instance);
 }
 
 bool vision_segmentation_available() {

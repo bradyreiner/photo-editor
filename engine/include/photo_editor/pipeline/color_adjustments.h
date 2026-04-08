@@ -35,7 +35,15 @@ struct LocalMask final {
   std::string retouch_mode;
   bool enabled = true;
   double exposure = 0.0;
+  double contrast = 0.0;
+  double highlights = 0.0;
+  double shadows = 0.0;
+  double whites = 0.0;
+  double blacks = 0.0;
   double temperature = 0.0;
+  double tint = 0.0;
+  double vibrance = 0.0;
+  double saturation = 0.0;
   double hue_shift = 0.0;
   double saturation_shift = 0.0;
   double colorize_hue = 0.0;
@@ -71,6 +79,27 @@ struct LocalMask final {
   std::vector<uint8_t> segmentation_mask;
   int segmentation_width = 0;
   int segmentation_height = 0;
+};
+
+struct LocalMaskSet final {
+  std::string id;
+  std::string name;
+  bool enabled = true;
+  double exposure = 0.0;
+  double contrast = 0.0;
+  double highlights = 0.0;
+  double shadows = 0.0;
+  double whites = 0.0;
+  double blacks = 0.0;
+  double temperature = 0.0;
+  double tint = 0.0;
+  double vibrance = 0.0;
+  double saturation = 0.0;
+  double hue_shift = 0.0;
+  double saturation_shift = 0.0;
+  double colorize_hue = 0.0;
+  double colorize_strength = 0.0;
+  std::vector<LocalMask> sources;
 };
 
 struct ColorMixerChannelAdjustment final {
@@ -142,6 +171,8 @@ struct ColorAdjustmentState final {
   double radial_mask_radius_x = 0.25;
   double radial_mask_radius_y = 0.25;
   double radial_mask_rotation = 0.0;
+  std::vector<LocalMaskSet> local_mask_sets;
+  std::vector<LocalMask> retouch_masks;
   std::vector<LocalMask> local_masks;
 };
 
@@ -153,6 +184,11 @@ struct ColorLut3D final {
   bool valid = false;
 };
 
+enum class RemovalQuality {
+  Interactive,
+  Final,
+};
+
 [[nodiscard]] double clamp_signed_percent(double value);
 [[nodiscard]] double clamp_unit(double value);
 [[nodiscard]] double srgb_to_linear(double value);
@@ -162,6 +198,11 @@ struct ColorLut3D final {
 [[nodiscard]] double channel_weight_for_selection(double hue, std::string_view channel);
 [[nodiscard]] ColorLut3D build_color_lut(const ColorAdjustmentState& state);
 [[nodiscard]] ColorPixel apply_lut(const ColorLut3D& lut, const ColorPixel& pixel);
-void apply_color_adjustments(std::vector<ColorPixel>* pixels, int width, int height, const ColorAdjustmentState& state);
+void apply_color_adjustments(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const ColorAdjustmentState& state,
+    RemovalQuality removal_quality = RemovalQuality::Interactive);
 
 }  // namespace photo_editor::pipeline

@@ -62,7 +62,10 @@ class MetalPipelineBackend final {
       std::vector<ColorPixel>* pixels,
       int width,
       int height,
-      const ColorAdjustmentState& state);
+      const ColorAdjustmentState& state,
+      const std::vector<float>* local_mask_weights = nullptr,
+      double local_mask_exposure = 0.0,
+      double local_mask_temperature = 0.0);
 
  private:
   struct Impl;

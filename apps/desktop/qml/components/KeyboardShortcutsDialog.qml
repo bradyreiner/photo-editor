@@ -33,6 +33,8 @@ Dialog {
             items: [
                 { "keys": primary("Z"), "description": "Undo the last photo adjustment." },
                 { "keys": redoLabel, "description": "Redo the most recently undone adjustment." },
+                { "keys": primary("D"), "description": "Deselect the active mask and clear transient selection tools." },
+                { "keys": "Esc", "description": "Exit the current mask tool or deselect the active mask." },
                 { "keys": "Left", "description": "Move to the previous photo in the filmstrip." },
                 { "keys": "Right", "description": "Move to the next photo in the filmstrip." }
             ]

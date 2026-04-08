@@ -12,6 +12,7 @@ namespace {
 using photo_editor::pipeline::ColorAdjustmentState;
 using photo_editor::pipeline::ColorPixel;
 using photo_editor::pipeline::LocalMask;
+using photo_editor::pipeline::LocalMaskSet;
 
 bool almost_equal(double left, double right, double tolerance = 1e-6) {
   return std::abs(left - right) <= tolerance;
@@ -281,6 +282,73 @@ int main() {
     return fail("sharpening should change local contrast on a simple edge pattern");
   }
 
+  const std::vector<ColorPixel> presence_input = {
+      edge_dark, edge_dark, edge_dark, edge_bright, edge_bright, edge_bright, edge_dark, edge_dark, edge_dark,
+  };
+  const auto base_presence_contrast =
+      luminance(presence_input[3]) - luminance(presence_input[2]);
+
+  ColorAdjustmentState texture_state;
+  texture_state.texture = 100.0;
+  const auto textured_pixels = apply_pixels(presence_input, 9, 1, texture_state);
+  if (!((luminance(textured_pixels[3]) - luminance(textured_pixels[2])) > base_presence_contrast + 1e-4)) {
+    return fail("texture should increase fine local contrast on a small edge transition");
+  }
+
+  ColorAdjustmentState clarity_state;
+  clarity_state.clarity = 100.0;
+  const auto clarified_pixels = apply_pixels(presence_input, 9, 1, clarity_state);
+  if (!((luminance(clarified_pixels[3]) - luminance(clarified_pixels[2])) > base_presence_contrast + 1e-4)) {
+    return fail("clarity should increase midtone edge contrast on a broader transition");
+  }
+
+  ColorAdjustmentState dehaze_state;
+  dehaze_state.dehaze = 100.0;
+  const auto dehazed_pixels = apply_pixels(presence_input, 9, 1, dehaze_state);
+  if (!((luminance(dehazed_pixels[4]) - luminance(dehazed_pixels[0])) >
+        (luminance(presence_input[4]) - luminance(presence_input[0])) + 1e-4)) {
+    return fail("dehaze should increase separation between brighter structure and a flatter surround");
+  }
+
+  ColorAdjustmentState luma_nr_state;
+  luma_nr_state.luminance_nr = 100.0;
+  std::vector<ColorPixel> luma_noise_input;
+  luma_noise_input.reserve(25);
+  for (int y = 0; y < 5; ++y) {
+    for (int x = 0; x < 5; ++x) {
+      const auto tone = ((x + y) % 2) == 0 ? 0.204F : 0.20F;
+      luma_noise_input.push_back(ColorPixel{
+          .red = tone,
+          .green = tone,
+          .blue = tone,
+          .alpha = 1.0F,
+      });
+    }
+  }
+  const auto denoised_luma_pixels = apply_pixels(luma_noise_input, 5, 5, luma_nr_state);
+  auto input_range = 0.0;
+  auto denoised_range = 0.0;
+  for (std::size_t i = 0; i < luma_noise_input.size(); ++i) {
+    input_range = std::max(input_range, std::abs(luminance(luma_noise_input[i]) - luminance(luma_noise_input[0])));
+    denoised_range =
+        std::max(denoised_range, std::abs(luminance(denoised_luma_pixels[i]) - luminance(denoised_luma_pixels[0])));
+  }
+  if (!(denoised_range < input_range - 1e-6)) {
+    return fail("luminance noise reduction should pull isolated brightness noise toward neighboring tones");
+  }
+
+  const auto neutral_gray = linear_pixel_from_srgb(QColor::fromRgbF(0.45F, 0.45F, 0.45F, 1.0F));
+  std::vector<ColorPixel> color_noise_input(5, neutral_gray);
+  color_noise_input[2] = linear_pixel_from_srgb(QColor::fromRgbF(0.72F, 0.40F, 0.40F, 1.0F));
+  ColorAdjustmentState color_nr_state;
+  color_nr_state.color_nr = 100.0;
+  const auto denoised_color_pixels = apply_pixels(color_noise_input, 5, 1, color_nr_state);
+  const auto base_color_gap = std::abs(color_noise_input[2].red - color_noise_input[2].green);
+  const auto denoised_color_gap = std::abs(denoised_color_pixels[2].red - denoised_color_pixels[2].green);
+  if (!(denoised_color_gap < base_color_gap - 1e-4)) {
+    return fail("color noise reduction should reduce isolated chroma speckling");
+  }
+
   const auto radial_input = linear_pixel_from_srgb(QColor::fromRgbF(0.45F, 0.45F, 0.45F, 1.0F));
   std::vector<ColorPixel> radial_pixels(9, radial_input);
   ColorAdjustmentState radial_state;
@@ -334,6 +402,72 @@ int main() {
     return fail("subtract mask operations should reduce the center of an additive local selection");
   }
 
+  std::vector<ColorPixel> grouped_stack_pixels(9, radial_input);
+  ColorAdjustmentState grouped_stack_state;
+  grouped_stack_state.local_mask_sets = {
+      LocalMaskSet{
+          .id = "subject",
+          .name = "Subject",
+          .enabled = true,
+          .exposure = 1.0,
+          .sources = {
+              LocalMask{
+                  .kind = "radial",
+                  .operation = "add",
+                  .enabled = true,
+                  .feather = 0.18,
+                  .center_x = 0.5,
+                  .center_y = 0.5,
+                  .radius_x = 0.32,
+                  .radius_y = 0.32,
+              },
+          },
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&grouped_stack_pixels, 3, 3, grouped_stack_state);
+  if (!(luminance(grouped_stack_pixels[4]) > luminance(grouped_stack_pixels[0]))) {
+    return fail("grouped mask sets should apply set-level adjustments through their contributor sources");
+  }
+
+  std::vector<ColorPixel> grouped_subtract_pixels(9, radial_input);
+  ColorAdjustmentState grouped_subtract_state = grouped_stack_state;
+  grouped_subtract_state.local_mask_sets.front().sources.push_back(
+      LocalMask{
+          .kind = "radial",
+          .operation = "subtract",
+          .enabled = true,
+          .feather = 0.12,
+          .center_x = 0.5,
+          .center_y = 0.5,
+          .radius_x = 0.14,
+          .radius_y = 0.14,
+      });
+  photo_editor::pipeline::apply_color_adjustments(&grouped_subtract_pixels, 3, 3, grouped_subtract_state);
+  if (!(luminance(grouped_subtract_pixels[4]) < luminance(grouped_stack_pixels[4]))) {
+    return fail("grouped mask sets should compose add and subtract contributors inside one set");
+  }
+
+  std::vector<ColorPixel> subtract_first_pixels(9, radial_input);
+  ColorAdjustmentState subtract_first_state = additive_stack_state;
+  subtract_first_state.local_masks.insert(
+      subtract_first_state.local_masks.begin(),
+      LocalMask{
+          .kind = "radial",
+          .operation = "subtract",
+          .enabled = true,
+          .exposure = 0.2,
+          .temperature = 0.0,
+          .feather = 0.12,
+          .center_x = 0.5,
+          .center_y = 0.5,
+          .radius_x = 0.14,
+          .radius_y = 0.14,
+      });
+  photo_editor::pipeline::apply_color_adjustments(&subtract_first_pixels, 3, 3, subtract_first_state);
+  if (!almost_equal(luminance(subtract_first_pixels[4]), luminance(additive_stack_pixels[4]), 1e-5)) {
+    return fail("leading subtract masks should not seed a composite selection or override the stack adjustment amount");
+  }
+
   std::vector<ColorPixel> brush_pixels(9, radial_input);
   ColorAdjustmentState brush_state;
   brush_state.local_masks = {
@@ -352,6 +486,29 @@ int main() {
   photo_editor::pipeline::apply_color_adjustments(&brush_pixels, 3, 3, brush_state);
   if (!(luminance(brush_pixels[4]) > luminance(brush_pixels[0]))) {
     return fail("brush masks should affect painted regions more strongly than untouched corners");
+  }
+
+  std::vector<ColorPixel> raster_brush_pixels(9, radial_input);
+  ColorAdjustmentState raster_brush_state;
+  raster_brush_state.local_masks = {
+      LocalMask{
+          .kind = "brush",
+          .operation = "add",
+          .enabled = true,
+          .exposure = 1.0,
+          .temperature = 0.0,
+          .segmentation_mask = {
+              0, 0, 0,
+              0, 255, 0,
+              0, 0, 0,
+          },
+          .segmentation_width = 3,
+          .segmentation_height = 3,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&raster_brush_pixels, 3, 3, raster_brush_state);
+  if (!(luminance(raster_brush_pixels[4]) > luminance(raster_brush_pixels[0]))) {
+    return fail("brush masks should honor raster mask payloads when present");
   }
 
   ColorAdjustmentState luminance_mask_state;
@@ -480,6 +637,26 @@ int main() {
     return fail("local object masks should support recoloring the selected region");
   }
 
+  std::vector<ColorPixel> malformed_object_pixels(3, radial_input);
+  ColorAdjustmentState malformed_object_state;
+  malformed_object_state.local_masks = {
+      LocalMask{
+          .kind = "object",
+          .operation = "add",
+          .enabled = true,
+          .exposure = 1.0,
+          .segmentation_mask = {255, 128},
+          .segmentation_width = 3,
+          .segmentation_height = 1,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&malformed_object_pixels, 3, 1, malformed_object_state);
+  if (!almost_equal(luminance(malformed_object_pixels[0]), luminance(radial_input), 1e-6) ||
+      !almost_equal(luminance(malformed_object_pixels[1]), luminance(radial_input), 1e-6) ||
+      !almost_equal(luminance(malformed_object_pixels[2]), luminance(radial_input), 1e-6)) {
+    return fail("malformed segmentation masks should be ignored instead of partially applying local adjustments");
+  }
+
   std::vector<ColorPixel> removal_pixels(25, linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
   removal_pixels[12] = linear_pixel_from_srgb(QColor::fromRgbF(0.90F, 0.12F, 0.12F, 1.0F));
   ColorAdjustmentState removal_state;
@@ -510,6 +687,141 @@ int main() {
         std::abs(removal_pixels[12].green - removal_pixels[0].green) < 0.18 &&
         std::abs(removal_pixels[12].blue - removal_pixels[0].blue) < 0.18)) {
     return fail("local removal should pull the removed region toward surrounding colors");
+  }
+
+  std::vector<ColorPixel> grouped_removal_pixels(25, linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
+  grouped_removal_pixels[12] = linear_pixel_from_srgb(QColor::fromRgbF(0.90F, 0.12F, 0.12F, 1.0F));
+  ColorAdjustmentState grouped_removal_state;
+  grouped_removal_state.retouch_masks = {
+      LocalMask{
+          .kind = "object",
+          .operation = "add",
+          .enabled = true,
+          .remove_strength = 100.0,
+          .segmentation_mask = {
+              0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0,
+              0, 0, 255, 0, 0,
+              0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0,
+          },
+          .segmentation_width = 5,
+          .segmentation_height = 5,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&grouped_removal_pixels, 5, 5, grouped_removal_state);
+  if (!(grouped_removal_pixels[12].red < 0.30 &&
+        grouped_removal_pixels[12].green > 0.05 &&
+        grouped_removal_pixels[12].blue > 0.05)) {
+    return fail("retouch masks should render from the dedicated retouch stack");
+  }
+
+  std::vector<ColorPixel> line_removal_pixels(
+      25,
+      linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
+  for (int y = 0; y < 5; ++y) {
+    line_removal_pixels[static_cast<std::size_t>(y * 5 + 2)] =
+        linear_pixel_from_srgb(QColor::fromRgbF(0.10F, 0.10F, 0.10F, 1.0F));
+  }
+  line_removal_pixels[12] = linear_pixel_from_srgb(QColor::fromRgbF(0.90F, 0.12F, 0.12F, 1.0F));
+  ColorAdjustmentState line_removal_state;
+  line_removal_state.local_masks = {
+      LocalMask{
+          .kind = "object",
+          .operation = "add",
+          .enabled = true,
+          .remove_strength = 100.0,
+          .segmentation_mask = {
+              0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0,
+              0, 0, 255, 0, 0,
+              0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0,
+          },
+          .segmentation_width = 5,
+          .segmentation_height = 5,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&line_removal_pixels, 5, 5, line_removal_state);
+  const auto line_center = line_removal_pixels[12];
+  const auto line_neighbor = line_removal_pixels[7];
+  const auto background_neighbor = line_removal_pixels[11];
+  if (!(std::abs(line_center.red - line_neighbor.red) <
+            std::abs(line_center.red - background_neighbor.red) &&
+        std::abs(line_center.green - line_neighbor.green) <
+            std::abs(line_center.green - background_neighbor.green) &&
+        std::abs(line_center.blue - line_neighbor.blue) <
+            std::abs(line_center.blue - background_neighbor.blue))) {
+    return fail("local removal should preserve simple line structure through the removed region");
+  }
+
+  std::vector<ColorPixel> checker_base_pixels;
+  checker_base_pixels.reserve(49);
+  for (int y = 0; y < 7; ++y) {
+    for (int x = 0; x < 7; ++x) {
+      const auto dark = ((x + y) % 2) == 0;
+      checker_base_pixels.push_back(
+          linear_pixel_from_srgb(
+              QColor::fromRgbF(dark ? 0.10F : 0.80F, dark ? 0.10F : 0.80F, dark ? 0.10F : 0.80F, 1.0F)));
+    }
+  }
+  for (int y = 2; y <= 4; ++y) {
+    for (int x = 2; x <= 4; ++x) {
+      checker_base_pixels[static_cast<std::size_t>(y * 7 + x)] =
+          linear_pixel_from_srgb(QColor::fromRgbF(0.92F, 0.18F, 0.18F, 1.0F));
+    }
+  }
+  ColorAdjustmentState checker_removal_state;
+  checker_removal_state.local_masks = {
+      LocalMask{
+          .kind = "object",
+          .operation = "add",
+          .enabled = true,
+          .remove_strength = 100.0,
+          .segmentation_mask = {
+              0, 0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+              0, 0, 255, 255, 255, 0, 0,
+              0, 0, 255, 255, 255, 0, 0,
+              0, 0, 255, 255, 255, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+              0, 0, 0, 0, 0, 0, 0,
+          },
+          .segmentation_width = 7,
+          .segmentation_height = 7,
+      },
+  };
+  auto checker_interactive_pixels = checker_base_pixels;
+  auto checker_final_pixels = checker_base_pixels;
+  photo_editor::pipeline::apply_color_adjustments(
+      &checker_interactive_pixels, 7, 7, checker_removal_state,
+      photo_editor::pipeline::RemovalQuality::Interactive);
+  photo_editor::pipeline::apply_color_adjustments(
+      &checker_final_pixels, 7, 7, checker_removal_state,
+      photo_editor::pipeline::RemovalQuality::Final);
+  const auto checker_center = checker_final_pixels[24];
+  const auto dark_checker =
+      linear_pixel_from_srgb(QColor::fromRgbF(0.10F, 0.10F, 0.10F, 1.0F));
+  const auto light_checker =
+      linear_pixel_from_srgb(QColor::fromRgbF(0.80F, 0.80F, 0.80F, 1.0F));
+  const auto removed_red =
+      linear_pixel_from_srgb(QColor::fromRgbF(0.92F, 0.18F, 0.18F, 1.0F));
+  const auto distance_to_dark =
+      std::abs(checker_center.red - dark_checker.red) +
+      std::abs(checker_center.green - dark_checker.green) +
+      std::abs(checker_center.blue - dark_checker.blue);
+  const auto distance_to_light =
+      std::abs(checker_center.red - light_checker.red) +
+      std::abs(checker_center.green - light_checker.green) +
+      std::abs(checker_center.blue - light_checker.blue);
+  const auto distance_to_removed_red =
+      std::abs(checker_center.red - removed_red.red) +
+      std::abs(checker_center.green - removed_red.green) +
+      std::abs(checker_center.blue - removed_red.blue);
+  if (!(std::abs(checker_center.red - checker_center.green) < 0.08 &&
+        std::abs(checker_center.green - checker_center.blue) < 0.08 &&
+        std::min(distance_to_dark, distance_to_light) + 1e-6 < distance_to_removed_red)) {
+    return fail("final removal quality should resolve repeated structure toward a neutral source patch instead of leaving removed-color contamination");
   }
 
   std::vector<ColorPixel> clone_pixels(5, linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
@@ -570,7 +882,6 @@ int main() {
     return fail("clone rotation should rotate the sampled source patch around the picked source point");
   }
 
-  const auto neutral_gray = linear_pixel_from_srgb(QColor::fromRgbF(0.45F, 0.45F, 0.45F, 1.0F));
   std::vector<ColorPixel> vignette_pixels(9, neutral_gray);
   ColorAdjustmentState vignette_state;
   vignette_state.lens_vignette = 55.0;

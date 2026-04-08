@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 import Qt.labs.folderlistmodel
 import "../components"
 
@@ -65,6 +66,11 @@ Rectangle {
         return index >= 0 ? index : 0;
     }
 
+    function fileNameForPath(filePath) {
+        const parts = filePath.split("/");
+        return parts.length > 0 ? parts[parts.length - 1] : filePath;
+    }
+
     function activeFilterSummary() {
         const parts = [];
         if (catalogAssets.searchFilter !== "")
@@ -117,6 +123,22 @@ Rectangle {
             return;
         catalogAssets.importFolderPath(localFolderPath);
         importBrowserOpen = false;
+    }
+
+    function hasActiveImportJobs() {
+        return jobQueue && jobQueue.activeJobCountForKind("catalog_import") > 0
+    }
+
+    function importJobStatus() {
+        return jobQueue
+                ? jobQueue.statusForKind("catalog_import", catalogAssets.status)
+                : catalogAssets.status
+    }
+
+    function openJobsWorkspace() {
+        const appWindow = root.Window.window
+        if (appWindow)
+            appWindow.currentWorkspace = appWindow.exportWorkspaceIndex
     }
 
     function clearFilters() {
@@ -612,54 +634,68 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        spacing: 8
+        spacing: theme.space12
 
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: theme.radius12
+            radius: theme.radiusSurface
             color: theme.ink850
             border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.24)
+            border.color: theme.alpha(theme.lineSoft, 0.28)
+
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: theme.alpha(theme.accentCool500, 0.05) }
+                GradientStop { position: 0.18; color: theme.alpha(theme.ink850, 0.98) }
+                GradientStop { position: 1.0; color: theme.ink900 }
+            }
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
+                anchors.margins: theme.space12
+                spacing: theme.space12
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 188
-                    radius: theme.radius12
-                    color: theme.alpha(theme.ink900, 0.78)
+                    Layout.preferredHeight: 194
+                    radius: theme.radiusSurface
+                    color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.2)
+                    border.color: theme.alpha(theme.lineSoft, 0.52)
+
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: theme.alpha(theme.accentWarm500, 0.08) }
+                        GradientStop { position: 0.24; color: theme.alpha(theme.accentCool500, 0.04) }
+                        GradientStop { position: 1.0; color: theme.alpha(theme.ink900, 0.98) }
+                    }
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 12
+                        anchors.margins: theme.space16
+                        spacing: theme.space10
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 14
+                            spacing: theme.space16
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 3
+                                spacing: 4
 
                                 Label {
                                     text: "Library"
-                                    color: "#f3f5f7"
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 28
+                                    color: theme.textStrong
+                                    font.family: theme.fontDisplay
+                                    font.pixelSize: 32
                                     font.weight: Font.DemiBold
                                 }
 
                                 Label {
-                                    text: catalogAssets.assetCount + " visible  •  " + catalogAssets.totalAssetCount + " imported assets  •  " + catalogAssets.driveCount + " drives"
-                                    color: "#c1cad2"
-                                    font.family: "Avenir Next"
+                                    text: catalogAssets.assetCount + " visible  •  "
+                                          + catalogAssets.totalAssetCount + " total  •  "
+                                          + catalogAssets.driveCount + " drives"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
                                     font.pixelSize: 12
                                 }
 
@@ -668,11 +704,13 @@ Rectangle {
                                     color: theme.textMuted
                                     font.family: theme.fontMono
                                     font.pixelSize: 10
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
                                 }
                             }
 
                             RowLayout {
-                                spacing: 8
+                                spacing: theme.space8
 
                                 ActionButton {
                                     text: "Grid"
@@ -698,186 +736,106 @@ Rectangle {
                                 }
 
                                 ActionButton {
+                                    text: "Finder Import"
+                                    tone: "primary"
+                                    onClicked: root.chooseImportFolder()
+                                }
+
+                                ActionButton {
                                     text: catalogAssets.loading ? "Refreshing..." : "Reload"
                                     enabled: !catalogAssets.busy
                                     onClicked: catalogAssets.refresh()
                                 }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space8
+
+                                ToneTextField {
+                                    id: searchField
+                                    Layout.fillWidth: true
+                                    placeholderText: "Search by filename, camera, lens, location..."
+                                    text: catalogAssets.searchFilter
+                                    onTextChanged: catalogAssets.searchFilter = text
+                                }
+
+                                FilterChip {
+                                    text: "All " + catalogAssets.assetCount
+                                    accent: theme.accentWarm400
+                                    active: catalogAssets.reviewFilter === "all"
+                                    onClicked: catalogAssets.reviewFilter = "all"
+                                }
+
+                                FilterChip {
+                                    text: "Picks " + catalogAssets.visiblePickedCount
+                                    accent: theme.success
+                                    active: catalogAssets.reviewFilter === "picked"
+                                    onClicked: catalogAssets.reviewFilter = "picked"
+                                }
+
+                                FilterChip {
+                                    text: "Rejects " + catalogAssets.visibleRejectedCount
+                                    accent: theme.error
+                                    active: catalogAssets.reviewFilter === "rejected"
+                                    onClicked: catalogAssets.reviewFilter = "rejected"
+                                }
+
+                                FilterChip {
+                                    text: "Unmarked " + catalogAssets.visibleUnmarkedCount
+                                    accent: theme.accentCool400
+                                    active: catalogAssets.reviewFilter === "unmarked"
+                                    onClicked: catalogAssets.reviewFilter = "unmarked"
+                                }
 
                                 ActionButton {
-                                    text: "Clear Filters"
+                                    text: "Clear"
+                                    compact: true
                                     enabled: catalogAssets.searchFilter !== ""
                                              || catalogAssets.importDateFilter !== "all"
                                              || catalogAssets.captureYearFilter !== "all"
                                              || catalogAssets.projectFilter !== "all"
                                              || catalogAssets.mediaTypeFilter !== "all"
                                              || catalogAssets.reviewFilter !== "all"
+                                             || catalogAssets.availabilityFilter !== "all"
                                              || catalogAssets.minimumRatingFilter > 0
                                     onClicked: root.clearFilters()
                                 }
                             }
-                        }
 
-                        TextField {
-                            id: searchField
-                            Layout.fillWidth: true
-                            placeholderText: "Search by filename, camera, lens, location..."
-                            placeholderTextColor: "#5a6570"
-                            color: "#e0e4e8"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 12
-                            text: catalogAssets.searchFilter
-                            onTextChanged: catalogAssets.searchFilter = text
-                            background: Rectangle {
-                                color: "#1a1f25"
-                                radius: 6
-                                border.color: searchField.activeFocus ? theme.accentWarm400 : "#2a3038"
-                                border.width: 1
-                            }
-                            leftPadding: 10
-                            rightPadding: 10
-                            topPadding: 6
-                            bottomPadding: 6
-                        }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space8
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-
-                            Repeater {
-                                model: [
-                                    {
-                                        text: "All " + catalogAssets.assetCount,
-                                        value: "all",
-                                        accent: theme.accentWarm400
-                                    },
-                                    {
-                                        text: "Picks " + catalogAssets.visiblePickedCount,
-                                        value: "picked",
-                                        accent: theme.success
-                                    },
-                                    {
-                                        text: "Rejects " + catalogAssets.visibleRejectedCount,
-                                        value: "rejected",
-                                        accent: theme.error
-                                    },
-                                    {
-                                        text: "Unmarked " + catalogAssets.visibleUnmarkedCount,
-                                        value: "unmarked",
-                                        accent: theme.accentCool400
-                                    }
-                                ]
-
-                                delegate: FilterChip {
-                                    required property var modelData
-
-                                    text: modelData.text
-                                    accent: modelData.accent
-                                    active: catalogAssets.reviewFilter === modelData.value
-                                    onClicked: catalogAssets.reviewFilter = modelData.value
+                                ToneComboBox {
+                                    Layout.preferredWidth: 160
+                                    model: root.importFilterLabels
+                                    currentIndex: root.indexForValue(root.importFilterValues, catalogAssets.importDateFilter)
+                                    onActivated: catalogAssets.importDateFilter = root.importFilterValues[currentIndex]
                                 }
-                            }
 
-                            Item {
-                                Layout.fillWidth: true
-                            }
+                                ToneComboBox {
+                                    Layout.preferredWidth: 160
+                                    model: root.mediaFilterLabels
+                                    currentIndex: root.indexForValue(root.mediaFilterValues, catalogAssets.mediaTypeFilter)
+                                    onActivated: catalogAssets.mediaTypeFilter = root.mediaFilterValues[currentIndex]
+                                }
 
-                            Label {
-                                text: "Imported"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
+                                ToneComboBox {
+                                    Layout.preferredWidth: 180
+                                    model: root.projectFilterLabels
+                                    currentIndex: root.indexForValue(root.projectFilterValues, catalogAssets.projectFilter)
+                                    onActivated: root.applyProjectSelection(root.projectFilterValues[currentIndex])
+                                }
 
-                            ToneComboBox {
-                                Layout.preferredWidth: 170
-                                model: root.importFilterLabels
-                                currentIndex: root.indexForValue(root.importFilterValues, catalogAssets.importDateFilter)
-                                onActivated: catalogAssets.importDateFilter = root.importFilterValues[currentIndex]
-                            }
-
-                            Label {
-                                text: "Captured"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 180
-                                model: root.captureFilterLabels
-                                currentIndex: root.indexForValue(root.captureFilterValues, catalogAssets.captureYearFilter)
-                                onActivated: catalogAssets.captureYearFilter = root.captureFilterValues[currentIndex]
-                            }
-
-                            Label {
-                                text: "Media"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 160
-                                model: root.mediaFilterLabels
-                                currentIndex: root.indexForValue(root.mediaFilterValues, catalogAssets.mediaTypeFilter)
-                                onActivated: catalogAssets.mediaTypeFilter = root.mediaFilterValues[currentIndex]
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 10
-
-                            Label {
-                                text: "Review"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 170
-                                model: root.reviewFilterLabels
-                                currentIndex: root.indexForValue(root.reviewFilterValues, catalogAssets.reviewFilter)
-                                onActivated: catalogAssets.reviewFilter = root.reviewFilterValues[currentIndex]
-                            }
-
-                            Label {
-                                text: "Source"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 160
-                                model: root.availabilityFilterLabels
-                                currentIndex: root.indexForValue(root.availabilityFilterValues, catalogAssets.availabilityFilter)
-                                onActivated: catalogAssets.availabilityFilter = root.availabilityFilterValues[currentIndex]
-                            }
-
-                            Label {
-                                text: "Rating"
-                                color: "#7f8a94"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 10
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            ToneComboBox {
-                                Layout.preferredWidth: 160
-                                model: root.minimumRatingLabels
-                                currentIndex: root.indexForValue(root.minimumRatingValues, catalogAssets.minimumRatingFilter)
-                                onActivated: catalogAssets.minimumRatingFilter = root.minimumRatingValues[currentIndex]
-                            }
-
-                            Item {
-                                Layout.fillWidth: true
+                                Item {
+                                    Layout.fillWidth: true
+                                }
                             }
                         }
                     }
@@ -903,9 +861,9 @@ Rectangle {
                         Flow {
                             id: galleryFlow
                             width: galleryFlick.width
-                            spacing: 4
+                            spacing: theme.space10
 
-                            property int columns: Math.max(2, Math.floor(width / 250))
+                            property int columns: Math.max(2, Math.floor(width / 248))
                             property real tileWidth: Math.floor((width - ((columns - 1) * spacing)) / columns)
 
                             Repeater {
@@ -939,12 +897,23 @@ Rectangle {
 
                                     Rectangle {
                                         id: previewFrame
-                                        width: parent.width
-                                        readonly property real sourceAspectRatio: previewImage.sourceSize.width > 0 && previewImage.sourceSize.height > 0 ? previewImage.sourceSize.height / previewImage.sourceSize.width : 0.66
-                                        height: Math.max(120, width * sourceAspectRatio)
-                                        radius: 8
-                                        color: "#0f1418"
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        readonly property real sourceAspectRatio: previewImage.sourceSize.width > 0 && previewImage.sourceSize.height > 0
+                                                                                 ? previewImage.sourceSize.height / previewImage.sourceSize.width
+                                                                                 : 0.68
+                                        height: Math.max(148, width * sourceAspectRatio)
+                                        radius: theme.radius12
+                                        color: theme.alpha(theme.ink900, 0.94)
                                         clip: true
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            gradient: Gradient {
+                                                GradientStop { position: 0.0; color: theme.alpha(theme.accentCool500, 0.04) }
+                                                GradientStop { position: 1.0; color: theme.alpha(theme.ink950, 0.18) }
+                                            }
+                                        }
 
                                         Image {
                                             id: previewImage
@@ -955,154 +924,32 @@ Rectangle {
                                             fillMode: Image.PreserveAspectFit
                                             sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
                                             sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
-                                            opacity: online ? 1.0 : 0.48
+                                            opacity: online ? 1.0 : 0.42
                                         }
 
                                         Rectangle {
-                                            anchors.left: parent.left
+                                            anchors.fill: parent
+                                            color: theme.alpha(theme.ink950, thumbnailMouseArea.containsMouse ? 0.04 : 0.0)
+                                        }
+
+                                        Rectangle {
                                             anchors.top: parent.top
-                                            anchors.margins: 8
-                                            radius: 8
-                                            color: "#11161bcc"
+                                            anchors.left: parent.left
+                                            anchors.margins: theme.space8
                                             visible: mediaType !== "photo"
-                                            implicitWidth: mediaBadge.implicitWidth + 14
+                                            radius: theme.radiusChip
+                                            color: theme.alpha(theme.ink950, 0.66)
+                                            border.width: 1
+                                            border.color: theme.alpha(theme.lineSoft, 0.48)
+                                            implicitWidth: mediaBadge.implicitWidth + theme.space12
                                             implicitHeight: 22
 
                                             Label {
                                                 id: mediaBadge
                                                 anchors.centerIn: parent
                                                 text: mediaType === "timeline" ? "Timeline" : "Video"
-                                                color: "#f3f5f7"
-                                                font.family: "Menlo"
-                                                font.pixelSize: 9
-                                            }
-                                        }
-
-                                        Row {
-                                            anchors.right: parent.right
-                                            anchors.top: parent.top
-                                            anchors.margins: 8
-                                            spacing: 6
-
-                                            Rectangle {
-                                                visible: rating > 0
-                                                radius: 8
-                                                color: "#11161bcc"
-                                                implicitWidth: ratingBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: ratingBadge
-                                                    anchors.centerIn: parent
-                                                    text: "R" + rating
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: picked || rejected
-                                                radius: 8
-                                                color: rejected ? "#6a3530dd" : "#334d39dd"
-                                                implicitWidth: cullBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: cullBadge
-                                                    anchors.centerIn: parent
-                                                    text: rejected ? "Reject" : "Pick"
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: burstSize > 1
-                                                radius: 8
-                                                color: "#263445dd"
-                                                implicitWidth: burstBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: burstBadge
-                                                    anchors.centerIn: parent
-                                                    text: "B " + burstPosition + "/" + burstSize
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: duplicateGroupSize > 1
-                                                radius: 8
-                                                color: "#2f4152dd"
-                                                implicitWidth: duplicateBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: duplicateBadge
-                                                    anchors.centerIn: parent
-                                                    text: "D " + duplicateGroupSize
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: bestShotSuggested
-                                                radius: 8
-                                                color: "#6a5331dd"
-                                                implicitWidth: suggestionBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: suggestionBadge
-                                                    anchors.centerIn: parent
-                                                    text: "Select"
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-
-                                            Rectangle {
-                                                visible: !online
-                                                radius: 8
-                                                color: "#5d4631dd"
-                                                implicitWidth: availabilityBadge.implicitWidth + 14
-                                                implicitHeight: 22
-
-                                                Label {
-                                                    id: availabilityBadge
-                                                    anchors.centerIn: parent
-                                                    text: "Offline"
-                                                    color: "#f3f5f7"
-                                                    font.family: "Menlo"
-                                                    font.pixelSize: 9
-                                                }
-                                            }
-                                        }
-
-                                        Rectangle {
-                                            anchors.left: parent.left
-                                            anchors.bottom: parent.bottom
-                                            anchors.margins: 8
-                                            radius: 8
-                                            color: "#11161bcc"
-                                            visible: syncGroupSize > 1
-                                            implicitWidth: syncBadge.implicitWidth + 14
-                                            implicitHeight: 22
-
-                                            Label {
-                                                id: syncBadge
-                                                anchors.centerIn: parent
-                                                text: "Sync " + syncGroupSize
-                                                color: "#f3f5f7"
-                                                font.family: "Menlo"
+                                                color: theme.textStrong
+                                                font.family: theme.fontMono
                                                 font.pixelSize: 9
                                             }
                                         }
@@ -1110,25 +957,29 @@ Rectangle {
                                         Rectangle {
                                             anchors.right: parent.right
                                             anchors.bottom: parent.bottom
-                                            anchors.margins: 8
-                                            radius: 8
-                                            color: "#11161bcc"
-                                            visible: durationText.length > 0
-                                            implicitWidth: durationBadge.implicitWidth + 14
+                                            anchors.margins: theme.space8
+                                            visible: mediaType !== "photo" && durationText.length > 0
+                                            radius: theme.radiusChip
+                                            color: theme.alpha(theme.ink950, 0.68)
+                                            border.width: 1
+                                            border.color: theme.alpha(theme.lineSoft, 0.48)
+                                            implicitWidth: durationBadge.implicitWidth + theme.space12
                                             implicitHeight: 22
 
                                             Label {
                                                 id: durationBadge
                                                 anchors.centerIn: parent
                                                 text: durationText
-                                                color: "#f3f5f7"
-                                                font.family: "Menlo"
+                                                color: theme.textStrong
+                                                font.family: theme.fontMono
                                                 font.pixelSize: 9
                                             }
                                         }
 
                                         MouseArea {
+                                            id: thumbnailMouseArea
                                             anchors.fill: parent
+                                            hoverEnabled: true
                                             onClicked: root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType)
                                             onDoubleClicked: {
                                                 root.selectCatalogAsset(index, assetId, filePath, thumbnailSource, cameraLabel, captureDate, lensModel, recipeJson, mediaType);
@@ -1143,12 +994,8 @@ Rectangle {
                                         color: "transparent"
                                         border.width: catalogAssets.selectedIndex === index ? 2 : 1
                                         border.color: catalogAssets.selectedIndex === index
-                                                      ? "#d0a157"
-                                                      : rejected
-                                                        ? theme.alpha(theme.error, 0.78)
-                                                        : picked
-                                                          ? theme.alpha(theme.success, 0.78)
-                                                          : theme.alpha(theme.lineSoft, 0.52)
+                                                      ? theme.accentWarm400
+                                                      : theme.alpha(theme.lineSoft, 0.42)
                                     }
                                 }
                             }
@@ -1165,26 +1012,31 @@ Rectangle {
                     Rectangle {
                         anchors.fill: parent
                         visible: catalogAssets.assetCount === 0 && !root.importBrowserOpen
-                        color: "#14191d"
+                        radius: theme.radiusSurface
+                        color: theme.alpha(theme.ink900, 0.92)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.42)
 
                         Column {
                             anchors.centerIn: parent
-                            spacing: 10
+                            spacing: theme.space10
 
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
                                 text: catalogAssets.totalAssetCount === 0 ? "No imported media yet." : "No assets match the current filters."
-                                color: "#d7dde3"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 18
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 20
                                 font.weight: Font.DemiBold
                             }
 
                             Label {
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                text: catalogAssets.totalAssetCount === 0 ? "Switch to Import to bring photos and videos in from folders, cards, and drives." : "Try changing the media, imported date, capture date, or project filter."
-                                color: "#85909a"
-                                font.family: "Avenir Next"
+                                text: catalogAssets.totalAssetCount === 0
+                                      ? "Switch to Import to bring photos and videos in from folders, cards, and drives."
+                                      : "Broaden the search or reset a few filters to reopen the working set."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
                                 font.pixelSize: 12
                             }
                         }
@@ -1193,19 +1045,19 @@ Rectangle {
                     Rectangle {
                         anchors.fill: parent
                         visible: root.importBrowserOpen
-                        radius: 16
-                        color: Qt.rgba(12 / 255, 15 / 255, 18 / 255, 0.98)
+                        radius: theme.radiusSurface
+                        color: theme.alpha(theme.ink950, 0.98)
                         border.width: 1
-                        border.color: "#29323a"
+                        border.color: theme.alpha(theme.lineSoft, 0.52)
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 18
-                            spacing: 14
+                            anchors.margins: theme.space18
+                            spacing: theme.space14
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 12
+                                spacing: theme.space12
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
@@ -1213,16 +1065,18 @@ Rectangle {
 
                                     Label {
                                         text: "Import From Finder"
-                                        color: "#f3f5f7"
-                                        font.family: "Avenir Next"
+                                        color: theme.textStrong
+                                        font.family: theme.fontDisplay
                                         font.pixelSize: 24
                                         font.weight: Font.DemiBold
                                     }
 
                                     Label {
-                                        text: root.localFolderPath.length > 0 ? root.localFolderPath : "Choose a folder, preview the media, then import it."
-                                        color: "#b3bdc7"
-                                        font.family: "Avenir Next"
+                                        text: root.localFolderPath.length > 0
+                                              ? root.localFolderPath
+                                              : "Choose a folder, preview it, then hand it off to Import."
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
                                         font.pixelSize: 12
                                         elide: Text.ElideMiddle
                                         Layout.fillWidth: true
@@ -1237,7 +1091,7 @@ Rectangle {
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 8
+                                spacing: theme.space8
 
                                 ActionButton {
                                     text: root.localFolderUrl.length > 0 ? "Choose Another Folder" : "Choose Folder"
@@ -1252,11 +1106,27 @@ Rectangle {
                                 }
 
                                 ActionButton {
-                                    text: catalogAssets.importing ? "Importing..." : "Import This Folder"
+                                    text: root.hasActiveImportJobs() ? "Importing..." : "Import This Folder"
                                     tone: "primary"
                                     enabled: root.localFolderPath.length > 0 && !catalogAssets.busy
                                     onClicked: root.importCurrentFolder()
                                 }
+
+                                ActionButton {
+                                    text: "Jobs"
+                                    compact: true
+                                    visible: jobQueue && jobQueue.totalJobCountForKind("catalog_import") > 0
+                                    onClicked: root.openJobsWorkspace()
+                                }
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.importJobStatus()
+                                color: root.hasActiveImportJobs() ? theme.accentWarm300 : theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                wrapMode: Text.Wrap
                             }
 
                             ListView {
@@ -1266,23 +1136,25 @@ Rectangle {
                                 clip: true
                                 orientation: ListView.Horizontal
                                 boundsBehavior: Flickable.StopAtBounds
-                                spacing: 8
+                                spacing: theme.space8
                                 model: localFolderModel
 
                                 delegate: Rectangle {
                                     required property int index
 
-                                    width: Math.max(96, folderLabel.implicitWidth + 24)
+                                    width: Math.max(108, folderLabel.implicitWidth + theme.space20)
                                     height: 34
-                                    radius: 9
-                                    color: "#171c21"
+                                    radius: theme.radius8
+                                    color: theme.alpha(theme.ink900, 0.92)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.48)
 
                                     Label {
                                         id: folderLabel
                                         anchors.centerIn: parent
                                         text: localFolderModel.get(index, "fileName")
-                                        color: "#d8dde2"
-                                        font.family: "Avenir Next"
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
                                         font.pixelSize: 10
                                         font.weight: Font.Medium
                                     }
@@ -1308,21 +1180,21 @@ Rectangle {
 
                                     width: 204
                                     height: 206
-                                    radius: 10
-                                    color: "#11161b"
+                                    radius: theme.radius12
+                                    color: theme.alpha(theme.ink900, 0.94)
                                     border.width: root.localSelectedFilePath === localImageModel.get(index, "filePath") ? 1 : 0
-                                    border.color: "#d0a157"
+                                    border.color: theme.accentWarm400
 
                                     ColumnLayout {
                                         anchors.fill: parent
-                                        anchors.margins: 8
-                                        spacing: 6
+                                        anchors.margins: theme.space8
+                                        spacing: theme.space6
 
                                         Rectangle {
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: 156
-                                            radius: 8
-                                            color: "#0e1317"
+                                            radius: theme.radius10
+                                            color: theme.ink950
                                             clip: true
 
                                             Image {
@@ -1336,8 +1208,8 @@ Rectangle {
 
                                         Label {
                                             text: localImageModel.get(index, "fileName")
-                                            color: "#f2f5f7"
-                                            font.family: "Avenir Next"
+                                            color: theme.textStrong
+                                            font.family: theme.fontUi
                                             font.pixelSize: 11
                                             elide: Text.ElideRight
                                             Layout.fillWidth: true
@@ -1357,525 +1229,392 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: 308
+            Layout.preferredWidth: 332
             Layout.fillHeight: true
-            radius: theme.radius12
+            radius: theme.radiusSurface
             color: theme.ink850
             border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.24)
+            border.color: theme.alpha(theme.lineSoft, 0.28)
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 12
-                spacing: 10
+                anchors.margins: theme.space12
+                spacing: theme.space12
 
-                Label {
-                    text: "Projects"
-                    color: "#f2f4f6"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 18
-                    font.weight: Font.Medium
+                BrandPanel {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 350
+                    title: "Details"
+                    subtitle: catalogAssets.selectedAssetId.length > 0
+                              ? root.fileNameForPath(catalogAssets.selectedFilePath)
+                              : "Select an image to inspect its metadata here instead of on the gallery."
+                    accent: theme.accentWarm400
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 176
+                        radius: theme.radius12
+                        color: theme.alpha(theme.ink900, 0.94)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.48)
+                        clip: true
+
+                        Image {
+                            anchors.fill: parent
+                            source: catalogAssets.selectedThumbnailSource
+                            asynchronous: true
+                            cache: false
+                            fillMode: Image.PreserveAspectFit
+                            opacity: catalogAssets.selectedAssetId.length > 0 ? (catalogAssets.selectedOnline ? 1.0 : 0.42) : 0.0
+                        }
+
+                        Column {
+                            anchors.centerIn: parent
+                            visible: catalogAssets.selectedAssetId.length === 0
+                            spacing: theme.space8
+
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "No Selection"
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 18
+                                font.weight: Font.DemiBold
+                            }
+
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: "Metadata appears here when you pick a frame."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.space8
+
+                        InfoPill {
+                            Layout.fillWidth: true
+                            label: "Media"
+                            value: catalogAssets.selectedAssetId.length > 0
+                                   ? (catalogAssets.selectedMediaType === "timeline" ? "Timeline" : catalogAssets.selectedMediaType)
+                                   : "None"
+                            accent: theme.accentCool400
+                        }
+
+                        InfoPill {
+                            Layout.fillWidth: true
+                            label: "Source"
+                            value: catalogAssets.selectedAssetId.length > 0 ? root.availabilityLabel(catalogAssets.selectedOnline) : "Waiting"
+                            accent: catalogAssets.selectedOnline ? theme.success : theme.warning
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "No camera metadata for the current selection."
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Capture date unavailable"
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: catalogAssets.selectedLensModel.length > 0
+                        text: catalogAssets.selectedLensModel
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: catalogAssets.selectedProjectSummary.length > 0
+                        text: "Projects  •  " + catalogAssets.selectedProjectSummary
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: catalogAssets.selectedImportedAt.length > 0
+                        text: "Imported  •  " + catalogAssets.selectedImportedAt
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : "No file path recorded."
+                        color: theme.textFaint
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        wrapMode: Text.WrapAnywhere
+                    }
                 }
 
-                Rectangle {
+                BrandPanel {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: cullingColumn.implicitHeight + 20
-                    Layout.minimumHeight: Layout.preferredHeight
-                    radius: theme.radius8
-                    color: theme.alpha(theme.ink900, 0.88)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.34)
+                    Layout.preferredHeight: 320
+                    title: "Review"
+                    subtitle: catalogAssets.selectedAssetId.length > 0
+                              ? ((catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount)
+                              : "Arrow keys move, 1-5 rate, P picks, X rejects, U clears."
+                    accent: theme.accentCool400
 
-                    ColumnLayout {
-                        id: cullingColumn
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 10
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.space8
 
-                        RowLayout {
+                        InfoPill {
                             Layout.fillWidth: true
-                            spacing: 8
+                            label: "Rating"
+                            value: catalogAssets.selectedAssetId.length > 0 ? root.ratingLabel(catalogAssets.selectedRating) : "None"
+                            accent: theme.warning
+                        }
 
-                            Label {
-                                text: "Culling"
-                                color: "#f2f4f6"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                font.capitalization: Font.AllUppercase
-                            }
+                        InfoPill {
+                            Layout.fillWidth: true
+                            label: "Review"
+                            value: catalogAssets.selectedAssetId.length > 0 ? root.cullStatusLabel(catalogAssets.selectedCullStatus) : "Waiting"
+                            accent: catalogAssets.selectedRejected ? theme.error : (catalogAssets.selectedPicked ? theme.success : theme.accentCool400)
+                        }
+                    }
 
-                            Item {
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.space8
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Pick"
+                            compact: true
+                            accent: theme.success
+                            active: catalogAssets.selectedPicked
+                            enabled: catalogAssets.selectedIndex >= 0
+                            onClicked: root.applyPickReview(false)
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Reject"
+                            compact: true
+                            accent: theme.error
+                            active: catalogAssets.selectedRejected
+                            enabled: catalogAssets.selectedIndex >= 0
+                            onClicked: root.applyRejectReview(false)
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Clear"
+                            compact: true
+                            enabled: catalogAssets.selectedIndex >= 0
+                            onClicked: catalogAssets.clearSelectedCullState()
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: theme.space6
+
+                        Repeater {
+                            model: 5
+
+                            delegate: ActionButton {
+                                required property int index
+
                                 Layout.fillWidth: true
+                                compact: true
+                                text: String(index + 1)
+                                accent: theme.warning
+                                active: catalogAssets.selectedRating >= index + 1
+                                enabled: catalogAssets.selectedIndex >= 0
+                                tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
+                                onClicked: root.applyRatingReview(index + 1, false)
                             }
+                        }
+                    }
+
+                    ActionButton {
+                        Layout.fillWidth: true
+                        compact: true
+                        text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
+                        accent: theme.accentCool400
+                        active: appShell.cullingAutoAdvance
+                        onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: catalogAssets.selectedAssetId.length > 0
+                        radius: theme.radius12
+                        color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.10) : theme.alpha(theme.warning, 0.14)
+                        border.width: 1
+                        border.color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.24) : theme.alpha(theme.warning, 0.26)
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: theme.space10
+                            spacing: theme.space8
 
                             Label {
-                                text: catalogAssets.selectedIndex >= 0
-                                      ? (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
-                                      : "No selection"
-                                color: theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
+                                Layout.fillWidth: true
+                                text: catalogAssets.selectedOnline
+                                      ? "Source is available on disk."
+                                      : "Source is offline. Recheck mounted drives or relink it to a matching folder."
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                                wrapMode: Text.WordWrap
                             }
-                        }
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: catalogAssets.selectedAssetId.length > 0
-                                  ? catalogAssets.selectedCameraLabel
-                                  : "Select an asset to rate, pick, or reject it."
-                            color: "#f2f4f6"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 12
-                            font.weight: Font.Medium
-                            elide: Text.ElideRight
-                        }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space8
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: catalogAssets.selectedAssetId.length > 0
-                                  ? root.cullSummary()
-                                  : "Keys: arrows move, 1-5 rate, 0 clears rating, P picks, X rejects, U clears."
-                            color: theme.textMuted
-                            font.family: "Avenir Next"
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: catalogAssets.selectedBurstSize > 1
-                            text: "Burst group  " + catalogAssets.selectedBurstPosition + " / " + catalogAssets.selectedBurstSize
-                            color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Visible  " + catalogAssets.assetCount
-                                  + "  •  Picks " + catalogAssets.visiblePickedCount
-                                  + "  •  Rejects " + catalogAssets.visibleRejectedCount
-                                  + "  •  Rated " + catalogAssets.visibleRatedCount
-                                  + "  •  Offline " + catalogAssets.visibleOfflineCount
-                            color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            wrapMode: Text.WordWrap
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            visible: catalogAssets.selectedAssetId.length > 0
-                            radius: theme.radius8
-                            color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.12) : theme.alpha(theme.warning, 0.14)
-                            border.width: 1
-                            border.color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.28) : theme.alpha(theme.warning, 0.3)
-                            implicitHeight: availabilityColumn.implicitHeight + 20
-
-                            ColumnLayout {
-                                id: availabilityColumn
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                spacing: 8
-
-                                RowLayout {
+                                ActionButton {
                                     Layout.fillWidth: true
-                                    spacing: 8
-
-                                    Label {
-                                        text: "Source"
-                                        color: "#f2f4f6"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        font.capitalization: Font.AllUppercase
-                                    }
-
-                                    Item {
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Label {
-                                        text: root.availabilityLabel(catalogAssets.selectedOnline)
-                                        color: catalogAssets.selectedOnline ? theme.success : theme.warning
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 10
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : "No file path recorded."
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WrapAnywhere
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: catalogAssets.selectedOnline
-                                          ? "Source is available on disk."
-                                          : "Source is offline. Recheck mounted drives or relink it to a matching folder."
-                                    color: theme.textMuted
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-
-                                    ActionButton {
-                                        Layout.fillWidth: true
-                                        compact: true
-                                        text: "Recheck"
-                                        onClicked: catalogAssets.refreshOnlineState()
-                                    }
-
-                                    ActionButton {
-                                        Layout.fillWidth: true
-                                        compact: true
-                                        text: "Relink Selected"
-                                        enabled: !catalogAssets.selectedOnline
-                                        onClicked: root.chooseRelinkFolder(true)
-                                    }
+                                    compact: true
+                                    text: "Recheck"
+                                    onClicked: catalogAssets.refreshOnlineState()
                                 }
 
                                 ActionButton {
                                     Layout.fillWidth: true
                                     compact: true
-                                    text: catalogAssets.visibleOfflineCount > 0
-                                          ? "Relink " + catalogAssets.visibleOfflineCount + " Offline Assets"
-                                          : "Relink Offline Assets"
-                                    enabled: catalogAssets.visibleOfflineCount > 0
-                                    onClicked: root.chooseRelinkFolder(false)
+                                    text: "Relink Selected"
+                                    enabled: !catalogAssets.selectedOnline
+                                    onClicked: root.chooseRelinkFolder(true)
                                 }
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Pick"
-                                compact: true
-                                accent: theme.success
-                                active: catalogAssets.selectedPicked
-                                enabled: catalogAssets.selectedIndex >= 0
-                                onClicked: root.applyPickReview(false)
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Reject"
-                                compact: true
-                                accent: theme.error
-                                active: catalogAssets.selectedRejected
-                                enabled: catalogAssets.selectedIndex >= 0
-                                onClicked: root.applyRejectReview(false)
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Clear"
-                                compact: true
-                                enabled: catalogAssets.selectedIndex >= 0
-                                onClicked: catalogAssets.clearSelectedCullState()
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            Repeater {
-                                model: 5
-
-                                delegate: ActionButton {
-                                    required property int index
-
-                                    Layout.fillWidth: true
-                                    compact: true
-                                    text: String(index + 1)
-                                    accent: theme.warning
-                                    active: catalogAssets.selectedRating >= index + 1
-                                    enabled: catalogAssets.selectedIndex >= 0
-                                    tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
-                                    onClicked: root.applyRatingReview(index + 1, false)
-                                }
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            compact: true
-                            text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
-                            accent: theme.accentCool400
-                            active: appShell.cullingAutoAdvance
-                            onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            compact: true
-                            text: root.focusCheckEnabled ? "Focus Check On" : "Focus Check Off"
-                            accent: theme.warning
-                            active: root.focusCheckEnabled
-                            onClicked: root.focusCheckEnabled = !root.focusCheckEnabled
-                        }
-                    }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: catalogAssets.projectNames.length > 0 ? "Choose a project from the list to filter the gallery." : "Create a project to start organizing the gallery."
-                    color: "#9ca6af"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 12
-                    wrapMode: Text.WordWrap
-                }
-
-                Rectangle {
-                    id: newProjectCard
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: newProjectColumn.implicitHeight + 20
-                    Layout.minimumHeight: Layout.preferredHeight
-                    radius: theme.radius8
-                    color: theme.alpha(theme.ink900, 0.88)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                    ColumnLayout {
-                        id: newProjectColumn
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 10
-
-                        Label {
-                            text: "New Project"
-                            color: "#f2f4f6"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 12
-                            font.weight: Font.DemiBold
-                            font.capitalization: Font.AllUppercase
-                        }
-
-                        Label {
-                            text: "Create a project, then click it in the list to make it the active gallery view."
-                            color: "#9ca6af"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                            Layout.fillWidth: true
-                        }
-
-                        ToneTextField {
-                            id: newProjectField
-                            Layout.fillWidth: true
-                            placeholderText: "Project name"
-                            onAccepted: {
-                                root.createAndFocusProject(text);
-                                text = "";
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Create Project"
-                            tone: "primary"
-                            enabled: newProjectField.text.trim().length > 0
-                            onClicked: {
-                                root.createAndFocusProject(newProjectField.text);
-                                newProjectField.text = "";
                             }
                         }
                     }
                 }
 
-                Rectangle {
+                BrandPanel {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    radius: theme.radius8
-                    color: theme.alpha(theme.ink900, 0.88)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.34)
+                    title: "Projects"
+                    subtitle: catalogAssets.projectNames.length > 0
+                              ? "Choose a project to focus the gallery or create a new one."
+                              : "Create a project to start organizing the gallery."
+                    accent: theme.accentWarm400
 
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 10
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
-
-                            Label {
-                                text: "Browse Projects"
-                                color: "#f2f4f6"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
-                                font.capitalization: Font.AllUppercase
-                            }
-
-                            Item {
-                                Layout.fillWidth: true
-                            }
-
-                            Label {
-                                text: catalogAssets.projectNames.length + (catalogAssets.projectNames.length === 1 ? " project" : " projects")
-                                color: theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
+                    ToneTextField {
+                        id: newProjectField
+                        Layout.fillWidth: true
+                        placeholderText: "Project name"
+                        onAccepted: {
+                            root.createAndFocusProject(text);
+                            text = "";
                         }
+                    }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 1
-                            color: theme.alpha(theme.lineSoft, 0.48)
+                    ActionButton {
+                        Layout.fillWidth: true
+                        text: "Create Project"
+                        tone: "primary"
+                        enabled: newProjectField.text.trim().length > 0
+                        onClicked: {
+                            root.createAndFocusProject(newProjectField.text);
+                            newProjectField.text = "";
                         }
+                    }
 
-                        ListView {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            clip: true
-                            spacing: 6
-                            boundsBehavior: Flickable.StopAtBounds
-                            model: root.projectFilterValues
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: theme.space6
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: root.projectFilterValues
 
-                            delegate: Rectangle {
-                                required property int index
-                                required property string modelData
+                        delegate: Rectangle {
+                            required property int index
+                            required property string modelData
 
-                                width: ListView.view.width
-                                height: 48
-                                radius: theme.radius8
-                                color: catalogAssets.projectFilter === modelData ? theme.alpha(theme.accentWarm500, 0.22) : (projectMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.9) : theme.alpha(theme.ink900, 0.72))
-                                border.width: 1
-                                border.color: catalogAssets.projectFilter === modelData ? theme.alpha(theme.accentWarm400, 0.8) : theme.alpha(theme.lineSoft, 0.46)
-
-                                Column {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.margins: 12
-                                    spacing: 2
-
-                                    Label {
-                                        width: parent.width
-                                        text: root.projectFilterLabels[index]
-                                        color: catalogAssets.projectFilter === modelData ? "#f4ede2" : "#f2f4f6"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 12
-                                        font.weight: Font.Medium
-                                        elide: Text.ElideRight
-                                    }
-
-                                    RowLayout {
-                                        width: parent.width
-                                        spacing: 8
-
-                                        Label {
-                                            readonly property int assetCount: {
-                                                catalogAssets.projectStatsRevision;
-                                                return catalogAssets.assetCountForProject(modelData);
-                                            }
-                                            text: assetCount + (assetCount === 1 ? " asset" : " assets")
-                                            color: theme.textFaint
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 10
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData === "all" ? "Show the full gallery." : modelData === "unassigned" ? "Only assets without a project." : "Filter the gallery to this project."
-                                            color: theme.textFaint
-                                            font.family: "Avenir Next"
-                                            font.pixelSize: 10
-                                            elide: Text.ElideRight
-                                        }
-                                    }
-                                }
-
-                                MouseArea {
-                                    id: projectMouseArea
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    onClicked: root.applyProjectSelection(modelData)
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            visible: catalogAssets.selectedAssetId.length > 0
-                            radius: theme.radius8
-                            color: theme.alpha(theme.accentCool400, 0.08)
+                            width: ListView.view.width
+                            height: 50
+                            radius: theme.radius10
+                            color: catalogAssets.projectFilter === modelData
+                                   ? theme.alpha(theme.accentWarm500, 0.18)
+                                   : (projectMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.9) : theme.alpha(theme.ink900, 0.76))
                             border.width: 1
-                            border.color: theme.alpha(theme.accentCool400, 0.2)
-                            implicitHeight: intelligenceColumn.implicitHeight + 20
+                            border.color: catalogAssets.projectFilter === modelData
+                                          ? theme.alpha(theme.accentWarm400, 0.74)
+                                          : theme.alpha(theme.lineSoft, 0.42)
 
-                            ColumnLayout {
-                                id: intelligenceColumn
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                spacing: 8
+                            Column {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.margins: theme.space12
+                                spacing: 2
+
+                                Label {
+                                    width: parent.width
+                                    text: root.projectFilterLabels[index]
+                                    color: catalogAssets.projectFilter === modelData ? theme.textStrong : theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                    elide: Text.ElideRight
+                                }
 
                                 RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
+                                    width: parent.width
+                                    spacing: theme.space8
 
                                     Label {
-                                        text: "Intelligence"
-                                        color: "#f2f4f6"
-                                        font.family: "Avenir Next"
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        font.capitalization: Font.AllUppercase
-                                    }
-
-                                    Item {
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Label {
-                                        text: catalogAssets.selectedBestShotSuggested ? "Suggested Select" : "Cluster Context"
-                                        color: theme.accentCool300
+                                        readonly property int assetCount: {
+                                            catalogAssets.projectStatsRevision;
+                                            return catalogAssets.assetCountForProject(modelData);
+                                        }
+                                        text: assetCount + (assetCount === 1 ? " asset" : " assets")
+                                        color: theme.textFaint
                                         font.family: theme.fontMono
                                         font.pixelSize: 10
                                     }
-                                }
 
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: catalogAssets.selectedBurstSize > 1
-                                          ? "Burst group " + catalogAssets.selectedBurstPosition + " / " + catalogAssets.selectedBurstSize + " with a suggested keeper."
-                                          : catalogAssets.selectedDuplicateGroupSize > 1
-                                            ? "Duplicate cluster of " + catalogAssets.selectedDuplicateGroupSize + " related frames."
-                                            : "No duplicate or burst cluster detected for this frame."
-                                    color: theme.textMuted
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: modelData === "all"
+                                              ? "Show the full gallery."
+                                              : modelData === "unassigned"
+                                                ? "Only assets without a project."
+                                                : "Filter the gallery to this project."
+                                        color: theme.textFaint
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
                                 }
+                            }
 
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: catalogAssets.selectedSyncGroupSize > 1
-                                          ? "Suggested sync group: " + catalogAssets.selectedSyncGroupSize + " frames with the same camera, lens, and day."
-                                          : "No sync cohort suggestion yet for this frame."
-                                    color: theme.textMuted
-                                    font.family: "Avenir Next"
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
+                            MouseArea {
+                                id: projectMouseArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: root.applyProjectSelection(modelData)
                             }
                         }
                     }

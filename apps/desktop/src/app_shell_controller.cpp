@@ -15,6 +15,10 @@ namespace photo_editor::desktop {
 
 namespace {
 
+#ifndef PHOTO_EDITOR_APP_VERSION
+#define PHOTO_EDITOR_APP_VERSION "0.0.0"
+#endif
+
 constexpr int kDefaultStartupWorkspace = 0;
 constexpr bool kDefaultReopenLastWorkspace = false;
 constexpr bool kDefaultTimelineSnapping = true;
@@ -93,6 +97,7 @@ QString AppShellController::appDataLocation() const { return AppBootstrap::appDa
 QString AppShellController::cacheLocation() const { return AppBootstrap::cacheLocation(); }
 QString AppShellController::logLocation() const { return AppBootstrap::logLocation(); }
 QString AppShellController::backupLocation() const { return AppBootstrap::backupLocation(); }
+QString AppShellController::appVersion() const { return QStringLiteral(PHOTO_EDITOR_APP_VERSION); }
 
 void AppShellController::setStartupWorkspace(int workspace_index) {
   const auto sanitized = sanitizedWorkspaceIndex(workspace_index);

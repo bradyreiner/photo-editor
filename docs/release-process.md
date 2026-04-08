@@ -42,21 +42,22 @@
 ## Recommended release flow
 
 1. Merge into `main` only through reviewed pull requests.
-2. Tag a release as `vX.Y.Z`.
-3. Let GitHub Actions build artifacts for macOS and Windows.
-4. Bundle the Rust helper binaries from `rust/target/release`.
-5. Bundle a PostgreSQL runtime root where available.
+2. Update the root `VERSION` file to `X.Y.Z`.
+3. Tag a release as `vX.Y.Z`.
+4. Let GitHub Actions build artifacts for macOS and Windows.
+5. Bundle the Rust helper binaries from `rust/target/release`.
+6. Bundle a PostgreSQL runtime root where available.
    macOS currently uses `brew --prefix postgresql@16` in CI.
    Windows uses either `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE` or `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`.
-6. When Sparkle is configured, bundle `Sparkle.framework` into the macOS app and generate an appcast from the packaged artifacts.
-7. Build an `.msix` from the staged Windows install root and generate an `.appinstaller` file when the update URIs are configured.
-8. Sign and notarize macOS artifacts.
-9. Sign Windows artifacts and publish the installer/update metadata.
-10. Publish release notes plus migration compatibility notes.
+7. When Sparkle is configured, bundle `Sparkle.framework` into the macOS app and generate an appcast from the packaged artifacts.
+8. Build an `.msix` from the staged Windows install root and generate an `.appinstaller` file when the update URIs are configured.
+9. Sign and notarize macOS artifacts.
+10. Sign Windows artifacts and publish the installer/update metadata.
+11. Publish release notes plus migration compatibility notes.
 
 ## Version contracts
 
-- App version: CMake project version and Git tag
+- App version: root `VERSION` file, CMake project version, bundle version, and Git tag
 - Catalog schema version: `sqlx` migration history
 - Edit recipe version: application-controlled JSON contract
 - Release channel: alpha, beta, stable

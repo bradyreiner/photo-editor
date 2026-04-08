@@ -1,17 +1,22 @@
 #pragma once
 
+#include <QObject>
+
 namespace photo_editor::desktop {
 
-class MacosUpdater final {
+class MacosUpdater final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool available READ available CONSTANT)
+
  public:
-  MacosUpdater();
+  explicit MacosUpdater(QObject* parent = nullptr);
   ~MacosUpdater();
 
   MacosUpdater(const MacosUpdater&) = delete;
   MacosUpdater& operator=(const MacosUpdater&) = delete;
 
   [[nodiscard]] bool available() const;
-  void checkForUpdates();
+  Q_INVOKABLE void checkForUpdates();
 
  private:
   void* controller_ = nullptr;

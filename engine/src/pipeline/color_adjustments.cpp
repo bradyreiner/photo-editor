@@ -40,7 +40,15 @@ struct CurveEvaluationData final {
 
 struct LocalAdjustmentSettings final {
   double exposure = 0.0;
+  double contrast = 0.0;
+  double highlights = 0.0;
+  double shadows = 0.0;
+  double whites = 0.0;
+  double blacks = 0.0;
   double temperature = 0.0;
+  double tint = 0.0;
+  double vibrance = 0.0;
+  double saturation = 0.0;
   double hue_shift = 0.0;
   double saturation_shift = 0.0;
   double colorize_hue = 0.0;
@@ -687,7 +695,15 @@ void apply_local_adjustment_mask(
     ColorPixel* pixel,
     double weight,
     double exposure,
+    double contrast,
+    double highlights,
+    double shadows,
+    double whites,
+    double blacks,
     double temperature,
+    double tint,
+    double vibrance,
+    double saturation,
     double hue_shift,
     double saturation_shift,
     double colorize_hue,
@@ -696,7 +712,7 @@ void apply_local_adjustment_mask(
     return;
   }
 
-  const auto local_white_balance = white_balance_multipliers(temperature, 0.0);
+  const auto local_white_balance = white_balance_multipliers(temperature * weight, tint * weight);
   const auto local_exposure_gain = std::pow(2.0, exposure * weight);
   pixel->red = static_cast<float>(static_cast<double>(pixel->red) * (1.0 + (local_white_balance[0] - 1.0) * weight));
   pixel->green = static_cast<float>(static_cast<double>(pixel->green) * (1.0 + (local_white_balance[1] - 1.0) * weight));
@@ -705,7 +721,30 @@ void apply_local_adjustment_mask(
   pixel->green = static_cast<float>(static_cast<double>(pixel->green) * local_exposure_gain);
   pixel->blue = static_cast<float>(static_cast<double>(pixel->blue) * local_exposure_gain);
 
-  if (std::abs(hue_shift) <= 1e-6 &&
+  const auto weighted_contrast = contrast * weight;
+  const auto weighted_highlights = highlights * weight;
+  const auto weighted_shadows = shadows * weight;
+  const auto weighted_whites = whites * weight;
+  const auto weighted_blacks = blacks * weight;
+  if (std::abs(weighted_contrast) > 1e-6 ||
+      std::abs(weighted_highlights) > 1e-6 ||
+      std::abs(weighted_shadows) > 1e-6 ||
+      std::abs(weighted_whites) > 1e-6 ||
+      std::abs(weighted_blacks) > 1e-6) {
+    ColorAdjustmentState local_tone_state;
+    local_tone_state.contrast = weighted_contrast;
+    local_tone_state.highlights = weighted_highlights;
+    local_tone_state.shadows = weighted_shadows;
+    local_tone_state.whites = weighted_whites;
+    local_tone_state.blacks = weighted_blacks;
+    *pixel = scale_pixel_to_luminance(*pixel, apply_global_tone(luminance_for_pixel(*pixel), local_tone_state));
+  }
+
+  const auto weighted_vibrance = vibrance * weight;
+  const auto weighted_saturation = saturation * weight;
+  if (std::abs(weighted_vibrance) <= 1e-6 &&
+      std::abs(weighted_saturation) <= 1e-6 &&
+      std::abs(hue_shift) <= 1e-6 &&
       std::abs(saturation_shift) <= 1e-6 &&
       std::abs(colorize_strength) <= 1e-6) {
     return;
@@ -718,6 +757,19 @@ void apply_local_adjustment_mask(
 
   if (chroma <= 1e-6) {
     hue = wrap_unit(colorize_hue) * 2.0 * kPi;
+  } else {
+    const auto normalized_hue = wrap_unit(hue / (2.0 * kPi));
+    const auto low_chroma_weight = 1.0 - smoothstep(0.03, 0.18, chroma);
+    const auto mid_lightness_weight = 1.0 - smoothstep(0.16, 0.50, std::abs(lightness - 0.55));
+    const auto skin_protection =
+        1.0 - 0.30 * circular_weight(normalized_hue, 0.08, 0.15) * smoothstep(0.02, 0.12, chroma);
+    chroma *= std::max(
+        0.0,
+        1.0 + (clamp_signed_percent(weighted_vibrance) / 100.0) * low_chroma_weight *
+                  mid_lightness_weight * skin_protection * 1.30);
+    chroma *= std::max(
+        0.0,
+        1.0 + (clamp_signed_percent(weighted_saturation) / 100.0));
   }
 
   hue = wrap_radians(hue + (clamp_signed_percent(hue_shift) / 100.0) * kPi * weight);
@@ -831,6 +883,36 @@ void apply_local_adjustment_mask(
     double normalized_x,
     double normalized_y,
     const LocalMask& mask) {
+  const auto expected_mask_size =
+      static_cast<std::size_t>(mask.segmentation_width) * static_cast<std::size_t>(mask.segmentation_height);
+  if (!mask.segmentation_mask.empty() && mask.segmentation_width > 0 &&
+      mask.segmentation_height > 0 &&
+      mask.segmentation_mask.size() == expected_mask_size) {
+    const auto max_x = std::max(mask.segmentation_width - 1, 0);
+    const auto max_y = std::max(mask.segmentation_height - 1, 0);
+    const auto fx = clamp_unit(normalized_x) * static_cast<double>(max_x);
+    const auto fy = clamp_unit(normalized_y) * static_cast<double>(max_y);
+    const auto ix0 = std::clamp(static_cast<int>(fx), 0, max_x);
+    const auto iy0 = std::clamp(static_cast<int>(fy), 0, max_y);
+    const auto ix1 = std::min(ix0 + 1, max_x);
+    const auto iy1 = std::min(iy0 + 1, max_y);
+    const auto dx = mask.segmentation_width > 1 ? fx - static_cast<double>(ix0) : 0.0;
+    const auto dy = mask.segmentation_height > 1 ? fy - static_cast<double>(iy0) : 0.0;
+    const auto index_for = [&](int x, int y) {
+      return static_cast<std::size_t>(y * mask.segmentation_width + x);
+    };
+    const auto sample = [&](int x, int y) {
+      return static_cast<double>(mask.segmentation_mask[index_for(x, y)]) / 255.0;
+    };
+    const auto v00 = sample(ix0, iy0);
+    const auto v10 = sample(ix1, iy0);
+    const auto v01 = sample(ix0, iy1);
+    const auto v11 = sample(ix1, iy1);
+    const auto top = v00 * (1.0 - dx) + v10 * dx;
+    const auto bottom = v01 * (1.0 - dx) + v11 * dx;
+    return clamp_unit(top * (1.0 - dy) + bottom * dy);
+  }
+
   auto weight = 0.0;
   const auto softness = std::clamp(mask.feather, 0.05, 1.0);
   const auto inner_scale = std::max(0.0, 1.0 - softness);
@@ -1003,7 +1085,10 @@ void hue_saturation_value_for_pixel(
     double normalized_x,
     double normalized_y,
     const LocalMask& mask) {
-  if (mask.segmentation_mask.empty() || mask.segmentation_width <= 0 || mask.segmentation_height <= 0) {
+  const auto expected_mask_size =
+      static_cast<std::size_t>(mask.segmentation_width) * static_cast<std::size_t>(mask.segmentation_height);
+  if (mask.segmentation_mask.empty() || mask.segmentation_width <= 0 || mask.segmentation_height <= 0 ||
+      mask.segmentation_mask.size() != expected_mask_size) {
     return 0.0;
   }
 
@@ -1081,20 +1166,145 @@ void hue_saturation_value_for_pixel(
       mask);
 }
 
+void accumulate_composite_weight(
+    double raw_weight,
+    std::string_view operation,
+    double* composite_weight,
+    bool* initialized);
+
+[[nodiscard]] bool local_mask_set_has_adjustments(const LocalMaskSet& mask_set) {
+  return std::abs(mask_set.exposure) > 1e-6 ||
+         std::abs(mask_set.contrast) > 1e-6 ||
+         std::abs(mask_set.highlights) > 1e-6 ||
+         std::abs(mask_set.shadows) > 1e-6 ||
+         std::abs(mask_set.whites) > 1e-6 ||
+         std::abs(mask_set.blacks) > 1e-6 ||
+         std::abs(mask_set.temperature) > 1e-6 ||
+         std::abs(mask_set.tint) > 1e-6 ||
+         std::abs(mask_set.vibrance) > 1e-6 ||
+         std::abs(mask_set.saturation) > 1e-6 ||
+         std::abs(mask_set.hue_shift) > 1e-6 ||
+         std::abs(mask_set.saturation_shift) > 1e-6 ||
+         std::abs(mask_set.colorize_hue) > 1e-6 ||
+         std::abs(mask_set.colorize_strength) > 1e-6;
+}
+
+[[nodiscard]] double local_mask_set_weight(
+    double normalized_x,
+    double normalized_y,
+    const ColorPixel& pixel,
+    const LocalMaskSet& mask_set) {
+  if (!mask_set.enabled) {
+    return 0.0;
+  }
+
+  auto composite_weight = 0.0;
+  auto initialized = false;
+  for (const auto& source : mask_set.sources) {
+    if (!source.enabled) {
+      continue;
+    }
+
+    const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, source);
+    accumulate_composite_weight(raw_weight, source.operation, &composite_weight, &initialized);
+  }
+
+  return initialized ? clamp_unit(composite_weight) : 0.0;
+}
+
+// A selection-only mask has no local adjustments and no retouch mode.
+// It acts purely as a selection modifier (add/subtract/intersect) for other
+// masks in the stack, so it should not prevent the composite rendering path.
+[[nodiscard]] bool is_selection_only_mask(const LocalMask& mask) {
+  return mask.retouch_mode.empty() &&
+         std::abs(mask.exposure) <= 1e-6 &&
+         std::abs(mask.contrast) <= 1e-6 &&
+         std::abs(mask.highlights) <= 1e-6 &&
+         std::abs(mask.shadows) <= 1e-6 &&
+         std::abs(mask.whites) <= 1e-6 &&
+         std::abs(mask.blacks) <= 1e-6 &&
+         std::abs(mask.temperature) <= 1e-6 &&
+         std::abs(mask.tint) <= 1e-6 &&
+         std::abs(mask.vibrance) <= 1e-6 &&
+         std::abs(mask.saturation) <= 1e-6 &&
+         std::abs(mask.hue_shift) <= 1e-6 &&
+         std::abs(mask.saturation_shift) <= 1e-6 &&
+         std::abs(mask.colorize_hue) <= 1e-6 &&
+         std::abs(mask.colorize_strength) <= 1e-6 &&
+         std::abs(mask.remove_strength) <= 1e-6;
+}
+
+void accumulate_composite_weight(
+    double raw_weight,
+    std::string_view operation,
+    double* composite_weight,
+    bool* initialized) {
+  if (composite_weight == nullptr || initialized == nullptr) {
+    return;
+  }
+
+  if (operation == "subtract") {
+    if (!*initialized) {
+      return;
+    }
+    *composite_weight = std::max(0.0, *composite_weight - raw_weight);
+    return;
+  }
+
+  if (operation == "intersect") {
+    if (!*initialized) {
+      return;
+    }
+    *composite_weight *= raw_weight;
+    return;
+  }
+
+  if (!*initialized) {
+    *composite_weight = raw_weight;
+    *initialized = true;
+    return;
+  }
+
+  *composite_weight = 1.0 - (1.0 - *composite_weight) * (1.0 - raw_weight);
+}
+
 [[nodiscard]] bool local_masks_share_adjustments(
     const std::vector<LocalMask>& masks,
     LocalAdjustmentSettings* shared_adjustments) {
   auto found_adjustment = false;
   LocalAdjustmentSettings adjustments;
+  auto selection_initialized = false;
 
   for (const auto& mask : masks) {
     if (!mask.enabled) {
       continue;
     }
 
+    const auto can_contribute_adjustments =
+        selection_initialized || (mask.operation != "subtract" && mask.operation != "intersect");
+    selection_initialized = selection_initialized || mask.operation == "add";
+    if (!can_contribute_adjustments) {
+      continue;
+    }
+
+    // Skip selection-only masks — they refine the composite selection area
+    // without contributing their own adjustments, so they should not cause
+    // the renderer to fall back to the independent per-mask path.
+    if (is_selection_only_mask(mask)) {
+      continue;
+    }
+
     if (!found_adjustment) {
       adjustments.exposure = mask.exposure;
+      adjustments.contrast = mask.contrast;
+      adjustments.highlights = mask.highlights;
+      adjustments.shadows = mask.shadows;
+      adjustments.whites = mask.whites;
+      adjustments.blacks = mask.blacks;
       adjustments.temperature = mask.temperature;
+      adjustments.tint = mask.tint;
+      adjustments.vibrance = mask.vibrance;
+      adjustments.saturation = mask.saturation;
       adjustments.hue_shift = mask.hue_shift;
       adjustments.saturation_shift = mask.saturation_shift;
       adjustments.colorize_hue = mask.colorize_hue;
@@ -1105,7 +1315,15 @@ void hue_saturation_value_for_pixel(
     }
 
     if (std::abs(mask.exposure - adjustments.exposure) > 1e-6 ||
+        std::abs(mask.contrast - adjustments.contrast) > 1e-6 ||
+        std::abs(mask.highlights - adjustments.highlights) > 1e-6 ||
+        std::abs(mask.shadows - adjustments.shadows) > 1e-6 ||
+        std::abs(mask.whites - adjustments.whites) > 1e-6 ||
+        std::abs(mask.blacks - adjustments.blacks) > 1e-6 ||
         std::abs(mask.temperature - adjustments.temperature) > 1e-6 ||
+        std::abs(mask.tint - adjustments.tint) > 1e-6 ||
+        std::abs(mask.vibrance - adjustments.vibrance) > 1e-6 ||
+        std::abs(mask.saturation - adjustments.saturation) > 1e-6 ||
         std::abs(mask.hue_shift - adjustments.hue_shift) > 1e-6 ||
         std::abs(mask.saturation_shift - adjustments.saturation_shift) > 1e-6 ||
         std::abs(mask.colorize_hue - adjustments.colorize_hue) > 1e-6 ||
@@ -1140,13 +1358,34 @@ void hue_saturation_value_for_pixel(
 [[nodiscard]] bool primary_local_mask_adjustments(
     const std::vector<LocalMask>& masks,
     LocalAdjustmentSettings* adjustments) {
+  auto selection_initialized = false;
   for (const auto& mask : masks) {
     if (!mask.enabled) {
       continue;
     }
+    const auto can_contribute_adjustments =
+        selection_initialized || (mask.operation != "subtract" && mask.operation != "intersect");
+    selection_initialized = selection_initialized || mask.operation == "add";
+    if (!can_contribute_adjustments) {
+      continue;
+    }
+    // Skip selection-only masks so that the primary adjustments come from the
+    // first mask that actually has values (e.g. a subject or radial mask),
+    // not from a zero-adjustment refinement brush.
+    if (is_selection_only_mask(mask)) {
+      continue;
+    }
     if (adjustments != nullptr) {
       adjustments->exposure = mask.exposure;
+      adjustments->contrast = mask.contrast;
+      adjustments->highlights = mask.highlights;
+      adjustments->shadows = mask.shadows;
+      adjustments->whites = mask.whites;
+      adjustments->blacks = mask.blacks;
       adjustments->temperature = mask.temperature;
+      adjustments->tint = mask.tint;
+      adjustments->vibrance = mask.vibrance;
+      adjustments->saturation = mask.saturation;
       adjustments->hue_shift = mask.hue_shift;
       adjustments->saturation_shift = mask.saturation_shift;
       adjustments->colorize_hue = mask.colorize_hue;
@@ -1226,22 +1465,246 @@ void hue_saturation_value_for_pixel(
     }
 
     const auto weighted = local_mask_weight(normalized_x, normalized_y, pixel, mask) * strength;
-    if (!initialized) {
-      composite_weight = weighted;
-      initialized = true;
-      continue;
-    }
-
-    if (mask.operation == "subtract") {
-      composite_weight = std::max(0.0, composite_weight - weighted);
-    } else if (mask.operation == "intersect") {
-      composite_weight *= weighted;
-    } else {
-      composite_weight = 1.0 - (1.0 - composite_weight) * (1.0 - weighted);
-    }
+    accumulate_composite_weight(weighted, mask.operation, &composite_weight, &initialized);
   }
 
   return initialized ? clamp_unit(composite_weight) : 0.0;
+}
+
+struct RemovalSample final {
+  ColorPixel pixel;
+  double confidence = 0.0;
+  int distance = 0;
+  bool valid = false;
+};
+
+struct RemovalCandidate final {
+  ColorPixel pixel;
+  double confidence = 0.0;
+  double score = 0.0;
+  bool valid = false;
+};
+
+[[nodiscard]] double removal_color_distance(const ColorPixel& left, const ColorPixel& right) {
+  const auto dr = static_cast<double>(left.red) - static_cast<double>(right.red);
+  const auto dg = static_cast<double>(left.green) - static_cast<double>(right.green);
+  const auto db = static_cast<double>(left.blue) - static_cast<double>(right.blue);
+  return std::sqrt(dr * dr + dg * dg + db * db);
+}
+
+[[nodiscard]] RemovalSample nearest_known_removal_sample(
+    const std::vector<ColorPixel>& pixels,
+    const std::vector<float>& confidence,
+    int width,
+    int height,
+    int start_x,
+    int start_y,
+    int step_x,
+    int step_y,
+    int max_distance) {
+  RemovalSample sample;
+  if (width <= 0 || height <= 0 || start_x < 0 || start_y < 0 ||
+      start_x >= width || start_y >= height || max_distance <= 0) {
+    return sample;
+  }
+
+  for (int distance = 1; distance <= max_distance; ++distance) {
+    const auto x = start_x + step_x * distance;
+    const auto y = start_y + step_y * distance;
+    if (x < 0 || y < 0 || x >= width || y >= height) {
+      break;
+    }
+    const auto index = static_cast<std::size_t>(y * width + x);
+    if (confidence[index] <= 1e-4F) {
+      continue;
+    }
+    sample.pixel = pixels[index];
+    sample.confidence = static_cast<double>(confidence[index]);
+    sample.distance = distance;
+    sample.valid = true;
+    return sample;
+  }
+
+  return sample;
+}
+
+[[nodiscard]] bool has_known_neighbor(
+    const std::vector<float>& confidence,
+    int width,
+    int height,
+    int x,
+    int y) {
+  for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+    for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+      if (offset_x == 0 && offset_y == 0) {
+        continue;
+      }
+      const auto sample_x = x + offset_x;
+      const auto sample_y = y + offset_y;
+      if (sample_x < 0 || sample_y < 0 || sample_x >= width || sample_y >= height) {
+        continue;
+      }
+      if (confidence[static_cast<std::size_t>(sample_y * width + sample_x)] > 1e-4F) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+[[nodiscard]] RemovalCandidate directional_removal_candidate(
+    const std::vector<ColorPixel>& pixels,
+    const std::vector<float>& confidence,
+    int width,
+    int height,
+    int x,
+    int y,
+    int max_line_radius) {
+  RemovalCandidate best_candidate;
+  const auto sample_structure_strength =
+      [&](int sample_x, int sample_y, int step_x, int step_y) {
+        if (sample_x < 0 || sample_y < 0 || sample_x >= width || sample_y >= height) {
+          return 0.0;
+        }
+        const auto sample_index = static_cast<std::size_t>(sample_y * width + sample_x);
+        if (confidence[sample_index] <= 1e-4F) {
+          return 0.0;
+        }
+        const auto perp_x = -step_y;
+        const auto perp_y = step_x;
+        auto structure = 0.0;
+        auto count = 0.0;
+        for (const auto sign : {-1, 1}) {
+          const auto neighbor_x = sample_x + perp_x * sign;
+          const auto neighbor_y = sample_y + perp_y * sign;
+          if (neighbor_x < 0 || neighbor_y < 0 || neighbor_x >= width || neighbor_y >= height) {
+            continue;
+          }
+          const auto neighbor_index = static_cast<std::size_t>(neighbor_y * width + neighbor_x);
+          if (confidence[neighbor_index] <= 1e-4F) {
+            continue;
+          }
+          structure += removal_color_distance(pixels[sample_index], pixels[neighbor_index]);
+          count += 1.0;
+        }
+        return count > 0.0 ? structure / count : 0.0;
+      };
+  constexpr std::array<std::pair<int, int>, 4> kDirections{
+      std::pair<int, int>{1, 0},
+      std::pair<int, int>{0, 1},
+      std::pair<int, int>{1, 1},
+      std::pair<int, int>{1, -1},
+  };
+
+  for (const auto& [step_x, step_y] : kDirections) {
+    const auto forward = nearest_known_removal_sample(
+        pixels, confidence, width, height, x, y, step_x, step_y, max_line_radius);
+    const auto backward = nearest_known_removal_sample(
+        pixels, confidence, width, height, x, y, -step_x, -step_y, max_line_radius);
+    if (!forward.valid && !backward.valid) {
+      continue;
+    }
+
+    RemovalCandidate candidate;
+    if (forward.valid && backward.valid) {
+      const auto forward_weight = forward.confidence / static_cast<double>(std::max(1, forward.distance));
+      const auto backward_weight = backward.confidence / static_cast<double>(std::max(1, backward.distance));
+      const auto weight_sum = std::max(1e-6, forward_weight + backward_weight);
+      candidate.pixel = ColorPixel{
+          .red = static_cast<float>(std::max(
+              0.0,
+              (static_cast<double>(forward.pixel.red) * forward_weight +
+               static_cast<double>(backward.pixel.red) * backward_weight) /
+                  weight_sum)),
+          .green = static_cast<float>(std::max(
+              0.0,
+              (static_cast<double>(forward.pixel.green) * forward_weight +
+               static_cast<double>(backward.pixel.green) * backward_weight) /
+                  weight_sum)),
+          .blue = static_cast<float>(std::max(
+              0.0,
+              (static_cast<double>(forward.pixel.blue) * forward_weight +
+               static_cast<double>(backward.pixel.blue) * backward_weight) /
+                  weight_sum)),
+          .alpha = 1.0F,
+      };
+      const auto color_match =
+          1.0 / (1.0 + removal_color_distance(forward.pixel, backward.pixel) * 6.0);
+      const auto structure_strength =
+          sample_structure_strength(x + step_x * forward.distance, y + step_y * forward.distance, step_x, step_y) +
+          sample_structure_strength(x - step_x * backward.distance, y - step_y * backward.distance, step_x, step_y);
+      const auto distance_sum = static_cast<double>(forward.distance + backward.distance);
+      candidate.confidence = std::clamp(
+          0.45 + 0.25 * std::min(forward.confidence, backward.confidence) + 0.20 * color_match +
+              std::min(0.10, structure_strength * 0.10),
+          0.0, 1.0);
+      candidate.score =
+          (forward_weight + backward_weight) * color_match *
+          (1.0 + std::min(1.5, structure_strength * 4.0)) /
+          std::max(1.0, distance_sum * 0.5);
+    } else {
+      const auto& sample = forward.valid ? forward : backward;
+      candidate.pixel = sample.pixel;
+      candidate.confidence =
+          std::clamp(0.28 + 0.45 * sample.confidence, 0.0, 0.9);
+      candidate.score =
+          (sample.confidence / static_cast<double>(std::max(1, sample.distance))) * 0.35;
+    }
+    candidate.pixel.alpha = pixels[static_cast<std::size_t>(y * width + x)].alpha;
+    candidate.valid = true;
+    if (!best_candidate.valid || candidate.score > best_candidate.score) {
+      best_candidate = candidate;
+    }
+  }
+
+  RemovalCandidate neighborhood_candidate;
+  double weighted_red = 0.0;
+  double weighted_green = 0.0;
+  double weighted_blue = 0.0;
+  double total_weight = 0.0;
+  double confidence_sum = 0.0;
+  for (int offset_y = -2; offset_y <= 2; ++offset_y) {
+    for (int offset_x = -2; offset_x <= 2; ++offset_x) {
+      if (offset_x == 0 && offset_y == 0) {
+        continue;
+      }
+      const auto sample_x = x + offset_x;
+      const auto sample_y = y + offset_y;
+      if (sample_x < 0 || sample_y < 0 || sample_x >= width || sample_y >= height) {
+        continue;
+      }
+      const auto index = static_cast<std::size_t>(sample_y * width + sample_x);
+      const auto sample_confidence = static_cast<double>(confidence[index]);
+      if (sample_confidence <= 1e-4) {
+        continue;
+      }
+      const auto distance_sq = static_cast<double>(offset_x * offset_x + offset_y * offset_y);
+      const auto weight = sample_confidence / std::max(1.0, distance_sq);
+      weighted_red += static_cast<double>(pixels[index].red) * weight;
+      weighted_green += static_cast<double>(pixels[index].green) * weight;
+      weighted_blue += static_cast<double>(pixels[index].blue) * weight;
+      total_weight += weight;
+      confidence_sum += sample_confidence;
+    }
+  }
+  if (total_weight > 1e-6) {
+    neighborhood_candidate.pixel = ColorPixel{
+        .red = static_cast<float>(std::max(0.0, weighted_red / total_weight)),
+        .green = static_cast<float>(std::max(0.0, weighted_green / total_weight)),
+        .blue = static_cast<float>(std::max(0.0, weighted_blue / total_weight)),
+        .alpha = pixels[static_cast<std::size_t>(y * width + x)].alpha,
+    };
+    neighborhood_candidate.confidence =
+        std::clamp(0.20 + confidence_sum / (total_weight * 8.0), 0.0, 0.85);
+    neighborhood_candidate.score = total_weight * 0.06;
+    neighborhood_candidate.valid = true;
+  }
+
+  if (!best_candidate.valid ||
+      (neighborhood_candidate.valid && neighborhood_candidate.score > best_candidate.score)) {
+    return neighborhood_candidate;
+  }
+  return best_candidate;
 }
 
 void apply_local_removal(
@@ -1249,108 +1712,297 @@ void apply_local_removal(
     int width,
     int height,
     const std::vector<double>& removal_mask,
-    double detail_preservation) {
+    double detail_preservation,
+    RemovalQuality removal_quality) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() != removal_mask.size()) {
     return;
   }
 
   const auto pixel_count = pixels->size();
-  const auto original_pixels = *pixels;
   auto filled_pixels = *pixels;
   std::vector<float> confidence(pixel_count, 1.0F);
+  std::vector<uint8_t> unresolved(pixel_count, 0);
   auto has_masked_pixels = false;
   for (std::size_t index = 0; index < pixel_count; ++index) {
     confidence[index] = static_cast<float>(1.0 - clamp_unit(removal_mask[index]));
     has_masked_pixels = has_masked_pixels || removal_mask[index] > 1e-4;
+    unresolved[index] = removal_mask[index] > 1e-4 ? 1U : 0U;
   }
   if (!has_masked_pixels) {
     return;
   }
 
-  std::vector<float> detail_red;
-  std::vector<float> detail_green;
-  std::vector<float> detail_blue;
-  if (detail_preservation > 1e-6) {
-    std::vector<float> original_red(pixel_count, 0.0F);
-    std::vector<float> original_green(pixel_count, 0.0F);
-    std::vector<float> original_blue(pixel_count, 0.0F);
-    for (std::size_t index = 0; index < pixel_count; ++index) {
-      original_red[index] = static_cast<float>(original_pixels[index].red);
-      original_green[index] = static_cast<float>(original_pixels[index].green);
-      original_blue[index] = static_cast<float>(original_pixels[index].blue);
+  const auto max_line_radius =
+      std::clamp(std::min(width, height) / 10, 3, 24);
+  auto unresolved_count = 0;
+  for (const auto flag : unresolved) {
+    unresolved_count += flag != 0 ? 1 : 0;
+  }
+
+  while (unresolved_count > 0) {
+    auto next_pixels = filled_pixels;
+    auto next_confidence = confidence;
+    std::vector<std::size_t> resolved_indices;
+    resolved_indices.reserve(static_cast<std::size_t>(unresolved_count));
+
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto index = static_cast<std::size_t>(y * width + x);
+        if (unresolved[index] == 0U || !has_known_neighbor(confidence, width, height, x, y)) {
+          continue;
+        }
+
+        const auto candidate = directional_removal_candidate(
+            filled_pixels,
+            confidence,
+            width,
+            height,
+            x,
+            y,
+            max_line_radius);
+        if (!candidate.valid) {
+          continue;
+        }
+
+        const auto mask_weight = clamp_unit(removal_mask[index]);
+        const auto blend =
+            std::clamp(mask_weight * (0.78 + candidate.confidence * 0.22), 0.0, 1.0);
+        next_pixels[index].red = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].red), static_cast<double>(candidate.pixel.red), blend));
+        next_pixels[index].green = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].green), static_cast<double>(candidate.pixel.green), blend));
+        next_pixels[index].blue = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].blue), static_cast<double>(candidate.pixel.blue), blend));
+        next_confidence[index] = static_cast<float>(std::max(
+            static_cast<double>(next_confidence[index]),
+            std::clamp(candidate.confidence, 0.0, 1.0)));
+        resolved_indices.push_back(index);
+      }
     }
-    const auto blurred_red = box_blur(original_red, width, height, 2);
-    const auto blurred_green = box_blur(original_green, width, height, 2);
-    const auto blurred_blue = box_blur(original_blue, width, height, 2);
-    detail_red.resize(pixel_count, 0.0F);
-    detail_green.resize(pixel_count, 0.0F);
-    detail_blue.resize(pixel_count, 0.0F);
-    for (std::size_t index = 0; index < pixel_count; ++index) {
-      detail_red[index] = original_red[index] - blurred_red[index];
-      detail_green[index] = original_green[index] - blurred_green[index];
-      detail_blue[index] = original_blue[index] - blurred_blue[index];
+
+    if (resolved_indices.empty()) {
+      break;
+    }
+
+    filled_pixels = std::move(next_pixels);
+    confidence = std::move(next_confidence);
+    for (const auto index : resolved_indices) {
+      if (unresolved[index] == 0U) {
+        continue;
+      }
+      unresolved[index] = 0U;
+      --unresolved_count;
     }
   }
 
-  constexpr std::array<int, 5> kFillRadii{2, 4, 8, 12, 18};
-  for (const auto radius : kFillRadii) {
-    std::vector<float> weighted_red(pixel_count, 0.0F);
-    std::vector<float> weighted_green(pixel_count, 0.0F);
-    std::vector<float> weighted_blue(pixel_count, 0.0F);
+  if (unresolved_count > 0) {
+    constexpr std::array<int, 5> kFillRadii{2, 4, 8, 12, 18};
+    for (const auto radius : kFillRadii) {
+      std::vector<float> weighted_red(pixel_count, 0.0F);
+      std::vector<float> weighted_green(pixel_count, 0.0F);
+      std::vector<float> weighted_blue(pixel_count, 0.0F);
 
-    for (std::size_t index = 0; index < pixel_count; ++index) {
-      weighted_red[index] = static_cast<float>(filled_pixels[index].red) * confidence[index];
-      weighted_green[index] = static_cast<float>(filled_pixels[index].green) * confidence[index];
-      weighted_blue[index] = static_cast<float>(filled_pixels[index].blue) * confidence[index];
+      for (std::size_t index = 0; index < pixel_count; ++index) {
+        weighted_red[index] = static_cast<float>(filled_pixels[index].red) * confidence[index];
+        weighted_green[index] = static_cast<float>(filled_pixels[index].green) * confidence[index];
+        weighted_blue[index] = static_cast<float>(filled_pixels[index].blue) * confidence[index];
+      }
+
+      const auto blurred_confidence = box_blur(confidence, width, height, radius);
+      const auto blurred_red = box_blur(weighted_red, width, height, radius);
+      const auto blurred_green = box_blur(weighted_green, width, height, radius);
+      const auto blurred_blue = box_blur(weighted_blue, width, height, radius);
+
+      for (std::size_t index = 0; index < pixel_count; ++index) {
+        if (unresolved[index] == 0U) {
+          continue;
+        }
+        const auto local_confidence = static_cast<double>(blurred_confidence[index]);
+        if (local_confidence <= 1e-5) {
+          continue;
+        }
+
+        const auto candidate = ColorPixel{
+            .red = static_cast<float>(std::max(0.0, static_cast<double>(blurred_red[index]) / local_confidence)),
+            .green = static_cast<float>(std::max(0.0, static_cast<double>(blurred_green[index]) / local_confidence)),
+            .blue = static_cast<float>(std::max(0.0, static_cast<double>(blurred_blue[index]) / local_confidence)),
+            .alpha = filled_pixels[index].alpha,
+        };
+        const auto blend =
+            std::clamp(0.40 + (1.0 - static_cast<double>(confidence[index])) * 0.60, 0.0, 1.0);
+        filled_pixels[index].red = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].red), static_cast<double>(candidate.red), blend));
+        filled_pixels[index].green = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].green), static_cast<double>(candidate.green), blend));
+        filled_pixels[index].blue = static_cast<float>(
+            std::lerp(static_cast<double>(filled_pixels[index].blue), static_cast<double>(candidate.blue), blend));
+        confidence[index] = static_cast<float>(std::max(
+            static_cast<double>(confidence[index]),
+            std::clamp(local_confidence, 0.0, 1.0)));
+      }
     }
+  }
 
-    const auto blurred_confidence = box_blur(confidence, width, height, radius);
-    const auto blurred_red = box_blur(weighted_red, width, height, radius);
-    const auto blurred_green = box_blur(weighted_green, width, height, radius);
-    const auto blurred_blue = box_blur(weighted_blue, width, height, radius);
-
+  if (detail_preservation > 1e-6) {
+    std::vector<float> filled_red(pixel_count, 0.0F);
+    std::vector<float> filled_green(pixel_count, 0.0F);
+    std::vector<float> filled_blue(pixel_count, 0.0F);
+    for (std::size_t index = 0; index < pixel_count; ++index) {
+      filled_red[index] = filled_pixels[index].red;
+      filled_green[index] = filled_pixels[index].green;
+      filled_blue[index] = filled_pixels[index].blue;
+    }
+    const auto blurred_red = box_blur(filled_red, width, height, 2);
+    const auto blurred_green = box_blur(filled_green, width, height, 2);
+    const auto blurred_blue = box_blur(filled_blue, width, height, 2);
     for (std::size_t index = 0; index < pixel_count; ++index) {
       const auto mask_weight = clamp_unit(removal_mask[index]);
       if (mask_weight <= 1e-4) {
         continue;
       }
+      const auto detail_gain = detail_preservation * mask_weight * 0.30;
+      filled_pixels[index].red = static_cast<float>(std::max(
+          0.0,
+          static_cast<double>(filled_pixels[index].red) +
+              static_cast<double>(filled_red[index] - blurred_red[index]) * detail_gain));
+      filled_pixels[index].green = static_cast<float>(std::max(
+          0.0,
+          static_cast<double>(filled_pixels[index].green) +
+              static_cast<double>(filled_green[index] - blurred_green[index]) * detail_gain));
+      filled_pixels[index].blue = static_cast<float>(std::max(
+          0.0,
+          static_cast<double>(filled_pixels[index].blue) +
+              static_cast<double>(filled_blue[index] - blurred_blue[index]) * detail_gain));
+    }
+  }
 
-      const auto local_confidence = static_cast<double>(blurred_confidence[index]);
-      if (local_confidence <= 1e-5) {
-        continue;
+  if (removal_quality == RemovalQuality::Final) {
+    auto min_mask_x = width;
+    auto min_mask_y = height;
+    auto max_mask_x = -1;
+    auto max_mask_y = -1;
+    auto masked_pixel_count = 0;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto index = static_cast<std::size_t>(y * width + x);
+        if (clamp_unit(removal_mask[index]) <= 1e-4) {
+          continue;
+        }
+        min_mask_x = std::min(min_mask_x, x);
+        min_mask_y = std::min(min_mask_y, y);
+        max_mask_x = std::max(max_mask_x, x);
+        max_mask_y = std::max(max_mask_y, y);
+        ++masked_pixel_count;
+      }
+    }
+
+    if (masked_pixel_count > 0) {
+      const auto search_radius = std::clamp(std::max(width, height) / 16, 12, 64);
+      const auto min_search_x = std::max(0, min_mask_x - search_radius);
+      const auto min_search_y = std::max(0, min_mask_y - search_radius);
+      const auto max_search_x = std::min(width - 1, max_mask_x + search_radius);
+      const auto max_search_y = std::min(height - 1, max_mask_y + search_radius);
+
+      std::vector<std::size_t> candidate_indices;
+      candidate_indices.reserve(
+          static_cast<std::size_t>(std::max(0, (max_search_x - min_search_x + 1) *
+                                                   (max_search_y - min_search_y + 1))));
+      for (int y = min_search_y; y <= max_search_y; ++y) {
+        for (int x = min_search_x; x <= max_search_x; ++x) {
+          const auto index = static_cast<std::size_t>(y * width + x);
+          if (clamp_unit(removal_mask[index]) > 1e-4) {
+            continue;
+          }
+          candidate_indices.push_back(index);
+        }
       }
 
-      const auto candidate = ColorPixel{
-          .red = static_cast<float>(clamp_unit(static_cast<double>(blurred_red[index]) / local_confidence)),
-          .green = static_cast<float>(clamp_unit(static_cast<double>(blurred_green[index]) / local_confidence)),
-          .blue = static_cast<float>(clamp_unit(static_cast<double>(blurred_blue[index]) / local_confidence)),
-          .alpha = filled_pixels[index].alpha,
-      };
-      auto textured_candidate = candidate;
-      if (detail_preservation > 1e-6) {
-        const auto detail_mix = detail_preservation * mask_weight * 0.65;
-        textured_candidate.red = static_cast<float>(std::max(
-            0.0,
-            static_cast<double>(textured_candidate.red) + static_cast<double>(detail_red[index]) * detail_mix));
-        textured_candidate.green = static_cast<float>(std::max(
-            0.0,
-            static_cast<double>(textured_candidate.green) + static_cast<double>(detail_green[index]) * detail_mix));
-        textured_candidate.blue = static_cast<float>(std::max(
-            0.0,
-            static_cast<double>(textured_candidate.blue) + static_cast<double>(detail_blue[index]) * detail_mix));
+      if (!candidate_indices.empty()) {
+        const auto candidate_stride =
+            std::max(1, static_cast<int>(candidate_indices.size() / 4096));
+        const auto patch_radius = 2;
+        auto refined_pixels = filled_pixels;
+        for (int y = min_mask_y; y <= max_mask_y; ++y) {
+          for (int x = min_mask_x; x <= max_mask_x; ++x) {
+            const auto index = static_cast<std::size_t>(y * width + x);
+            const auto mask_weight = clamp_unit(removal_mask[index]);
+            if (mask_weight <= 1e-4) {
+              continue;
+            }
+
+            auto best_score = std::numeric_limits<double>::max();
+            auto best_candidate = refined_pixels[index];
+            auto found_candidate = false;
+            for (std::size_t candidate_offset = 0;
+                 candidate_offset < candidate_indices.size();
+                 candidate_offset += static_cast<std::size_t>(candidate_stride)) {
+              const auto candidate_index = candidate_indices[candidate_offset];
+              const auto candidate_x = static_cast<int>(candidate_index % static_cast<std::size_t>(width));
+              const auto candidate_y = static_cast<int>(candidate_index / static_cast<std::size_t>(width));
+
+              auto score = 0.0;
+              auto support = 0.0;
+              for (int offset_y = -patch_radius; offset_y <= patch_radius; ++offset_y) {
+                for (int offset_x = -patch_radius; offset_x <= patch_radius; ++offset_x) {
+                  if (offset_x == 0 && offset_y == 0) {
+                    continue;
+                  }
+                  const auto target_x = x + offset_x;
+                  const auto target_y = y + offset_y;
+                  const auto sample_x = candidate_x + offset_x;
+                  const auto sample_y = candidate_y + offset_y;
+                  if (target_x < 0 || target_y < 0 || target_x >= width || target_y >= height ||
+                      sample_x < 0 || sample_y < 0 || sample_x >= width || sample_y >= height) {
+                    continue;
+                  }
+
+                  const auto target_index =
+                      static_cast<std::size_t>(target_y * width + target_x);
+                  const auto sample_index =
+                      static_cast<std::size_t>(sample_y * width + sample_x);
+                  if (clamp_unit(removal_mask[sample_index]) > 1e-4) {
+                    continue;
+                  }
+
+                  const auto context_weight =
+                      1.0 / std::max(1.0, static_cast<double>(offset_x * offset_x + offset_y * offset_y));
+                  const auto target_context =
+                      clamp_unit(removal_mask[target_index]) <= 0.35 ? (*pixels)[target_index]
+                                                                     : filled_pixels[target_index];
+                  score += removal_color_distance(target_context, filled_pixels[sample_index]) *
+                           context_weight;
+                  support += context_weight;
+                }
+              }
+
+              if (support <= 1e-6) {
+                continue;
+              }
+              score /= support;
+              if (score < best_score) {
+                best_score = score;
+                best_candidate = filled_pixels[candidate_index];
+                found_candidate = true;
+              }
+            }
+
+            if (!found_candidate) {
+              continue;
+            }
+
+            const auto blend =
+                std::clamp(0.45 + mask_weight * 0.45, 0.0, 1.0);
+            refined_pixels[index].red = static_cast<float>(
+                std::lerp(static_cast<double>(refined_pixels[index].red), static_cast<double>(best_candidate.red), blend));
+            refined_pixels[index].green = static_cast<float>(
+                std::lerp(static_cast<double>(refined_pixels[index].green), static_cast<double>(best_candidate.green), blend));
+            refined_pixels[index].blue = static_cast<float>(
+                std::lerp(static_cast<double>(refined_pixels[index].blue), static_cast<double>(best_candidate.blue), blend));
+          }
+        }
+        filled_pixels = std::move(refined_pixels);
       }
-      const auto fill_blend =
-          clamp_unit(0.35 + (1.0 - static_cast<double>(confidence[index])) * 0.75) * mask_weight;
-      filled_pixels[index].red = static_cast<float>(
-          std::lerp(static_cast<double>(filled_pixels[index].red), static_cast<double>(textured_candidate.red), fill_blend));
-      filled_pixels[index].green = static_cast<float>(
-          std::lerp(static_cast<double>(filled_pixels[index].green), static_cast<double>(textured_candidate.green), fill_blend));
-      filled_pixels[index].blue = static_cast<float>(
-          std::lerp(static_cast<double>(filled_pixels[index].blue), static_cast<double>(textured_candidate.blue), fill_blend));
-      confidence[index] = std::max(
-          confidence[index],
-          static_cast<float>(std::min(1.0, local_confidence + mask_weight * 0.45)));
     }
   }
 
@@ -1443,22 +2095,59 @@ void apply_local_clone(
     }
 
     const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, mask);
-    if (!initialized) {
-      composite_weight = raw_weight;
-      initialized = true;
-      continue;
-    }
-
-    if (mask.operation == "subtract") {
-      composite_weight = std::max(0.0, composite_weight - raw_weight);
-    } else if (mask.operation == "intersect") {
-      composite_weight *= raw_weight;
-    } else {
-      composite_weight = 1.0 - (1.0 - composite_weight) * (1.0 - raw_weight);
-    }
+    accumulate_composite_weight(raw_weight, mask.operation, &composite_weight, &initialized);
   }
 
   return initialized ? clamp_unit(composite_weight) : 0.0;
+}
+
+[[nodiscard]] std::vector<float> build_composite_local_mask_weights(
+    const std::vector<ColorPixel>& pixels,
+    int width,
+    int height,
+    double exposure_gain,
+    const std::array<double, 3>& white_balance,
+    const std::vector<LocalMask>& masks) {
+  const auto pixel_count = static_cast<std::size_t>(width * height);
+  std::vector<float> weights(pixel_count, 0.0F);
+  if (pixels.size() != pixel_count) {
+    return {};
+  }
+
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto index = static_cast<std::size_t>(y * width + x);
+      auto pixel = pixels[index];
+      pixel.red = static_cast<float>(
+          std::max(0.0, static_cast<double>(pixel.red) * exposure_gain * white_balance[0]));
+      pixel.green = static_cast<float>(
+          std::max(0.0, static_cast<double>(pixel.green) * exposure_gain * white_balance[1]));
+      pixel.blue = static_cast<float>(
+          std::max(0.0, static_cast<double>(pixel.blue) * exposure_gain * white_balance[2]));
+
+      const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
+      const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
+      weights[index] = static_cast<float>(
+          composite_local_mask_weight(normalized_x, normalized_y, pixel, masks));
+    }
+  }
+
+  return weights;
+}
+
+[[nodiscard]] bool local_adjustments_supported_by_metal_pre_tone(
+    const LocalAdjustmentSettings& adjustments) {
+  return std::abs(adjustments.contrast) <= 1e-6 &&
+         std::abs(adjustments.highlights) <= 1e-6 &&
+         std::abs(adjustments.shadows) <= 1e-6 &&
+         std::abs(adjustments.whites) <= 1e-6 &&
+         std::abs(adjustments.blacks) <= 1e-6 &&
+         std::abs(adjustments.tint) <= 1e-6 &&
+         std::abs(adjustments.vibrance) <= 1e-6 &&
+         std::abs(adjustments.saturation) <= 1e-6 &&
+         std::abs(adjustments.hue_shift) <= 1e-6 &&
+         std::abs(adjustments.saturation_shift) <= 1e-6 &&
+         std::abs(adjustments.colorize_strength) <= 1e-6;
 }
 
 [[nodiscard]] ColorPixel gamut_fit_oklch(double lightness, double chroma, double hue, double alpha) {
@@ -1970,7 +2659,8 @@ void apply_color_adjustments(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
-    const ColorAdjustmentState& state) {
+    const ColorAdjustmentState& state,
+    RemovalQuality removal_quality) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() != static_cast<std::size_t>(width * height)) {
     return;
@@ -1985,16 +2675,20 @@ void apply_color_adjustments(
   const auto sharpen_mask_strength = clamp_signed_percent(state.sharpen_masking) / 100.0;
   const auto luma_nr_strength = clamp_signed_percent(state.luminance_nr) / 100.0;
   const auto color_nr_strength = clamp_signed_percent(state.color_nr) / 100.0;
+  const auto uses_native_local_mask_sets = !state.local_mask_sets.empty();
+  const auto& effective_retouch_masks =
+      state.retouch_masks.empty() ? state.local_masks : state.retouch_masks;
   const auto has_spatial_tone_color =
-      state.linear_mask_enabled || state.radial_mask_enabled || !state.local_masks.empty() ||
+      state.linear_mask_enabled || state.radial_mask_enabled ||
+      uses_native_local_mask_sets || !state.local_masks.empty() ||
       std::abs(texture_strength) > 1e-6 || std::abs(clarity_strength) > 1e-6 ||
       std::abs(dehaze_strength) > 1e-6;
   const auto has_detail_effects =
       std::abs(sharpen_strength) > 1e-6 ||
       std::abs(luma_nr_strength) > 1e-6 || std::abs(color_nr_strength) > 1e-6;
-  const auto has_local_heal = has_local_mask_heal(state.local_masks);
-  const auto has_local_clone = has_local_mask_clone(state.local_masks);
-  const auto has_local_removal = has_local_mask_removal(state.local_masks);
+  const auto has_local_heal = has_local_mask_heal(effective_retouch_masks);
+  const auto has_local_clone = has_local_mask_clone(effective_retouch_masks);
+  const auto has_local_removal = has_local_mask_removal(effective_retouch_masks);
 
   // Fast path: no masks or spatial tone/color effects — use precomputed 3D LUT
   if (!has_spatial_tone_color) {
@@ -2042,23 +2736,53 @@ void apply_color_adjustments(
   const auto blue_curve = build_curve_data(state.blue_curve_points);
   const auto saturation_strength = clamp_signed_percent(state.saturation) / 100.0;
   const auto vibrance_strength = clamp_signed_percent(state.vibrance) / 100.0;
-  const auto uses_local_mask_stack = !state.local_masks.empty();
+  const auto uses_legacy_local_mask_stack = !state.local_masks.empty();
   const auto stack_is_additive = local_masks_all_additive(state.local_masks);
   LocalAdjustmentSettings shared_stack_adjustments;
   const auto stack_shares_adjustments =
+      uses_legacy_local_mask_stack &&
       local_masks_share_adjustments(state.local_masks, &shared_stack_adjustments);
-  if (!stack_shares_adjustments) {
+  if (uses_legacy_local_mask_stack && !stack_shares_adjustments) {
     (void)primary_local_mask_adjustments(state.local_masks, &shared_stack_adjustments);
   }
+  const auto uses_composite_local_mask_path =
+      uses_legacy_local_mask_stack && (stack_shares_adjustments || !stack_is_additive);
   const auto gradient_radians = state.linear_mask_rotation * kPi / 180.0;
   const auto gradient_cosine = std::cos(gradient_radians);
   const auto gradient_sine = std::sin(gradient_radians);
   const auto gradient_feather = std::max(0.05, state.linear_mask_feather);
+  std::vector<float> composite_local_mask_weights;
+  if (uses_composite_local_mask_path) {
+    composite_local_mask_weights = build_composite_local_mask_weights(
+        *pixels,
+        width,
+        height,
+        exposure_gain,
+        white_balance,
+        state.local_masks);
+  }
   auto ran_pre_tone_on_gpu = false;
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   {
     auto& metal = metal_backend();
-    ran_pre_tone_on_gpu = metal.available() && metal.apply_pre_tone_effects(pixels, width, height, state);
+    const auto can_run_local_mask_stack_on_gpu =
+        !uses_native_local_mask_sets &&
+        uses_composite_local_mask_path &&
+        composite_local_mask_weights.size() == pixels->size() &&
+        local_adjustments_supported_by_metal_pre_tone(shared_stack_adjustments);
+    const auto can_run_pre_tone_on_gpu =
+        !uses_native_local_mask_sets &&
+        (!uses_legacy_local_mask_stack || can_run_local_mask_stack_on_gpu);
+    ran_pre_tone_on_gpu = can_run_pre_tone_on_gpu &&
+                          metal.available() &&
+                          metal.apply_pre_tone_effects(
+                              pixels,
+                              width,
+                              height,
+                              state,
+                              can_run_local_mask_stack_on_gpu ? &composite_local_mask_weights : nullptr,
+                              can_run_local_mask_stack_on_gpu ? shared_stack_adjustments.exposure : 0.0,
+                              can_run_local_mask_stack_on_gpu ? shared_stack_adjustments.temperature : 0.0);
   }
 #endif
 
@@ -2076,13 +2800,46 @@ void apply_color_adjustments(
 
         const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
         const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
-        if (uses_local_mask_stack) {
-          if (stack_shares_adjustments || !stack_is_additive) {
+        if (uses_native_local_mask_sets) {
+          for (const auto& mask_set : state.local_mask_sets) {
+            if (!local_mask_set_has_adjustments(mask_set)) {
+              continue;
+            }
             apply_local_adjustment_mask(
                 &pixel,
-                composite_local_mask_weight(normalized_x, normalized_y, pixel, state.local_masks),
+                local_mask_set_weight(normalized_x, normalized_y, pixel, mask_set),
+                mask_set.exposure,
+                mask_set.contrast,
+                mask_set.highlights,
+                mask_set.shadows,
+                mask_set.whites,
+                mask_set.blacks,
+                mask_set.temperature,
+                mask_set.tint,
+                mask_set.vibrance,
+                mask_set.saturation,
+                mask_set.hue_shift,
+                mask_set.saturation_shift,
+                mask_set.colorize_hue,
+                mask_set.colorize_strength);
+          }
+        } else if (uses_legacy_local_mask_stack) {
+          if (uses_composite_local_mask_path) {
+            apply_local_adjustment_mask(
+                &pixel,
+                composite_local_mask_weights.empty()
+                    ? composite_local_mask_weight(normalized_x, normalized_y, pixel, state.local_masks)
+                    : static_cast<double>(composite_local_mask_weights[index]),
                 shared_stack_adjustments.exposure,
+                shared_stack_adjustments.contrast,
+                shared_stack_adjustments.highlights,
+                shared_stack_adjustments.shadows,
+                shared_stack_adjustments.whites,
+                shared_stack_adjustments.blacks,
                 shared_stack_adjustments.temperature,
+                shared_stack_adjustments.tint,
+                shared_stack_adjustments.vibrance,
+                shared_stack_adjustments.saturation,
                 shared_stack_adjustments.hue_shift,
                 shared_stack_adjustments.saturation_shift,
                 shared_stack_adjustments.colorize_hue,
@@ -2093,7 +2850,15 @@ void apply_color_adjustments(
                   &pixel,
                   local_mask_weight(normalized_x, normalized_y, pixel, mask),
                   mask.exposure,
+                  mask.contrast,
+                  mask.highlights,
+                  mask.shadows,
+                  mask.whites,
+                  mask.blacks,
                   mask.temperature,
+                  mask.tint,
+                  mask.vibrance,
+                  mask.saturation,
                   mask.hue_shift,
                   mask.saturation_shift,
                   mask.colorize_hue,
@@ -2110,7 +2875,15 @@ void apply_color_adjustments(
                 &pixel,
                 mask_weight,
                 state.linear_mask_exposure,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
                 state.linear_mask_temperature,
+                0.0,
+                0.0,
+                0.0,
                 0.0,
                 0.0,
                 0.0,
@@ -2120,7 +2893,15 @@ void apply_color_adjustments(
               &pixel,
               radial_mask_weight(normalized_x, normalized_y, state),
               state.radial_mask_exposure,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
               state.radial_mask_temperature,
+              0.0,
+              0.0,
+              0.0,
               0.0,
               0.0,
               0.0,
@@ -2298,7 +3079,7 @@ void apply_color_adjustments(
   }  // end slow path (else)
 
   if (has_local_clone) {
-    apply_local_clone(pixels, width, height, state.local_masks);
+    apply_local_clone(pixels, width, height, effective_retouch_masks);
   }
 
   if (has_local_heal) {
@@ -2312,12 +3093,12 @@ void apply_color_adjustments(
         const auto normalized_y =
             height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         heal_mask[index] = composite_local_removal_weight(
-            normalized_x, normalized_y, (*pixels)[index], state.local_masks, "heal");
+            normalized_x, normalized_y, (*pixels)[index], effective_retouch_masks, "heal");
         has_nonzero_heal = has_nonzero_heal || heal_mask[index] > 1e-4;
       }
     }
     if (has_nonzero_heal) {
-      apply_local_removal(pixels, width, height, heal_mask, 0.55);
+      apply_local_removal(pixels, width, height, heal_mask, 0.55, removal_quality);
     }
   }
 
@@ -2332,12 +3113,12 @@ void apply_color_adjustments(
         const auto normalized_y =
             height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         removal_mask[index] = composite_local_removal_weight(
-            normalized_x, normalized_y, (*pixels)[index], state.local_masks, "");
+            normalized_x, normalized_y, (*pixels)[index], effective_retouch_masks, "");
         has_nonzero_removal = has_nonzero_removal || removal_mask[index] > 1e-4;
       }
     }
     if (has_nonzero_removal) {
-      apply_local_removal(pixels, width, height, removal_mask, 0.0);
+      apply_local_removal(pixels, width, height, removal_mask, 0.0, removal_quality);
     }
   }
 

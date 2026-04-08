@@ -217,6 +217,11 @@ struct PreToneUniforms {
   float radial_wb_red;
   float radial_wb_green;
   float radial_wb_blue;
+  int has_local_mask;
+  float local_exposure;
+  float local_wb_red;
+  float local_wb_green;
+  float local_wb_blue;
   int width;
   int height;
 };
@@ -692,7 +697,8 @@ kernel void apply_post_color(
 kernel void compute_pre_tone_inputs(
     device float4* pixels [[buffer(0)]],
     device float* target_luminance [[buffer(1)]],
-    constant PreToneUniforms& uniforms [[buffer(2)]],
+    device const float* local_mask_weights [[buffer(2)]],
+    constant PreToneUniforms& uniforms [[buffer(3)]],
     uint gid [[thread_position_in_grid]]) {
   uint total = uint(uniforms.width) * uint(uniforms.height);
   if (gid >= total) {
@@ -732,6 +738,16 @@ kernel void compute_pre_tone_inputs(
       pixel.r *= (1.0f + (uniforms.radial_wb_red - 1.0f) * w) * gain;
       pixel.g *= (1.0f + (uniforms.radial_wb_green - 1.0f) * w) * gain;
       pixel.b *= (1.0f + (uniforms.radial_wb_blue - 1.0f) * w) * gain;
+    }
+  }
+
+  if (uniforms.has_local_mask != 0) {
+    const float w = clamp_unit(local_mask_weights[gid]);
+    if (w > 0.0f) {
+      const float gain = pow(2.0f, uniforms.local_exposure * w);
+      pixel.r *= (1.0f + (uniforms.local_wb_red - 1.0f) * w) * gain;
+      pixel.g *= (1.0f + (uniforms.local_wb_green - 1.0f) * w) * gain;
+      pixel.b *= (1.0f + (uniforms.local_wb_blue - 1.0f) * w) * gain;
     }
   }
 

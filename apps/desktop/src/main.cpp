@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -11,39 +12,64 @@
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
 #include "editor_preview_controller.h"
+#include "editor_preview_image_provider.h"
 #include "export_job_controller.h"
+#include "job_queue_model.h"
+#include "job_runner.h"
 #include "macos_updater.h"
+#include "observability.h"
 #include "preview_backend_controller.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
 
 int main(int argc, char* argv[]) {
+  QElapsedTimer startup_timer;
+  startup_timer.start();
   QQuickStyle::setStyle(QStringLiteral("Basic"));
   QApplication app(argc, argv);
   QApplication::setApplicationName(photo_editor::desktop::AppBootstrap::application_name);
   QApplication::setOrganizationName(photo_editor::desktop::AppBootstrap::organization_name);
   photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories();
+  photo_editor::desktop::observability::initialize();
+  photo_editor::desktop::observability::logInfo(
+      photoEditorAppLog(),
+      QStringLiteral("desktop.startup.begin"),
+      {
+          {QStringLiteral("session_id"), photo_editor::desktop::observability::sessionId()},
+          {QStringLiteral("run_directory"), photo_editor::desktop::observability::runDirectory()},
+          {QStringLiteral("desktop_log_file"), photo_editor::desktop::observability::desktopLogFilePath()},
+      });
   QString catalog_bootstrap_error;
   if (!photo_editor::desktop::AppBootstrap::ensureCatalogService(&catalog_bootstrap_error) &&
       !catalog_bootstrap_error.isEmpty()) {
-    qWarning().noquote() << catalog_bootstrap_error;
+    photo_editor::desktop::observability::logWarning(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.bootstrap.failed"),
+        {{QStringLiteral("error"), catalog_bootstrap_error}});
   }
 
   photo_editor::desktop::CatalogAssetModel catalog_assets;
   photo_editor::desktop::AppShellController app_shell;
   photo_editor::desktop::CarouselDocumentController carousel_document;
   photo_editor::desktop::EditorPreviewController editor_preview;
+  photo_editor::desktop::JobRunner job_runner;
+  photo_editor::desktop::JobQueueModel job_queue;
   photo_editor::desktop::ExportJobController export_jobs;
   photo_editor::desktop::MacosUpdater macos_updater;
   photo_editor::desktop::PreviewBackendController preview_backend;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
   QQmlApplicationEngine engine;
+  auto* editor_preview_image_provider = new photo_editor::desktop::EditorPreviewImageProvider;
+  editor_preview.setImageProvider(editor_preview_image_provider);
+  engine.addImageProvider(QStringLiteral("editor-preview"), editor_preview_image_provider);
   engine.rootContext()->setContextProperty("appShell", &app_shell);
   engine.rootContext()->setContextProperty("catalogAssets", &catalog_assets);
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
   engine.rootContext()->setContextProperty("editorPreview", &editor_preview);
   engine.rootContext()->setContextProperty("exportJobs", &export_jobs);
+  engine.rootContext()->setContextProperty("jobQueue", &job_queue);
+  engine.rootContext()->setContextProperty("macosUpdater", &macos_updater);
   engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
@@ -70,7 +96,15 @@ int main(int argc, char* argv[]) {
   QObject::connect(&app, &QCoreApplication::aboutToQuit, [&]() {
     session_timer.stop();
     app_shell.markCleanExit();
+    photo_editor::desktop::observability::logInfo(
+        photoEditorAppLog(),
+        QStringLiteral("desktop.shutdown"),
+        {{QStringLiteral("uptime_ms"), startup_timer.elapsed()}});
   });
 
+  photo_editor::desktop::observability::logInfo(
+      photoEditorPerfLog(),
+      QStringLiteral("desktop.startup.ready"),
+      {{QStringLiteral("elapsed_ms"), startup_timer.elapsed()}});
   return app.exec();
 }

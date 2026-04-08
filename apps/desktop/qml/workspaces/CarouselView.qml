@@ -8,6 +8,7 @@ import "../components"
 Rectangle {
     id: root
     color: "transparent"
+    focus: true
 
     Theme { id: theme }
 
@@ -16,18 +17,158 @@ Rectangle {
     property string mediaPickerProjectName: ""
     property string mediaPickerScope: "all"
     property string mediaPickerIntent: "slot"
-    readonly property bool compactWorkspace: width < 1380
+    property string activeTool: "select"
+    property real composerZoom: 1.0
+    property bool snappingEnabled: true
+    property bool guidesEnabled: true
+    property bool thirdsGuidesEnabled: false
+    property bool safeGuidesEnabled: false
+    property real snapThresholdPixels: 12
+    property var activeSnapGuides: []
+    readonly property bool compactWorkspace: width < 1500
     readonly property bool condensedHeader: width < 1180
-    readonly property real stripScale: carouselDocument.documentPixelHeight > 0 ? stripSurface.height / carouselDocument.documentPixelHeight : 1
+    readonly property real stripAvailableWidth: Math.max(240, artboardFlick.width - 44)
+    readonly property real stripAvailableHeight: Math.max(260, artboardFlick.height - 44)
+    readonly property real stripFitScaleWidth: carouselDocument.documentPixelWidth > 0 ? root.stripAvailableWidth / carouselDocument.documentPixelWidth : 1
+    readonly property real stripFitScaleHeight: carouselDocument.documentPixelHeight > 0 ? root.stripAvailableHeight / carouselDocument.documentPixelHeight : 1
+    readonly property real baseStripScale: Math.max(0.14, Math.min(0.58, root.stripFitScaleWidth, root.stripFitScaleHeight))
+    readonly property real stripScale: root.baseStripScale * root.composerZoom
+    readonly property var currentSlideLayers: {
+        const items = []
+        const slide = root.slideGeometry(carouselDocument.currentIndex)
+        for (let index = carouselDocument.canvasItems.length - 1; index >= 0; --index) {
+            const item = carouselDocument.canvasItems[index]
+            if (root.itemIntersectsSlide(item, slide))
+                items.push(item)
+        }
+        return items
+    }
     readonly property var templateButtons: [
         { label: "Single", value: "single" },
         { label: "Split Pair", value: "split-pair" },
         { label: "Linked 2", value: "linked-horizontal-pair" },
         { label: "Stacked 3", value: "stacked-triptych" }
     ]
+    readonly property var toolButtons: [
+        { value: "select", label: "Select", key: "V", cursor: Qt.ArrowCursor },
+        { value: "hand", label: "Pan", key: "H", cursor: Qt.OpenHandCursor },
+        { value: "text", label: "Text", key: "T", cursor: Qt.IBeamCursor },
+        { value: "media", label: "Media", key: "M", cursor: Qt.PointingHandCursor }
+    ]
 
     function slideWidthOnStrip() {
         return carouselDocument.slideCount > 0 ? stripSurface.width / carouselDocument.slideCount : stripSurface.width
+    }
+
+    function clampZoom(value) {
+        return Math.max(0.5, Math.min(3.0, value))
+    }
+
+    function zoomIn() {
+        composerZoom = clampZoom(composerZoom * 1.12)
+    }
+
+    function zoomOut() {
+        composerZoom = clampZoom(composerZoom / 1.12)
+    }
+
+    function resetZoomToFit() {
+        composerZoom = 1.0
+    }
+
+    function nudgeSelected(dx, dy) {
+        if (!selection.hasSelection || !selection.hasUnlockedSelection)
+            return
+        carouselDocument.moveSelectedItemByPixels(dx, dy)
+    }
+
+    function clamp(value, minimum, maximum) {
+        return Math.max(minimum, Math.min(maximum, value))
+    }
+
+    function slidePixelWidth() {
+        return carouselDocument.slideCount > 0 ? carouselDocument.documentPixelWidth / carouselDocument.slideCount : carouselDocument.documentPixelWidth
+    }
+
+    function slideGeometry(index) {
+        const width = slidePixelWidth()
+        return {
+            x: index * width,
+            y: 0,
+            width: width,
+            height: carouselDocument.documentPixelHeight
+        }
+    }
+
+    function itemIntersectsSlide(item, slide) {
+        if (!item || !slide)
+            return false
+        const x = Number(item.x || 0)
+        const y = Number(item.y || 0)
+        const width = Number(item.width || 0)
+        const height = Number(item.height || 0)
+        return x < slide.x + slide.width
+                && x + width > slide.x
+                && y < slide.y + slide.height
+                && y + height > slide.y
+    }
+
+    function hasMultiSelectModifier(modifiers) {
+        return Boolean(modifiers & Qt.ControlModifier) || Boolean(modifiers & Qt.MetaModifier)
+    }
+
+    function focusLayerItem(itemId, alreadySelected) {
+        if (alreadySelected && selection.selectedCount > 1)
+            carouselDocument.addItemToSelection(itemId)
+        else
+            carouselDocument.selectItem(itemId)
+    }
+
+    function setActiveTool(toolName) {
+        const normalized = toolName === "hand" || toolName === "text" || toolName === "media" ? toolName : "select"
+        activeTool = normalized
+    }
+
+    function toolCursorShape() {
+        if (activeTool === "hand")
+            return Qt.OpenHandCursor
+        if (activeTool === "text")
+            return Qt.IBeamCursor
+        if (activeTool === "media")
+            return Qt.PointingHandCursor
+        return Qt.ArrowCursor
+    }
+
+    function handleCanvasToolPress(mouse, width, height) {
+        const slideWidth = root.slideWidthOnStrip()
+        const targetIndex = Math.max(0, Math.min(carouselDocument.slideCount - 1, Math.floor(mouse.x / Math.max(1, slideWidth))))
+        const localX = mouse.x - (targetIndex * slideWidth)
+        carouselDocument.selectSlide(targetIndex)
+        chooseSlotForSlide(slideData(targetIndex), localX, mouse.y, width, height)
+
+        if (activeTool === "text") {
+            carouselDocument.addTextItem("New Text")
+            carouselDocument.setSelectedItemCenter(mouse.x / root.stripScale, mouse.y / root.stripScale)
+            root.setActiveTool("select")
+            root.clearSnapGuides()
+            return
+        }
+
+        if (activeTool === "media") {
+            carouselDocument.clearSelection()
+            root.clearSnapGuides()
+            openMediaPicker("slot")
+            root.setActiveTool("select")
+            return
+        }
+
+        carouselDocument.clearSelection()
+        root.clearSnapGuides()
+    }
+
+    function slideIndexForDocumentX(xPos) {
+        const slideWidth = Math.max(1, slidePixelWidth())
+        return clamp(Math.floor(xPos / slideWidth), 0, Math.max(0, carouselDocument.slideCount - 1))
     }
 
     function slideData(index) {
@@ -48,6 +189,103 @@ Rectangle {
         if (selection.templateKind === "stacked-triptych")
             return "Stacked 3"
         return "Single"
+    }
+
+    function slotRegionsForSlide(slide, width, height) {
+        if (!slide)
+            return []
+        if (slide.groupKind === "linked-horizontal-pair") {
+            return [{
+                    name: "primary",
+                    label: "Spread",
+                    x: 0,
+                    y: 0,
+                    width: width,
+                    height: height,
+                    hasMedia: Boolean(slide.primaryHasMedia)
+                }]
+        }
+        if (slide.templateKind === "split-pair") {
+            const leftWidth = width / 2
+            return [{
+                    name: "primary",
+                    label: "Left",
+                    x: 0,
+                    y: 0,
+                    width: leftWidth,
+                    height: height,
+                    hasMedia: Boolean(slide.primaryHasMedia)
+                }, {
+                    name: "secondary",
+                    label: "Right",
+                    x: leftWidth,
+                    y: 0,
+                    width: width - leftWidth,
+                    height: height,
+                    hasMedia: Boolean(slide.secondaryHasMedia)
+                }]
+        }
+        if (slide.templateKind === "stacked-triptych") {
+            const bandHeight = height / 3
+            return [{
+                    name: "primary",
+                    label: "Top",
+                    x: 0,
+                    y: 0,
+                    width: width,
+                    height: bandHeight,
+                    hasMedia: Boolean(slide.primaryHasMedia)
+                }, {
+                    name: "secondary",
+                    label: "Middle",
+                    x: 0,
+                    y: bandHeight,
+                    width: width,
+                    height: bandHeight,
+                    hasMedia: Boolean(slide.secondaryHasMedia)
+                }, {
+                    name: "tertiary",
+                    label: "Bottom",
+                    x: 0,
+                    y: bandHeight * 2,
+                    width: width,
+                    height: height - bandHeight * 2,
+                    hasMedia: Boolean(slide.tertiaryHasMedia)
+                }]
+        }
+        return [{
+                name: "primary",
+                label: "Primary",
+                x: 0,
+                y: 0,
+                width: width,
+                height: height,
+                hasMedia: Boolean(slide.primaryHasMedia)
+            }]
+    }
+
+    function activeSlotRegionForSlide(slide, width, height) {
+        const regions = slotRegionsForSlide(slide, width, height)
+        for (let index = 0; index < regions.length; ++index) {
+            if (regions[index].name === selection.activeSlot)
+                return regions[index]
+        }
+        return regions.length > 0 ? regions[0] : null
+    }
+
+    function slotInteractionGuides(slideIndex, slide, width, height, slotName, offsetX, offsetY) {
+        if (!root.guidesEnabled)
+            return []
+        const region = activeSlotRegionForSlide(slide, width, height)
+        if (!region || region.name !== slotName)
+            return []
+        const guides = []
+        const originX = slideIndex * slidePixelWidth()
+        if (Math.abs(offsetX) < 0.001)
+            guides.push({ orientation: "vertical", position: originX + ((region.x + region.width / 2) / root.stripScale), label: "Center" })
+        if (Math.abs(offsetY) < 0.001)
+            guides.push({ orientation: "horizontal", position: (region.y + region.height / 2) / root.stripScale, label: "Center" })
+        return guides
     }
 
     function canPlaceVideo() {
@@ -116,13 +354,18 @@ Rectangle {
     }
 
     function galleryLayerSelectionSupported() {
-        return catalogAssets.selectedFilePath.length > 0 && catalogAssets.selectedMediaType === "photo"
+        if (catalogAssets.selectedFilePath.length === 0)
+            return false
+        return catalogAssets.selectedMediaType === "photo" || catalogAssets.selectedMediaType === "video"
     }
 
     function assignSelectedGalleryMediaAsLayer() {
         if (!galleryLayerSelectionSupported())
             return
-        carouselDocument.addPhotoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+        if (catalogAssets.selectedMediaType === "video")
+            carouselDocument.addVideoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel)
+        else
+            carouselDocument.addPhotoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
     }
 
     function preferredMediaPickerProject() {
@@ -170,7 +413,7 @@ Rectangle {
     }
 
     function openMediaPicker(intent) {
-        mediaPickerIntent = intent || "slot"
+        mediaPickerIntent = intent === "replace" ? "replace" : intent === "layer" ? "layer" : "slot"
         mediaPickerScope = hasProjectScopedMediaPicker() ? "project" : "all"
         refreshMediaPickerAssets()
         mediaPickerDialog.openDialog()
@@ -180,12 +423,31 @@ Rectangle {
         if (!mediaPickerDialog.hasSelection || !mediaPickerDialog.selectedOnline)
             return
 
+        if (mediaPickerIntent === "replace") {
+            if (mediaPickerDialog.selectedMediaType === "photo") {
+                carouselDocument.replaceSelectedPhotoItem(
+                            mediaPickerDialog.selectedFilePath,
+                            mediaPickerDialog.selectedDisplayLabel,
+                            String(mediaPickerDialog.selectedAsset.recipeJson || ""))
+            } else if (mediaPickerDialog.selectedMediaType === "video") {
+                carouselDocument.replaceSelectedVideoItem(
+                            mediaPickerDialog.selectedFilePath,
+                            mediaPickerDialog.selectedDisplayLabel)
+            }
+            mediaPickerDialog.close()
+            return
+        }
+
         if (mediaPickerIntent === "layer") {
             if (mediaPickerDialog.selectedMediaType === "photo") {
                 carouselDocument.addPhotoItem(
                             mediaPickerDialog.selectedFilePath,
                             mediaPickerDialog.selectedDisplayLabel,
                             String(mediaPickerDialog.selectedAsset.recipeJson || ""))
+            } else if (mediaPickerDialog.selectedMediaType === "video") {
+                carouselDocument.addVideoItem(
+                            mediaPickerDialog.selectedFilePath,
+                            mediaPickerDialog.selectedDisplayLabel)
             }
             mediaPickerDialog.close()
             return
@@ -212,30 +474,323 @@ Rectangle {
         mediaPickerDialog.close()
     }
 
-    function librarySelectionLabel() {
-        if (catalogAssets.selectedFilePath.length === 0)
-            return "No library asset selected"
-        const parts = catalogAssets.selectedFilePath.split("/")
-        return parts.length > 0 ? parts[parts.length - 1] : catalogAssets.selectedFilePath
+    function replaceSelectedLayerFromGallery() {
+        if (!selection.hasSelection || selection.isText)
+            return
+        openMediaPicker("replace")
+    }
+
+    function pushGuide(target, orientation, position, label) {
+        if (position < -0.001)
+            return
+        target.push({
+            orientation: orientation,
+            position: position,
+            label: label
+        })
+    }
+
+    function guideCandidatesForSlide(index) {
+        const rect = slideGeometry(index)
+        const slide = slideData(index)
+        const guides = []
+
+        pushGuide(guides, "vertical", rect.x, "Left")
+        pushGuide(guides, "vertical", rect.x + rect.width / 2, "Center")
+        pushGuide(guides, "vertical", rect.x + rect.width, "Right")
+        pushGuide(guides, "horizontal", rect.y, "Top")
+        pushGuide(guides, "horizontal", rect.y + rect.height / 2, "Middle")
+        pushGuide(guides, "horizontal", rect.y + rect.height, "Bottom")
+
+        if (root.thirdsGuidesEnabled) {
+            pushGuide(guides, "vertical", rect.x + rect.width / 3, "Third")
+            pushGuide(guides, "vertical", rect.x + rect.width * 2 / 3, "Third")
+            pushGuide(guides, "horizontal", rect.y + rect.height / 3, "Third")
+            pushGuide(guides, "horizontal", rect.y + rect.height * 2 / 3, "Third")
+        }
+
+        if (root.safeGuidesEnabled) {
+            pushGuide(guides, "vertical", rect.x + rect.width * 0.08, "Safe")
+            pushGuide(guides, "vertical", rect.x + rect.width * 0.92, "Safe")
+            pushGuide(guides, "horizontal", rect.y + rect.height * 0.08, "Safe")
+            pushGuide(guides, "horizontal", rect.y + rect.height * 0.92, "Safe")
+        }
+
+        if (slide && slide.templateKind === "split-pair")
+            pushGuide(guides, "vertical", rect.x + rect.width / 2, "Slot")
+        if (slide && slide.templateKind === "stacked-triptych") {
+            pushGuide(guides, "horizontal", rect.y + rect.height / 3, "Slot")
+            pushGuide(guides, "horizontal", rect.y + rect.height * 2 / 3, "Slot")
+        }
+
+        for (let itemIndex = 0; itemIndex < carouselDocument.canvasItems.length; ++itemIndex) {
+            const item = carouselDocument.canvasItems[itemIndex]
+            if (String(item.itemId || "") === String(selection.itemId || ""))
+                continue
+            if (!root.itemIntersectsSlide(item, rect))
+                continue
+            const x = Number(item.x || 0)
+            const y = Number(item.y || 0)
+            const width = Number(item.width || 0)
+            const height = Number(item.height || 0)
+            pushGuide(guides, "vertical", x, "Layer")
+            pushGuide(guides, "vertical", x + width / 2, "Layer")
+            pushGuide(guides, "vertical", x + width, "Layer")
+            pushGuide(guides, "horizontal", y, "Layer")
+            pushGuide(guides, "horizontal", y + height / 2, "Layer")
+            pushGuide(guides, "horizontal", y + height, "Layer")
+        }
+
+        return guides
+    }
+
+    function snapCenterAxis(center, halfSpan, orientation, candidates) {
+        const threshold = root.snapThresholdPixels / Math.max(0.01, root.stripScale)
+        let best = {
+            value: center,
+            guide: null,
+            distance: threshold + 1
+        }
+        const anchors = [
+            { value: center - halfSpan, offset: halfSpan },
+            { value: center, offset: 0 },
+            { value: center + halfSpan, offset: -halfSpan }
+        ]
+
+        for (let candidateIndex = 0; candidateIndex < candidates.length; ++candidateIndex) {
+            const guide = candidates[candidateIndex]
+            if (guide.orientation !== orientation)
+                continue
+            for (let anchorIndex = 0; anchorIndex < anchors.length; ++anchorIndex) {
+                const anchor = anchors[anchorIndex]
+                const distance = Math.abs(anchor.value - guide.position)
+                if (distance < best.distance) {
+                    best = {
+                        value: guide.position + anchor.offset,
+                        guide: guide,
+                        distance: distance
+                    }
+                }
+            }
+        }
+
+        return best.distance <= threshold ? best : {
+            value: center,
+            guide: null,
+            distance: threshold + 1
+        }
+    }
+
+    function snapSymmetricAxis(center, halfSpan, orientation, candidates) {
+        const threshold = root.snapThresholdPixels / Math.max(0.01, root.stripScale)
+        let best = {
+            halfSpan: halfSpan,
+            guide: null,
+            distance: threshold + 1
+        }
+
+        for (let candidateIndex = 0; candidateIndex < candidates.length; ++candidateIndex) {
+            const guide = candidates[candidateIndex]
+            if (guide.orientation !== orientation)
+                continue
+            const snappedHalfSpan = Math.abs(guide.position - center)
+            const distance = Math.abs(snappedHalfSpan - halfSpan)
+            if (distance < best.distance) {
+                best = {
+                    halfSpan: snappedHalfSpan,
+                    guide: guide,
+                    distance: distance
+                }
+            }
+        }
+
+        return best.distance <= threshold ? best : {
+            halfSpan: halfSpan,
+            guide: null,
+            distance: threshold + 1
+        }
+    }
+
+    function setSnapGuides(guides) {
+        const filtered = []
+        for (let index = 0; index < guides.length; ++index) {
+            if (guides[index])
+                filtered.push(guides[index])
+        }
+        activeSnapGuides = filtered
+    }
+
+    function clearSnapGuides() {
+        activeSnapGuides = []
+    }
+
+    function snapDragPosition(itemData, centerX, centerY) {
+        if (!root.snappingEnabled)
+            return { centerX: centerX, centerY: centerY, guides: [] }
+
+        const slideIndex = slideIndexForDocumentX(centerX)
+        const guides = guideCandidatesForSlide(slideIndex)
+        const halfWidth = Number(itemData.width || 0) / 2
+        const halfHeight = Number(itemData.height || 0) / 2
+        const xResult = snapCenterAxis(centerX, halfWidth, "vertical", guides)
+        const yResult = snapCenterAxis(centerY, halfHeight, "horizontal", guides)
+        return {
+            centerX: xResult.value,
+            centerY: yResult.value,
+            guides: [xResult.guide, yResult.guide]
+        }
+    }
+
+    function snapResize(itemData, centerX, centerY, width, height) {
+        if (!root.snappingEnabled)
+            return { width: width, height: height, guides: [] }
+
+        const slideIndex = slideIndexForDocumentX(centerX)
+        const guides = guideCandidatesForSlide(slideIndex)
+        const widthResult = snapSymmetricAxis(centerX, width / 2, "vertical", guides)
+        const heightResult = snapSymmetricAxis(centerY, height / 2, "horizontal", guides)
+        return {
+            width: Math.max(36, widthResult.halfSpan * 2),
+            height: Math.max(36, heightResult.halfSpan * 2),
+            guides: [widthResult.guide, heightResult.guide]
+        }
     }
 
     Connections {
         target: catalogAssets
 
         function onAssetCountChanged() {
-            if (mediaPickerDialog.visible)
-                root.refreshMediaPickerAssets()
+            root.refreshMediaPickerAssets()
         }
 
         function onTotalAssetCountChanged() {
-            if (mediaPickerDialog.visible)
-                root.refreshMediaPickerAssets()
+            root.refreshMediaPickerAssets()
         }
 
         function onProjectStatsRevisionChanged() {
-            if (mediaPickerDialog.visible)
-                root.refreshMediaPickerAssets()
+            root.refreshMediaPickerAssets()
         }
+
+        function onLoadingChanged() {
+            root.refreshMediaPickerAssets()
+        }
+    }
+
+    Component.onCompleted: refreshMediaPickerAssets()
+
+    Shortcut {
+        sequence: StandardKey.Delete
+        onActivated: carouselDocument.removeSelectedItem()
+    }
+
+    Shortcut {
+        sequence: StandardKey.Copy
+        onActivated: carouselDocument.duplicateSelectedItem()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+D"
+        onActivated: carouselDocument.duplicateSelectedItem()
+    }
+
+    Shortcut {
+        sequence: "Meta+D"
+        onActivated: carouselDocument.duplicateSelectedItem()
+    }
+
+    Shortcut {
+        sequence: "V"
+        onActivated: root.setActiveTool("select")
+    }
+
+    Shortcut {
+        sequence: "H"
+        onActivated: root.setActiveTool("hand")
+    }
+
+    Shortcut {
+        sequence: "T"
+        onActivated: root.setActiveTool("text")
+    }
+
+    Shortcut {
+        sequence: "M"
+        onActivated: root.setActiveTool("media")
+    }
+
+    Shortcut {
+        sequence: "Shift+T"
+        onActivated: carouselDocument.addTextItem("New Text")
+    }
+
+    Shortcut {
+        sequence: "Shift+M"
+        onActivated: openMediaPicker("layer")
+    }
+
+    Shortcut {
+        sequence: "]"
+        onActivated: carouselDocument.bringSelectedForward()
+    }
+
+    Shortcut {
+        sequence: "["
+        onActivated: carouselDocument.sendSelectedBackward()
+    }
+
+    Shortcut {
+        sequence: "="
+        onActivated: zoomIn()
+    }
+
+    Shortcut {
+        sequence: "-"
+        onActivated: zoomOut()
+    }
+
+    Shortcut {
+        sequence: "0"
+        onActivated: resetZoomToFit()
+    }
+
+    Shortcut {
+        sequence: "Left"
+        onActivated: root.nudgeSelected(-1, 0)
+    }
+
+    Shortcut {
+        sequence: "Right"
+        onActivated: root.nudgeSelected(1, 0)
+    }
+
+    Shortcut {
+        sequence: "Up"
+        onActivated: root.nudgeSelected(0, -1)
+    }
+
+    Shortcut {
+        sequence: "Down"
+        onActivated: root.nudgeSelected(0, 1)
+    }
+
+    Shortcut {
+        sequence: "Shift+Left"
+        onActivated: root.nudgeSelected(-10, 0)
+    }
+
+    Shortcut {
+        sequence: "Shift+Right"
+        onActivated: root.nudgeSelected(10, 0)
+    }
+
+    Shortcut {
+        sequence: "Shift+Up"
+        onActivated: root.nudgeSelected(0, -10)
+    }
+
+    Shortcut {
+        sequence: "Shift+Down"
+        onActivated: root.nudgeSelected(0, 10)
     }
 
     RowLayout {
@@ -243,170 +798,121 @@ Rectangle {
         spacing: theme.space12
 
         Rectangle {
-            Layout.preferredWidth: root.compactWorkspace ? 250 : 276
-            Layout.minimumWidth: 228
+            Layout.preferredWidth: 84
+            Layout.minimumWidth: 76
             Layout.fillHeight: true
             radius: theme.radius12
             color: theme.alpha(theme.ink900, 0.94)
             border.width: 1
             border.color: theme.alpha(theme.lineSoft, 0.58)
 
-            ScrollView {
+            ColumnLayout {
                 anchors.fill: parent
-                clip: true
-                contentWidth: availableWidth
+                anchors.margins: 10
+                spacing: 8
 
-                Column {
-                    x: theme.panelPadding
-                    y: theme.panelPadding
-                    width: Math.max(parent.width - theme.panelPadding * 2, 0)
-                    spacing: theme.space10
+                Label {
+                    Layout.alignment: Qt.AlignHCenter
+                    text: "Tools"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                }
 
-                    InspectorSection {
-                        width: parent.width
-                        title: "Canvas"
-                        subtitle: documentPixelLabel() + "  •  " + carouselDocument.slideCount + " boards"
-                        accent: theme.warning
+                Repeater {
+                    model: root.toolButtons
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
+                    delegate: Rectangle {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 58
+                        radius: 12
+                        color: root.activeTool === modelData.value
+                               ? theme.alpha(theme.accentWarm500, 0.22)
+                               : theme.alpha(theme.ink950, 0.55)
+                        border.width: 1
+                        border.color: root.activeTool === modelData.value
+                                      ? theme.accentWarm300
+                                      : theme.alpha(theme.lineSoft, 0.42)
 
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "4x5"
-                                active: carouselDocument.documentFormat === "4x5"
-                                onClicked: carouselDocument.documentFormat = "4x5"
-                            }
-
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "5x4"
-                                active: carouselDocument.documentFormat === "5x4"
-                                onClicked: carouselDocument.documentFormat = "5x4"
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Add Canvas"
-                            tone: "primary"
-                            enabled: carouselDocument.canAddSlide
-                            onClicked: carouselDocument.addSlide()
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Earlier"
-                                enabled: carouselDocument.slideCount > 1
-                                onClicked: carouselDocument.moveCurrentBackward()
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Later"
-                                enabled: carouselDocument.slideCount > 1
-                                onClicked: carouselDocument.moveCurrentForward()
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Remove Current"
-                            enabled: carouselDocument.slideCount > 1
-                            onClicked: carouselDocument.removeCurrentSlide()
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: "New canvases are appended flush against the previous one, so anything that crosses a seam exports as separate cut slides automatically."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-                    }
-
-                    InspectorSection {
-                        width: parent.width
-                        title: "Template"
-                        subtitle: "Per-canvas layout for slot-based media."
-                        accent: theme.accentWarm400
-
-                        Flow {
-                            Layout.fillWidth: true
-                            width: parent.width
-                            spacing: theme.space8
-
-                            Repeater {
-                                model: root.templateButtons
-
-                                delegate: FilterChip {
-                                    required property var modelData
-                                    text: modelData.label
-                                    active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
-                                    onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
-                                }
-                            }
-                        }
-                    }
-
-                    InspectorSection {
-                        width: parent.width
-                        title: "Layers"
-                        subtitle: currentCanvasLabel() + "  •  " + selection.layerCount + " total"
-                        accent: theme.accentWarm400
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Add Photo"
-                            tone: "primary"
-                            onClicked: carouselDocument.pickPhotoItem()
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Open Gallery As Layer"
-                            onClicked: openMediaPicker("layer")
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Use Library As Layer"
-                            enabled: galleryLayerSelectionSupported()
-                            onClicked: assignSelectedGalleryMediaAsLayer()
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Add Text"
-                            onClicked: carouselDocument.addTextItem("New Text")
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: theme.radiusControl
-                            color: theme.alpha(theme.ink850, 0.88)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.7)
-                            implicitHeight: librarySelectionText.implicitHeight + 18
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: 2
 
                             Label {
-                                id: librarySelectionText
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                text: "Library: " + librarySelectionLabel()
-                                color: theme.textMuted
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: modelData.value === "select" ? "V"
+                                                                   : modelData.value === "hand" ? "H"
+                                                                   : modelData.value === "text" ? "T" : "M"
+                                color: theme.textStrong
                                 font.family: theme.fontMono
+                                font.pixelSize: 14
+                                font.weight: Font.Bold
+                            }
+
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: modelData.label
+                                color: theme.textMuted
+                                font.family: theme.fontUi
                                 font.pixelSize: 10
-                                wrapMode: Text.WrapAnywhere
                             }
                         }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.setActiveTool(modelData.value)
+                        }
                     }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: theme.alpha(theme.lineSoft, 0.32)
+                }
+
+                ActionButton {
+                    Layout.fillWidth: true
+                    compact: true
+                    text: "Fit"
+                    onClicked: root.resetZoomToFit()
+                }
+
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Snap"
+                    active: root.snappingEnabled
+                    onClicked: root.snappingEnabled = !root.snappingEnabled
+                }
+
+                FilterChip {
+                    Layout.fillWidth: true
+                    text: "Guides"
+                    active: root.guidesEnabled
+                    onClicked: root.guidesEnabled = !root.guidesEnabled
+                }
+
+                Item {
+                    Layout.fillHeight: true
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                    text: root.activeTool === "select"
+                          ? "Move, resize, and rotate layers."
+                          : root.activeTool === "hand"
+                            ? "Pan the workspace."
+                            : root.activeTool === "text"
+                              ? "Click the canvas to add text."
+                              : "Click the canvas to place media."
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
                 }
             }
         }
@@ -452,21 +958,21 @@ Rectangle {
                     }
 
                     InfoPill {
-                        label: "Selection"
-                        value: selection.hasSelection ? selection.displayLabel : "None"
+                        label: "Tool"
+                        value: root.activeTool === "hand" ? "Pan" : root.activeTool === "text" ? "Text" : root.activeTool === "media" ? "Media" : "Select"
                         accent: theme.accentWarm400
                     }
 
                     InfoPill {
-                        label: "Slot"
-                        value: slotLabel()
+                        label: "Selection"
+                        value: selection.hasSelection ? selection.displayLabel : "None"
                         accent: theme.accentCool400
                     }
 
                     InfoPill {
                         visible: !root.condensedHeader
-                        label: "Layers"
-                        value: String(selection.layerCount)
+                        label: "Slot"
+                        value: slotLabel()
                         accent: theme.accentCool400
                     }
 
@@ -480,17 +986,142 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
+                    radius: theme.radiusControl
+                    color: theme.alpha(theme.ink950, 0.5)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.48)
+                    implicitHeight: 116
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 10
+                        spacing: 10
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            Label {
+                                text: "Canvas"
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            FilterChip {
+                                text: "4x5"
+                                active: carouselDocument.documentFormat === "4x5"
+                                onClicked: carouselDocument.documentFormat = "4x5"
+                            }
+
+                            FilterChip {
+                                text: "5x4"
+                                active: carouselDocument.documentFormat === "5x4"
+                                onClicked: carouselDocument.documentFormat = "5x4"
+                            }
+
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 18
+                                color: theme.alpha(theme.lineSoft, 0.36)
+                            }
+
+                            Repeater {
+                                model: root.templateButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    text: modelData.label
+                                    active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
+                                    onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
+                                }
+                            }
+
+                            Item {
+                                Layout.fillWidth: true
+                            }
+
+                            ActionButton {
+                                compact: true
+                                text: "Add Text"
+                                onClicked: carouselDocument.addTextItem("New Text")
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            FilterChip {
+                                text: "Snap"
+                                active: root.snappingEnabled
+                                onClicked: root.snappingEnabled = !root.snappingEnabled
+                            }
+
+                            FilterChip {
+                                text: "Guides"
+                                active: root.guidesEnabled
+                                onClicked: root.guidesEnabled = !root.guidesEnabled
+                            }
+
+                            FilterChip {
+                                text: "Thirds"
+                                active: root.thirdsGuidesEnabled
+                                onClicked: root.thirdsGuidesEnabled = !root.thirdsGuidesEnabled
+                            }
+
+                            FilterChip {
+                                text: "Safe"
+                                active: root.safeGuidesEnabled
+                                onClicked: root.safeGuidesEnabled = !root.safeGuidesEnabled
+                            }
+
+                            Item {
+                                Layout.preferredWidth: 12
+                            }
+
+                            ActionButton {
+                                text: "-"
+                                compact: true
+                                onClicked: root.zoomOut()
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Zoom"
+                                valueText: Math.round(root.composerZoom * 100) + "%"
+                                from: 0.5
+                                to: 3.0
+                                stepSize: 0.05
+                                value: root.composerZoom
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    root.composerZoom = root.clampZoom(value)
+                                }
+                            }
+
+                            ActionButton {
+                                text: "+"
+                                compact: true
+                                onClicked: root.zoomIn()
+                            }
+
+                            ActionButton {
+                                text: "Fit"
+                                compact: true
+                                onClicked: root.resetZoomToFit()
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 18
-                    color: theme.alpha(theme.ink950, 0.72)
+                    color: theme.alpha(theme.ink950, 0.88)
                     border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.56)
-
-                    gradient: Gradient {
-                        GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.14) }
-                        GradientStop { position: 0.24; color: theme.alpha(theme.ink900, 0.92) }
-                        GradientStop { position: 1.0; color: theme.ink950 }
-                    }
+                    border.color: theme.alpha(theme.lineSoft, 0.42)
 
                     Flickable {
                         id: artboardFlick
@@ -499,17 +1130,32 @@ Rectangle {
                         contentWidth: Math.max(width, stripSurface.width + 40)
                         contentHeight: Math.max(height, stripSurface.height + 40)
                         boundsBehavior: Flickable.StopAtBounds
+                        interactive: root.activeTool === "hand"
                         clip: true
 
                         ScrollBar.horizontal: ScrollBar { }
                         ScrollBar.vertical: ScrollBar { }
+
+                        WheelHandler {
+                            target: null
+
+                            onWheel: function(event) {
+                                if (event.modifiers & Qt.ControlModifier) {
+                                    if (event.angleDelta.y > 0)
+                                        root.zoomIn()
+                                    else if (event.angleDelta.y < 0)
+                                        root.zoomOut()
+                                    event.accepted = true
+                                }
+                            }
+                        }
 
                         Rectangle {
                             id: stripSurface
                             x: Math.max(20, (artboardFlick.width - width) / 2)
                             y: Math.max(20, (artboardFlick.height - height) / 2)
                             width: Math.max(200, carouselDocument.documentPixelWidth * root.stripScale)
-                            height: Math.max(260, Math.min(artboardFlick.height - 44, root.compactWorkspace ? 420 : 520))
+                            height: Math.max(260, carouselDocument.documentPixelHeight * root.stripScale)
                             radius: 18
                             color: "#fbf7f1"
                             border.width: 2
@@ -519,15 +1165,14 @@ Rectangle {
                             MouseArea {
                                 anchors.fill: parent
                                 hoverEnabled: true
-                                cursorShape: Qt.CrossCursor
+                                cursorShape: root.toolCursorShape()
 
                                 onPressed: function(mouse) {
-                                    const slideWidth = root.slideWidthOnStrip()
-                                    const targetIndex = Math.max(0, Math.min(carouselDocument.slideCount - 1, Math.floor(mouse.x / Math.max(1, slideWidth))))
-                                    const localX = mouse.x - (targetIndex * slideWidth)
-                                    carouselDocument.selectSlide(targetIndex)
-                                    chooseSlotForSlide(slideData(targetIndex), localX, mouse.y, slideWidth, stripSurface.height)
-                                    carouselDocument.clearSelection()
+                                    if (root.activeTool === "hand") {
+                                        mouse.accepted = false
+                                        return
+                                    }
+                                    root.handleCanvasToolPress(mouse, root.slideWidthOnStrip(), stripSurface.height)
                                 }
                             }
 
@@ -535,13 +1180,16 @@ Rectangle {
                                 model: carouselDocument.slides
 
                                 delegate: Item {
+                                    id: slideDelegate
                                     required property int index
                                     required property var modelData
+                                    property var slotRegions: root.slotRegionsForSlide(modelData, width, height)
 
                                     x: index * root.slideWidthOnStrip()
                                     y: 0
                                     width: root.slideWidthOnStrip()
                                     height: stripSurface.height
+                                    z: modelData.selected ? 2 : 1
 
                                     Rectangle {
                                         anchors.fill: parent
@@ -550,77 +1198,344 @@ Rectangle {
                                         border.color: theme.alpha("#cdb9a4", 0.84)
                                     }
 
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: modelData.selected ? "transparent" : theme.alpha(theme.ink950, 0.08)
+                                    }
+
                                     Image {
                                         anchors.fill: parent
                                         source: modelData.previewSource
                                         fillMode: Image.PreserveAspectCrop
                                         cache: false
                                         asynchronous: false
+                                        smooth: true
+                                        mipmap: true
+                                        sourceSize.width: Math.max(1, Math.round(width))
+                                        sourceSize.height: Math.max(1, Math.round(height))
                                     }
 
                                     Rectangle {
                                         anchors.fill: parent
                                         color: "transparent"
-                                        border.width: modelData.selected ? 2 : 0
+                                        border.width: modelData.selected ? 3 : 0
                                         border.color: theme.alpha(theme.accentWarm500, 0.96)
                                     }
 
                                     Rectangle {
-                                        visible: modelData.selected && modelData.templateKind === "split-pair" && selection.activeSlot === "primary"
-                                        width: parent.width / 2
-                                        height: parent.height
-                                        color: "transparent"
-                                        border.width: 2
-                                        border.color: theme.alpha(theme.accentWarm500, 0.96)
+                                        visible: modelData.selected
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        height: 4
+                                        color: theme.accentWarm400
                                     }
 
-                                    Rectangle {
-                                        visible: modelData.selected && modelData.templateKind === "split-pair" && selection.activeSlot === "secondary"
-                                        x: parent.width / 2
-                                        width: parent.width / 2
-                                        height: parent.height
-                                        color: "transparent"
-                                        border.width: 2
-                                        border.color: theme.alpha(theme.accentWarm500, 0.96)
+                                    Repeater {
+                                        model: parent.slotRegions
+
+                                        delegate: Item {
+                                            id: slotRegion
+                                            required property var modelData
+                                            property bool isActive: root.selection.activeSlot === modelData.name
+                                            property bool dragArmed: false
+                                            property real lastX: 0
+                                            property real lastY: 0
+                                            property real startScale: 1.0
+                                            property real handleStartX: 0
+                                            property real handleStartY: 0
+                                            property bool scaleArmed: false
+
+                                            x: Number(modelData.x || 0)
+                                            y: Number(modelData.y || 0)
+                                            width: Number(modelData.width || 0)
+                                            height: Number(modelData.height || 0)
+                                            visible: slideDelegate.modelData.selected && !root.selection.hasSelection
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                color: slotRegion.isActive
+                                                       ? theme.alpha(theme.accentWarm500, modelData.hasMedia ? 0.05 : 0.08)
+                                                       : theme.alpha(theme.ink950, 0.02)
+                                                border.width: slotRegion.isActive ? 2 : 1
+                                                border.color: slotRegion.isActive
+                                                              ? theme.alpha(theme.accentWarm500, 0.96)
+                                                              : theme.alpha("#d6c7b6", 0.42)
+                                            }
+
+                                            Label {
+                                                anchors.left: parent.left
+                                                anchors.top: parent.top
+                                                anchors.margins: 10
+                                                text: modelData.label
+                                                color: slotRegion.isActive ? theme.textStrong : "#8a7360"
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 10
+                                            }
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                visible: !modelData.hasMedia
+                                                text: "Click to add media"
+                                                color: theme.alpha(theme.textMuted, 0.92)
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 12
+                                            }
+
+                                            Item {
+                                                anchors.fill: parent
+                                                visible: slotRegion.isActive && root.guidesEnabled
+
+                                                Rectangle {
+                                                    x: parent.width / 2
+                                                    y: 0
+                                                    width: 1
+                                                    height: parent.height
+                                                    color: theme.alpha("#5fc2d8", 0.42)
+                                                }
+
+                                                Rectangle {
+                                                    x: 0
+                                                    y: parent.height / 2
+                                                    width: parent.width
+                                                    height: 1
+                                                    color: theme.alpha("#5fc2d8", 0.42)
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                enabled: root.activeTool === "select" || root.activeTool === "media"
+                                                hoverEnabled: true
+                                                preventStealing: true
+                                                cursorShape: root.activeTool === "media"
+                                                             ? Qt.PointingHandCursor
+                                                             : modelData.hasMedia
+                                                               ? pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                                               : Qt.PointingHandCursor
+
+                                                onPressed: function(mouse) {
+                                                    carouselDocument.selectSlide(slideDelegate.index)
+                                                    carouselDocument.setActiveSlot(modelData.name)
+                                                    carouselDocument.clearSelection()
+                                                    if (root.activeTool === "media" || !modelData.hasMedia) {
+                                                        slotRegion.dragArmed = false
+                                                        root.clearSnapGuides()
+                                                        return
+                                                    }
+                                                    const p = slotRegion.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                    slotRegion.lastX = p.x
+                                                    slotRegion.lastY = p.y
+                                                    slotRegion.dragArmed = true
+                                                }
+
+                                                onPositionChanged: function(mouse) {
+                                                    if (!pressed || !slotRegion.dragArmed)
+                                                        return
+                                                    const p = slotRegion.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                    carouselDocument.moveCurrentMediaByPixels(
+                                                                (p.x - slotRegion.lastX) / root.stripScale,
+                                                                (p.y - slotRegion.lastY) / root.stripScale)
+                                                    slotRegion.lastX = p.x
+                                                    slotRegion.lastY = p.y
+                                                    root.setSnapGuides(root.slotInteractionGuides(
+                                                                           slideDelegate.index,
+                                                                           slideDelegate.modelData,
+                                                                           slideDelegate.width,
+                                                                           slideDelegate.height,
+                                                                           modelData.name,
+                                                                           Number(selection.offsetX || 0),
+                                                                           Number(selection.offsetY || 0)))
+                                                }
+
+                                                onReleased: {
+                                                    slotRegion.dragArmed = false
+                                                    root.clearSnapGuides()
+                                                }
+
+                                                onClicked: function() {
+                                                    carouselDocument.selectSlide(slideDelegate.index)
+                                                    carouselDocument.setActiveSlot(modelData.name)
+                                                    carouselDocument.clearSelection()
+                                                    if (root.activeTool === "media" || !modelData.hasMedia) {
+                                                        openMediaPicker("slot")
+                                                        if (root.activeTool === "media")
+                                                            root.setActiveTool("select")
+                                                    }
+                                                }
+
+                                                onDoubleClicked: {
+                                                    carouselDocument.selectSlide(slideDelegate.index)
+                                                    carouselDocument.setActiveSlot(modelData.name)
+                                                    carouselDocument.clearSelection()
+                                                    openMediaPicker("slot")
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                id: slotScaleHandle
+                                                visible: slotRegion.isActive && modelData.hasMedia && root.activeTool === "select"
+                                                width: 18
+                                                height: 18
+                                                radius: 9
+                                                anchors.right: parent.right
+                                                anchors.bottom: parent.bottom
+                                                anchors.margins: -9
+                                                color: theme.accentWarm500
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.ink950, 0.35)
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    cursorShape: Qt.SizeFDiagCursor
+                                                    preventStealing: true
+
+                                                    onPressed: function(mouse) {
+                                                        carouselDocument.selectSlide(slideDelegate.index)
+                                                        carouselDocument.setActiveSlot(modelData.name)
+                                                        carouselDocument.clearSelection()
+                                                        slotRegion.scaleArmed = true
+                                                        slotRegion.startScale = Number(selection.scale || 1)
+                                                        const p = slotScaleHandle.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                        slotRegion.handleStartX = p.x
+                                                        slotRegion.handleStartY = p.y
+                                                    }
+
+                                                    onPositionChanged: function(mouse) {
+                                                        if (!pressed || !slotRegion.scaleArmed)
+                                                            return
+                                                        const p = slotScaleHandle.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                        const delta = Math.max(
+                                                                        p.x - slotRegion.handleStartX,
+                                                                        p.y - slotRegion.handleStartY)
+                                                        let scale = slotRegion.startScale + (delta / Math.max(120, Math.min(slotRegion.width, slotRegion.height)))
+                                                        if (Math.abs(scale - 1.0) < 0.08)
+                                                            scale = 1.0
+                                                        carouselDocument.setCurrentScale(scale)
+                                                    }
+
+                                                    onReleased: {
+                                                        slotRegion.scaleArmed = false
+                                                        root.clearSnapGuides()
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
 
-                                    Rectangle {
-                                        visible: modelData.selected && modelData.templateKind === "stacked-triptych" && selection.activeSlot === "primary"
-                                        width: parent.width
-                                        height: parent.height / 3
-                                        color: "transparent"
-                                        border.width: 2
-                                        border.color: theme.alpha(theme.accentWarm500, 0.96)
-                                    }
+                                    Item {
+                                        anchors.fill: parent
+                                        visible: root.guidesEnabled && modelData.selected
 
-                                    Rectangle {
-                                        visible: modelData.selected && modelData.templateKind === "stacked-triptych" && selection.activeSlot === "secondary"
-                                        y: parent.height / 3
-                                        width: parent.width
-                                        height: parent.height / 3
-                                        color: "transparent"
-                                        border.width: 2
-                                        border.color: theme.alpha(theme.accentWarm500, 0.96)
-                                    }
+                                        Rectangle {
+                                            x: parent.width / 2
+                                            y: 0
+                                            width: 1
+                                            height: parent.height
+                                            color: theme.alpha("#5fc2d8", 0.55)
+                                        }
 
-                                    Rectangle {
-                                        visible: modelData.selected && modelData.templateKind === "stacked-triptych" && selection.activeSlot === "tertiary"
-                                        y: parent.height * 2 / 3
-                                        width: parent.width
-                                        height: parent.height / 3
-                                        color: "transparent"
-                                        border.width: 2
-                                        border.color: theme.alpha(theme.accentWarm500, 0.96)
+                                        Rectangle {
+                                            x: 0
+                                            y: parent.height / 2
+                                            width: parent.width
+                                            height: 1
+                                            color: theme.alpha("#5fc2d8", 0.55)
+                                        }
+
+                                        Rectangle {
+                                            visible: root.thirdsGuidesEnabled
+                                            x: parent.width / 3
+                                            y: 0
+                                            width: 1
+                                            height: parent.height
+                                            color: theme.alpha("#f0b35d", 0.45)
+                                        }
+
+                                        Rectangle {
+                                            visible: root.thirdsGuidesEnabled
+                                            x: parent.width * 2 / 3
+                                            y: 0
+                                            width: 1
+                                            height: parent.height
+                                            color: theme.alpha("#f0b35d", 0.45)
+                                        }
+
+                                        Rectangle {
+                                            visible: root.thirdsGuidesEnabled
+                                            x: 0
+                                            y: parent.height / 3
+                                            width: parent.width
+                                            height: 1
+                                            color: theme.alpha("#f0b35d", 0.45)
+                                        }
+
+                                        Rectangle {
+                                            visible: root.thirdsGuidesEnabled
+                                            x: 0
+                                            y: parent.height * 2 / 3
+                                            width: parent.width
+                                            height: 1
+                                            color: theme.alpha("#f0b35d", 0.45)
+                                        }
+
+                                        Rectangle {
+                                            visible: root.safeGuidesEnabled
+                                            anchors.fill: parent
+                                            anchors.margins: Math.round(Math.min(parent.width, parent.height) * 0.08)
+                                            color: "transparent"
+                                            border.width: 1
+                                            border.color: theme.alpha("#7bd0bf", 0.7)
+                                        }
                                     }
 
                                     Label {
                                         anchors.left: parent.left
                                         anchors.top: parent.top
                                         anchors.margins: 12
-                                        text: "Canvas " + (index + 1)
+                                        text: modelData.selected ? "Current • Canvas " + (index + 1) : "Canvas " + (index + 1)
                                         color: modelData.selected ? theme.textStrong : "#7d6858"
                                         font.family: theme.fontMono
                                         font.pixelSize: 10
+                                    }
+                                }
+                            }
+
+                            Repeater {
+                                model: root.activeSnapGuides
+
+                                delegate: Item {
+                                    required property var modelData
+
+                                    x: modelData.orientation === "vertical" ? Number(modelData.position || 0) * root.stripScale : 0
+                                    y: modelData.orientation === "horizontal" ? Number(modelData.position || 0) * root.stripScale : 0
+                                    width: modelData.orientation === "vertical" ? 1 : stripSurface.width
+                                    height: modelData.orientation === "horizontal" ? 1 : stripSurface.height
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: theme.alpha(theme.accentCool400, 0.92)
+                                    }
+
+                                    Rectangle {
+                                        visible: modelData.label && modelData.label.length > 0
+                                        x: modelData.orientation === "vertical" ? 6 : 10
+                                        y: modelData.orientation === "vertical" ? 10 : 6
+                                        radius: 8
+                                        color: theme.alpha(theme.ink950, 0.88)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.accentCool400, 0.72)
+                                        implicitWidth: snapGuideText.implicitWidth + 14
+                                        implicitHeight: snapGuideText.implicitHeight + 8
+
+                                        Label {
+                                            id: snapGuideText
+                                            anchors.centerIn: parent
+                                            text: modelData.label
+                                            color: theme.textStrong
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
                                     }
                                 }
                             }
@@ -634,19 +1549,27 @@ Rectangle {
                                     required property var modelData
                                     property real dragLastX: 0
                                     property real dragLastY: 0
+                                    property real dragCenterX: 0
+                                    property real dragCenterY: 0
                                     property real resizeStartWidth: 0
                                     property real resizeStartHeight: 0
                                     property real resizeStartX: 0
                                     property real resizeStartY: 0
+                                    property real resizeCenterX: 0
+                                    property real resizeCenterY: 0
                                     property real rotateCenterX: 0
                                     property real rotateCenterY: 0
+                                    property bool dragArmed: false
                                     property bool selected: !!modelData.selected
+                                    property bool primarySelected: !!modelData.primarySelected
 
                                     x: Number(modelData.x || 0) * root.stripScale
                                     y: Number(modelData.y || 0) * root.stripScale
                                     width: Math.max(10, Number(modelData.width || 0) * root.stripScale)
                                     height: Math.max(10, Number(modelData.height || 0) * root.stripScale)
                                     z: layerItem.index + 10
+                                    visible: !Boolean(modelData.hidden)
+                                    opacity: Boolean(modelData.locked) ? 0.82 : 1.0
 
                                     transform: Rotation {
                                         origin.x: layerBody.width / 2
@@ -662,7 +1585,7 @@ Rectangle {
                                             anchors.fill: parent
                                             radius: modelData.type === "image" ? 2 : 0
                                             color: modelData.type === "image" ? theme.alpha(theme.ink950, 0.05) : "transparent"
-                                            border.width: layerItem.selected ? 2 : 0
+                                            border.width: layerItem.primarySelected ? 2 : layerItem.selected ? 1 : 0
                                             border.color: theme.alpha(theme.accentWarm500, 0.96)
                                             clip: true
 
@@ -672,7 +1595,58 @@ Rectangle {
                                                 source: modelData.sourceUrl
                                                 fillMode: modelData.fitMode === "contain" ? Image.PreserveAspectFit : Image.PreserveAspectCrop
                                                 cache: false
-                                                asynchronous: true
+                                                asynchronous: false
+                                                smooth: true
+                                                mipmap: true
+                                                sourceSize.width: Math.max(1, Math.round(parent.width))
+                                                sourceSize.height: Math.max(1, Math.round(parent.height))
+                                            }
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: modelData.type === "video"
+                                                color: "#0f1820"
+                                                border.width: 2
+                                                border.color: theme.alpha("#69cad8", 0.88)
+                                                radius: 8
+
+                                                Rectangle {
+                                                    anchors.centerIn: parent
+                                                    width: Math.min(parent.width, parent.height) * 0.28
+                                                    height: width
+                                                    radius: width / 2
+                                                    color: theme.alpha("#69cad8", 0.16)
+                                                    border.width: 1
+                                                    border.color: theme.alpha("#69cad8", 0.72)
+
+                                                    Canvas {
+                                                        anchors.fill: parent
+                                                        onPaint: {
+                                                            const ctx = getContext("2d")
+                                                            ctx.reset()
+                                                            ctx.fillStyle = "#69cad8"
+                                                            ctx.beginPath()
+                                                            ctx.moveTo(width * 0.4, height * 0.28)
+                                                            ctx.lineTo(width * 0.4, height * 0.72)
+                                                            ctx.lineTo(width * 0.72, height * 0.5)
+                                                            ctx.closePath()
+                                                            ctx.fill()
+                                                        }
+                                                    }
+                                                }
+
+                                                Label {
+                                                    anchors.left: parent.left
+                                                    anchors.right: parent.right
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.margins: 10
+                                                    text: modelData.displayLabel
+                                                    color: "#eef4f6"
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: Math.max(10, Math.round(11 * root.stripScale / 0.2))
+                                                    horizontalAlignment: Text.AlignHCenter
+                                                    elide: Text.ElideRight
+                                                }
                                             }
 
                                             Text {
@@ -692,29 +1666,60 @@ Rectangle {
                                         MouseArea {
                                             anchors.fill: parent
                                             hoverEnabled: true
-                                            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                            enabled: root.activeTool === "select"
+                                            preventStealing: true
+                                            cursorShape: Boolean(modelData.locked) ? Qt.ForbiddenCursor
+                                                                                  : pressed ? Qt.ClosedHandCursor : Qt.SizeAllCursor
 
                                             onPressed: function(mouse) {
-                                                carouselDocument.selectItem(modelData.itemId)
+                                                if (root.hasMultiSelectModifier(mouse.modifiers)) {
+                                                    carouselDocument.toggleItemSelection(modelData.itemId)
+                                                    layerItem.dragArmed = false
+                                                    root.clearSnapGuides()
+                                                    return
+                                                }
+                                                if (Boolean(modelData.locked)) {
+                                                    root.focusLayerItem(modelData.itemId, layerItem.selected)
+                                                    layerItem.dragArmed = false
+                                                    root.clearSnapGuides()
+                                                    return
+                                                }
+                                                root.focusLayerItem(modelData.itemId, layerItem.selected)
                                                 const p = layerBody.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                layerItem.dragLastX = p.x
+                                                layerItem.dragLastY = p.y
+                                                layerItem.dragCenterX = Number(modelData.centerX || 0)
+                                                layerItem.dragCenterY = Number(modelData.centerY || 0)
+                                                layerItem.dragArmed = true
+                                            }
+
+                                            onPositionChanged: function(mouse) {
+                                                if (!pressed || !layerItem.dragArmed)
+                                                    return
+                                                const p = layerBody.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                const deltaX = (p.x - layerItem.dragLastX) / root.stripScale
+                                                const deltaY = (p.y - layerItem.dragLastY) / root.stripScale
+                                                const snapped = root.snapDragPosition(
+                                                            modelData,
+                                                            layerItem.dragCenterX + deltaX,
+                                                            layerItem.dragCenterY + deltaY)
+                                                carouselDocument.setSelectedItemCenter(snapped.centerX, snapped.centerY)
+                                                root.setSnapGuides(snapped.guides)
+                                                layerItem.dragCenterX = snapped.centerX
+                                                layerItem.dragCenterY = snapped.centerY
                                                 layerItem.dragLastX = p.x
                                                 layerItem.dragLastY = p.y
                                             }
 
-                                            onPositionChanged: function(mouse) {
-                                                if (!pressed)
-                                                    return
-                                                const p = layerBody.mapToItem(stripSurface, mouse.x, mouse.y)
-                                                carouselDocument.moveSelectedItemByPixels((p.x - layerItem.dragLastX) / root.stripScale,
-                                                                                         (p.y - layerItem.dragLastY) / root.stripScale)
-                                                layerItem.dragLastX = p.x
-                                                layerItem.dragLastY = p.y
+                                            onReleased: {
+                                                layerItem.dragArmed = false
+                                                root.clearSnapGuides()
                                             }
                                         }
 
                                         Rectangle {
                                             id: rotateHandle
-                                            visible: layerItem.selected
+                                            visible: root.activeTool === "select" && layerItem.primarySelected && !Boolean(modelData.locked)
                                             width: 18
                                             height: 18
                                             radius: 9
@@ -728,9 +1733,10 @@ Rectangle {
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.CrossCursor
+                                                preventStealing: true
 
                                                 onPressed: function(mouse) {
-                                                    carouselDocument.selectItem(modelData.itemId)
+                                                    root.focusLayerItem(modelData.itemId, true)
                                                     const center = layerBody.mapToItem(stripSurface, layerBody.width / 2, layerBody.height / 2)
                                                     layerItem.rotateCenterX = center.x
                                                     layerItem.rotateCenterY = center.y
@@ -743,12 +1749,14 @@ Rectangle {
                                                     const angle = Math.atan2(p.y - layerItem.rotateCenterY, p.x - layerItem.rotateCenterX) * 180 / Math.PI + 90
                                                     carouselDocument.setSelectedItemRotation(angle)
                                                 }
+
+                                                onReleased: root.clearSnapGuides()
                                             }
                                         }
 
                                         Rectangle {
                                             id: resizeHandle
-                                            visible: layerItem.selected
+                                            visible: root.activeTool === "select" && layerItem.primarySelected && !Boolean(modelData.locked)
                                             width: 18
                                             height: 18
                                             radius: 9
@@ -762,11 +1770,14 @@ Rectangle {
                                             MouseArea {
                                                 anchors.fill: parent
                                                 cursorShape: Qt.SizeFDiagCursor
+                                                preventStealing: true
 
                                                 onPressed: function(mouse) {
-                                                    carouselDocument.selectItem(modelData.itemId)
+                                                    root.focusLayerItem(modelData.itemId, true)
                                                     layerItem.resizeStartWidth = Number(modelData.width || 0)
                                                     layerItem.resizeStartHeight = Number(modelData.height || 0)
+                                                    layerItem.resizeCenterX = Number(modelData.centerX || 0)
+                                                    layerItem.resizeCenterY = Number(modelData.centerY || 0)
                                                     const p = resizeHandle.mapToItem(stripSurface, mouse.x, mouse.y)
                                                     layerItem.resizeStartX = p.x
                                                     layerItem.resizeStartY = p.y
@@ -776,9 +1787,17 @@ Rectangle {
                                                     if (!pressed)
                                                         return
                                                     const p = resizeHandle.mapToItem(stripSurface, mouse.x, mouse.y)
-                                                    carouselDocument.setSelectedItemSize(layerItem.resizeStartWidth + ((p.x - layerItem.resizeStartX) / root.stripScale),
-                                                                                        layerItem.resizeStartHeight + ((p.y - layerItem.resizeStartY) / root.stripScale))
+                                                    const snapped = root.snapResize(
+                                                                modelData,
+                                                                layerItem.resizeCenterX,
+                                                                layerItem.resizeCenterY,
+                                                                layerItem.resizeStartWidth + ((p.x - layerItem.resizeStartX) / root.stripScale),
+                                                                layerItem.resizeStartHeight + ((p.y - layerItem.resizeStartY) / root.stripScale))
+                                                    carouselDocument.setSelectedItemSize(snapped.width, snapped.height)
+                                                    root.setSnapGuides(snapped.guides)
                                                 }
+
+                                                onReleased: root.clearSnapGuides()
                                             }
                                         }
                                     }
@@ -791,8 +1810,8 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: root.compactWorkspace ? 280 : 308
-            Layout.minimumWidth: 248
+            Layout.preferredWidth: root.compactWorkspace ? 248 : 272
+            Layout.minimumWidth: 228
             Layout.fillHeight: true
             radius: theme.radius12
             color: theme.alpha(theme.ink900, 0.94)
@@ -812,9 +1831,49 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        title: "Media"
-                        subtitle: currentCanvasLabel() + "  •  " + currentTemplateLabel()
+                        visible: !selection.hasSelection
+                        title: "Canvas"
+                        subtitle: currentCanvasLabel() + "  •  " + carouselDocument.slideCount + " boards"
                         accent: theme.accentWarm400
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Add Board"
+                                tone: "primary"
+                                enabled: carouselDocument.canAddSlide
+                                onClicked: carouselDocument.addSlide()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Remove"
+                                enabled: carouselDocument.slideCount > 1
+                                onClicked: carouselDocument.removeCurrentSlide()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Move Left"
+                                enabled: carouselDocument.slideCount > 1
+                                onClicked: carouselDocument.moveCurrentBackward()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Move Right"
+                                enabled: carouselDocument.slideCount > 1
+                                onClicked: carouselDocument.moveCurrentForward()
+                            }
+                        }
 
                         Rectangle {
                             Layout.fillWidth: true
@@ -830,7 +1889,7 @@ Rectangle {
                                 anchors.margins: 10
                                 text: selection.hasMedia
                                       ? selection.slotDisplayLabel + "\n" + slotLabel() + " slot"
-                                      : "The active slot is empty."
+                                      : "Choose media for the active slot."
                                 color: theme.textMain
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -840,41 +1899,9 @@ Rectangle {
 
                         ActionButton {
                             Layout.fillWidth: true
-                            text: "Open Gallery For Slot"
+                            text: "Choose Media"
                             tone: "primary"
                             onClicked: openMediaPicker("slot")
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Use Library Selection"
-                            enabled: gallerySelectionSupported()
-                            onClicked: assignSelectedGalleryMedia()
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Pick Image"
-                                onClicked: {
-                                    if (selection.canUseTertiary && selection.activeSlot === "tertiary")
-                                        carouselDocument.pickSecondaryImage()
-                                    else if (selection.canUseSecondary && selection.activeSlot === "secondary")
-                                        carouselDocument.pickSecondaryImage()
-                                    else
-                                        carouselDocument.pickPrimaryImage()
-                                }
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Pick Video"
-                                enabled: canPlaceVideo()
-                                onClicked: carouselDocument.pickPrimaryVideo()
-                            }
                         }
 
                         ActionButton {
@@ -936,6 +1963,17 @@ Rectangle {
                             }
                         }
 
+                        Label {
+                            Layout.fillWidth: true
+                            text: selection.hasMedia
+                                  ? "Drag inside the active slot to reposition the image. Drag the corner handle on the canvas to scale it."
+                                  : "Click a slot on the canvas to target it, then choose media."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Scale"
@@ -981,19 +2019,149 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        title: "Selected Layer"
-                        subtitle: selection.hasSelection ? selection.displayLabel : "Nothing selected"
+                        title: "Layers"
+                        subtitle: currentCanvasLabel() + "  •  " + currentSlideLayers.length + " layers"
                         accent: theme.accentCool400
 
-                        Label {
+                        Rectangle {
                             Layout.fillWidth: true
-                            text: selection.hasSelection
-                                  ? "Drag the layer directly on the strip. Use the top handle to rotate and the lower-right handle to resize."
-                                  : "Click a photo or text layer to edit it."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
+                            radius: theme.radiusControl
+                            color: theme.alpha(theme.ink850, 0.88)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.7)
+                            implicitHeight: currentSlideLayers.length === 0 ? 72 : Math.min(260, Math.max(84, currentSlideLayers.length * 62 + 12))
+
+                            ListView {
+                                visible: currentSlideLayers.length > 0
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                clip: true
+                                spacing: 6
+                                model: root.currentSlideLayers
+
+                                delegate: Rectangle {
+                                    id: layerRow
+                                    required property var modelData
+
+                                    width: parent ? parent.width : 200
+                                    height: 56
+                                    radius: 10
+                                    color: Boolean(modelData.selected)
+                                           ? theme.alpha(theme.accentCool400, 0.18)
+                                           : theme.alpha(theme.ink900, Boolean(modelData.hidden) ? 0.46 : 0.72)
+                                    border.width: 1
+                                    border.color: Boolean(modelData.primarySelected)
+                                                  ? theme.accentCool400
+                                                  : Boolean(modelData.selected)
+                                                    ? theme.alpha(theme.accentCool400, 0.7)
+                                                  : theme.alpha(theme.lineSoft, 0.26)
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 8
+                                        spacing: 8
+
+                                        Rectangle {
+                                            Layout.preferredWidth: 40
+                                            Layout.preferredHeight: 40
+                                            radius: 8
+                                            color: modelData.type === "text" ? theme.alpha(theme.success, 0.2)
+                                                                             : modelData.type === "video" ? theme.alpha(theme.accentCool400, 0.2)
+                                                                                                           : theme.alpha(theme.warning, 0.18)
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                text: modelData.type === "text" ? "T" : modelData.type === "video" ? "V" : "P"
+                                                color: theme.textStrong
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 12
+                                                font.weight: Font.Bold
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(modelData.displayLabel || "Layer")
+                                                color: theme.textStrong
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 12
+                                                font.weight: Font.Medium
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: "x " + Math.round(Number(modelData.x || 0)) + "  y " + Math.round(Number(modelData.y || 0))
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 10
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+
+                                        ActionButton {
+                                            compact: true
+                                            text: Boolean(modelData.hidden) ? "Show" : "Hide"
+                                            onClicked: {
+                                                root.focusLayerItem(String(modelData.itemId || ""), Boolean(modelData.selected))
+                                                carouselDocument.setSelectedItemHidden(!Boolean(modelData.hidden))
+                                            }
+                                        }
+
+                                        ActionButton {
+                                            compact: true
+                                            text: Boolean(modelData.locked) ? "Unlock" : "Lock"
+                                            onClicked: {
+                                                root.focusLayerItem(String(modelData.itemId || ""), Boolean(modelData.selected))
+                                                carouselDocument.setSelectedItemLocked(!Boolean(modelData.locked))
+                                            }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        z: -1
+                                        onClicked: function(mouse) {
+                                            if (root.hasMultiSelectModifier(mouse.modifiers))
+                                                carouselDocument.toggleItemSelection(String(modelData.itemId || ""))
+                                            else
+                                                root.focusLayerItem(String(modelData.itemId || ""), Boolean(modelData.selected))
+                                        }
+                                    }
+                                }
+                            }
+
+                            Label {
+                                anchors.centerIn: parent
+                                visible: currentSlideLayers.length === 0
+                                text: "No layers yet"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Duplicate"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.duplicateSelectedItem()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Replace"
+                                enabled: selection.selectedCount === 1 && !selection.isText
+                                onClicked: root.replaceSelectedLayerFromGallery()
+                            }
                         }
 
                         RowLayout {
@@ -1014,12 +2182,119 @@ Rectangle {
                                 onClicked: carouselDocument.bringSelectedForward()
                             }
                         }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: selection.hasSelection
+                        title: "Properties"
+                        subtitle: selection.hasMultipleSelection ? selection.selectedCount + " layers selected" : selection.displayLabel
+                        accent: theme.accentCool400
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Cmd/Ctrl-click adds or removes layers from the selection. Transform handles stay on the primary selected layer."
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
 
                         ActionButton {
                             Layout.fillWidth: true
                             text: "Remove Selected"
                             enabled: selection.hasSelection
                             onClicked: carouselDocument.removeSelectedItem()
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: selection.hidden ? "Show Layer" : "Hide Layer"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.setSelectedItemHidden(!selection.hidden)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: selection.locked ? "Unlock Layer" : "Lock Layer"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.setSelectedItemLocked(!selection.locked)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Left"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionLeft()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Center X"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionHorizontalCenter()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Right"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionRight()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Top"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionTop()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Center Y"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionVerticalCenter()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Bottom"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionBottom()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Space X"
+                                enabled: selection.editableSelectionCount > 2
+                                onClicked: carouselDocument.distributeSelectionHorizontally()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Space Y"
+                                enabled: selection.editableSelectionCount > 2
+                                onClicked: carouselDocument.distributeSelectionVertically()
+                            }
                         }
 
                         Rectangle {
@@ -1035,9 +2310,13 @@ Rectangle {
                                 anchors.fill: parent
                                 anchors.margins: 10
                                 text: selection.hasSelection
-                                      ? "x " + Math.round(selection.x) + "  y " + Math.round(selection.y)
-                                        + "\n" + Math.round(selection.width) + " x " + Math.round(selection.height)
-                                        + "\nrotation " + Math.round(selection.rotation) + "°"
+                                      ? (selection.selectedCount > 1
+                                         ? selection.selectedCount + " layers selected"
+                                           + "\nprimary x " + Math.round(selection.x) + "  y " + Math.round(selection.y)
+                                           + "\nprimary " + Math.round(selection.width) + " x " + Math.round(selection.height)
+                                         : "x " + Math.round(selection.x) + "  y " + Math.round(selection.y)
+                                           + "\n" + Math.round(selection.width) + " x " + Math.round(selection.height)
+                                           + "\nrotation " + Math.round(selection.rotation) + "°")
                                       : "Select a layer to inspect its size and position."
                                 color: theme.textMain
                                 font.family: theme.fontMono
@@ -1049,7 +2328,7 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.isImage
+                        visible: selection.isImage && !selection.hasMultipleSelection
                         title: "Photo"
                         subtitle: "How the image fits inside its frame."
                         accent: theme.accentWarm400
@@ -1076,7 +2355,7 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.isText
+                        visible: selection.isText && !selection.hasMultipleSelection
                         title: "Text"
                         subtitle: "Edit content, color, and size."
                         accent: theme.success
@@ -1096,6 +2375,10 @@ Rectangle {
                             }
                             onActiveFocusChanged: {
                                 if (!activeFocus && selection.isText)
+                                    carouselDocument.setSelectedText(text)
+                            }
+                            onTextChanged: {
+                                if (activeFocus && selection.isText)
                                     carouselDocument.setSelectedText(text)
                             }
                         }
@@ -1120,6 +2403,10 @@ Rectangle {
                             }
                             onEditingFinished: {
                                 if (selection.isText)
+                                    carouselDocument.setSelectedTextColor(text)
+                            }
+                            onTextChanged: {
+                                if (activeFocus && selection.isText)
                                     carouselDocument.setSelectedTextColor(text)
                             }
                         }
@@ -1156,7 +2443,9 @@ Rectangle {
         dialogTitle: "Gallery"
         subtitle: root.mediaPickerSubtitle()
         emptyStateText: root.mediaPickerEmptyStateText()
-        selectionHintText: mediaPickerIntent === "layer" ? "Choose a photo layer" : "Choose media for the active slot"
+        selectionHintText: mediaPickerIntent === "replace"
+                           ? "Choose media to replace the selected layer"
+                           : mediaPickerIntent === "layer" ? "Choose a photo or video layer" : "Choose media for the active slot"
         showProjectScopeToggle: root.hasProjectScopedMediaPicker()
         scope: root.mediaPickerScope
         assets: root.mediaPickerAssets
@@ -1170,12 +2459,16 @@ Rectangle {
 
                 ActionButton {
                     Layout.fillWidth: true
-                    text: mediaPickerIntent === "layer" ? "Add As Layer" : "Add To Slot"
+                    text: mediaPickerIntent === "replace" ? "Replace Layer" : mediaPickerIntent === "layer" ? "Add As Layer" : "Add To Slot"
                     tone: "primary"
                     enabled: mediaPickerDialog.hasSelection
                              && mediaPickerDialog.selectedOnline
-                             && (mediaPickerIntent === "layer"
-                                 ? mediaPickerDialog.selectedMediaType === "photo"
+                             && (mediaPickerIntent === "replace"
+                                 ? (mediaPickerDialog.selectedMediaType === "photo"
+                                    || mediaPickerDialog.selectedMediaType === "video")
+                                 : mediaPickerIntent === "layer"
+                                 ? (mediaPickerDialog.selectedMediaType === "photo"
+                                    || mediaPickerDialog.selectedMediaType === "video")
                                  : (mediaPickerDialog.selectedMediaType === "photo"
                                     || (mediaPickerDialog.selectedMediaType === "video" && root.canPlaceVideo())))
                     onClicked: root.applyPickedMedia()

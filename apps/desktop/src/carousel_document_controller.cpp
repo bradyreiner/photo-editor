@@ -2,6 +2,7 @@
 
 #include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "raw_image_decoder.h"
 
 #include <QColor>
 #include <QDir>
@@ -9,15 +10,21 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QFontMetricsF>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QPainter>
 #include <QPen>
 #include <QProcess>
+#include <QProcessEnvironment>
+#include <QSaveFile>
 #include <QStandardPaths>
 #include <QUrl>
 #include <QUuid>
 #include <QtMath>
+#include <algorithm>
 #include <array>
 #include <vector>
 
@@ -26,7 +33,7 @@ namespace photo_editor::desktop {
 namespace {
 
 constexpr int kMaxSlides = 20;
-constexpr int kPreviewLongEdge = 640;
+constexpr int kPreviewLongEdge = 1600;
 constexpr double kMinItemSize = 36.0;
 constexpr double kMinTextPointSize = 12.0;
 constexpr auto kTextFontFamily = "Avenir Next";
@@ -40,22 +47,45 @@ double clamp_zoom_scale(double value) {
 }
 
 QString normalized_path(const QString& path) {
+  if (path.trimmed().isEmpty()) {
+    return {};
+  }
   return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
 QStringList image_suffixes() {
   return {
+      QStringLiteral("3fr"),
+      QStringLiteral("arw"),
       QStringLiteral("avif"),
       QStringLiteral("bmp"),
+      QStringLiteral("cr2"),
+      QStringLiteral("cr3"),
+      QStringLiteral("dng"),
+      QStringLiteral("erf"),
       QStringLiteral("gif"),
       QStringLiteral("heic"),
       QStringLiteral("heif"),
+      QStringLiteral("iiq"),
       QStringLiteral("jpeg"),
       QStringLiteral("jpg"),
+      QStringLiteral("kdc"),
+      QStringLiteral("mef"),
+      QStringLiteral("mos"),
+      QStringLiteral("nef"),
+      QStringLiteral("nrw"),
+      QStringLiteral("orf"),
+      QStringLiteral("pef"),
       QStringLiteral("png"),
+      QStringLiteral("raf"),
+      QStringLiteral("raw"),
+      QStringLiteral("rw2"),
+      QStringLiteral("sr2"),
+      QStringLiteral("srf"),
       QStringLiteral("tif"),
       QStringLiteral("tiff"),
       QStringLiteral("webp"),
+      QStringLiteral("x3f"),
   };
 }
 
@@ -242,6 +272,13 @@ QString summary_label(const CarouselDocumentController::CanvasItem& item) {
     const auto trimmed = item.text.simplified();
     return trimmed.isEmpty() ? QStringLiteral("Text") : trimmed.left(28);
   }
+  if (item.kind == CarouselDocumentController::ItemKind::Video) {
+    if (!item.display_label.trimmed().isEmpty()) {
+      return item.display_label.trimmed();
+    }
+    const QFileInfo info(item.file_path);
+    return info.completeBaseName().isEmpty() ? QStringLiteral("Video") : info.completeBaseName();
+  }
   if (!item.display_label.trimmed().isEmpty()) {
     return item.display_label.trimmed();
   }
@@ -255,6 +292,86 @@ QString summary_label(const CarouselDocumentController::MediaItem& item) {
   }
   const QFileInfo info(item.file_path);
   return info.completeBaseName().isEmpty() ? info.fileName() : info.completeBaseName();
+}
+
+QString normalized_document_name(const QString& value) {
+  const auto trimmed = value.simplified();
+  return trimmed.isEmpty() ? QStringLiteral("Untitled Carousel") : trimmed;
+}
+
+QString carousel_documents_root() {
+  return QDir(AppBootstrap::appDataLocation()).filePath(QStringLiteral("carousels"));
+}
+
+QString carousel_document_index_path() {
+  return QDir(carousel_documents_root()).filePath(QStringLiteral("index.json"));
+}
+
+QString carousel_document_file_path(const QString& document_id) {
+  return QDir(carousel_documents_root())
+      .filePath(QStringLiteral("documents/%1.json").arg(document_id));
+}
+
+QJsonObject legacy_document_entry(
+    const QString& document_id,
+    const QString& name,
+    const QString& document_format,
+    int slide_count,
+    const QString& created_at,
+    const QString& updated_at) {
+  QJsonObject entry;
+  entry.insert(QStringLiteral("documentId"), document_id);
+  entry.insert(QStringLiteral("name"), name);
+  entry.insert(QStringLiteral("documentFormat"), document_format);
+  entry.insert(QStringLiteral("slideCount"), slide_count);
+  entry.insert(QStringLiteral("createdAt"), created_at);
+  entry.insert(QStringLiteral("updatedAt"), updated_at);
+  return entry;
+}
+
+QJsonArray load_legacy_document_index() {
+  QFile file(carousel_document_index_path());
+  if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+    return {};
+  }
+
+  const auto parsed = QJsonDocument::fromJson(file.readAll());
+  if (!parsed.isObject()) {
+    return {};
+  }
+  return parsed.object().value(QStringLiteral("documents")).toArray();
+}
+
+bool save_legacy_document_index(const QJsonArray& documents) {
+  QDir().mkpath(QFileInfo(carousel_document_index_path()).absolutePath());
+  QJsonObject root;
+  root.insert(QStringLiteral("documents"), documents);
+  QSaveFile file(carousel_document_index_path());
+  if (!file.open(QIODevice::WriteOnly)) {
+    return false;
+  }
+  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  return file.commit();
+}
+
+QJsonObject load_legacy_document_payload(const QString& document_id) {
+  QFile file(carousel_document_file_path(document_id));
+  if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
+    return {};
+  }
+
+  const auto parsed = QJsonDocument::fromJson(file.readAll());
+  return parsed.isObject() ? parsed.object() : QJsonObject{};
+}
+
+bool save_legacy_document_payload(const QString& document_id, const QJsonObject& payload) {
+  QDir().mkpath(QFileInfo(carousel_document_file_path(document_id)).absolutePath());
+  QSaveFile file(carousel_document_file_path(document_id));
+  if (!file.open(QIODevice::WriteOnly)) {
+    return false;
+  }
+  file.write(QJsonDocument(payload).toJson(QJsonDocument::Indented));
+  return file.commit();
 }
 
 }  // namespace
@@ -305,6 +422,10 @@ bool CarouselDocumentController::exportBusy() const { return export_busy_; }
 
 QString CarouselDocumentController::selectedItemId() const { return selected_item_id_; }
 
+QString CarouselDocumentController::documentName() const { return document_name_; }
+
+QString CarouselDocumentController::savedDocumentId() const { return saved_document_id_; }
+
 QStringList CarouselDocumentController::templateOptions() const {
   return {
       QStringLiteral("single"),
@@ -340,16 +461,23 @@ void CarouselDocumentController::setDocumentFormat(const QString& document_forma
           .arg(normalized == QStringLiteral("4x5") ? QStringLiteral("1080x1350") : QStringLiteral("1350x1080")));
 }
 
+void CarouselDocumentController::setDocumentName(const QString& document_name) {
+  const auto normalized = normalized_document_name(document_name);
+  if (document_name_ == normalized) {
+    return;
+  }
+  document_name_ = normalized;
+  emit documentStateChanged();
+}
+
 void CarouselDocumentController::selectSlide(int index) {
   if (index < 0 || index >= slides_.size()) {
     return;
   }
   current_index_ = index;
-  if (!selected_item_id_.isEmpty()) {
-    const auto* item = currentItem();
-    if (item == nullptr || slideIndexForItem(*item) != current_index_) {
-      selected_item_id_.clear();
-    }
+  normalizeSelection();
+  if (const auto* item = currentItem(); item == nullptr || slideIndexForItem(*item) != current_index_) {
+    setSelectedItemIds({});
   }
   normalizeForCurrentTemplate();
   emitCanvasStateChanged(true);
@@ -390,9 +518,6 @@ void CarouselDocumentController::removeCurrentSlide() {
     auto& item = items_[index - 1];
     const auto center_x = item.bounds.center().x();
     if (center_x >= removed_left && center_x < removed_right) {
-      if (item.id == selected_item_id_) {
-        selected_item_id_.clear();
-      }
       items_.removeAt(index - 1);
       continue;
     }
@@ -418,6 +543,7 @@ void CarouselDocumentController::removeCurrentSlide() {
 
   rebuildGroupIndices();
   current_index_ = qBound(0, start_index, static_cast<int>(slides_.size()) - 1);
+  normalizeSelection();
   normalizeForCurrentTemplate();
   refreshPreviews();
   emitCanvasStateChanged(true);
@@ -512,13 +638,28 @@ void CarouselDocumentController::addPhotoItem(
     return;
   }
 
-  QImageReader reader(normalized);
-  if (!reader.canRead()) {
+  QSizeF source_size;
+  if (native_image_supported(normalized)) {
+    const auto native_size = native_image_size(normalized);
+    if (native_size.isValid()) {
+      source_size = QSizeF(native_size);
+    }
+  } else {
+    QImageReader reader(normalized);
+    if (reader.canRead()) {
+      source_size = reader.size().isValid() ? QSizeF(reader.size()) : QSizeF(1200.0, 1200.0);
+    } else {
+      const auto raw_size = raw_image_size(normalized);
+      if (raw_size.isValid()) {
+        source_size = QSizeF(raw_size);
+      }
+    }
+  }
+
+  if (!source_size.isValid()) {
     setStatus(QStringLiteral("Unable to read that image file."));
     return;
   }
-
-  const auto source_size = reader.size().isValid() ? QSizeF(reader.size()) : QSizeF(1200.0, 1200.0);
   const auto slide_rect = slideRectInDocument(current_index_);
   const auto max_width = slide_rect.width() * 0.72;
   const auto max_height = slide_rect.height() * 0.72;
@@ -539,9 +680,42 @@ void CarouselDocumentController::addPhotoItem(
 
   items_.push_back(item);
   setSelectedItemId(item.id);
-  refreshPreviews();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Added a freeform photo layer to canvas %1.").arg(current_index_ + 1));
+}
+
+void CarouselDocumentController::addVideoItem(const QString& file_path, const QString& display_label) {
+  const auto normalized = normalized_path(file_path);
+  if (!isVideoFile(normalized)) {
+    setStatus(QStringLiteral("That file is not a supported video format."));
+    return;
+  }
+
+  QSizeF source_size = QSizeF(probeVideoSize(normalized));
+  if (!source_size.isValid()) {
+    source_size = QSizeF(1080.0, 1920.0);
+  }
+
+  const auto slide_rect = slideRectInDocument(current_index_);
+  const auto max_width = slide_rect.width() * 0.58;
+  const auto max_height = slide_rect.height() * 0.62;
+  QSizeF fitted = source_size;
+  fitted.scale(max_width, max_height, Qt::KeepAspectRatio);
+
+  CanvasItem item;
+  item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  item.kind = ItemKind::Video;
+  item.file_path = normalized;
+  item.display_label = displayNameForPath(normalized, display_label);
+  item.fit_mode = FitMode::Contain;
+  item.source_size = source_size;
+  item.bounds = QRectF(0.0, 0.0, fitted.width(), fitted.height());
+  item.bounds.moveCenter(slide_rect.center());
+
+  items_.push_back(item);
+  setSelectedItemId(item.id);
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Added a freeform video layer to canvas %1.").arg(current_index_ + 1));
 }
 
 void CarouselDocumentController::addTextItem(const QString& text) {
@@ -557,7 +731,6 @@ void CarouselDocumentController::addTextItem(const QString& text) {
 
   items_.push_back(item);
   setSelectedItemId(item.id);
-  refreshPreviews();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Added a text layer to canvas %1.").arg(current_index_ + 1));
 }
@@ -573,70 +746,206 @@ void CarouselDocumentController::pickPhotoItem() {
   }
 }
 
+void CarouselDocumentController::pickVideoItem() {
+  const auto file_path = QFileDialog::getOpenFileName(
+      nullptr,
+      QStringLiteral("Choose Video Layer"),
+      QDir::homePath(),
+      videoFileFilter());
+  if (!file_path.isEmpty()) {
+    addVideoItem(file_path, QFileInfo(file_path).completeBaseName());
+  }
+}
+
 void CarouselDocumentController::selectItem(const QString& item_id) {
   const auto index = indexOfItem(item_id);
   if (index < 0) {
     return;
   }
 
-  selected_item_id_ = items_.at(index).id;
+  setSelectedItemId(items_.at(index).id);
   current_index_ = slideIndexForItem(items_.at(index));
   emitCanvasStateChanged(true);
 }
 
-void CarouselDocumentController::clearSelection() {
-  if (selected_item_id_.isEmpty()) {
-    return;
-  }
-  selected_item_id_.clear();
-  emitCanvasStateChanged(true);
-}
-
-void CarouselDocumentController::removeSelectedItem() {
-  const auto index = indexOfItem(selected_item_id_);
+void CarouselDocumentController::addItemToSelection(const QString& item_id) {
+  const auto index = indexOfItem(item_id);
   if (index < 0) {
     return;
   }
 
-  items_.removeAt(index);
-  selected_item_id_.clear();
-  refreshPreviews();
+  const auto item_slide = slideIndexForItem(items_.at(index));
+  const auto selection_slide = currentSelectionSlideIndex();
+  if (selection_slide >= 0 && item_slide != selection_slide) {
+    setSelectedItemId(items_.at(index).id);
+  } else {
+    auto next_ids = selected_item_ids_;
+    next_ids.removeAll(items_.at(index).id);
+    next_ids.push_back(items_.at(index).id);
+    setSelectedItemIds(next_ids, items_.at(index).id);
+  }
+  current_index_ = item_slide;
   emitCanvasStateChanged(true);
-  setStatus(QStringLiteral("Removed the selected layer."));
+}
+
+void CarouselDocumentController::toggleItemSelection(const QString& item_id) {
+  const auto index = indexOfItem(item_id);
+  if (index < 0) {
+    return;
+  }
+
+  const auto item_slide = slideIndexForItem(items_.at(index));
+  const auto selection_slide = currentSelectionSlideIndex();
+  if (selection_slide >= 0 && item_slide != selection_slide) {
+    setSelectedItemId(items_.at(index).id);
+    current_index_ = item_slide;
+    emitCanvasStateChanged(true);
+    return;
+  }
+
+  auto next_ids = selected_item_ids_;
+  if (next_ids.contains(items_.at(index).id)) {
+    next_ids.removeAll(items_.at(index).id);
+    const auto next_primary = next_ids.isEmpty() ? QString{} : next_ids.back();
+    setSelectedItemIds(next_ids, next_primary);
+  } else {
+    next_ids.push_back(items_.at(index).id);
+    setSelectedItemIds(next_ids, items_.at(index).id);
+  }
+  current_index_ = item_slide;
+  emitCanvasStateChanged(true);
+}
+
+void CarouselDocumentController::clearSelection() {
+  if (selected_item_ids_.isEmpty()) {
+    return;
+  }
+  setSelectedItemIds({});
+  emitCanvasStateChanged(true);
+}
+
+void CarouselDocumentController::removeSelectedItem() {
+  const auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  for (qsizetype i = indexes.size(); i > 0; --i) {
+    items_.removeAt(indexes.at(i - 1));
+  }
+  setSelectedItemIds({});
+  emitCanvasStateChanged(true);
+  setStatus(
+      indexes.size() == 1 ? QStringLiteral("Removed the selected layer.")
+                          : QStringLiteral("Removed %1 selected layers.").arg(indexes.size()));
+}
+
+void CarouselDocumentController::duplicateSelectedItem() {
+  const auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  QVector<CanvasItem> duplicates;
+  duplicates.reserve(indexes.size());
+  for (const auto index : indexes) {
+    auto item = items_.at(index);
+    item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    item.bounds.translate(48.0, 48.0);
+    duplicates.push_back(item);
+  }
+
+  const auto insert_at = indexes.back() + 1;
+  for (int i = 0; i < duplicates.size(); ++i) {
+    items_.insert(insert_at + i, duplicates.at(i));
+  }
+
+  QStringList duplicate_ids;
+  duplicate_ids.reserve(duplicates.size());
+  for (const auto& item : duplicates) {
+    duplicate_ids.push_back(item.id);
+  }
+  setSelectedItemIds(duplicate_ids, duplicate_ids.isEmpty() ? QString{} : duplicate_ids.back());
+  current_index_ = slideIndexForItem(duplicates.back());
+  emitCanvasStateChanged(true);
+  setStatus(
+      duplicates.size() == 1 ? QStringLiteral("Duplicated the selected layer.")
+                             : QStringLiteral("Duplicated %1 selected layers.").arg(duplicates.size()));
 }
 
 void CarouselDocumentController::bringSelectedForward() {
-  const auto index = indexOfItem(selected_item_id_);
-  if (index < 0 || index >= items_.size() - 1) {
+  auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty()) {
     return;
   }
 
-  items_.move(index, index + 1);
-  refreshPreviews();
-  emitCanvasStateChanged(true);
+  bool moved = false;
+  for (qsizetype i = indexes.size(); i > 0; --i) {
+    const auto index = indexes.at(i - 1);
+    if (index >= items_.size() - 1) {
+      continue;
+    }
+    const auto next_id = items_.at(index + 1).id;
+    if (selected_item_ids_.contains(next_id)) {
+      continue;
+    }
+    items_.move(index, index + 1);
+    moved = true;
+  }
+  if (moved) {
+    emitCanvasStateChanged(true);
+  }
 }
 
 void CarouselDocumentController::sendSelectedBackward() {
-  const auto index = indexOfItem(selected_item_id_);
-  if (index <= 0) {
+  const auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty()) {
     return;
   }
 
-  items_.move(index, index - 1);
-  refreshPreviews();
-  emitCanvasStateChanged(true);
+  bool moved = false;
+  for (const auto index : indexes) {
+    if (index <= 0) {
+      continue;
+    }
+    const auto previous_id = items_.at(index - 1).id;
+    if (selected_item_ids_.contains(previous_id)) {
+      continue;
+    }
+    items_.move(index, index - 1);
+    moved = true;
+  }
+  if (moved) {
+    emitCanvasStateChanged(true);
+  }
 }
 
 void CarouselDocumentController::moveSelectedItemByPixels(double delta_x, double delta_y) {
-  auto* item = currentItem();
-  if (item == nullptr) {
+  const auto indexes = selectedItemIndexes(false, false);
+  if (indexes.isEmpty()) {
     return;
   }
 
-  item->bounds.translate(delta_x, delta_y);
-  current_index_ = slideIndexForItem(*item);
-  refreshCurrentSelectionPreviews();
-  emitCanvasStateChanged(true);
+  bool moved = false;
+  bool slides_changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.locked) {
+      continue;
+    }
+    const auto previous_slide = slideIndexForItem(item);
+    item.bounds.translate(delta_x, delta_y);
+    slides_changed = slides_changed || previous_slide != slideIndexForItem(item);
+    moved = true;
+  }
+  if (!moved) {
+    return;
+  }
+
+  if (const auto* item = currentItem()) {
+    current_index_ = slideIndexForItem(*item);
+  }
+  emitItemGeometryChanged(slides_changed);
 }
 
 void CarouselDocumentController::setSelectedItemCenter(double center_x, double center_y) {
@@ -645,15 +954,14 @@ void CarouselDocumentController::setSelectedItemCenter(double center_x, double c
     return;
   }
 
-  item->bounds.moveCenter(QPointF(center_x, center_y));
-  current_index_ = slideIndexForItem(*item);
-  refreshCurrentSelectionPreviews();
-  emitCanvasStateChanged(true);
+  const auto delta_x = center_x - item->bounds.center().x();
+  const auto delta_y = center_y - item->bounds.center().y();
+  moveSelectedItemByPixels(delta_x, delta_y);
 }
 
 void CarouselDocumentController::setSelectedItemSize(double width, double height) {
   auto* item = currentItem();
-  if (item == nullptr) {
+  if (item == nullptr || item->locked) {
     return;
   }
 
@@ -661,7 +969,7 @@ void CarouselDocumentController::setSelectedItemSize(double width, double height
   auto next_width = qMax(kMinItemSize, width);
   auto next_height = qMax(kMinItemSize, height);
 
-  if (item->kind == ItemKind::Image) {
+  if (item->kind != ItemKind::Text) {
     const auto aspect_ratio = normalizedAspectRatio(*item);
     if (aspect_ratio > 0.0) {
       if (next_width / next_height > aspect_ratio) {
@@ -671,31 +979,29 @@ void CarouselDocumentController::setSelectedItemSize(double width, double height
       }
     }
   } else {
+    item->bounds.setWidth(next_width);
     item->text_point_size = qMax(kMinTextPointSize, next_height / 1.2);
     next_height = measuredTextHeight(*item);
   }
 
   item->bounds = QRectF(0.0, 0.0, next_width, next_height);
   item->bounds.moveCenter(center);
-  current_index_ = slideIndexForItem(*item);
-  refreshCurrentSelectionPreviews();
-  emitCanvasStateChanged(true);
+  emitItemGeometryChanged(false);
 }
 
 void CarouselDocumentController::setSelectedItemRotation(double rotation_degrees) {
   auto* item = currentItem();
-  if (item == nullptr) {
+  if (item == nullptr || item->locked) {
     return;
   }
 
   item->rotation_degrees = rotation_degrees;
-  refreshCurrentSelectionPreviews();
-  emitCanvasStateChanged(true);
+  emitCanvasStateChanged(false);
 }
 
 void CarouselDocumentController::setSelectedText(const QString& text) {
   auto* item = currentItem();
-  if (item == nullptr || item->kind != ItemKind::Text) {
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
     return;
   }
 
@@ -704,13 +1010,12 @@ void CarouselDocumentController::setSelectedText(const QString& text) {
   const auto center = item->bounds.center();
   item->bounds.setHeight(measuredTextHeight(*item));
   item->bounds.moveCenter(center);
-  refreshCurrentSelectionPreviews();
   emitCanvasStateChanged(true);
 }
 
 void CarouselDocumentController::setSelectedTextColor(const QString& color_value) {
   auto* item = currentItem();
-  if (item == nullptr || item->kind != ItemKind::Text) {
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
     return;
   }
 
@@ -720,13 +1025,12 @@ void CarouselDocumentController::setSelectedTextColor(const QString& color_value
   }
 
   item->text_color = color.name(QColor::HexRgb);
-  refreshCurrentSelectionPreviews();
-  emitCanvasStateChanged(true);
+  emitCanvasStateChanged(false);
 }
 
 void CarouselDocumentController::setSelectedTextPointSize(double point_size) {
   auto* item = currentItem();
-  if (item == nullptr || item->kind != ItemKind::Text) {
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
     return;
   }
 
@@ -734,8 +1038,262 @@ void CarouselDocumentController::setSelectedTextPointSize(double point_size) {
   const auto center = item->bounds.center();
   item->bounds.setHeight(measuredTextHeight(*item));
   item->bounds.moveCenter(center);
-  refreshCurrentSelectionPreviews();
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedItemHidden(bool hidden) {
+  const auto indexes = selectedItemIndexes(false, false);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.hidden == hidden) {
+      continue;
+    }
+    item.hidden = hidden;
+    changed = true;
+  }
+  if (!changed) {
+    return;
+  }
   emitCanvasStateChanged(true);
+}
+
+void CarouselDocumentController::setSelectedItemLocked(bool locked) {
+  const auto indexes = selectedItemIndexes(false, false);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.locked == locked) {
+      continue;
+    }
+    item.locked = locked;
+    changed = true;
+  }
+  if (!changed) {
+    return;
+  }
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::replaceSelectedPhotoItem(
+    const QString& file_path,
+    const QString& display_label,
+    const QString& recipe_json) {
+  auto* item = currentItem();
+  if (item == nullptr) {
+    return;
+  }
+
+  const auto normalized = normalized_path(file_path);
+  if (!isImageFile(normalized)) {
+    setStatus(QStringLiteral("That file is not a supported image format."));
+    return;
+  }
+
+  QSizeF source_size;
+  if (native_image_supported(normalized)) {
+    const auto native_size = native_image_size(normalized);
+    if (native_size.isValid()) {
+      source_size = QSizeF(native_size);
+    }
+  } else {
+    QImageReader reader(normalized);
+    if (reader.canRead()) {
+      source_size = reader.size().isValid() ? QSizeF(reader.size()) : QSizeF(1200.0, 1200.0);
+    } else {
+      const auto raw_size = raw_image_size(normalized);
+      if (raw_size.isValid()) {
+        source_size = QSizeF(raw_size);
+      }
+    }
+  }
+
+  if (!source_size.isValid()) {
+    setStatus(QStringLiteral("Unable to read that image file."));
+    return;
+  }
+
+  item->kind = ItemKind::Image;
+  item->file_path = normalized;
+  item->display_label = displayNameForPath(normalized, display_label);
+  item->recipe_json = recipe_json;
+  item->recipe_state = recipeStateFromJson(recipe_json);
+  item->fit_mode = FitMode::Cover;
+  item->source_size = source_size;
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Replaced the selected layer with a photo."));
+}
+
+void CarouselDocumentController::replaceSelectedVideoItem(
+    const QString& file_path,
+    const QString& display_label) {
+  auto* item = currentItem();
+  if (item == nullptr) {
+    return;
+  }
+
+  const auto normalized = normalized_path(file_path);
+  if (!isVideoFile(normalized)) {
+    setStatus(QStringLiteral("That file is not a supported video format."));
+    return;
+  }
+
+  QSizeF source_size = QSizeF(probeVideoSize(normalized));
+  if (!source_size.isValid()) {
+    source_size = QSizeF(1080.0, 1920.0);
+  }
+
+  item->kind = ItemKind::Video;
+  item->file_path = normalized;
+  item->display_label = displayNameForPath(normalized, display_label);
+  item->recipe_json.clear();
+  item->recipe_state = RecipeState{};
+  item->fit_mode = FitMode::Contain;
+  item->source_size = source_size;
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Replaced the selected layer with a video."));
+}
+
+void CarouselDocumentController::alignSelectionLeft() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  for (const auto index : indexes) {
+    items_[index].bounds.moveLeft(slide_rect.left());
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::alignSelectionHorizontalCenter() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  for (const auto index : indexes) {
+    items_[index].bounds.moveCenter(QPointF(slide_rect.center().x(), items_[index].bounds.center().y()));
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::alignSelectionRight() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  const auto right_edge = slide_rect.left() + slide_rect.width();
+  for (const auto index : indexes) {
+    items_[index].bounds.moveRight(right_edge);
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::alignSelectionTop() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  for (const auto index : indexes) {
+    items_[index].bounds.moveTop(slide_rect.top());
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::alignSelectionVerticalCenter() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  for (const auto index : indexes) {
+    items_[index].bounds.moveCenter(QPointF(items_[index].bounds.center().x(), slide_rect.center().y()));
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::alignSelectionBottom() {
+  const auto indexes = selectedItemIndexes(true, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto slide_rect = slideRectInDocument(currentSelectionSlideIndex());
+  const auto bottom_edge = slide_rect.top() + slide_rect.height();
+  for (const auto index : indexes) {
+    items_[index].bounds.moveBottom(bottom_edge);
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::distributeSelectionHorizontally() {
+  auto indexes = selectedItemIndexes(true, true);
+  if (indexes.size() < 3) {
+    return;
+  }
+
+  std::sort(indexes.begin(), indexes.end(), [this](int left, int right) {
+    return items_.at(left).bounds.left() < items_.at(right).bounds.left();
+  });
+
+  const auto first_left = items_.at(indexes.front()).bounds.left();
+  const auto last_right = items_.at(indexes.back()).bounds.right();
+  double total_width = 0.0;
+  for (const auto index : indexes) {
+    total_width += items_.at(index).bounds.width();
+  }
+  const auto gap = (last_right - first_left - total_width) / static_cast<double>(indexes.size() - 1);
+
+  auto cursor = first_left;
+  for (int i = 0; i < indexes.size(); ++i) {
+    auto& item = items_[indexes.at(i)];
+    item.bounds.moveLeft(cursor);
+    cursor += item.bounds.width() + gap;
+  }
+  emitItemGeometryChanged(false);
+}
+
+void CarouselDocumentController::distributeSelectionVertically() {
+  auto indexes = selectedItemIndexes(true, true);
+  if (indexes.size() < 3) {
+    return;
+  }
+
+  std::sort(indexes.begin(), indexes.end(), [this](int top, int bottom) {
+    return items_.at(top).bounds.top() < items_.at(bottom).bounds.top();
+  });
+
+  const auto first_top = items_.at(indexes.front()).bounds.top();
+  const auto last_bottom = items_.at(indexes.back()).bounds.bottom();
+  double total_height = 0.0;
+  for (const auto index : indexes) {
+    total_height += items_.at(index).bounds.height();
+  }
+  const auto gap = (last_bottom - first_top - total_height) / static_cast<double>(indexes.size() - 1);
+
+  auto cursor = first_top;
+  for (int i = 0; i < indexes.size(); ++i) {
+    auto& item = items_[indexes.at(i)];
+    item.bounds.moveTop(cursor);
+    cursor += item.bounds.height() + gap;
+  }
+  emitItemGeometryChanged(false);
 }
 
 void CarouselDocumentController::applyTemplateToCurrent(const QString& template_kind) {
@@ -874,7 +1432,7 @@ void CarouselDocumentController::setActiveSlot(const QString& slot_name) {
 
 void CarouselDocumentController::setCurrentFitMode(const QString& fit_mode) {
   if (auto* item = currentItem()) {
-    if (item->kind == ItemKind::Image) {
+    if (item->kind == ItemKind::Image || item->kind == ItemKind::Video) {
       item->fit_mode = fitModeFromName(fit_mode);
       refreshCurrentSelectionPreviews();
       emitCanvasStateChanged(true);
@@ -920,6 +1478,69 @@ void CarouselDocumentController::setCurrentOffsetY(double offset_y) {
     refreshCurrentSelectionPreviews();
     emitCanvasStateChanged(true);
   }
+}
+
+void CarouselDocumentController::moveCurrentMediaByPixels(double delta_x, double delta_y) {
+  if (currentItem() != nullptr) {
+    return;
+  }
+
+  auto* media = currentEditableMedia();
+  if (media == nullptr || media->type == MediaType::Empty || media->file_path.trimmed().isEmpty()) {
+    return;
+  }
+
+  const auto viewport_size = currentMediaViewportSize();
+  const auto source_size = effectiveMediaSourceSize(*media);
+  if (!viewport_size.isValid() || !source_size.isValid()) {
+    return;
+  }
+
+  const double viewport_width = static_cast<double>(viewport_size.width());
+  const double viewport_height = static_cast<double>(viewport_size.height());
+  const double source_width = static_cast<double>(source_size.width());
+  const double source_height = static_cast<double>(source_size.height());
+  if (viewport_width <= 0.0 || viewport_height <= 0.0 || source_width <= 0.0 || source_height <= 0.0) {
+    return;
+  }
+
+  const double base_scale = media->fit_mode == FitMode::Contain
+                                ? qMin(viewport_width / source_width, viewport_height / source_height)
+                                : qMax(viewport_width / source_width, viewport_height / source_height);
+  const double scaled_width = qMax(1.0, source_width * base_scale * media->scale);
+  const double scaled_height = qMax(1.0, source_height * base_scale * media->scale);
+  const double free_x = viewport_width - scaled_width;
+  const double free_y = viewport_height - scaled_height;
+
+  auto update_axis = [](double offset, double free_space, double delta) {
+    if (qAbs(free_space) <= 0.001) {
+      return 0.0;
+    }
+    const double minimum_position = qMin(0.0, free_space);
+    const double maximum_position = qMax(0.0, free_space);
+    const double current_position = free_space * ((offset + 1.0) / 2.0);
+    const double next_position = qBound(minimum_position, current_position + delta, maximum_position);
+    double next_offset = ((next_position / free_space) * 2.0) - 1.0;
+    if (qAbs(next_offset) < 0.06) {
+      next_offset = 0.0;
+    } else if (qAbs(next_offset - 1.0) < 0.04) {
+      next_offset = 1.0;
+    } else if (qAbs(next_offset + 1.0) < 0.04) {
+      next_offset = -1.0;
+    }
+    return clamp_unit_interval(next_offset);
+  };
+
+  const double next_offset_x = update_axis(media->offset_x, free_x, delta_x);
+  const double next_offset_y = update_axis(media->offset_y, free_y, delta_y);
+  if (qFuzzyCompare(media->offset_x, next_offset_x) && qFuzzyCompare(media->offset_y, next_offset_y)) {
+    return;
+  }
+
+  media->offset_x = next_offset_x;
+  media->offset_y = next_offset_y;
+  refreshCurrentSelectionPreviews();
+  emitCanvasStateChanged(true);
 }
 
 void CarouselDocumentController::clearCurrentSlot() {
@@ -1019,7 +1640,7 @@ void CarouselDocumentController::assignPrimaryVideo(
   slide->secondary = MediaItem{};
   slide->tertiary = MediaItem{};
   active_slot_ = QStringLiteral("primary");
-  selected_item_id_.clear();
+  setSelectedItemIds({});
   refreshCurrentSelectionPreviews();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Video added to the current canvas."));
@@ -1154,6 +1775,171 @@ bool CarouselDocumentController::exportCarouselToDirectory(const QString& direct
   return true;
 }
 
+QVariantList CarouselDocumentController::recentDocuments() const {
+  QVariantList documents;
+
+  QString output;
+  if (runHelperCommand({QStringLiteral("list")}, &output, nullptr)) {
+    const auto parsed = QJsonDocument::fromJson(output.toUtf8());
+    if (parsed.isArray()) {
+      for (const auto& value : parsed.array()) {
+        if (!value.isObject()) {
+          continue;
+        }
+        const auto object = value.toObject();
+        QVariantMap document;
+        document.insert(QStringLiteral("documentId"), object.value(QStringLiteral("document_id")).toString().trimmed());
+        document.insert(QStringLiteral("name"), object.value(QStringLiteral("name")).toString().trimmed());
+        document.insert(QStringLiteral("documentFormat"), object.value(QStringLiteral("document_format")).toString().trimmed());
+        document.insert(QStringLiteral("slideCount"), object.value(QStringLiteral("slide_count")).toInt());
+        document.insert(QStringLiteral("createdAt"), object.value(QStringLiteral("created_at")).toString().trimmed());
+        document.insert(QStringLiteral("updatedAt"), object.value(QStringLiteral("updated_at")).toString().trimmed());
+        documents.push_back(document);
+      }
+      return documents;
+    }
+  }
+
+  for (const auto& value : load_legacy_document_index()) {
+    if (!value.isObject()) {
+      continue;
+    }
+    const auto object = value.toObject();
+    QVariantMap document;
+    document.insert(QStringLiteral("documentId"), object.value(QStringLiteral("documentId")).toString().trimmed());
+    document.insert(QStringLiteral("name"), object.value(QStringLiteral("name")).toString().trimmed());
+    document.insert(QStringLiteral("documentFormat"), object.value(QStringLiteral("documentFormat")).toString().trimmed());
+    document.insert(QStringLiteral("slideCount"), object.value(QStringLiteral("slideCount")).toInt());
+    document.insert(QStringLiteral("createdAt"), object.value(QStringLiteral("createdAt")).toString().trimmed());
+    document.insert(QStringLiteral("updatedAt"), object.value(QStringLiteral("updatedAt")).toString().trimmed());
+    documents.push_back(document);
+  }
+
+  return documents;
+}
+
+bool CarouselDocumentController::saveDocument(const QString& document_name) {
+  const auto previous_document_id = saved_document_id_;
+  const auto next_name = normalized_document_name(document_name.isEmpty() ? document_name_ : document_name);
+  if (saved_document_id_.isEmpty()) {
+    saved_document_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  }
+  document_name_ = next_name;
+
+  QJsonObject payload;
+  payload.insert(QStringLiteral("document_id"), saved_document_id_);
+  payload.insert(QStringLiteral("name"), document_name_);
+  payload.insert(QStringLiteral("document_format"), document_format_);
+  payload.insert(QStringLiteral("slide_count"), slideCount());
+  payload.insert(QStringLiteral("document_json"), documentObject());
+  payload.insert(QStringLiteral("created_at"), QString{});
+  payload.insert(QStringLiteral("updated_at"), QString{});
+
+  const auto json_payload = QString::fromUtf8(QJsonDocument(payload).toJson(QJsonDocument::Compact));
+  QString error_message;
+  if (!runHelperCommand({QStringLiteral("upsert"), json_payload}, nullptr, &error_message)) {
+    const auto now = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    auto index_entries = load_legacy_document_index();
+    QString created_at = now;
+    QJsonArray next_entries;
+    bool updated_existing = false;
+    for (const auto& value : index_entries) {
+      if (!value.isObject()) {
+        continue;
+      }
+      auto entry = value.toObject();
+      if (entry.value(QStringLiteral("documentId")).toString().trimmed() == saved_document_id_) {
+        const auto existing_created_at = entry.value(QStringLiteral("createdAt")).toString().trimmed();
+        if (!existing_created_at.isEmpty()) {
+          created_at = existing_created_at;
+        }
+        entry = legacy_document_entry(
+            saved_document_id_,
+            document_name_,
+            document_format_,
+            slideCount(),
+            created_at,
+            now);
+        updated_existing = true;
+      }
+      next_entries.push_back(entry);
+    }
+    if (!updated_existing) {
+      next_entries.push_back(
+          legacy_document_entry(saved_document_id_, document_name_, document_format_, slideCount(), now, now));
+    }
+
+    QJsonObject legacy_payload;
+    legacy_payload.insert(QStringLiteral("documentId"), saved_document_id_);
+    legacy_payload.insert(QStringLiteral("name"), document_name_);
+    legacy_payload.insert(QStringLiteral("documentFormat"), document_format_);
+    legacy_payload.insert(QStringLiteral("slideCount"), slideCount());
+    legacy_payload.insert(QStringLiteral("document"), documentObject());
+
+    if (!save_legacy_document_payload(saved_document_id_, legacy_payload) || !save_legacy_document_index(next_entries)) {
+      saved_document_id_ = previous_document_id;
+      setStatus(error_message.isEmpty() ? QStringLiteral("Unable to save the carousel document.") : error_message);
+      return false;
+    }
+  }
+
+  emit documentStateChanged();
+  setStatus(QStringLiteral("Saved carousel '%1'.").arg(document_name_));
+  return true;
+}
+
+bool CarouselDocumentController::loadDocument(const QString& document_id) {
+  const auto trimmed_id = document_id.trimmed();
+  if (trimmed_id.isEmpty()) {
+    setStatus(QStringLiteral("Choose a saved carousel to load."));
+    return false;
+  }
+
+  QString output;
+  QString error_message;
+  QJsonObject stored_document;
+  if (runHelperCommand({QStringLiteral("get"), trimmed_id}, &output, &error_message)) {
+    const auto parsed = QJsonDocument::fromJson(output.toUtf8());
+    if (parsed.isObject()) {
+      stored_document = parsed.object();
+    }
+  } else {
+    stored_document = load_legacy_document_payload(trimmed_id);
+  }
+
+  if (stored_document.isEmpty()) {
+    setStatus(QStringLiteral("The selected carousel is unavailable."));
+    return false;
+  }
+
+  auto document_value = stored_document.value(QStringLiteral("document_json"));
+  if (!document_value.isObject()) {
+    document_value = stored_document.value(QStringLiteral("document"));
+  }
+  if (!document_value.isObject() || !loadDocumentObject(document_value.toObject())) {
+    setStatus(QStringLiteral("The selected carousel document is invalid."));
+    return false;
+  }
+
+  saved_document_id_ = stored_document.value(QStringLiteral("document_id")).toString().trimmed();
+  if (saved_document_id_.isEmpty()) {
+    saved_document_id_ = stored_document.value(QStringLiteral("documentId")).toString().trimmed();
+  }
+  document_name_ = normalized_document_name(stored_document.value(QStringLiteral("name")).toString());
+  const auto stored_format = stored_document.value(QStringLiteral("document_format")).toString().trimmed().isEmpty()
+      ? stored_document.value(QStringLiteral("documentFormat")).toString().trimmed()
+      : stored_document.value(QStringLiteral("document_format")).toString().trimmed();
+  if (!stored_format.isEmpty()) {
+    document_format_ = stored_format == QStringLiteral("5x4") ? QStringLiteral("5x4") : QStringLiteral("4x5");
+  }
+  refreshPreviews();
+  emit documentFormatChanged();
+  emit documentStateChanged();
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Loaded carousel '%1'.").arg(document_name_));
+  return true;
+}
+
 CarouselDocumentController::Slide* CarouselDocumentController::slideAt(int index) {
   return index >= 0 && index < slides_.size() ? &slides_[index] : nullptr;
 }
@@ -1236,6 +2022,19 @@ int CarouselDocumentController::indexOfItem(const QString& item_id) const {
   return -1;
 }
 
+int CarouselDocumentController::currentSelectionSlideIndex() const {
+  if (const auto* item = currentItem()) {
+    return slideIndexForItem(*item);
+  }
+  if (!selected_item_ids_.isEmpty()) {
+    const auto index = indexOfItem(selected_item_ids_.back());
+    if (index >= 0) {
+      return slideIndexForItem(items_.at(index));
+    }
+  }
+  return -1;
+}
+
 QRectF CarouselDocumentController::slideRectInDocument(int index) const {
   const auto size = exportPixelSize();
   return QRectF(index * size.width(), 0.0, size.width(), size.height());
@@ -1276,6 +2075,82 @@ QString CarouselDocumentController::versionedLocalFile(const QString& file_path,
   return url.toString();
 }
 
+QString CarouselDocumentController::helperProgram() const {
+  if (useBuiltHelperBinary()) {
+    return builtBinaryPath(QStringLiteral("catalog_carousel_documents"));
+  }
+
+  return QStringLiteral("cargo");
+}
+
+QStringList CarouselDocumentController::helperArguments(const QStringList& command_arguments) const {
+  if (useBuiltHelperBinary()) {
+    return command_arguments;
+  }
+
+  QStringList arguments = {
+      QStringLiteral("run"),
+      QStringLiteral("--quiet"),
+      QStringLiteral("--manifest-path"),
+      QStringLiteral("rust/Cargo.toml"),
+      QStringLiteral("-p"),
+      QStringLiteral("photo-catalog"),
+      QStringLiteral("--bin"),
+      QStringLiteral("catalog_carousel_documents"),
+      QStringLiteral("--"),
+  };
+  arguments.append(command_arguments);
+  return arguments;
+}
+
+bool CarouselDocumentController::useBuiltHelperBinary() const {
+  const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_carousel_documents")));
+  return binary.exists() && binary.isExecutable();
+}
+
+QString CarouselDocumentController::builtBinaryPath(const QString& binary_name) const {
+  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
+}
+
+bool CarouselDocumentController::runHelperCommand(
+    const QStringList& command_arguments,
+    QString* output,
+    QString* error_message) const {
+  QProcess process;
+  process.setWorkingDirectory(QDir::currentPath());
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    if (error_message != nullptr) {
+      *error_message = environment_error;
+    }
+    return false;
+  }
+
+  process.setProcessEnvironment(environment);
+  process.setProcessChannelMode(QProcess::MergedChannels);
+  process.start(helperProgram(), helperArguments(command_arguments));
+  if (!process.waitForStarted(5000)) {
+    if (error_message != nullptr) {
+      *error_message = QStringLiteral("Unable to start carousel document helper.");
+    }
+    return false;
+  }
+
+  if (!process.waitForFinished(15000) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    if (error_message != nullptr) {
+      const auto helper_output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+      *error_message = helper_output.isEmpty() ? QStringLiteral("Carousel document helper failed.") : helper_output;
+    }
+    return false;
+  }
+
+  if (output != nullptr) {
+    *output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+  }
+  return true;
+}
+
 QString CarouselDocumentController::fileUrlForPath(const QString& file_path) const {
   if (file_path.isEmpty()) {
     return {};
@@ -1286,6 +2161,294 @@ QString CarouselDocumentController::fileUrlForPath(const QString& file_path) con
 CarouselDocumentController::RecipeState CarouselDocumentController::recipeStateFromJson(
     const QString& recipe_json) const {
   return parse_edit_recipe_json(recipe_json);
+}
+
+QJsonObject CarouselDocumentController::mediaObject(const MediaItem& media) const {
+  QJsonObject object;
+  QString type = QStringLiteral("empty");
+  if (media.type == MediaType::Image) {
+    type = QStringLiteral("image");
+  } else if (media.type == MediaType::Video) {
+    type = QStringLiteral("video");
+  }
+  object.insert(QStringLiteral("type"), type);
+  object.insert(QStringLiteral("filePath"), media.file_path);
+  object.insert(QStringLiteral("displayLabel"), media.display_label);
+  object.insert(QStringLiteral("recipeJson"), media.recipe_json);
+  object.insert(QStringLiteral("fitMode"), fitModeName(media.fit_mode));
+  object.insert(QStringLiteral("scale"), media.scale);
+  object.insert(QStringLiteral("offsetX"), media.offset_x);
+  object.insert(QStringLiteral("offsetY"), media.offset_y);
+  return object;
+}
+
+CarouselDocumentController::MediaItem CarouselDocumentController::mediaFromObject(const QJsonObject& object) const {
+  MediaItem media;
+  const auto type = object.value(QStringLiteral("type")).toString().trimmed();
+  if (type == QStringLiteral("image")) {
+    media.type = MediaType::Image;
+  } else if (type == QStringLiteral("video")) {
+    media.type = MediaType::Video;
+  }
+  media.file_path = normalized_path(object.value(QStringLiteral("filePath")).toString());
+  media.display_label = object.value(QStringLiteral("displayLabel")).toString().trimmed();
+  media.recipe_json = object.value(QStringLiteral("recipeJson")).toString().trimmed();
+  media.recipe_state = recipeStateFromJson(media.recipe_json);
+  media.fit_mode = fitModeFromName(object.value(QStringLiteral("fitMode")).toString());
+  media.scale = clamp_zoom_scale(object.value(QStringLiteral("scale")).toDouble(1.0));
+  media.offset_x = clamp_unit_interval(object.value(QStringLiteral("offsetX")).toDouble());
+  media.offset_y = clamp_unit_interval(object.value(QStringLiteral("offsetY")).toDouble());
+  return media;
+}
+
+QJsonObject CarouselDocumentController::slideObject(const Slide& slide) const {
+  QJsonObject object;
+  QString template_kind = QStringLiteral("single");
+  if (slide.template_kind == SlideTemplate::SplitPair) {
+    template_kind = QStringLiteral("split-pair");
+  } else if (slide.template_kind == SlideTemplate::StackedTriptych) {
+    template_kind = QStringLiteral("stacked-triptych");
+  }
+  object.insert(QStringLiteral("templateKind"), template_kind);
+  object.insert(QStringLiteral("primary"), mediaObject(slide.primary));
+  object.insert(QStringLiteral("secondary"), mediaObject(slide.secondary));
+  object.insert(QStringLiteral("tertiary"), mediaObject(slide.tertiary));
+  object.insert(QStringLiteral("linkedGroupId"), slide.linked_group_id);
+  return object;
+}
+
+CarouselDocumentController::Slide CarouselDocumentController::slideFromObject(const QJsonObject& object) const {
+  Slide slide;
+  const auto template_kind = object.value(QStringLiteral("templateKind")).toString().trimmed();
+  if (template_kind == QStringLiteral("split-pair")) {
+    slide.template_kind = SlideTemplate::SplitPair;
+  } else if (template_kind == QStringLiteral("stacked-triptych")) {
+    slide.template_kind = SlideTemplate::StackedTriptych;
+  }
+  if (object.value(QStringLiteral("primary")).isObject()) {
+    slide.primary = mediaFromObject(object.value(QStringLiteral("primary")).toObject());
+  }
+  if (object.value(QStringLiteral("secondary")).isObject()) {
+    slide.secondary = mediaFromObject(object.value(QStringLiteral("secondary")).toObject());
+  }
+  if (object.value(QStringLiteral("tertiary")).isObject()) {
+    slide.tertiary = mediaFromObject(object.value(QStringLiteral("tertiary")).toObject());
+  }
+  slide.linked_group_id = object.value(QStringLiteral("linkedGroupId")).toString().trimmed();
+  return slide;
+}
+
+QJsonObject CarouselDocumentController::groupObject(const LinkedGroup& group) const {
+  QJsonObject object;
+  object.insert(QStringLiteral("id"), group.id);
+  object.insert(QStringLiteral("kind"), groupKindName(group.kind));
+  object.insert(QStringLiteral("startIndex"), group.start_index);
+  object.insert(QStringLiteral("span"), group.span);
+  object.insert(QStringLiteral("media"), mediaObject(group.media));
+  return object;
+}
+
+CarouselDocumentController::LinkedGroup CarouselDocumentController::groupFromObject(const QJsonObject& object) const {
+  LinkedGroup group;
+  group.id = object.value(QStringLiteral("id")).toString().trimmed();
+  group.kind = groupKindFromTemplate(object.value(QStringLiteral("kind")).toString().trimmed());
+  group.start_index = qMax(0, object.value(QStringLiteral("startIndex")).toInt());
+  group.span = qMax(0, object.value(QStringLiteral("span")).toInt());
+  if (object.value(QStringLiteral("media")).isObject()) {
+    group.media = mediaFromObject(object.value(QStringLiteral("media")).toObject());
+  }
+  return group;
+}
+
+QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item) const {
+  QJsonObject object;
+  object.insert(QStringLiteral("id"), item.id);
+  QString kind = QStringLiteral("image");
+  if (item.kind == ItemKind::Text) {
+    kind = QStringLiteral("text");
+  } else if (item.kind == ItemKind::Video) {
+    kind = QStringLiteral("video");
+  }
+  object.insert(QStringLiteral("kind"), kind);
+  object.insert(QStringLiteral("filePath"), item.file_path);
+  object.insert(QStringLiteral("displayLabel"), item.display_label);
+  object.insert(QStringLiteral("hidden"), item.hidden);
+  object.insert(QStringLiteral("locked"), item.locked);
+  object.insert(QStringLiteral("recipeJson"), item.recipe_json);
+  object.insert(QStringLiteral("text"), item.text);
+  object.insert(QStringLiteral("textColor"), item.text_color);
+  object.insert(QStringLiteral("textPointSize"), item.text_point_size);
+  QJsonObject bounds;
+  bounds.insert(QStringLiteral("x"), item.bounds.x());
+  bounds.insert(QStringLiteral("y"), item.bounds.y());
+  bounds.insert(QStringLiteral("width"), item.bounds.width());
+  bounds.insert(QStringLiteral("height"), item.bounds.height());
+  object.insert(QStringLiteral("bounds"), bounds);
+  object.insert(QStringLiteral("rotationDegrees"), item.rotation_degrees);
+  object.insert(QStringLiteral("fitMode"), fitModeName(item.fit_mode));
+  QJsonObject source_size;
+  source_size.insert(QStringLiteral("width"), item.source_size.width());
+  source_size.insert(QStringLiteral("height"), item.source_size.height());
+  object.insert(QStringLiteral("sourceSize"), source_size);
+  return object;
+}
+
+CarouselDocumentController::CanvasItem CarouselDocumentController::itemFromObject(const QJsonObject& object) const {
+  CanvasItem item;
+  item.id = object.value(QStringLiteral("id")).toString().trimmed();
+  const auto kind = object.value(QStringLiteral("kind")).toString().trimmed();
+  if (kind == QStringLiteral("text")) {
+    item.kind = ItemKind::Text;
+  } else if (kind == QStringLiteral("video")) {
+    item.kind = ItemKind::Video;
+  } else {
+    item.kind = ItemKind::Image;
+  }
+  item.file_path = normalized_path(object.value(QStringLiteral("filePath")).toString());
+  item.display_label = object.value(QStringLiteral("displayLabel")).toString().trimmed();
+  item.hidden = object.value(QStringLiteral("hidden")).toBool(false);
+  item.locked = object.value(QStringLiteral("locked")).toBool(false);
+  item.recipe_json = object.value(QStringLiteral("recipeJson")).toString().trimmed();
+  item.recipe_state = recipeStateFromJson(item.recipe_json);
+  item.text = object.value(QStringLiteral("text")).toString();
+  item.text_color = object.value(QStringLiteral("textColor")).toString().trimmed();
+  if (item.text_color.isEmpty()) {
+    item.text_color = QStringLiteral("#1e1a17");
+  }
+  item.text_point_size = qMax(kMinTextPointSize, object.value(QStringLiteral("textPointSize")).toDouble(72.0));
+  const auto bounds_value = object.value(QStringLiteral("bounds"));
+  if (bounds_value.isObject()) {
+    const auto bounds = bounds_value.toObject();
+    item.bounds = QRectF(
+        bounds.value(QStringLiteral("x")).toDouble(),
+        bounds.value(QStringLiteral("y")).toDouble(),
+        qMax(kMinItemSize, bounds.value(QStringLiteral("width")).toDouble(kMinItemSize)),
+        qMax(kMinItemSize, bounds.value(QStringLiteral("height")).toDouble(kMinItemSize)));
+  }
+  item.rotation_degrees = object.value(QStringLiteral("rotationDegrees")).toDouble();
+  item.fit_mode = fitModeFromName(object.value(QStringLiteral("fitMode")).toString());
+  const auto source_size_value = object.value(QStringLiteral("sourceSize"));
+  if (source_size_value.isObject()) {
+    const auto source_size = source_size_value.toObject();
+    item.source_size = QSizeF(
+        qMax(0.0, source_size.value(QStringLiteral("width")).toDouble()),
+        qMax(0.0, source_size.value(QStringLiteral("height")).toDouble()));
+  }
+  if (item.kind == ItemKind::Text && item.bounds.height() <= 0.0) {
+    item.bounds.setHeight(measuredTextHeight(item));
+  }
+  return item;
+}
+
+QJsonObject CarouselDocumentController::documentObject() const {
+  QJsonObject object;
+  object.insert(QStringLiteral("version"), 2);
+  object.insert(QStringLiteral("documentName"), document_name_);
+  object.insert(QStringLiteral("documentFormat"), document_format_);
+  object.insert(QStringLiteral("currentIndex"), current_index_);
+  object.insert(QStringLiteral("activeSlot"), active_slot_);
+  object.insert(QStringLiteral("selectedItemId"), selected_item_id_);
+  QJsonArray selected_items_array;
+  for (const auto& item_id : selected_item_ids_) {
+    selected_items_array.push_back(item_id);
+  }
+  object.insert(QStringLiteral("selectedItemIds"), selected_items_array);
+
+  QJsonArray slides_array;
+  for (const auto& slide : slides_) {
+    slides_array.push_back(slideObject(slide));
+  }
+  object.insert(QStringLiteral("slides"), slides_array);
+
+  QJsonArray groups_array;
+  for (const auto& group : groups_) {
+    groups_array.push_back(groupObject(group));
+  }
+  object.insert(QStringLiteral("groups"), groups_array);
+
+  QJsonArray items_array;
+  for (const auto& item : items_) {
+    items_array.push_back(itemObject(item));
+  }
+  object.insert(QStringLiteral("items"), items_array);
+  return object;
+}
+
+bool CarouselDocumentController::loadDocumentObject(const QJsonObject& object) {
+  QVector<Slide> next_slides;
+  QVector<LinkedGroup> next_groups;
+  QVector<CanvasItem> next_items;
+
+  const auto slides_value = object.value(QStringLiteral("slides"));
+  if (!slides_value.isArray()) {
+    return false;
+  }
+
+  const auto slides_array = slides_value.toArray();
+  next_slides.reserve(slides_array.size());
+  for (const auto& value : slides_array) {
+    if (!value.isObject()) {
+      continue;
+    }
+    next_slides.push_back(slideFromObject(value.toObject()));
+  }
+  if (next_slides.isEmpty()) {
+    next_slides.push_back(Slide{});
+  }
+
+  const auto groups_array = object.value(QStringLiteral("groups")).toArray();
+  next_groups.reserve(groups_array.size());
+  for (const auto& value : groups_array) {
+    if (!value.isObject()) {
+      continue;
+    }
+    const auto group = groupFromObject(value.toObject());
+    if (!group.id.isEmpty()) {
+      next_groups.push_back(group);
+    }
+  }
+
+  const auto items_array = object.value(QStringLiteral("items")).toArray();
+  next_items.reserve(items_array.size());
+  for (const auto& value : items_array) {
+    if (!value.isObject()) {
+      continue;
+    }
+    auto item = itemFromObject(value.toObject());
+    if (item.id.isEmpty()) {
+      item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    }
+    next_items.push_back(item);
+  }
+
+  slides_ = next_slides;
+  groups_ = next_groups;
+  items_ = next_items;
+  document_name_ = normalized_document_name(object.value(QStringLiteral("documentName")).toString());
+  document_format_ =
+      object.value(QStringLiteral("documentFormat")).toString().trimmed() == QStringLiteral("5x4")
+          ? QStringLiteral("5x4")
+          : QStringLiteral("4x5");
+  current_index_ = qBound(0, object.value(QStringLiteral("currentIndex")).toInt(), qMax(0, static_cast<int>(slides_.size()) - 1));
+  active_slot_ = object.value(QStringLiteral("activeSlot")).toString().trimmed();
+  if (active_slot_ != QStringLiteral("secondary") && active_slot_ != QStringLiteral("tertiary")) {
+    active_slot_ = QStringLiteral("primary");
+  }
+  QStringList next_selected_ids;
+  const auto selected_items_value = object.value(QStringLiteral("selectedItemIds"));
+  if (selected_items_value.isArray()) {
+    const auto selected_items_array = selected_items_value.toArray();
+    next_selected_ids.reserve(selected_items_array.size());
+    for (const auto& value : selected_items_array) {
+      next_selected_ids.push_back(value.toString().trimmed());
+    }
+  }
+  const auto primary_selected_id = object.value(QStringLiteral("selectedItemId")).toString().trimmed();
+  rebuildGroupIndices();
+  ensureCurrentIndexValid();
+  normalizeForCurrentTemplate();
+  setSelectedItemIds(next_selected_ids, primary_selected_id);
+  return true;
 }
 
 bool CarouselDocumentController::isImageFile(const QString& file_path) const {
@@ -1342,6 +2505,9 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
   int freeform_count = 0;
   QString freeform_label;
   for (const auto& item : items_) {
+    if (item.hidden) {
+      continue;
+    }
     if (!slide_rect.intersects(item.bounds)) {
       continue;
     }
@@ -1370,6 +2536,11 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
   map.insert(QStringLiteral("groupSpan"), group != nullptr ? group->span : 0);
   map.insert(QStringLiteral("groupPosition"), group != nullptr ? (index - group->start_index + 1) : 0);
   map.insert(QStringLiteral("previewSource"), slide != nullptr ? slide->preview_source : QString{});
+  map.insert(QStringLiteral("primaryHasMedia"), group != nullptr ? group->media.type != MediaType::Empty
+                                                                  : slide != nullptr ? slide->primary.type != MediaType::Empty
+                                                                                    : false);
+  map.insert(QStringLiteral("secondaryHasMedia"), slide != nullptr ? slide->secondary.type != MediaType::Empty : false);
+  map.insert(QStringLiteral("tertiaryHasMedia"), slide != nullptr ? slide->tertiary.type != MediaType::Empty : false);
   map.insert(QStringLiteral("title"), QStringLiteral("%1").arg(index + 1, 2, 10, QLatin1Char('0')));
   map.insert(QStringLiteral("mediaType"), media_type);
   map.insert(QStringLiteral("label"), label);
@@ -1380,14 +2551,25 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
 QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
   QVariantMap map;
   map.insert(QStringLiteral("itemId"), item.id);
-  map.insert(QStringLiteral("type"), item.kind == ItemKind::Text ? QStringLiteral("text") : QStringLiteral("image"));
+  QString type = QStringLiteral("image");
+  if (item.kind == ItemKind::Text) {
+    type = QStringLiteral("text");
+  } else if (item.kind == ItemKind::Video) {
+    type = QStringLiteral("video");
+  }
+  map.insert(QStringLiteral("type"), type);
   map.insert(QStringLiteral("x"), item.bounds.x());
   map.insert(QStringLiteral("y"), item.bounds.y());
   map.insert(QStringLiteral("width"), item.bounds.width());
   map.insert(QStringLiteral("height"), item.bounds.height());
+  map.insert(QStringLiteral("centerX"), item.bounds.center().x());
+  map.insert(QStringLiteral("centerY"), item.bounds.center().y());
   map.insert(QStringLiteral("rotation"), item.rotation_degrees);
   map.insert(QStringLiteral("fitMode"), fitModeName(item.fit_mode));
-  map.insert(QStringLiteral("selected"), item.id == selected_item_id_);
+  map.insert(QStringLiteral("selected"), selected_item_ids_.contains(item.id));
+  map.insert(QStringLiteral("primarySelected"), item.id == selected_item_id_);
+  map.insert(QStringLiteral("hidden"), item.hidden);
+  map.insert(QStringLiteral("locked"), item.locked);
   map.insert(QStringLiteral("displayLabel"), summary_label(item));
   map.insert(QStringLiteral("sourceUrl"), fileUrlForPath(item.file_path));
   map.insert(QStringLiteral("text"), item.text);
@@ -1403,21 +2585,41 @@ QVariantMap CarouselDocumentController::selectionMap() const {
   const auto* slide = slideAt(current_index_);
   const auto* group = groupForIndex(current_index_);
   const auto* media = currentEditableMedia();
+  const auto unlocked_selected_indexes = selectedItemIndexes(false, true);
+  QVariantList selected_item_ids;
+  selected_item_ids.reserve(selected_item_ids_.size());
+  for (const auto& item_id : selected_item_ids_) {
+    selected_item_ids.push_back(item_id);
+  }
 
   map.insert(QStringLiteral("currentIndex"), current_index_);
   map.insert(QStringLiteral("slideNumber"), current_index_ + 1);
   map.insert(QStringLiteral("hasSelection"), item != nullptr);
+  map.insert(QStringLiteral("selectedCount"), selected_item_ids_.size());
+  map.insert(QStringLiteral("hasMultipleSelection"), selected_item_ids_.size() > 1);
+  map.insert(QStringLiteral("editableSelectionCount"), unlocked_selected_indexes.size());
+  map.insert(QStringLiteral("hasUnlockedSelection"), !unlocked_selected_indexes.isEmpty());
+  map.insert(QStringLiteral("selectedItemIds"), selected_item_ids);
   map.insert(QStringLiteral("itemId"), item != nullptr ? item->id : QString{});
-  map.insert(QStringLiteral("itemType"),
-             item == nullptr ? QStringLiteral("none")
-                             : item->kind == ItemKind::Text ? QStringLiteral("text") : QStringLiteral("image"));
+  QString item_type = QStringLiteral("none");
+  if (item != nullptr) {
+    if (item->kind == ItemKind::Text) {
+      item_type = QStringLiteral("text");
+    } else if (item->kind == ItemKind::Video) {
+      item_type = QStringLiteral("video");
+    } else {
+      item_type = QStringLiteral("image");
+    }
+  }
+  map.insert(QStringLiteral("itemType"), item_type);
   map.insert(QStringLiteral("isText"), item != nullptr && item->kind == ItemKind::Text);
   map.insert(QStringLiteral("isImage"), item != nullptr && item->kind == ItemKind::Image);
+  map.insert(QStringLiteral("isVideo"), item != nullptr && item->kind == ItemKind::Video);
   map.insert(QStringLiteral("layerDisplayLabel"), item != nullptr ? summary_label(*item) : QStringLiteral("Nothing selected"));
   map.insert(QStringLiteral("displayLabel"),
              item != nullptr ? summary_label(*item) : media != nullptr ? summary_label(*media) : QStringLiteral("Nothing selected"));
   map.insert(QStringLiteral("itemFitMode"),
-             item != nullptr && item->kind == ItemKind::Image ? fitModeName(item->fit_mode) : QStringLiteral("cover"));
+             item != nullptr && item->kind != ItemKind::Text ? fitModeName(item->fit_mode) : QStringLiteral("cover"));
   map.insert(QStringLiteral("x"), item != nullptr ? item->bounds.x() : 0.0);
   map.insert(QStringLiteral("y"), item != nullptr ? item->bounds.y() : 0.0);
   map.insert(QStringLiteral("width"), item != nullptr ? item->bounds.width() : 0.0);
@@ -1425,6 +2627,8 @@ QVariantMap CarouselDocumentController::selectionMap() const {
   map.insert(QStringLiteral("centerX"), item != nullptr ? item->bounds.center().x() : 0.0);
   map.insert(QStringLiteral("centerY"), item != nullptr ? item->bounds.center().y() : 0.0);
   map.insert(QStringLiteral("rotation"), item != nullptr ? item->rotation_degrees : 0.0);
+  map.insert(QStringLiteral("hidden"), item != nullptr ? item->hidden : false);
+  map.insert(QStringLiteral("locked"), item != nullptr ? item->locked : false);
   map.insert(QStringLiteral("text"), item != nullptr ? item->text : QString{});
   map.insert(QStringLiteral("textColor"), item != nullptr ? item->text_color : QStringLiteral("#1e1a17"));
   map.insert(QStringLiteral("textPointSize"), item != nullptr ? item->text_point_size : 72.0);
@@ -1450,9 +2654,9 @@ QVariantMap CarouselDocumentController::selectionMap() const {
   map.insert(QStringLiteral("slotDisplayLabel"), media != nullptr ? summary_label(*media) : QStringLiteral("Empty slot"));
   map.insert(QStringLiteral("mediaFitMode"), media != nullptr ? fitModeName(media->fit_mode) : QStringLiteral("cover"));
   map.insert(QStringLiteral("fitMode"),
-             item != nullptr && item->kind == ItemKind::Image ? fitModeName(item->fit_mode)
-                                                              : media != nullptr ? fitModeName(media->fit_mode)
-                                                                                 : QStringLiteral("cover"));
+             item != nullptr && item->kind != ItemKind::Text ? fitModeName(item->fit_mode)
+                                                             : media != nullptr ? fitModeName(media->fit_mode)
+                                                                                : QStringLiteral("cover"));
   map.insert(QStringLiteral("scale"), media != nullptr ? media->scale : 1.0);
   map.insert(QStringLiteral("offsetX"), media != nullptr ? media->offset_x : 0.0);
   map.insert(QStringLiteral("offsetY"), media != nullptr ? media->offset_y : 0.0);
@@ -1536,6 +2740,60 @@ QString CarouselDocumentController::currentActiveSlot() const {
   return active_slot_;
 }
 
+QSize CarouselDocumentController::currentMediaViewportSize() const {
+  if (currentSelectionIsLinked()) {
+    if (const auto* group = groupForIndex(current_index_)) {
+      const auto slide_size = exportPixelSize();
+      return QSize(slide_size.width() * qMax(1, group->span), slide_size.height());
+    }
+    return exportPixelSize();
+  }
+
+  const auto* slide = slideAt(current_index_);
+  if (slide == nullptr) {
+    return exportPixelSize();
+  }
+
+  const auto slide_size = exportPixelSize();
+  switch (slide->template_kind) {
+    case SlideTemplate::SplitPair:
+      return QSize(slide_size.width() / 2, slide_size.height());
+    case SlideTemplate::StackedTriptych:
+      return QSize(slide_size.width(), slide_size.height() / 3);
+    case SlideTemplate::Single:
+      break;
+  }
+  return slide_size;
+}
+
+QSize CarouselDocumentController::effectiveMediaSourceSize(const MediaItem& media) const {
+  if (media.type == MediaType::Video) {
+    return probeVideoSize(media.file_path);
+  }
+
+  QImageReader reader(media.file_path);
+  QSize source_size = reader.size();
+  bool using_decoded_size = false;
+  if (!source_size.isValid()) {
+    QImage decoded;
+    if (decodeEditedImage(media, &decoded, true, kPreviewLongEdge * 2)) {
+      source_size = decoded.size();
+      using_decoded_size = true;
+    }
+  }
+  if (!source_size.isValid()) {
+    return {};
+  }
+
+  if (!using_decoded_size &&
+      (has_explicit_crop_rect(media.recipe_state) ||
+      media.recipe_state.crop_preset != QStringLiteral("Original") ||
+      !qFuzzyCompare(media.recipe_state.crop_zoom, 1.0))) {
+    source_size = crop_rect_for_image(source_size, media.recipe_state).size();
+  }
+  return source_size;
+}
+
 qreal CarouselDocumentController::normalizedAspectRatio(const CanvasItem& item) const {
   if (item.source_size.width() > 0.0 && item.source_size.height() > 0.0) {
     return item.source_size.width() / item.source_size.height();
@@ -1591,6 +2849,9 @@ QSize CarouselDocumentController::probeVideoSize(const QString& file_path) const
 bool CarouselDocumentController::hasFreeformItemsOnSlide(int index) const {
   const auto rect = slideRectInDocument(index);
   for (const auto& item : items_) {
+    if (item.hidden) {
+      continue;
+    }
     if (rect.intersects(item.bounds)) {
       return true;
     }
@@ -1775,19 +3036,26 @@ bool CarouselDocumentController::decodeEditedImage(
     return false;
   }
 
-  QImageReader reader(media.file_path);
-  if (!reader.canRead()) {
-    return false;
-  }
+  if (native_image_supported(media.file_path)) {
+    if (!decode_native_image(media.file_path, image, preview ? max_edge : 0)) {
+      return false;
+    }
+  } else {
+    QImageReader reader(media.file_path);
+    if (reader.canRead()) {
+      if (preview && max_edge > 0) {
+        const auto source_size = reader.size();
+        if (source_size.isValid()) {
+          reader.setScaledSize(source_size.scaled(max_edge, max_edge, Qt::KeepAspectRatio));
+        }
+      }
 
-  if (preview && max_edge > 0) {
-    const auto source_size = reader.size();
-    if (source_size.isValid()) {
-      reader.setScaledSize(source_size.scaled(max_edge, max_edge, Qt::KeepAspectRatio));
+      *image = reader.read().convertToFormat(QImage::Format_ARGB32);
+    } else if (!decode_raw_image(media.file_path, image, preview ? max_edge : 0)) {
+      return false;
     }
   }
 
-  *image = reader.read().convertToFormat(QImage::Format_ARGB32);
   if (image->isNull()) {
     return false;
   }
@@ -1887,6 +3155,9 @@ void CarouselDocumentController::renderItemIntoSlide(
     int slide_index,
     const QSize& slide_size,
     bool preview) const {
+  if (item.hidden) {
+    return;
+  }
   const auto export_size = exportPixelSize();
   const auto scale_x = static_cast<double>(slide_size.width()) / static_cast<double>(export_size.width());
   const auto scale_y = static_cast<double>(slide_size.height()) / static_cast<double>(export_size.height());
@@ -1907,6 +3178,8 @@ void CarouselDocumentController::renderItemIntoSlide(
   const QRectF local_rect(-frame_rect.width() / 2.0, -frame_rect.height() / 2.0, frame_rect.width(), frame_rect.height());
   if (item.kind == ItemKind::Image) {
     renderPhotoItem(painter, item, local_rect, preview);
+  } else if (item.kind == ItemKind::Video) {
+    renderVideoItem(painter, item, local_rect);
   } else {
     renderTextItem(painter, item, local_rect);
   }
@@ -1934,6 +3207,23 @@ void CarouselDocumentController::renderPhotoItem(
   QRectF draw_rect(QPointF(0.0, 0.0), draw_size);
   draw_rect.moveCenter(frame_rect.center());
   painter->drawImage(draw_rect, source_image);
+  painter->restore();
+}
+
+void CarouselDocumentController::renderVideoItem(
+    QPainter* painter,
+    const CanvasItem& item,
+    const QRectF& frame_rect) const {
+  MediaItem media;
+  media.type = MediaType::Video;
+  media.file_path = item.file_path;
+  media.display_label = item.display_label;
+
+  painter->save();
+  painter->setClipRect(frame_rect);
+  const auto placeholder =
+      renderVideoPlaceholder(media, frame_rect.size().toSize().expandedTo(QSize(1, 1)));
+  painter->drawImage(frame_rect, placeholder);
   painter->restore();
 }
 
@@ -2035,6 +3325,14 @@ void CarouselDocumentController::adjustItemsForBlockMove(int start_index, int sp
   }
 }
 
+void CarouselDocumentController::emitItemGeometryChanged(bool slides_changed) {
+  emit itemsChanged();
+  emit selectionChanged();
+  if (slides_changed) {
+    emit slidesChanged();
+  }
+}
+
 void CarouselDocumentController::ensureCurrentIndexValid() {
   current_index_ = qBound(0, current_index_, qMax(0, static_cast<int>(slides_.size()) - 1));
   normalizeForCurrentTemplate();
@@ -2082,6 +3380,43 @@ void CarouselDocumentController::refreshCurrentSelectionPreviews() {
   }
 }
 
+QStringList CarouselDocumentController::normalizedSelectedItemIds(const QStringList& item_ids) const {
+  QStringList normalized_ids;
+  normalized_ids.reserve(item_ids.size());
+  for (const auto& item_id : item_ids) {
+    const auto normalized_id = item_id.trimmed();
+    if (normalized_id.isEmpty() || indexOfItem(normalized_id) < 0 || normalized_ids.contains(normalized_id)) {
+      continue;
+    }
+    normalized_ids.push_back(normalized_id);
+  }
+  return normalized_ids;
+}
+
+QVector<int> CarouselDocumentController::selectedItemIndexes(bool primary_slide_only, bool unlocked_only) const {
+  QVector<int> indexes;
+  indexes.reserve(selected_item_ids_.size());
+  const auto selection_slide = currentSelectionSlideIndex();
+  for (int index = 0; index < items_.size(); ++index) {
+    const auto& item = items_.at(index);
+    if (!selected_item_ids_.contains(item.id)) {
+      continue;
+    }
+    if (primary_slide_only && selection_slide >= 0 && slideIndexForItem(item) != selection_slide) {
+      continue;
+    }
+    if (unlocked_only && item.locked) {
+      continue;
+    }
+    indexes.push_back(index);
+  }
+  return indexes;
+}
+
+void CarouselDocumentController::normalizeSelection() {
+  setSelectedItemIds(selected_item_ids_, selected_item_id_);
+}
+
 void CarouselDocumentController::emitCanvasStateChanged(bool slides_changed) {
   emit itemsChanged();
   emit selectionChanged();
@@ -2090,8 +3425,35 @@ void CarouselDocumentController::emitCanvasStateChanged(bool slides_changed) {
   }
 }
 
+void CarouselDocumentController::setSelectedItemIds(
+    const QStringList& item_ids,
+    const QString& primary_item_id) {
+  auto normalized_ids = normalizedSelectedItemIds(item_ids);
+  auto normalized_primary = primary_item_id.trimmed();
+  if (!normalized_primary.isEmpty() && !normalized_ids.contains(normalized_primary) &&
+      indexOfItem(normalized_primary) >= 0) {
+    normalized_ids.push_back(normalized_primary);
+  }
+
+  if (normalized_ids.isEmpty()) {
+    selected_item_id_.clear();
+    selected_item_ids_.clear();
+    return;
+  }
+
+  if (normalized_primary.isEmpty() || !normalized_ids.contains(normalized_primary)) {
+    normalized_primary = normalized_ids.back();
+  } else {
+    normalized_ids.removeAll(normalized_primary);
+    normalized_ids.push_back(normalized_primary);
+  }
+
+  selected_item_id_ = normalized_primary;
+  selected_item_ids_ = normalized_ids;
+}
+
 void CarouselDocumentController::setSelectedItemId(const QString& item_id) {
-  selected_item_id_ = item_id;
+  setSelectedItemIds(item_id.trimmed().isEmpty() ? QStringList{} : QStringList{item_id}, item_id);
 }
 
 void CarouselDocumentController::setStatus(const QString& status) {
@@ -2204,9 +3566,6 @@ void CarouselDocumentController::removeGroupAtIndex(int index, bool keep_current
       auto& item = items_[item_index - 1];
       const auto center_x = item.bounds.center().x();
       if (center_x >= removed_left && center_x < removed_right) {
-        if (item.id == selected_item_id_) {
-          selected_item_id_.clear();
-        }
         items_.removeAt(item_index - 1);
         continue;
       }
@@ -2217,6 +3576,7 @@ void CarouselDocumentController::removeGroupAtIndex(int index, bool keep_current
   }
 
   current_index_ = group_copy.start_index;
+  normalizeSelection();
   if (group_copy.span > 1) {
     slides_.remove(group_copy.start_index + 1, group_copy.span - 1);
   }

@@ -72,7 +72,15 @@ Rectangle {
 
     function activeMaskHasAdjustments() {
         return Math.abs(editorPreview.activeMaskExposure) > 0.001 ||
+               Math.abs(editorPreview.activeMaskContrast) > 0.001 ||
+               Math.abs(editorPreview.activeMaskHighlights) > 0.001 ||
+               Math.abs(editorPreview.activeMaskShadows) > 0.001 ||
+               Math.abs(editorPreview.activeMaskWhites) > 0.001 ||
+               Math.abs(editorPreview.activeMaskBlacks) > 0.001 ||
                Math.abs(editorPreview.activeMaskTemperature) > 0.001 ||
+               Math.abs(editorPreview.activeMaskTint) > 0.001 ||
+               Math.abs(editorPreview.activeMaskVibrance) > 0.001 ||
+               Math.abs(editorPreview.activeMaskSaturation) > 0.001 ||
                Math.abs(editorPreview.activeMaskHueShift) > 0.001 ||
                Math.abs(editorPreview.activeMaskSaturationShift) > 0.001 ||
                Math.abs(editorPreview.activeMaskColorizeStrength) > 0.001 ||
@@ -196,11 +204,11 @@ Rectangle {
                     id: maskPreview
                     anchors.fill: parent
                     anchors.margins: 18
-                    source: editorPreview.previewSource
+                    source: editorPreview.displayPreviewSource
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
                     cache: false
-                    visible: editorPreview.previewSource.length > 0
+                    visible: editorPreview.displayPreviewSource.length > 0
                 }
 
                 Item {
@@ -229,10 +237,13 @@ Rectangle {
                             Item {
                                 id: linearOverlay
                                 visible: mask.kind === "linear"
+                                readonly property real positionValue: mask && mask.position !== undefined ? mask.position : 0.5
+                                readonly property real featherValue: mask && mask.feather !== undefined ? mask.feather : 0.22
+                                readonly property real rotationValue: mask && mask.rotation !== undefined ? mask.rotation : 0
                                 anchors.centerIn: parent
                                 width: parent.width * 1.35
                                 height: parent.height * 1.35
-                                rotation: mask.rotation
+                                rotation: rotationValue
                                 opacity: active ? 0.92 : 0.48
 
                                 Rectangle {
@@ -241,12 +252,12 @@ Rectangle {
                                     gradient: Gradient {
                                         GradientStop { position: 0.0; color: Qt.alpha(accent, 0.34) }
                                         GradientStop {
-                                            position: Math.max(0.0, mask.position - mask.feather * 0.5)
+                                            position: Math.max(0.0, positionValue - featherValue * 0.5)
                                             color: Qt.alpha(accent, 0.14)
                                         }
-                                        GradientStop { position: mask.position; color: Qt.rgba(0.95, 0.97, 0.98, 0.72) }
+                                        GradientStop { position: positionValue; color: Qt.rgba(0.95, 0.97, 0.98, 0.72) }
                                         GradientStop {
-                                            position: Math.min(1.0, mask.position + mask.feather * 0.5)
+                                            position: Math.min(1.0, positionValue + featherValue * 0.5)
                                             color: Qt.alpha(accent, 0.06)
                                         }
                                         GradientStop { position: 1.0; color: Qt.alpha(accent, 0.0) }
@@ -255,7 +266,7 @@ Rectangle {
 
                                 Rectangle {
                                     x: 0
-                                    y: Math.max(0, Math.min(linearOverlay.height - 1, linearOverlay.height * mask.position))
+                                    y: Math.max(0, Math.min(linearOverlay.height - 1, linearOverlay.height * positionValue))
                                     width: linearOverlay.width
                                     height: 1
                                     color: "#f4f7fa"
@@ -266,7 +277,7 @@ Rectangle {
                                     anchors.fill: parent
                                     acceptedButtons: Qt.LeftButton
                                     cursorShape: active ? Qt.CrossCursor : Qt.PointingHandCursor
-                                    onPressed: {
+                                    onPressed: function(mouse) {
                                         editorPreview.activeMaskIndex = index
                                         if (active)
                                             editorPreview.activeMaskPosition = root.clamp(mouse.y / linearOverlay.height, 0, 1)
@@ -276,7 +287,7 @@ Rectangle {
                                 Rectangle {
                                     visible: active
                                     x: linearOverlay.width / 2 - width / 2
-                                    y: linearOverlay.height * mask.position - height / 2
+                                    y: linearOverlay.height * positionValue - height / 2
                                     width: 16
                                     height: 16
                                     radius: 8
@@ -326,11 +337,17 @@ Rectangle {
                             Item {
                                 id: radialOverlay
                                 visible: mask.kind === "radial"
-                                x: mask.centerX * parent.width - width / 2
-                                y: mask.centerY * parent.height - height / 2
-                                width: Math.max(24, parent.width * mask.radiusX * 2)
-                                height: Math.max(24, parent.height * mask.radiusY * 2)
-                                rotation: mask.rotation
+                                readonly property real centerXValue: mask && mask.centerX !== undefined ? mask.centerX : 0.5
+                                readonly property real centerYValue: mask && mask.centerY !== undefined ? mask.centerY : 0.5
+                                readonly property real radiusXValue: mask && mask.radiusX !== undefined ? mask.radiusX : 0.2
+                                readonly property real radiusYValue: mask && mask.radiusY !== undefined ? mask.radiusY : 0.2
+                                readonly property real featherValue: mask && mask.feather !== undefined ? mask.feather : 0.25
+                                readonly property real rotationValue: mask && mask.rotation !== undefined ? mask.rotation : 0
+                                x: centerXValue * parent.width - width / 2
+                                y: centerYValue * parent.height - height / 2
+                                width: Math.max(24, parent.width * radiusXValue * 2)
+                                height: Math.max(24, parent.height * radiusYValue * 2)
+                                rotation: rotationValue
                                 opacity: active ? 0.92 : 0.48
 
                                 MouseArea {
@@ -341,19 +358,20 @@ Rectangle {
                                 }
 
                                 Canvas {
+                                    id: radialCanvas
                                     anchors.fill: parent
 
                                     Connections {
                                         target: editorPreview
 
                                         function onControlsChanged() {
-                                            parent.requestPaint()
+                                            radialCanvas.requestPaint()
                                         }
                                     }
 
                                     onPaint: {
                                         const ctx = getContext("2d")
-                                        const innerScale = Math.max(0.0, 1.0 - mask.feather)
+                                        const innerScale = Math.max(0.0, 1.0 - featherValue)
                                         ctx.reset()
                                         ctx.strokeStyle = "#f4f7fa"
                                         ctx.lineWidth = active ? 1.8 : 1.2
@@ -470,21 +488,51 @@ Rectangle {
                                 anchors.fill: parent
                                 opacity: active ? 0.92 : 0.52
 
-                                Repeater {
-                                    model: mask.brushPoints || []
+                                Canvas {
+                                    id: brushCanvas
+                                    anchors.fill: parent
+                                    renderStrategy: Canvas.Threaded
 
-                                    delegate: Rectangle {
-                                        required property var modelData
+                                    function drawBrushPoint(ctx, point) {
+                                        const diameter = Math.max(
+                                                    8,
+                                                    Math.min(previewItem.width, previewItem.height) *
+                                                    (point.size || mask.brushSize || 0.08) * 2)
+                                        const x = (point.x || 0.5) * brushOverlay.width
+                                        const y = (point.y || 0.5) * brushOverlay.height
+                                        const radius = diameter / 2
+                                        ctx.beginPath()
+                                        ctx.arc(x, y, radius, 0, Math.PI * 2, false)
+                                        ctx.fillStyle = Qt.alpha(
+                                                    accent,
+                                                    Math.max(0.12, (point.flow || mask.brushFlow || 1.0) * 0.28))
+                                        ctx.fill()
+                                        if (active) {
+                                            ctx.lineWidth = 1
+                                            ctx.strokeStyle = Qt.alpha("#f4f7fa", 0.45)
+                                            ctx.stroke()
+                                        }
+                                    }
 
-                                        readonly property real pointDiameter: Math.max(8, Math.min(previewItem.width, previewItem.height) * (modelData.size || mask.brushSize || 0.08) * 2)
-                                        x: (modelData.x || 0.5) * brushOverlay.width - width / 2
-                                        y: (modelData.y || 0.5) * brushOverlay.height - height / 2
-                                        width: pointDiameter
-                                        height: pointDiameter
-                                        radius: pointDiameter / 2
-                                        color: Qt.alpha(accent, Math.max(0.12, (modelData.flow || mask.brushFlow || 1.0) * 0.28))
-                                        border.width: active ? 1 : 0
-                                        border.color: Qt.alpha("#f4f7fa", 0.45)
+                                    onPaint: {
+                                        const ctx = getContext("2d")
+                                        ctx.clearRect(0, 0, width, height)
+                                        const points = mask.brushPoints || []
+                                        for (let i = 0; i < points.length; ++i)
+                                            drawBrushPoint(ctx, points[i])
+                                    }
+                                }
+
+                                onVisibleChanged: brushCanvas.requestPaint()
+                                onWidthChanged: brushCanvas.requestPaint()
+                                onHeightChanged: brushCanvas.requestPaint()
+
+                                Connections {
+                                    target: editorPreview
+
+                                    function onControlsChanged() {
+                                        if (brushOverlay.visible)
+                                            brushCanvas.requestPaint()
                                     }
                                 }
 
@@ -527,7 +575,7 @@ Rectangle {
                                     acceptedButtons: Qt.LeftButton
                                     enabled: active
                                     cursorShape: Qt.CrossCursor
-                                    onPressed: {
+                                    onPressed: function(mouse) {
                                         editorPreview.activeMaskIndex = index
                                         if (mask.retouchMode === "clone" &&
                                                 (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
@@ -555,13 +603,14 @@ Rectangle {
                                 opacity: active ? 0.95 : 0.56
 
                                 Canvas {
+                                    id: polygonCanvas
                                     anchors.fill: parent
 
                                     Connections {
                                         target: editorPreview
 
                                         function onControlsChanged() {
-                                            parent.requestPaint()
+                                            polygonCanvas.requestPaint()
                                         }
                                     }
 
@@ -639,180 +688,6 @@ Rectangle {
                                     font.pixelSize: 12
                                     font.weight: Font.Medium
                                 }
-                            }
-                        }
-                    }
-
-                    Column {
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.margins: 16
-                        spacing: 10
-                        z: 110
-
-                        Rectangle {
-                            width: 52
-                            radius: 14
-                            color: Qt.alpha("#101419", 0.88)
-                            border.width: 1
-                            border.color: "#2d3339"
-                            implicitHeight: toolRail.implicitHeight + 14
-
-                            Column {
-                                id: toolRail
-                                anchors.fill: parent
-                                anchors.margins: 7
-                                spacing: 6
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "smart-select"
-                                    tooltipText: "Smart Select"
-                                    active: root.objectPickArmed && !root.objectPickCreateNew
-                                    enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
-                                    onClicked: root.selectTool(root.objectPickArmed && !root.objectPickCreateNew ? "" : "smart")
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "plus"
-                                    tooltipText: "New Smart Selection"
-                                    active: root.objectPickArmed && root.objectPickCreateNew
-                                    enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
-                                    onClicked: root.selectTool(root.objectPickArmed && root.objectPickCreateNew ? "" : "smart-new")
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "lasso"
-                                    tooltipText: "Lasso"
-                                    active: root.lassoDrawArmed
-                                    onClicked: root.selectTool(root.lassoDrawArmed ? "" : "lasso")
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "polygon-tool"
-                                    tooltipText: "Polygon"
-                                    active: root.polygonDrawArmed
-                                    onClicked: {
-                                        if (!root.polygonDrawArmed && editorPreview.activeMaskKind !== "polygon")
-                                            editorPreview.startPolygonSelection()
-                                        root.selectTool(root.polygonDrawArmed ? "" : "polygon")
-                                    }
-                                }
-
-                                Rectangle {
-                                    width: 38
-                                    height: 1
-                                    radius: 1
-                                    color: "#2d3339"
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "brush-tool"
-                                    tooltipText: "Refine Add Brush"
-                                    active: editorPreview.activeMaskKind === "brush" &&
-                                            editorPreview.activeMaskOperation === "add" &&
-                                            editorPreview.activeMaskRetouchMode.length === 0
-                                    onClicked: {
-                                        root.clearTransientTools()
-                                        editorPreview.startSelectionBrush(false)
-                                    }
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "brush-subtract"
-                                    tooltipText: "Refine Subtract Brush"
-                                    active: editorPreview.activeMaskKind === "brush" &&
-                                            editorPreview.activeMaskOperation === "subtract" &&
-                                            editorPreview.activeMaskRetouchMode.length === 0
-                                    onClicked: {
-                                        root.clearTransientTools()
-                                        editorPreview.startSelectionBrush(true)
-                                    }
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "effects"
-                                    tooltipText: "Heal Brush"
-                                    active: editorPreview.activeMaskKind === "brush" &&
-                                            editorPreview.activeMaskRetouchMode === "heal"
-                                    onClicked: {
-                                        root.clearTransientTools()
-                                        editorPreview.startHealBrush()
-                                    }
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "source"
-                                    tooltipText: "Clone Stamp"
-                                    active: editorPreview.activeMaskKind === "brush" &&
-                                            editorPreview.activeMaskRetouchMode === "clone"
-                                    onClicked: {
-                                        root.clearTransientTools()
-                                        if (editorPreview.activeMaskKind === "brush" &&
-                                                editorPreview.activeMaskRetouchMode === "clone") {
-                                            root.cloneSourcePickArmed = true
-                                        } else {
-                                            editorPreview.startCloneBrush()
-                                            root.cloneSourcePickArmed = true
-                                        }
-                                    }
-                                }
-
-                                ActionButton {
-                                    width: 38
-                                    compact: true
-                                    showText: false
-                                    iconName: "erase-tool"
-                                    tooltipText: "Remove Brush"
-                                    active: editorPreview.activeMaskKind === "brush" &&
-                                            editorPreview.activeMaskRetouchMode === "remove"
-                                    onClicked: {
-                                        root.clearTransientTools()
-                                        editorPreview.startRemoveBrush()
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            width: toolLabel.implicitWidth + 20
-                            height: toolLabel.implicitHeight + 12
-                            radius: 10
-                            color: Qt.alpha("#101419", 0.82)
-                            border.width: 1
-                            border.color: "#2d3339"
-
-                            Label {
-                                id: toolLabel
-                                anchors.centerIn: parent
-                                text: root.activeToolLabel()
-                                color: "#f2f4f6"
-                                font.family: "Avenir Next"
-                                font.pixelSize: 11
-                                font.weight: Font.Medium
                             }
                         }
                     }
@@ -965,7 +840,7 @@ Rectangle {
                     anchors.fill: parent
                     anchors.margins: 18
                     radius: 10
-                    visible: editorPreview.previewSource.length === 0
+                    visible: editorPreview.displayPreviewSource.length === 0
                     color: "#181c20"
                     border.width: 1
                     border.color: "#2d3339"
@@ -1010,8 +885,75 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Advanced Masks"
-                        subtitle: "Shapes and range masks live here. Selection and removal tools are on the preview rail."
+                        title: "Tools"
+                        subtitle: "Select, refine, and retouch tools for the canvas."
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "SELECT"
+                            color: "#6b7580"
+                            font.family: "Menlo"
+                            font.pixelSize: 8
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.8
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 8
+                            rowSpacing: 8
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Smart Select"
+                                active: root.objectPickArmed && !root.objectPickCreateNew
+                                enabled: editorPreview.hasAsset
+                                onClicked: root.selectTool(root.objectPickArmed && !root.objectPickCreateNew ? "" : "smart")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "New Selection"
+                                active: root.objectPickArmed && root.objectPickCreateNew
+                                enabled: editorPreview.hasAsset
+                                onClicked: root.selectTool(root.objectPickArmed && root.objectPickCreateNew ? "" : "smart-new")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Lasso"
+                                active: root.lassoDrawArmed
+                                onClicked: root.selectTool(root.lassoDrawArmed ? "" : "lasso")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Polygon"
+                                active: root.polygonDrawArmed
+                                onClicked: {
+                                    if (!root.polygonDrawArmed && editorPreview.activeMaskKind !== "polygon")
+                                        editorPreview.startPolygonSelection()
+                                    root.selectTool(root.polygonDrawArmed ? "" : "polygon")
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !editorPreview.subjectMaskAvailable
+                            text: "AI Subject requires macOS 14 or later."
+                            wrapMode: Text.WordWrap
+                            color: "#8f98a2"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    InspectorSection {
+                        Layout.fillWidth: true
+                        title: "Masks"
+                        subtitle: "Shape and range masks for local adjustments."
 
                         GridLayout {
                             Layout.fillWidth: true
@@ -1038,7 +980,6 @@ Rectangle {
                             }
 
                             ActionButton {
-                                Layout.columnSpan: 2
                                 Layout.fillWidth: true
                                 text: "Color Range"
                                 onClicked: editorPreview.addMask("color")
@@ -1055,28 +996,18 @@ Rectangle {
                                 }
                             }
                         }
-
-                        Label {
-                            visible: !editorPreview.subjectMaskAvailable
-                            Layout.fillWidth: true
-                            text: "AI Subject and Smart Select require macOS 14 or later."
-                            wrapMode: Text.WordWrap
-                            color: "#8f98a2"
-                            font.family: "Avenir Next"
-                            font.pixelSize: 11
-                        }
                     }
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Stack"
+                        title: "Mask Sets"
 
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 8
 
                             Repeater {
-                                model: editorPreview.maskStack
+                                model: editorPreview.maskSets
 
                                 delegate: Rectangle {
                                     required property int index
@@ -1084,54 +1015,117 @@ Rectangle {
 
                                     Layout.fillWidth: true
                                     radius: 10
-                                    color: index === editorPreview.activeMaskIndex ? "#21272d" : "#171b1f"
+                                    color: "#171b1f"
                                     border.width: 1
-                                    border.color: index === editorPreview.activeMaskIndex ? root.maskAccent(modelData) : "#2d3339"
-                                    implicitHeight: 56
+                                    border.color: "#2d3339"
+                                    implicitHeight: setColumn.implicitHeight + 20
 
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: editorPreview.activeMaskIndex = index
-                                    }
-
-                                    RowLayout {
+                                    ColumnLayout {
+                                        id: setColumn
                                         anchors.fill: parent
                                         anchors.margins: 10
                                         spacing: 8
 
-                                        Rectangle {
-                                            width: 10
-                                            height: 10
-                                            radius: 5
-                                            color: root.maskAccent(modelData)
-                                        }
-
-                                        ColumnLayout {
+                                        RowLayout {
                                             Layout.fillWidth: true
-                                            spacing: 1
+                                            spacing: 8
 
-                                            Label {
-                                                text: modelData.name
-                                                color: "#f2f4f6"
-                                                font.family: "Avenir Next"
-                                                font.pixelSize: 13
-                                                font.weight: Font.Medium
+                                            Rectangle {
+                                                width: 10
+                                                height: 10
+                                                radius: 5
+                                                color: modelData.sources.length > 0
+                                                       ? root.maskAccent(modelData.sources[0])
+                                                       : "#8ab8d8"
                                             }
 
-                                            Label {
-                                                text: modelData.kind + " · " + modelData.operation
-                                                color: "#8f98a2"
-                                                font.family: "Avenir Next"
-                                                font.pixelSize: 11
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 1
+
+                                                Label {
+                                                    text: modelData.name
+                                                    color: "#f2f4f6"
+                                                    font.family: "Avenir Next"
+                                                    font.pixelSize: 13
+                                                    font.weight: Font.Medium
+                                                }
+
+                                                Label {
+                                                    text: modelData.sourceCount.toString() + " sources"
+                                                    color: "#8f98a2"
+                                                    font.family: "Avenir Next"
+                                                    font.pixelSize: 11
+                                                }
                                             }
                                         }
 
-                                        ActionButton {
-                                            text: modelData.enabled ? "On" : "Off"
-                                            active: modelData.enabled
-                                            onClicked: {
-                                                editorPreview.activeMaskIndex = index
-                                                editorPreview.activeMaskEnabled = !modelData.enabled
+                                        Repeater {
+                                            model: modelData.sources
+
+                                            delegate: Rectangle {
+                                                required property var modelData
+
+                                                Layout.fillWidth: true
+                                                radius: 8
+                                                color: modelData.flatIndex === editorPreview.activeMaskIndex
+                                                       ? "#21272d"
+                                                       : "#14181c"
+                                                border.width: 1
+                                                border.color: modelData.flatIndex === editorPreview.activeMaskIndex
+                                                              ? root.maskAccent(modelData)
+                                                              : "#242b31"
+                                                implicitHeight: 44
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    onClicked: editorPreview.activeMaskIndex =
+                                                                   (editorPreview.activeMaskIndex === modelData.flatIndex
+                                                                    ? -1
+                                                                    : modelData.flatIndex)
+                                                }
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 8
+                                                    spacing: 8
+
+                                                    Rectangle {
+                                                        width: 8
+                                                        height: 8
+                                                        radius: 4
+                                                        color: root.maskAccent(modelData)
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 1
+
+                                                        Label {
+                                                            text: modelData.name
+                                                            color: "#f2f4f6"
+                                                            font.family: "Avenir Next"
+                                                            font.pixelSize: 12
+                                                            font.weight: Font.Medium
+                                                        }
+
+                                                        Label {
+                                                            text: modelData.kind + " · " + modelData.operation
+                                                            color: "#8f98a2"
+                                                            font.family: "Avenir Next"
+                                                            font.pixelSize: 10
+                                                        }
+                                                    }
+
+                                                    ActionButton {
+                                                        text: modelData.enabled ? "On" : "Off"
+                                                        active: modelData.enabled
+                                                        onClicked: {
+                                                            editorPreview.activeMaskIndex = modelData.flatIndex
+                                                            editorPreview.activeMaskEnabled = !modelData.enabled
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -1139,8 +1133,8 @@ Rectangle {
                             }
 
                             Label {
-                                visible: editorPreview.maskCount === 0
-                                text: "No masks yet. Add a shape, brush, or range selector to start."
+                                visible: editorPreview.maskSetCount === 0
+                                text: "No selection masks yet. Add a shape, brush, range selector, or AI mask to start."
                                 wrapMode: Text.WordWrap
                                 color: "#8f98a2"
                                 font.family: "Avenir Next"
@@ -1174,6 +1168,87 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: "Delete"
                                 onClicked: editorPreview.removeActiveMask()
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        Layout.fillWidth: true
+                        title: "Retouch"
+                        subtitle: "Heal, clone, and remove live outside mask sets."
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Repeater {
+                                model: editorPreview.retouchStack
+
+                                delegate: Rectangle {
+                                    required property var modelData
+
+                                    Layout.fillWidth: true
+                                    radius: 10
+                                    color: modelData.flatIndex === editorPreview.activeMaskIndex ? "#21272d" : "#171b1f"
+                                    border.width: 1
+                                    border.color: modelData.flatIndex === editorPreview.activeMaskIndex
+                                                  ? root.maskAccent(modelData)
+                                                  : "#2d3339"
+                                    implicitHeight: 50
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        onClicked: editorPreview.activeMaskIndex =
+                                                       (editorPreview.activeMaskIndex === modelData.flatIndex
+                                                        ? -1
+                                                        : modelData.flatIndex)
+                                    }
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 10
+                                        spacing: 8
+
+                                        Rectangle {
+                                            width: 10
+                                            height: 10
+                                            radius: 5
+                                            color: root.maskAccent(modelData)
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 1
+
+                                            Label {
+                                                text: modelData.name
+                                                color: "#f2f4f6"
+                                                font.family: "Avenir Next"
+                                                font.pixelSize: 13
+                                                font.weight: Font.Medium
+                                            }
+
+                                            Label {
+                                                text: modelData.retouchMode.length > 0
+                                                      ? modelData.retouchMode + " · " +
+                                                        (modelData.committed ? "applied" : "staged")
+                                                      : "retouch"
+                                                color: "#8f98a2"
+                                                font.family: "Avenir Next"
+                                                font.pixelSize: 11
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Label {
+                                visible: editorPreview.retouchCount === 0
+                                text: "No retouch strokes yet."
+                                wrapMode: Text.WordWrap
+                                color: "#8f98a2"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 12
                             }
                         }
                     }

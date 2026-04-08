@@ -153,7 +153,10 @@ Repository automation now lives under `.github/workflows`:
 
 These workflows provide the release backbone, but code signing, notarization, Sparkle appcasts, and Windows App Installer/MSIX publishing still require your real certificates and hosting configuration.
 
+App/package versioning is now sourced from the root [`VERSION`](/Users/bradyreiner/projects/PersonalProjects/photo-editor/VERSION) file. Release tags must match it as `vX.Y.Z`.
+
 For the full step-by-step shipping process, see [docs/shipping-guide.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/shipping-guide.md).
+For the short practical checklist, see [docs/release-checklist.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/release-checklist.md).
 
 To open an interactive shell in the container:
 

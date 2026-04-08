@@ -67,6 +67,43 @@ ApplicationWindow {
         return theme.textMuted
     }
 
+    function workspaceBadgeCount(index) {
+        if (!jobQueue)
+            return 0
+
+        if (index === libraryWorkspaceIndex)
+            return jobQueue.activeJobCountForKind("catalog_import") + jobQueue.failedJobCountForKind("catalog_import")
+
+        if (index === timelineWorkspaceIndex)
+            return jobQueue.activeJobCountForKind("timeline_render") + jobQueue.failedJobCountForKind("timeline_render")
+
+        if (index === exportWorkspaceIndex)
+            return jobQueue.activeJobCount + jobQueue.failedJobCount
+
+        return 0
+    }
+
+    function workspaceBadgeText(index) {
+        const count = workspaceBadgeCount(index)
+        return count > 0 ? String(count) : ""
+    }
+
+    function workspaceBadgeEmphasis(index) {
+        if (!jobQueue)
+            return false
+
+        if (index === libraryWorkspaceIndex)
+            return jobQueue.failedJobCountForKind("catalog_import") > 0
+
+        if (index === timelineWorkspaceIndex)
+            return jobQueue.failedJobCountForKind("timeline_render") > 0
+
+        if (index === exportWorkspaceIndex)
+            return jobQueue.hasFailures
+
+        return false
+    }
+
     function activeWorkspaceItem() {
         return workspaceLoader.item ? workspaceLoader.item : null
     }
@@ -465,9 +502,9 @@ ApplicationWindow {
 
     Action {
         id: clearFinishedExportsAction
-        text: "Clear Finished Exports"
-        enabled: exportJobs.jobCount > 0
-        onTriggered: exportJobs.clearFinishedJobs()
+        text: "Clear Finished Jobs"
+        enabled: jobQueue.jobCount > 0
+        onTriggered: jobQueue.clearFinishedJobs()
     }
 
     Action {
@@ -829,6 +866,13 @@ ApplicationWindow {
     }
 
     Action {
+        id: checkForUpdatesAction
+        text: "Check for Updates..."
+        enabled: window.macStyle && macosUpdater && macosUpdater.available
+        onTriggered: macosUpdater.checkForUpdates()
+    }
+
+    Action {
         id: toggleDarkModeAction
         text: appShell.darkMode ? "Switch to Light Theme" : "Switch to Dark Theme"
         onTriggered: appShell.darkMode = !appShell.darkMode
@@ -976,6 +1020,7 @@ ApplicationWindow {
         Menu {
             title: "&Help"
             MenuItem { action: keyboardShortcutsAction }
+            MenuItem { action: checkForUpdatesAction }
             MenuSeparator {}
             MenuItem { action: aboutAction }
             MenuItem { action: runtimePathsAction }
@@ -1067,11 +1112,11 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         title: modelData
                         tooltipText: modelData + "  •  " + workspaceSubtitles[index]
-                        badgeText: ""
-                        badgeEmphasis: false
                         compact: false
                         kind: window.workspaceKinds[index]
                         accent: window.workspaceAccent(index)
+                        badgeText: window.workspaceBadgeText(index)
+                        badgeEmphasis: window.workspaceBadgeEmphasis(index)
                         highlighted: index === window.currentWorkspace
                         onClicked: window.currentWorkspace = index
                     }
@@ -1152,6 +1197,7 @@ ApplicationWindow {
             { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
             { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
             { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
+            { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
             { action: aboutAction, category: "Help", shortcutHint: "" },
             { action: clearFinishedExportsAction, category: "Export", shortcutHint: "" },
             { action: minimizeWindowAction, category: "Window", shortcutHint: "" },
@@ -1189,6 +1235,14 @@ ApplicationWindow {
 
             Label {
                 Layout.fillWidth: true
+                text: "Version " + appShell.appVersion
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 11
+            }
+
+            Label {
+                Layout.fillWidth: true
                 text: "A native editing shell for library browsing, still-image adjustments, timeline editing, carousel layouts, and export queue management."
                 color: theme.textMain
                 wrapMode: Text.WordWrap
@@ -1199,6 +1253,16 @@ ApplicationWindow {
                 text: "Runtime data is stored in your application support, cache, log, and backup folders shown in Preferences."
                 color: theme.textMuted
                 wrapMode: Text.WordWrap
+            }
+
+            ActionButton {
+                visible: window.macStyle && macosUpdater && macosUpdater.available
+                text: "Check for Updates"
+                compact: true
+                onClicked: {
+                    aboutDialog.close()
+                    macosUpdater.checkForUpdates()
+                }
             }
         }
     }

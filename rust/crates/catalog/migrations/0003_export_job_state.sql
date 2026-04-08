@@ -1,0 +1,26 @@
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS asset_id TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS display_label TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS source_path TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS edited_preview_source TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS recipe_json JSONB;
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS output_path TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS error_message TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE export_jobs
+    ADD COLUMN IF NOT EXISTS progress INTEGER NOT NULL DEFAULT 0;

@@ -2,9 +2,12 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QProcess>
 #include <QStandardPaths>
+
+#include "observability.h"
 
 namespace photo_editor::desktop {
 
@@ -133,6 +136,18 @@ QProcessEnvironment base_environment() {
   environment.insert(
       QStringLiteral("PHOTO_EDITOR_BACKUP_DIR"),
       QDir(app_data_root()).filePath(QStringLiteral("backups")));
+  if (observability::enabled()) {
+    environment.insert(QString::fromLatin1(observability::kEnabledEnv), QStringLiteral("1"));
+    environment.insert(
+        QString::fromLatin1(observability::kSessionIdEnv),
+        observability::sessionId());
+    environment.insert(
+        QString::fromLatin1(observability::kLogLevelEnv),
+        observability::logLevel());
+    environment.insert(
+        QString::fromLatin1(observability::kRunDirectoryEnv),
+        observability::runDirectory());
+  }
   return environment;
 }
 
@@ -142,6 +157,16 @@ bool run_helper(
     QString* output,
     QString* error_message,
     int timeout_ms = 30000) {
+  QElapsedTimer timer;
+  timer.start();
+  observability::logInfo(
+      photoEditorCatalogLog(),
+      QStringLiteral("catalog.helper.start"),
+      {
+          {QStringLiteral("binary"), binary_name},
+          {QStringLiteral("arguments"), arguments.join(' ')},
+          {QStringLiteral("timeout_ms"), timeout_ms},
+      });
   QProcess process;
   process.setWorkingDirectory(QDir::currentPath());
   process.setProcessEnvironment(base_environment());
@@ -152,22 +177,46 @@ bool run_helper(
     if (error_message != nullptr) {
       *error_message = QStringLiteral("Unable to start %1. Build the Rust helpers first.").arg(binary_name);
     }
+    observability::logWarning(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.helper.failed_to_start"),
+        {
+            {QStringLiteral("binary"), binary_name},
+            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+        });
     return false;
   }
 
   if (!process.waitForFinished(timeout_ms) || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    const auto failure_output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
     if (error_message != nullptr) {
-      const auto failure_output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
       *error_message = failure_output.isEmpty()
                            ? QStringLiteral("%1 failed to prepare the catalog database.").arg(binary_name)
                            : friendly_helper_error(binary_name, failure_output);
     }
+    observability::logWarning(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.helper.failed"),
+        {
+            {QStringLiteral("binary"), binary_name},
+            {QStringLiteral("exit_code"), process.exitCode()},
+            {QStringLiteral("exit_status"), static_cast<int>(process.exitStatus())},
+            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+            {QStringLiteral("output"), failure_output},
+        });
     return false;
   }
 
   if (output != nullptr) {
     *output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
   }
+  observability::logInfo(
+      photoEditorCatalogLog(),
+      QStringLiteral("catalog.helper.completed"),
+      {
+          {QStringLiteral("binary"), binary_name},
+          {QStringLiteral("elapsed_ms"), timer.elapsed()},
+      });
   return true;
 }
 
@@ -219,18 +268,50 @@ bool AppBootstrap::ensureRuntimeDirectories() {
 }
 
 bool AppBootstrap::ensureCatalogService(QString* error_message) {
+  QElapsedTimer timer;
+  timer.start();
   if (!ensureRuntimeDirectories()) {
     if (error_message != nullptr) {
       *error_message = QStringLiteral("Unable to create the application runtime directories.");
     }
+    observability::logWarning(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.bootstrap.failed"),
+        {
+            {QStringLiteral("reason"), QStringLiteral("runtime_directories")},
+            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+        });
     return false;
   }
 
   if (QProcessEnvironment::systemEnvironment().contains(QStringLiteral("PHOTO_EDITOR_DATABASE_URL"))) {
+    observability::logInfo(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.bootstrap.external_database"),
+        {{QStringLiteral("elapsed_ms"), timer.elapsed()}});
     return true;
   }
 
-  return !resolve_database_url(error_message).isEmpty();
+  const auto database_url = resolve_database_url(error_message);
+  const auto success = !database_url.isEmpty();
+  if (success) {
+    observability::logInfo(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.bootstrap.ready"),
+        {
+            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+            {QStringLiteral("managed_local_database"), true},
+        });
+  } else {
+    observability::logWarning(
+        photoEditorCatalogLog(),
+        QStringLiteral("catalog.bootstrap.unavailable"),
+        {
+            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+            {QStringLiteral("managed_local_database"), true},
+        });
+  }
+  return success;
 }
 
 bool AppBootstrap::prepareProcessEnvironment(

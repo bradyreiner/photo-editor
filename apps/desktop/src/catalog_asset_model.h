@@ -4,6 +4,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QFutureWatcher>
+#include <QJsonObject>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSet>
@@ -11,6 +12,8 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVector>
+
+#include "job_store.h"
 
 namespace photo_editor::desktop {
 
@@ -291,12 +294,19 @@ class CatalogAssetModel final : public QAbstractListModel {
   void handleSnapshotFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleImportFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleThumbnailFinished();
+  void pollActiveImportJob();
 
  private:
   void setStatus(const QString& status);
   void setErrorMessage(const QString& message);
   void setLoading(bool loading);
   void setImporting(bool importing);
+  void beginImportJob(
+      const QString& folder_path,
+      const QString& project_name,
+      const QStringList& selected_file_paths,
+      int selection_count);
+  void finishImportJob(bool success, const QString& message);
   void setDriveCount(int drive_count);
   void updateAssets(const QVector<CatalogAssetItem>& items);
   void queueThumbnailRefreshes();
@@ -319,6 +329,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   void loadTimelineAssets();
   void loadProjects();
   void saveProjects() const;
+  bool runCatalogStateCommand(const QStringList& command_arguments, QString* error_message = nullptr) const;
+  void loadPersistedLibraryState(const QJsonObject& root);
   void addAssetsToProject(const QStringList& asset_ids, const QString& project_name);
   void finalizePendingImportProjectAssignment();
   void bumpProjectStatsRevision();
@@ -346,8 +358,11 @@ class CatalogAssetModel final : public QAbstractListModel {
   QStringList snapshotArguments() const;
   QString importProgram() const;
   QStringList importArguments(const QString& folder_path) const;
+  QString stateProgram() const;
+  QStringList stateArguments(const QStringList& command_arguments) const;
   bool useBuiltSnapshotBinary() const;
   bool useBuiltImportBinary() const;
+  bool useBuiltStateBinary() const;
   QString builtBinaryPath(const QString& binary_name) const;
 
   QVector<CatalogAssetItem> all_assets_;
@@ -390,6 +405,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   QString import_selection_manifest_path_;
   QStringList pending_import_file_paths_;
   QString pending_import_project_name_;
+  PersistentJobRecord active_import_job_;
 };
 
 }  // namespace photo_editor::desktop

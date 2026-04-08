@@ -5,7 +5,7 @@
 
 namespace photo_editor::desktop {
 
-MacosUpdater::MacosUpdater() {
+MacosUpdater::MacosUpdater(QObject* parent) : QObject(parent) {
   @autoreleasepool {
     SPUStandardUpdaterController* controller = [[SPUStandardUpdaterController alloc]
         initWithStartingUpdater:YES

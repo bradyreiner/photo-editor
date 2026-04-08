@@ -63,7 +63,7 @@ int main() {
   }
 
   const auto root = structured_document.object();
-  if (root.value(QStringLiteral("recipeVersion")).toInt() != 3) {
+  if (root.value(QStringLiteral("recipeVersion")).toInt() != 4) {
     return fail("structured recipe output should bump the recipe version");
   }
   if (!root.value(QStringLiteral("globalAdjustments")).isObject()) {
@@ -79,6 +79,11 @@ int main() {
   const auto mask_stack = root.value(QStringLiteral("maskStack")).toArray();
   if (mask_stack.size() != 1 || !mask_stack.at(0).isObject()) {
     return fail("structured recipe output should serialize the current linear mask into maskStack");
+  }
+  const auto mask_sets = root.value(QStringLiteral("maskSets")).toArray();
+  if (mask_sets.size() != 1 ||
+      mask_sets.at(0).toObject().value(QStringLiteral("sources")).toArray().size() != 1) {
+    return fail("structured recipe output should also group selection masks into maskSets");
   }
 
   const auto reparsed_structured = photo_editor::desktop::parse_edit_recipe_json(structured_recipe);
@@ -99,6 +104,10 @@ int main() {
   }
   if (!default_document.value(QStringLiteral("maskStack")).toArray().isEmpty()) {
     return fail("default recipe should not serialize an empty linear mask into maskStack");
+  }
+  if (!default_document.value(QStringLiteral("maskSets")).toArray().isEmpty() ||
+      !default_document.value(QStringLiteral("retouchStack")).toArray().isEmpty()) {
+    return fail("default recipe should not serialize empty mask sets or retouch stacks");
   }
 
   EditRecipeState point_curve_state;
@@ -188,6 +197,8 @@ int main() {
   QVariantMap base_linear_mask;
   base_linear_mask.insert(QStringLiteral("id"), QStringLiteral("linear-base"));
   base_linear_mask.insert(QStringLiteral("name"), QStringLiteral("Subject"));
+  base_linear_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("subject-set"));
+  base_linear_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Subject"));
   base_linear_mask.insert(QStringLiteral("kind"), QStringLiteral("linear"));
   base_linear_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
   base_linear_mask.insert(QStringLiteral("enabled"), true);
@@ -200,6 +211,8 @@ int main() {
   QVariantMap subtract_radial_mask;
   subtract_radial_mask.insert(QStringLiteral("id"), QStringLiteral("radial-cutout"));
   subtract_radial_mask.insert(QStringLiteral("name"), QStringLiteral("Exclude Window"));
+  subtract_radial_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("subject-set"));
+  subtract_radial_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Subject"));
   subtract_radial_mask.insert(QStringLiteral("kind"), QStringLiteral("radial"));
   subtract_radial_mask.insert(QStringLiteral("operation"), QStringLiteral("subtract"));
   subtract_radial_mask.insert(QStringLiteral("enabled"), true);
@@ -223,6 +236,11 @@ int main() {
       QStringLiteral("subtract")) {
     return fail("structured recipe should preserve mask combine operations");
   }
+  const auto stacked_mask_sets = stacked_document.value(QStringLiteral("maskSets")).toArray();
+  if (stacked_mask_sets.size() != 1 ||
+      stacked_mask_sets.at(0).toObject().value(QStringLiteral("sources")).toArray().size() != 2) {
+    return fail("structured recipe should group related selection sources into one mask set");
+  }
 
   const auto reparsed_stack =
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(stacked_document).toJson(QJsonDocument::Compact)));
@@ -242,16 +260,23 @@ int main() {
   QVariantMap brush_mask;
   brush_mask.insert(QStringLiteral("kind"), QStringLiteral("brush"));
   brush_mask.insert(QStringLiteral("name"), QStringLiteral("Painted Subject"));
+  brush_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
+  brush_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
   brush_mask.insert(QStringLiteral("brushSize"), 0.12);
   brush_mask.insert(QStringLiteral("brushFlow"), 0.85);
   brush_mask.insert(QStringLiteral("brushPoints"), QVariantList{
       QVariantMap{{QStringLiteral("x"), 0.42}, {QStringLiteral("y"), 0.33}, {QStringLiteral("size"), 0.12}, {QStringLiteral("flow"), 0.85}},
       QVariantMap{{QStringLiteral("x"), 0.48}, {QStringLiteral("y"), 0.37}, {QStringLiteral("size"), 0.10}, {QStringLiteral("flow"), 0.75}},
   });
+  brush_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("00ff7f3f"));
+  brush_mask.insert(QStringLiteral("segmentationWidth"), 2);
+  brush_mask.insert(QStringLiteral("segmentationHeight"), 2);
 
   QVariantMap luminance_mask;
   luminance_mask.insert(QStringLiteral("kind"), QStringLiteral("luminance"));
   luminance_mask.insert(QStringLiteral("name"), QStringLiteral("Highlights"));
+  luminance_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
+  luminance_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
   luminance_mask.insert(QStringLiteral("luminanceMin"), 0.62);
   luminance_mask.insert(QStringLiteral("luminanceMax"), 0.95);
   luminance_mask.insert(QStringLiteral("rangeFeather"), 0.08);
@@ -259,6 +284,8 @@ int main() {
   QVariantMap color_mask;
   color_mask.insert(QStringLiteral("kind"), QStringLiteral("color"));
   color_mask.insert(QStringLiteral("name"), QStringLiteral("Skin Range"));
+  color_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
+  color_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
   color_mask.insert(QStringLiteral("hueCenter"), 0.07);
   color_mask.insert(QStringLiteral("hueRange"), 0.09);
   color_mask.insert(QStringLiteral("saturationMin"), 0.18);
@@ -275,14 +302,41 @@ int main() {
   if (!mixed_mask_array.at(0).toObject().value(QStringLiteral("geometry")).toObject().value(QStringLiteral("brushPoints")).isArray()) {
     return fail("brush mask serialization should retain brush points");
   }
+  QJsonObject grouped_brush_geometry;
+  const auto grouped_sources =
+      mixed_mask_document.value(QStringLiteral("maskSets"))
+          .toArray()
+          .at(0)
+          .toObject()
+          .value(QStringLiteral("sources"))
+          .toArray();
+  for (const auto& source_value : grouped_sources) {
+    if (!source_value.isObject()) {
+      continue;
+    }
+    const auto source_object = source_value.toObject();
+    if (source_object.value(QStringLiteral("kind")).toString() != QStringLiteral("brush")) {
+      continue;
+    }
+    grouped_brush_geometry = source_object.value(QStringLiteral("geometry")).toObject();
+    break;
+  }
+  if (!grouped_brush_geometry.contains(QStringLiteral("segmentationData"))) {
+    return fail("grouped brush serialization should retain raster mask payloads");
+  }
   if (!mixed_mask_array.at(2).toObject().value(QStringLiteral("constraints")).toObject().contains(QStringLiteral("hueCenter"))) {
     return fail("color range serialization should retain range constraints");
+  }
+  if (mixed_mask_document.value(QStringLiteral("maskSets")).toArray().size() != 1 ||
+      mixed_mask_document.value(QStringLiteral("maskSets")).toArray().at(0).toObject().value(QStringLiteral("sources")).toArray().size() != 3) {
+    return fail("structured recipe should serialize grouped contributor sources into one mask set");
   }
 
   const auto reparsed_mixed_masks =
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(mixed_mask_document).toJson(QJsonDocument::Compact)));
   if (reparsed_mixed_masks.mask_stack.size() != 3 ||
       reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("brushPoints")).toList().size() != 2 ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("segmentationData")).toByteArray() != QByteArray::fromHex("00ff7f3f") ||
       !almost_equal(reparsed_mixed_masks.mask_stack.at(1).toMap().value(QStringLiteral("luminanceMin")).toDouble(), 0.62) ||
       !almost_equal(reparsed_mixed_masks.mask_stack.at(2).toMap().value(QStringLiteral("hueRange")).toDouble(), 0.09)) {
     return fail("structured recipe should round-trip brush and range mask data");
@@ -324,6 +378,15 @@ int main() {
       subject_geometry.value(QStringLiteral("segmentationHeight")).toInt() != 2) {
     return fail("structured recipe should serialize AI subject segmentation payloads");
   }
+  const auto serialized_subject = subject_document
+                                      .value(QStringLiteral("maskStack"))
+                                      .toArray()
+                                      .at(0)
+                                      .toObject();
+  if (serialized_subject.value(QStringLiteral("toolRole")).toString() != QStringLiteral("selection") ||
+      !serialized_subject.value(QStringLiteral("committed")).toBool()) {
+    return fail("structured recipe should preserve selection mask tool role and committed state");
+  }
   const auto subject_adjustments = subject_document
                                        .value(QStringLiteral("maskStack"))
                                        .toArray()
@@ -334,7 +397,6 @@ int main() {
   if (!almost_equal(subject_adjustments.value(QStringLiteral("hueShift")).toDouble(), 24.0) ||
       !almost_equal(subject_adjustments.value(QStringLiteral("saturationShift")).toDouble(), 18.0) ||
       !almost_equal(subject_adjustments.value(QStringLiteral("colorizeStrength")).toDouble(), 72.0) ||
-      !almost_equal(subject_adjustments.value(QStringLiteral("removeStrength")).toDouble(), 55.0) ||
       !subject_adjustments.value(QStringLiteral("selectionInvert")).toBool() ||
       !almost_equal(subject_adjustments.value(QStringLiteral("selectionExpand")).toDouble(), 18.0)) {
     return fail("structured recipe should serialize local recolor adjustments");
@@ -345,12 +407,13 @@ int main() {
   const auto reparsed_subject = reparsed_subject_mask.mask_stack.at(0).toMap();
   if (reparsed_subject_mask.mask_stack.size() != 1 ||
       reparsed_subject.value(QStringLiteral("kind")).toString() != QStringLiteral("subject") ||
+      reparsed_subject.value(QStringLiteral("toolRole")).toString() != QStringLiteral("selection") ||
+      !reparsed_subject.value(QStringLiteral("committed")).toBool() ||
       reparsed_subject.value(QStringLiteral("segmentationData")).toByteArray() != QByteArray::fromHex("00ff7f3f") ||
       !almost_equal(reparsed_subject.value(QStringLiteral("hueShift")).toDouble(), 24.0) ||
       !almost_equal(reparsed_subject.value(QStringLiteral("saturationShift")).toDouble(), 18.0) ||
       !almost_equal(reparsed_subject.value(QStringLiteral("colorizeHue")).toDouble(), 0.02) ||
       !almost_equal(reparsed_subject.value(QStringLiteral("colorizeStrength")).toDouble(), 72.0) ||
-      !almost_equal(reparsed_subject.value(QStringLiteral("removeStrength")).toDouble(), 55.0) ||
       !reparsed_subject.value(QStringLiteral("selectionInvert")).toBool() ||
       !almost_equal(reparsed_subject.value(QStringLiteral("selectionExpand")).toDouble(), 18.0) ||
       reparsed_subject.value(QStringLiteral("segmentationWidth")).toInt() != 2 ||
@@ -369,6 +432,18 @@ int main() {
   if (reparsed_object_mask.mask_stack.size() != 1 ||
       reparsed_object_mask.mask_stack.at(0).toMap().value(QStringLiteral("kind")).toString() != QStringLiteral("object")) {
     return fail("structured recipe should round-trip AI object mask kinds");
+  }
+
+  QVariantMap malformed_subject_mask = subject_mask;
+  malformed_subject_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff"));
+  malformed_subject_mask.insert(QStringLiteral("segmentationWidth"), 2);
+  malformed_subject_mask.insert(QStringLiteral("segmentationHeight"), 2);
+  const auto normalized_malformed_subject =
+      photo_editor::desktop::normalized_mask_definition(malformed_subject_mask, 1);
+  if (normalized_malformed_subject.contains(QStringLiteral("segmentationData")) ||
+      normalized_malformed_subject.contains(QStringLiteral("segmentationWidth")) ||
+      normalized_malformed_subject.contains(QStringLiteral("segmentationHeight"))) {
+    return fail("mask normalization should discard malformed segmentation payloads");
   }
 
   EditRecipeState polygon_mask_state;
@@ -424,6 +499,7 @@ int main() {
   clone_brush.insert(QStringLiteral("cloneRotation"), 24.0);
   clone_brush.insert(QStringLiteral("brushSize"), 0.07);
   clone_brush.insert(QStringLiteral("brushFlow"), 0.88);
+  clone_brush.insert(QStringLiteral("committed"), false);
   clone_brush.insert(
       QStringLiteral("brushPoints"),
       QVariantList{
@@ -441,6 +517,9 @@ int main() {
                                   .value(QStringLiteral("geometry"))
                                   .toObject();
   if (clone_geometry.value(QStringLiteral("retouchMode")).toString() != QStringLiteral("clone") ||
+      clone_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+      clone_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().value(QStringLiteral("committed")).toBool() ||
+      clone_document.value(QStringLiteral("retouchStack")).toArray().size() != 1 ||
       !clone_geometry.value(QStringLiteral("cloneSourceSet")).toBool() ||
       !almost_equal(clone_geometry.value(QStringLiteral("cloneScale")).toDouble(), 1.35) ||
       clone_geometry.value(QStringLiteral("brushPoints")).toArray().size() != 2) {
@@ -450,12 +529,39 @@ int main() {
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(clone_document).toJson(QJsonDocument::Compact)));
   const auto reparsed_clone = reparsed_clone_mask.mask_stack.at(0).toMap();
   if (reparsed_clone.value(QStringLiteral("retouchMode")).toString() != QStringLiteral("clone") ||
+      reparsed_clone.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+      reparsed_clone.value(QStringLiteral("committed")).toBool() ||
       !reparsed_clone.value(QStringLiteral("cloneSourceSet")).toBool() ||
       !almost_equal(reparsed_clone.value(QStringLiteral("cloneOffsetX")).toDouble(), -0.15) ||
       !almost_equal(reparsed_clone.value(QStringLiteral("cloneScale")).toDouble(), 1.35) ||
       !almost_equal(reparsed_clone.value(QStringLiteral("cloneRotation")).toDouble(), 24.0) ||
       reparsed_clone.value(QStringLiteral("brushPoints")).toList().size() != 2) {
     return fail("structured recipe should round-trip clone brush metadata");
+  }
+
+  EditRecipeState remove_object_state;
+  QVariantMap remove_object_mask;
+  remove_object_mask.insert(QStringLiteral("id"), QStringLiteral("remove-object"));
+  remove_object_mask.insert(QStringLiteral("name"), QStringLiteral("Remove Object"));
+  remove_object_mask.insert(QStringLiteral("kind"), QStringLiteral("object"));
+  remove_object_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  remove_object_mask.insert(QStringLiteral("removeStrength"), 100.0);
+  remove_object_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff00"));
+  remove_object_mask.insert(QStringLiteral("segmentationWidth"), 2);
+  remove_object_mask.insert(QStringLiteral("segmentationHeight"), 1);
+  remove_object_state.mask_stack = {remove_object_mask};
+  const auto remove_object_document =
+      QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(remove_object_state).toUtf8()).object();
+  if (remove_object_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().value(QStringLiteral("toolRole")).toString() !=
+          QStringLiteral("retouch") ||
+      remove_object_document.value(QStringLiteral("retouchStack")).toArray().size() != 1) {
+    return fail("remove-only object masks should serialize into the retouch stack");
+  }
+  const auto reparsed_remove_object =
+      photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(remove_object_document).toJson(QJsonDocument::Compact)));
+  if (reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("toolRole")).toString() !=
+      QStringLiteral("retouch")) {
+    return fail("remove-only object masks should round-trip as retouch entries");
   }
 
   EditRecipeState optics_state;
@@ -480,7 +586,51 @@ int main() {
     return fail("structured recipe should round-trip optics controls");
   }
 
+  EditRecipeState raw_state;
+  raw_state.raw_exposure = 0.85;
+  raw_state.raw_boost = 0.42;
+  raw_state.raw_shadow_boost = 1.35;
+  raw_state.raw_detail = 0.66;
+  raw_state.raw_highlight_recovery = false;
+  raw_state.raw_gamut_mapping = false;
+  raw_state.raw_lens_correction = false;
+  raw_state.raw_white_balance_override = true;
+  raw_state.raw_white_balance_temperature = 6100.0;
+  raw_state.raw_white_balance_tint = -18.0;
+  const auto raw_document =
+      QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(raw_state).toUtf8()).object();
+  const auto raw_object = raw_document.value(QStringLiteral("rawAdjustments")).toObject();
+  if (!almost_equal(raw_object.value(QStringLiteral("exposure")).toDouble(), 0.85) ||
+      !almost_equal(raw_object.value(QStringLiteral("boost")).toDouble(), 0.42) ||
+      !almost_equal(raw_object.value(QStringLiteral("shadowBoost")).toDouble(), 1.35) ||
+      !almost_equal(raw_object.value(QStringLiteral("detail")).toDouble(), 0.66) ||
+      raw_object.value(QStringLiteral("highlightRecovery")).toBool() ||
+      raw_object.value(QStringLiteral("gamutMapping")).toBool() ||
+      raw_object.value(QStringLiteral("lensCorrection")).toBool() ||
+      !raw_object.value(QStringLiteral("whiteBalanceOverride")).toBool() ||
+      !almost_equal(raw_object.value(QStringLiteral("whiteBalanceTemperature")).toDouble(), 6100.0) ||
+      !almost_equal(raw_object.value(QStringLiteral("whiteBalanceTint")).toDouble(), -18.0)) {
+    return fail("structured recipe should serialize RAW decode controls");
+  }
+
+  const auto reparsed_raw =
+      photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(raw_document).toJson(QJsonDocument::Compact)));
+  if (!almost_equal(reparsed_raw.raw_exposure, raw_state.raw_exposure) ||
+      !almost_equal(reparsed_raw.raw_boost, raw_state.raw_boost) ||
+      !almost_equal(reparsed_raw.raw_shadow_boost, raw_state.raw_shadow_boost) ||
+      !almost_equal(reparsed_raw.raw_detail, raw_state.raw_detail) ||
+      reparsed_raw.raw_highlight_recovery != raw_state.raw_highlight_recovery ||
+      reparsed_raw.raw_gamut_mapping != raw_state.raw_gamut_mapping ||
+      reparsed_raw.raw_lens_correction != raw_state.raw_lens_correction ||
+      reparsed_raw.raw_white_balance_override != raw_state.raw_white_balance_override ||
+      !almost_equal(reparsed_raw.raw_white_balance_temperature, raw_state.raw_white_balance_temperature) ||
+      !almost_equal(reparsed_raw.raw_white_balance_tint, raw_state.raw_white_balance_tint)) {
+    return fail("structured recipe should round-trip RAW decode controls");
+  }
+
   EditRecipeState base_state;
+  base_state.raw_exposure = -0.3;
+  base_state.raw_gamut_mapping = true;
   base_state.exposure = -0.25;
   base_state.temperature = -12.0;
   base_state.crop_preset = QStringLiteral("Original");
@@ -489,6 +639,10 @@ int main() {
   base_state.lens_distortion = 0.0;
 
   EditRecipeState source_state;
+  source_state.raw_exposure = 1.1;
+  source_state.raw_boost = 0.65;
+  source_state.raw_shadow_boost = 1.4;
+  source_state.raw_gamut_mapping = false;
   source_state.exposure = 1.1;
   source_state.temperature = 18.0;
   source_state.crop_preset = QStringLiteral("4x5");
@@ -504,14 +658,30 @@ int main() {
           {QStringLiteral("color"), QStringLiteral("masks")});
   if (!almost_equal(merged_color_and_masks.temperature, 18.0) ||
       !merged_color_and_masks.linear_mask_enabled ||
+      !almost_equal(merged_color_and_masks.raw_exposure, -0.3) ||
       !almost_equal(merged_color_and_masks.exposure, -0.25) ||
       merged_color_and_masks.crop_preset != QStringLiteral("Original")) {
     return fail("group merge should only update the requested adjustment groups");
   }
 
+  const auto merged_raw =
+      photo_editor::desktop::merge_edit_recipe_state_by_groups(
+          base_state,
+          source_state,
+          {QStringLiteral("raw")});
+  if (!almost_equal(merged_raw.raw_exposure, 1.1) ||
+      !almost_equal(merged_raw.raw_boost, 0.65) ||
+      !almost_equal(merged_raw.raw_shadow_boost, 1.4) ||
+      merged_raw.raw_gamut_mapping ||
+      !almost_equal(merged_raw.exposure, -0.25) ||
+      !almost_equal(merged_raw.temperature, -12.0)) {
+    return fail("raw group merge should only update RAW decode controls");
+  }
+
   const auto merged_all =
       photo_editor::desktop::merge_edit_recipe_state_by_groups(base_state, source_state, {});
   if (!almost_equal(merged_all.exposure, 1.1) ||
+      !almost_equal(merged_all.raw_exposure, 1.1) ||
       merged_all.crop_preset != QStringLiteral("4x5") ||
       !merged_all.linear_mask_enabled ||
       !almost_equal(merged_all.texture, 26.0) ||

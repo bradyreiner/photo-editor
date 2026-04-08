@@ -1,3 +1,4 @@
+pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -30,6 +31,24 @@ Dialog {
     signal assetActivated(var asset)
 
     property int selectedIndex: -1
+
+    function gcd(a, b) {
+        let left = Math.abs(Math.round(a))
+        let right = Math.abs(Math.round(b))
+        while (right > 0) {
+            const next = left % right
+            left = right
+            right = next
+        }
+        return Math.max(1, left)
+    }
+
+    function aspectRatioText(width, height) {
+        if (width <= 0 || height <= 0)
+            return ""
+        const divisor = gcd(width, height)
+        return Math.round(width / divisor) + ":" + Math.round(height / divisor)
+    }
 
     function clearSelection() {
         selectedIndex = -1
@@ -188,12 +207,35 @@ Dialog {
                                     clip: true
 
                                     Image {
+                                        id: cardPreview
                                         anchors.fill: parent
                                         source: thumbnailSource
                                         fillMode: Image.PreserveAspectCrop
                                         asynchronous: true
                                         cache: false
                                         visible: thumbnailSource.length > 0
+                                    }
+
+                                    Rectangle {
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: 8
+                                        visible: cardPreview.status === Image.Ready && root.aspectRatioText(cardPreview.sourceSize.width, cardPreview.sourceSize.height).length > 0
+                                        radius: 8
+                                        color: root.theme.alpha(root.theme.ink950, 0.88)
+                                        border.width: 1
+                                        border.color: root.theme.alpha(root.theme.lineSoft, 0.52)
+                                        implicitWidth: ratioLabel.implicitWidth + 12
+                                        implicitHeight: ratioLabel.implicitHeight + 6
+
+                                        Label {
+                                            id: ratioLabel
+                                            anchors.centerIn: parent
+                                            text: root.aspectRatioText(cardPreview.sourceSize.width, cardPreview.sourceSize.height)
+                                            color: root.theme.textStrong
+                                            font.family: root.theme.fontMono
+                                            font.pixelSize: 10
+                                        }
                                     }
 
                                     Label {
@@ -297,6 +339,7 @@ Dialog {
                     clip: true
 
                     Image {
+                        id: selectedPreview
                         anchors.fill: parent
                         source: root.selectedThumbnailSource
                         fillMode: Image.PreserveAspectFit
@@ -340,6 +383,16 @@ Dialog {
                     font.family: root.theme.fontUi
                     font.pixelSize: 11
                     wrapMode: Text.Wrap
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.aspectRatioText(selectedPreview.sourceSize.width, selectedPreview.sourceSize.height)
+                          + (root.aspectRatioText(selectedPreview.sourceSize.width, selectedPreview.sourceSize.height).length > 0 ? " aspect" : "")
+                    visible: text.length > 0
+                    color: root.theme.textMuted
+                    font.family: root.theme.fontMono
+                    font.pixelSize: 10
                 }
 
                 Label {

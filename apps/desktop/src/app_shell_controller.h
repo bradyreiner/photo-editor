@@ -22,6 +22,7 @@ class AppShellController final : public QObject {
   Q_PROPERTY(QString cacheLocation READ cacheLocation CONSTANT)
   Q_PROPERTY(QString logLocation READ logLocation CONSTANT)
   Q_PROPERTY(QString backupLocation READ backupLocation CONSTANT)
+  Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
 
  public:
   explicit AppShellController(QObject* parent = nullptr);
@@ -39,6 +40,7 @@ class AppShellController final : public QObject {
   [[nodiscard]] QString cacheLocation() const;
   [[nodiscard]] QString logLocation() const;
   [[nodiscard]] QString backupLocation() const;
+  [[nodiscard]] QString appVersion() const;
 
   void setStartupWorkspace(int workspace_index);
   void setReopenLastWorkspace(bool reopen_last_workspace);

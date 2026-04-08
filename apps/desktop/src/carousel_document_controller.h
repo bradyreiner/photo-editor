@@ -11,6 +11,7 @@
 #include <QSizeF>
 #include <QString>
 #include <QStringList>
+#include <QJsonObject>
 #include <QVariantList>
 #include <QVariantMap>
 #include <QVector>
@@ -33,6 +34,8 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(bool exportBusy READ exportBusy NOTIFY exportBusyChanged)
   Q_PROPERTY(QString selectedItemId READ selectedItemId NOTIFY selectionChanged)
+  Q_PROPERTY(QString documentName READ documentName WRITE setDocumentName NOTIFY documentStateChanged)
+  Q_PROPERTY(QString savedDocumentId READ savedDocumentId NOTIFY documentStateChanged)
   Q_PROPERTY(QStringList templateOptions READ templateOptions CONSTANT)
   Q_PROPERTY(QStringList fitModeOptions READ fitModeOptions CONSTANT)
   Q_PROPERTY(QStringList slotOptions READ slotOptions CONSTANT)
@@ -44,7 +47,7 @@ class CarouselDocumentController final : public QObject {
   enum class FitMode { Cover, Contain };
   enum class SlideTemplate { Single, SplitPair, StackedTriptych };
   enum class GroupKind { None, HorizontalPair };
-  enum class ItemKind { Image, Text };
+  enum class ItemKind { Image, Text, Video };
 
   using RecipeState = EditRecipeState;
 
@@ -65,6 +68,8 @@ class CarouselDocumentController final : public QObject {
     ItemKind kind = ItemKind::Image;
     QString file_path;
     QString display_label;
+    bool hidden = false;
+    bool locked = false;
     QString recipe_json;
     RecipeState recipe_state;
     QString text = QStringLiteral("New Text");
@@ -88,11 +93,14 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QString status() const;
   [[nodiscard]] bool exportBusy() const;
   [[nodiscard]] QString selectedItemId() const;
+  [[nodiscard]] QString documentName() const;
+  [[nodiscard]] QString savedDocumentId() const;
   [[nodiscard]] QStringList templateOptions() const;
   [[nodiscard]] QStringList fitModeOptions() const;
   [[nodiscard]] QStringList slotOptions() const;
 
   void setDocumentFormat(const QString& document_format);
+  void setDocumentName(const QString& document_name);
 
   Q_INVOKABLE void selectSlide(int index);
   Q_INVOKABLE void addSlide();
@@ -104,11 +112,18 @@ class CarouselDocumentController final : public QObject {
       const QString& file_path,
       const QString& display_label = QString(),
       const QString& recipe_json = QString());
+  Q_INVOKABLE void addVideoItem(
+      const QString& file_path,
+      const QString& display_label = QString());
   Q_INVOKABLE void addTextItem(const QString& text = QStringLiteral("New Text"));
   Q_INVOKABLE void pickPhotoItem();
+  Q_INVOKABLE void pickVideoItem();
   Q_INVOKABLE void selectItem(const QString& item_id);
+  Q_INVOKABLE void addItemToSelection(const QString& item_id);
+  Q_INVOKABLE void toggleItemSelection(const QString& item_id);
   Q_INVOKABLE void clearSelection();
   Q_INVOKABLE void removeSelectedItem();
+  Q_INVOKABLE void duplicateSelectedItem();
   Q_INVOKABLE void bringSelectedForward();
   Q_INVOKABLE void sendSelectedBackward();
   Q_INVOKABLE void moveSelectedItemByPixels(double delta_x, double delta_y);
@@ -118,6 +133,23 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedText(const QString& text);
   Q_INVOKABLE void setSelectedTextColor(const QString& color_value);
   Q_INVOKABLE void setSelectedTextPointSize(double point_size);
+  Q_INVOKABLE void setSelectedItemHidden(bool hidden);
+  Q_INVOKABLE void setSelectedItemLocked(bool locked);
+  Q_INVOKABLE void replaceSelectedPhotoItem(
+      const QString& file_path,
+      const QString& display_label = QString(),
+      const QString& recipe_json = QString());
+  Q_INVOKABLE void replaceSelectedVideoItem(
+      const QString& file_path,
+      const QString& display_label = QString());
+  Q_INVOKABLE void alignSelectionLeft();
+  Q_INVOKABLE void alignSelectionHorizontalCenter();
+  Q_INVOKABLE void alignSelectionRight();
+  Q_INVOKABLE void alignSelectionTop();
+  Q_INVOKABLE void alignSelectionVerticalCenter();
+  Q_INVOKABLE void alignSelectionBottom();
+  Q_INVOKABLE void distributeSelectionHorizontally();
+  Q_INVOKABLE void distributeSelectionVertically();
 
   Q_INVOKABLE void applyTemplateToCurrent(const QString& template_kind);
   Q_INVOKABLE void setActiveSlot(const QString& slot_name);
@@ -125,6 +157,7 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void setCurrentScale(double scale);
   Q_INVOKABLE void setCurrentOffsetX(double offset_x);
   Q_INVOKABLE void setCurrentOffsetY(double offset_y);
+  Q_INVOKABLE void moveCurrentMediaByPixels(double delta_x, double delta_y);
   Q_INVOKABLE void clearCurrentSlot();
   Q_INVOKABLE void clearCurrentGroup();
   Q_INVOKABLE void assignPrimaryImage(
@@ -147,6 +180,9 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void pickPrimaryVideo();
   Q_INVOKABLE void exportCarousel();
   Q_INVOKABLE bool exportCarouselToDirectory(const QString& directory_path);
+  Q_INVOKABLE QVariantList recentDocuments() const;
+  Q_INVOKABLE bool saveDocument(const QString& document_name = QString());
+  Q_INVOKABLE bool loadDocument(const QString& document_id);
 
  signals:
   void slidesChanged();
@@ -155,6 +191,7 @@ class CarouselDocumentController final : public QObject {
   void documentFormatChanged();
   void statusChanged();
   void exportBusyChanged();
+  void documentStateChanged();
 
  private:
   struct Slide final {
@@ -185,6 +222,7 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] MediaItem* currentEditableMedia();
   [[nodiscard]] const MediaItem* currentEditableMedia() const;
   [[nodiscard]] int indexOfItem(const QString& item_id) const;
+  [[nodiscard]] int currentSelectionSlideIndex() const;
   [[nodiscard]] QRectF slideRectInDocument(int index) const;
   [[nodiscard]] int slideIndexForX(double x) const;
   [[nodiscard]] int slideIndexForItem(const CanvasItem& item) const;
@@ -210,6 +248,8 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] GroupKind groupKindFromTemplate(const QString& template_kind) const;
   [[nodiscard]] bool currentSelectionIsLinked() const;
   [[nodiscard]] QString currentActiveSlot() const;
+  [[nodiscard]] QSize currentMediaViewportSize() const;
+  [[nodiscard]] QSize effectiveMediaSourceSize(const MediaItem& media) const;
   [[nodiscard]] qreal normalizedAspectRatio(const CanvasItem& item) const;
   [[nodiscard]] qreal measuredTextHeight(const CanvasItem& item) const;
   [[nodiscard]] QSize probeVideoSize(const QString& file_path) const;
@@ -218,6 +258,24 @@ class CarouselDocumentController final : public QObject {
       const MediaItem& media,
       const QString& output_path,
       const QSize& target_size) const;
+  [[nodiscard]] QString helperProgram() const;
+  [[nodiscard]] QStringList helperArguments(const QStringList& command_arguments) const;
+  [[nodiscard]] bool useBuiltHelperBinary() const;
+  [[nodiscard]] QString builtBinaryPath(const QString& binary_name) const;
+  [[nodiscard]] bool runHelperCommand(
+      const QStringList& command_arguments,
+      QString* output = nullptr,
+      QString* error_message = nullptr) const;
+  [[nodiscard]] QJsonObject mediaObject(const MediaItem& media) const;
+  [[nodiscard]] MediaItem mediaFromObject(const QJsonObject& object) const;
+  [[nodiscard]] QJsonObject slideObject(const Slide& slide) const;
+  [[nodiscard]] Slide slideFromObject(const QJsonObject& object) const;
+  [[nodiscard]] QJsonObject groupObject(const LinkedGroup& group) const;
+  [[nodiscard]] LinkedGroup groupFromObject(const QJsonObject& object) const;
+  [[nodiscard]] QJsonObject itemObject(const CanvasItem& item) const;
+  [[nodiscard]] CanvasItem itemFromObject(const QJsonObject& object) const;
+  [[nodiscard]] QJsonObject documentObject() const;
+  bool loadDocumentObject(const QJsonObject& object);
   [[nodiscard]] QImage renderSlideBaseImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderSlideImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderVideoPlaceholder(const MediaItem& media, const QSize& size) const;
@@ -249,16 +307,27 @@ class CarouselDocumentController final : public QObject {
       const CanvasItem& item,
       const QRectF& frame_rect,
       bool preview) const;
+  void renderVideoItem(
+      QPainter* painter,
+      const CanvasItem& item,
+      const QRectF& frame_rect) const;
   void renderTextItem(QPainter* painter, const CanvasItem& item, const QRectF& frame_rect) const;
   void adjustItemsForFormatChange(const QSize& old_slide_size, const QSize& new_slide_size);
   void adjustItemsForSlidesShifted(int start_index, int delta_slides);
   void adjustItemsForSlideSwap(int first_index, int second_index);
   void adjustItemsForBlockMove(int start_index, int span, int destination_index);
+  [[nodiscard]] QStringList normalizedSelectedItemIds(const QStringList& item_ids) const;
+  [[nodiscard]] QVector<int> selectedItemIndexes(
+      bool primary_slide_only = false,
+      bool unlocked_only = false) const;
+  void normalizeSelection();
+  void emitItemGeometryChanged(bool slides_changed);
   void ensureCurrentIndexValid();
   void refreshPreviews();
   void refreshPreviewAt(int index);
   void refreshCurrentSelectionPreviews();
   void emitCanvasStateChanged(bool slides_changed = true);
+  void setSelectedItemIds(const QStringList& item_ids, const QString& primary_item_id = QString());
   void setSelectedItemId(const QString& item_id);
   void setStatus(const QString& status);
   void setExportBusy(bool export_busy);
@@ -285,6 +354,9 @@ class CarouselDocumentController final : public QObject {
   int preview_revision_ = 0;
   QString session_id_;
   QString selected_item_id_;
+  QStringList selected_item_ids_;
+  QString document_name_ = QStringLiteral("Untitled Carousel");
+  QString saved_document_id_;
 };
 
 }  // namespace photo_editor::desktop

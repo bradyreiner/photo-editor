@@ -5,11 +5,19 @@ qt_policy(SET QTP0004 NEW)
 
 set(photo_editor_desktop_sources
   src/app_shell_controller.cpp
+  src/brush_live_preview_item.cpp
+  src/brush_preview_compositor.cpp
   src/carousel_document_controller.cpp
   src/catalog_asset_model.cpp
   src/editor_preview_controller.cpp
+  src/editor_preview_image_provider.cpp
   src/export_job_controller.cpp
+  src/job_queue_model.cpp
+  src/job_runner.cpp
+  src/job_store.cpp
+  src/observability.cpp
   src/photo_render_utils.cpp
+  src/raw_image_decoder_stub.cpp
   src/main.cpp
   src/preview_backend_controller.cpp
   src/app_bootstrap.cpp
@@ -21,6 +29,11 @@ set(photo_editor_desktop_sources
 )
 
 if(APPLE)
+  if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
+    list(APPEND photo_editor_desktop_sources src/brush_preview_compositor_metal.mm)
+  endif()
+  list(REMOVE_ITEM photo_editor_desktop_sources src/raw_image_decoder_stub.cpp)
+  list(APPEND photo_editor_desktop_sources src/raw_image_decoder.mm)
   list(REMOVE_ITEM photo_editor_desktop_sources src/vision_segmentation_stub.cpp)
   list(APPEND photo_editor_desktop_sources src/vision_segmentation.mm)
 
@@ -150,17 +163,42 @@ target_link_libraries(
 
 target_compile_definitions(photo_editor_app
   PRIVATE
+    PHOTO_EDITOR_APP_VERSION="${PROJECT_VERSION}"
+    PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=$<BOOL:${PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY}>
     PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND}>
     PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND}>)
 
 if(APPLE)
+  find_library(COREGRAPHICS_FRAMEWORK CoreGraphics)
   find_library(VISION_FRAMEWORK Vision)
   find_library(COREIMAGE_FRAMEWORK CoreImage)
   find_library(COREVIDEO_FRAMEWORK CoreVideo)
-  if(VISION_FRAMEWORK AND COREIMAGE_FRAMEWORK AND COREVIDEO_FRAMEWORK)
-    target_link_libraries(photo_editor_app PRIVATE ${VISION_FRAMEWORK} ${COREIMAGE_FRAMEWORK} ${COREVIDEO_FRAMEWORK})
+  find_library(IMAGEIO_FRAMEWORK ImageIO)
+  find_library(METAL_FRAMEWORK Metal)
+  find_library(FOUNDATION_FRAMEWORK Foundation)
+  if(VISION_FRAMEWORK AND COREGRAPHICS_FRAMEWORK AND COREIMAGE_FRAMEWORK AND COREVIDEO_FRAMEWORK AND IMAGEIO_FRAMEWORK)
+    target_link_libraries(
+      photo_editor_app
+      PRIVATE
+        ${COREGRAPHICS_FRAMEWORK}
+        ${VISION_FRAMEWORK}
+        ${COREIMAGE_FRAMEWORK}
+        ${COREVIDEO_FRAMEWORK}
+        ${IMAGEIO_FRAMEWORK})
   endif()
+  if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND AND METAL_FRAMEWORK AND FOUNDATION_FRAMEWORK)
+    target_link_libraries(
+      photo_editor_app
+      PRIVATE
+        ${METAL_FRAMEWORK}
+        ${FOUNDATION_FRAMEWORK})
+  endif()
+  set_source_files_properties(src/raw_image_decoder.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   set_source_files_properties(src/vision_segmentation.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  set_source_files_properties(src/brush_live_preview_item.cpp PROPERTIES LANGUAGE OBJCXX)
+  if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
+    set_source_files_properties(src/brush_preview_compositor_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+  endif()
 endif()
 
 if(APPLE AND PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)

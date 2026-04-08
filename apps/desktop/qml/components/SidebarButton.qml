@@ -63,7 +63,15 @@ Button {
         anchors.fill: parent
         anchors.leftMargin: theme.space10
         anchors.rightMargin: theme.space10
-        spacing: theme.gapControl
+        spacing: theme.gapDense
+
+        AppIcon {
+            name: root.iconName
+            color: root.highlighted ? root.accent : (root.hovered ? theme.textMain : theme.textFaint)
+            implicitWidth: 14
+            implicitHeight: 14
+            Layout.alignment: Qt.AlignVCenter
+        }
 
         Text {
             Layout.fillWidth: true

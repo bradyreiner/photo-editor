@@ -1,6 +1,7 @@
 #include "timeline_document_controller.h"
 
 #include "app_bootstrap.h"
+#include "job_store.h"
 #include "timeline_asset_store.h"
 
 #include <algorithm>
@@ -99,6 +100,30 @@ double clamp_non_negative(double value) {
 QString default_timeline_name(const QString& requested_name) {
   const auto trimmed = requested_name.simplified();
   return trimmed.isEmpty() ? QStringLiteral("Untitled Timeline") : trimmed;
+}
+
+PersistentJobRecord timeline_render_job_record(
+    const QString& timeline_id,
+    const QString& timeline_name,
+    const QString& document_path,
+    const QString& render_path,
+    const QString& export_container,
+    const QString& export_codec) {
+  PersistentJobRecord record;
+  record.job_id = QStringLiteral("timeline-render-%1").arg(timeline_id);
+  record.job_kind = QStringLiteral("timeline_render");
+  record.asset_id = QStringLiteral("timeline:%1").arg(timeline_id);
+  record.media_type = QStringLiteral("timeline");
+  record.display_label = timeline_name;
+  record.source_path = document_path;
+  record.preset_name = QStringLiteral("%1/%2").arg(export_container, export_codec);
+  record.output_path = render_path;
+  record.metadata_json = QJsonObject{
+      {QStringLiteral("timelineId"), timeline_id},
+      {QStringLiteral("exportContainer"), export_container},
+      {QStringLiteral("exportCodec"), export_codec},
+  };
+  return record;
 }
 
 QString normalized_color_space(const QString& color_space) {
@@ -598,19 +623,24 @@ void TimelineDocumentController::closeTimeline() {
 }
 
 bool TimelineDocumentController::loadTimeline(const QString& document_path) {
+  QJsonObject object;
   QFile file(document_path);
-  if (!file.exists() || !file.open(QIODevice::ReadOnly)) {
-    setStatus(QStringLiteral("The selected timeline document is unavailable."));
-    return false;
+  if (file.exists() && file.open(QIODevice::ReadOnly)) {
+    const auto document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject()) {
+      setStatus(QStringLiteral("The selected timeline document is invalid."));
+      return false;
+    }
+    object = document.object();
+  } else {
+    const auto timeline_id = QFileInfo(document_path).completeBaseName().trimmed();
+    object = loadTimelineDocumentBackup(timeline_id);
+    if (object.isEmpty()) {
+      setStatus(QStringLiteral("The selected timeline document is unavailable."));
+      return false;
+    }
   }
 
-  const auto document = QJsonDocument::fromJson(file.readAll());
-  if (!document.isObject()) {
-    setStatus(QStringLiteral("The selected timeline document is invalid."));
-    return false;
-  }
-
-  const auto object = document.object();
   const auto timeline_id = object.value(QStringLiteral("timelineId")).toString().trimmed();
   if (timeline_id.isEmpty()) {
     setStatus(QStringLiteral("The selected timeline document is missing its id."));
@@ -1035,16 +1065,6 @@ bool TimelineDocumentController::saveTimeline() {
       QStringLiteral("%1.%2").arg(timeline_id_, export_container_));
   saved_poster_path_ = QDir(timelinePostersRootPath()).filePath(QStringLiteral("%1.jpg").arg(timeline_id_));
 
-  if (!renderTimelineVideo(saved_render_path_)) {
-    return false;
-  }
-
-  const auto poster_source = ensureVideoPoster(saved_render_path_, timeline_id_);
-  if (!poster_source.isEmpty()) {
-    saved_poster_path_ = QUrl(poster_source).toLocalFile();
-    preview_source_ = poster_source;
-  }
-
   if (!persistDocument(saved_document_path_)) {
     setStatus(QStringLiteral("Unable to save the timeline document."));
     return false;
@@ -1087,15 +1107,59 @@ bool TimelineDocumentController::saveTimeline() {
   }
 
   if (!saveTimelineAssetRecords(records)) {
-    setStatus(QStringLiteral("Timeline rendered, but the library index could not be updated."));
+    setStatus(QStringLiteral("Timeline saved, but the library index could not be updated."));
+    return false;
+  }
+
+  TimelineAssetRecord persisted_record;
+  persisted_record.asset_id = QStringLiteral("timeline:%1").arg(timeline_id_);
+  persisted_record.timeline_id = timeline_id_;
+  persisted_record.name = timeline_name_;
+  persisted_record.document_path = saved_document_path_;
+  persisted_record.render_path = saved_render_path_;
+  persisted_record.poster_path = saved_poster_path_;
+  persisted_record.duration_seconds = totalDurationSeconds();
+  persisted_record.created_at = created_at_;
+  persisted_record.updated_at = updated_at;
+  if (!saveTimelineDocumentBackup(persisted_record, documentObject())) {
+    setStatus(QStringLiteral("Timeline saved, but the catalog backup could not be updated."));
+    return false;
+  }
+
+  auto render_job = timeline_render_job_record(
+      timeline_id_,
+      timeline_name_,
+      saved_document_path_,
+      saved_render_path_,
+      export_container_,
+      export_codec_);
+  render_job.status = QStringLiteral("Queued");
+  render_job.progress = 0;
+  render_job.created_at = created_at_;
+  render_job.updated_at = updated_at;
+  render_job.metadata_json.insert(QStringLiteral("durationSeconds"), totalDurationSeconds());
+  render_job.metadata_json.insert(QStringLiteral("posterPath"), saved_poster_path_);
+  render_job.metadata_json.insert(QStringLiteral("timelineName"), timeline_name_);
+  QString job_error;
+  if (!upsertPersistedJobRecord(render_job, &job_error)) {
+    setStatus(job_error.isEmpty() ? QStringLiteral("Timeline saved, but the render job could not be queued.")
+                                  : job_error);
     return false;
   }
 
   emit previewSourceChanged();
   emit savedPathsChanged();
   setDirty(false);
-  setStatus(QStringLiteral("Saved timeline '%1' to the gallery.").arg(timeline_name_));
+  setStatus(QStringLiteral("Saved timeline '%1' and queued the gallery render.").arg(timeline_name_));
   return true;
+}
+
+bool TimelineDocumentController::renderCurrentTimeline(const QString& output_path) const {
+  return renderTimelineVideo(output_path);
+}
+
+QString TimelineDocumentController::generateVideoPoster(const QString& file_path, const QString& cache_key) const {
+  return ensureVideoPoster(file_path, cache_key);
 }
 
 void TimelineDocumentController::selectClip(int index) {
@@ -3710,6 +3774,18 @@ void TimelineDocumentController::overwriteTrackRange(Track* track, double range_
 }
 
 bool TimelineDocumentController::persistDocument(const QString& document_path) const {
+  const auto root = documentObject();
+
+  QSaveFile file(document_path);
+  if (!file.open(QIODevice::WriteOnly)) {
+    return false;
+  }
+
+  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+  return file.commit();
+}
+
+QJsonObject TimelineDocumentController::documentObject() const {
   auto clip_object_for = [](const Clip& clip) {
     QJsonObject clip_object;
     QJsonArray effect_array;
@@ -3817,14 +3893,7 @@ bool TimelineDocumentController::persistDocument(const QString& document_path) c
   root.insert(QStringLiteral("markers"), marker_array);
   root.insert(QStringLiteral("tracks"), track_array);
   root.insert(QStringLiteral("clips"), legacy_clip_array);
-
-  QSaveFile file(document_path);
-  if (!file.open(QIODevice::WriteOnly)) {
-    return false;
-  }
-
-  file.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-  return file.commit();
+  return root;
 }
 
 void TimelineDocumentController::initializeDefaultTracks() {

@@ -1,5 +1,7 @@
 #include "catalog_asset_model.h"
 #include "edit_recipe_state.h"
+#include "job_runner.h"
+#include "job_store.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -87,6 +89,22 @@ bool wait_for_thumbnail(
   }
 
   return false;
+}
+
+bool wait_for_import_completion(
+    photo_editor::desktop::CatalogAssetModel* model,
+    int timeout_ms = 15000) {
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < timeout_ms) {
+    if (!model->importing()) {
+      return true;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  }
+
+  return !model->importing();
 }
 
 }  // namespace
@@ -184,6 +202,17 @@ int main(int argc, char** argv) {
     }
 
     model.setMinimumRatingFilter(0);
+  }
+
+  {
+    photo_editor::desktop::CatalogAssetModel model;
+    const auto filters = model.importFileNameFilters();
+    if (!filters.contains(QStringLiteral("*.cr2")) || !filters.contains(QStringLiteral("*.CR2"))) {
+      return fail("import file filters should include Canon RAW extensions in lower and upper case");
+    }
+    if (!filters.contains(QStringLiteral("*.jpg")) || !filters.contains(QStringLiteral("*.JPG"))) {
+      return fail("import file filters should include common raster extensions in lower and upper case");
+    }
   }
 
   {
@@ -377,6 +406,49 @@ int main(int argc, char** argv) {
     if (reloaded_relink_model.assetCount() != 1 ||
         reloaded_relink_model.selectedAssetId() != QStringLiteral("asset-offline")) {
       return fail("offline filter should continue to work after a relink target disappears");
+    }
+  }
+
+  {
+    const auto import_root = runtime_root.filePath(QStringLiteral("import-source"));
+    const auto import_file_path = runtime_root.filePath(QStringLiteral("import-source/DCIM/IMG_0300.jpg"));
+    if (!write_file(import_file_path)) {
+      return fail("import source file should be created");
+    }
+
+    photo_editor::desktop::JobRunner import_runner;
+    photo_editor::desktop::CatalogAssetModel import_model;
+    import_model.importFolderPath(import_root);
+    if (!wait_for_import_completion(&import_model)) {
+      return fail("import should eventually finish");
+    }
+
+    const auto jobs = photo_editor::desktop::loadPersistedJobRecords();
+    auto import_job = photo_editor::desktop::PersistentJobRecord{};
+    auto found_import_job = false;
+    for (const auto& record : jobs) {
+      if (record.job_kind != QStringLiteral("catalog_import")) {
+        continue;
+      }
+      if (QDir::cleanPath(record.source_path) != QDir::cleanPath(import_root)) {
+        continue;
+      }
+      import_job = record;
+      found_import_job = true;
+      break;
+    }
+
+    if (!found_import_job) {
+      return fail("import attempts should be recorded in the shared job store");
+    }
+    if (import_job.status == QStringLiteral("Running") || import_job.status == QStringLiteral("Queued")) {
+      return fail("persisted import jobs should be finalized by the shared job runner");
+    }
+    if (import_job.metadata_json.value(QStringLiteral("selectionCount")).toInt() != 0) {
+      return fail("folder imports should persist a zero selection count");
+    }
+    if (import_job.metadata_json.value(QStringLiteral("importMode")).toString() != QStringLiteral("referenced")) {
+      return fail("import jobs should persist the referenced import mode");
     }
   }
 

@@ -22,6 +22,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read release version
+        id: release-version
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! printf '%s' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must contain X.Y.Z" >&2
+            exit 1
+          fi
+          printf 'version=%s\n' "${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: Validate tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          expected_tag="v${{ steps.release-version.outputs.version }}"
+          if [ "${GITHUB_REF_NAME}" != "${expected_tag}" ]; then
+            echo "Release tag ${GITHUB_REF_NAME} does not match VERSION ${expected_tag}" >&2
+            exit 1
+          fi
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install Qt
@@ -160,7 +181,7 @@ jobs:
         run: |
           $packageVersion = "${{ github.ref_name }}"
           if ([string]::IsNullOrWhiteSpace($packageVersion)) {
-            $packageVersion = "0.1.0"
+            $packageVersion = "${{ steps.release-version.outputs.version }}"
           }
           ./scripts/package-windows-msix.ps1 `
             -InstallRoot "${env:RUNNER_TEMP}\photo-editor-windows-install" `

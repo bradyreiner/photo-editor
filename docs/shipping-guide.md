@@ -116,7 +116,7 @@ Optional macOS updater metadata:
 
 ## Versioning rules
 
-Use Git tags in the form:
+Use the root `VERSION` file as the source of truth, and Git tags in the form:
 
 ```text
 vX.Y.Z
@@ -130,12 +130,12 @@ v0.2.3
 v1.0.0
 ```
 
-That tag drives the release workflow and package versioning.
+The release workflow validates that the tag matches `VERSION`.
 
 For database compatibility:
 
 - schema version comes from `rust/crates/catalog/migrations`
-- app version comes from the Git tag and CMake package version
+- app version comes from the root `VERSION` file and matching Git tag
 - edit recipe versioning is still application-owned and should be treated separately
 
 ## How to build a release locally

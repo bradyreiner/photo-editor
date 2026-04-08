@@ -6,14 +6,18 @@
 #include <QDir>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <qqml.h>
 #include <QQuickStyle>
 #include <QTemporaryDir>
 
 #include "app_shell_controller.h"
+#include "brush_live_preview_item.h"
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
 #include "editor_preview_controller.h"
 #include "export_job_controller.h"
+#include "job_queue_model.h"
+#include "job_runner.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
 
@@ -48,9 +52,16 @@ int main(int argc, char** argv) {
   photo_editor::desktop::CatalogAssetModel catalog_assets;
   photo_editor::desktop::CarouselDocumentController carousel_document;
   photo_editor::desktop::EditorPreviewController editor_preview;
+  photo_editor::desktop::JobRunner job_runner;
+  photo_editor::desktop::JobQueueModel job_queue;
   photo_editor::desktop::ExportJobController export_jobs;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
+  qmlRegisterType<photo_editor::desktop::BrushLivePreviewItem>(
+      "PhotoEditor",
+      1,
+      0,
+      "BrushLivePreviewItem");
 
   QQmlApplicationEngine engine;
   engine.rootContext()->setContextProperty("appShell", &app_shell);
@@ -58,6 +69,7 @@ int main(int argc, char** argv) {
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
   engine.rootContext()->setContextProperty("editorPreview", &editor_preview);
   engine.rootContext()->setContextProperty("exportJobs", &export_jobs);
+  engine.rootContext()->setContextProperty("jobQueue", &job_queue);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 
