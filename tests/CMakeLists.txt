@@ -259,6 +259,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ${photo_editor_desktop_brush_preview_sources}
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
     ../apps/desktop/src/vision_segmentation.h
     ../apps/desktop/src/vision_segmentation_stub.cpp)

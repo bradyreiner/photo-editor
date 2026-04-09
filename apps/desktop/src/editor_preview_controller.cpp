@@ -7,6 +7,7 @@
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "raw_image_decoder.h"
 #include "vision_segmentation.h"
+#include "working_image.h"
 
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <cstring>
 #include <QCryptographicHash>
+#include <QColorSpace>
 #include <QDateTime>
 #include <QDebug>
 #include <QDir>
@@ -63,6 +65,7 @@ constexpr int kExpensiveInteractiveRenderDebounceMs = 70;
 constexpr int kExpensiveFullRenderDebounceMs = 650;
 constexpr int kSmartSelectPreviewDebounceMs = 45;
 constexpr qint64 kMaxCacheMemoryBytes = 512 * 1024 * 1024;  // 512 MB
+constexpr qint64 kMaxLinearCacheMemoryBytes = 256 * 1024 * 1024;  // 256 MB
 constexpr int kMaxEditHistoryDepth = 100;
 constexpr auto kEditedPreviewImageId = "edited";
 constexpr auto kReferencePreviewImageId = "reference";
@@ -100,8 +103,50 @@ struct DecodedImageCache final {
   }
 };
 
+using LinearImageBuffer = WorkingImage;
+
+struct LinearImageCache final {
+  QMutex mutex;
+  QHash<QString, std::shared_ptr<LinearImageBuffer>> images;
+  QList<QString> access_order;  // front = most recently used
+  qint64 total_bytes = 0;
+
+  void touch(const QString& key) {
+    access_order.removeOne(key);
+    access_order.prepend(key);
+  }
+
+  void insert(const QString& key, const std::shared_ptr<LinearImageBuffer>& image) {
+    if (!image) {
+      return;
+    }
+    if (images.contains(key)) {
+      total_bytes -= static_cast<qint64>(images.value(key)->pixels.size() * sizeof(photo_editor::pipeline::ColorPixel));
+      images.remove(key);
+      access_order.removeOne(key);
+    }
+    const auto image_bytes =
+        static_cast<qint64>(image->pixels.size() * sizeof(photo_editor::pipeline::ColorPixel));
+    while (total_bytes + image_bytes > kMaxLinearCacheMemoryBytes && !access_order.isEmpty()) {
+      const auto& evict_key = access_order.last();
+      total_bytes -= static_cast<qint64>(
+          images.value(evict_key)->pixels.size() * sizeof(photo_editor::pipeline::ColorPixel));
+      images.remove(evict_key);
+      access_order.removeLast();
+    }
+    images.insert(key, image);
+    access_order.prepend(key);
+    total_bytes += image_bytes;
+  }
+};
+
 DecodedImageCache& decoded_image_cache() {
   static DecodedImageCache cache;
+  return cache;
+}
+
+LinearImageCache& linear_image_cache() {
+  static LinearImageCache cache;
   return cache;
 }
 
@@ -126,6 +171,70 @@ RawDecodeSettings raw_decode_settings_for_state(const EditState& state) {
       .white_balance_temperature = state.raw_white_balance_temperature,
       .white_balance_tint = state.raw_white_balance_tint,
   };
+}
+
+QImage normalize_preview_color_space(QImage image);
+QColorSpace preview_target_color_space() {
+  return QColorSpace(QColorSpace::SRgb);
+}
+
+QColorSpace output_color_space_for_name(const QString& name) {
+  const auto normalized = normalized_output_color_space_name(name);
+  if (normalized == QStringLiteral("Display P3")) {
+    return QColorSpace(QColorSpace::DisplayP3);
+  }
+  return preview_target_color_space();
+}
+
+void apply_output_color_space_transform(QImage* image, const QString& output_color_space_name) {
+  if (image == nullptr || image->isNull()) {
+    return;
+  }
+
+  const auto target_color_space = output_color_space_for_name(output_color_space_name);
+  if (!target_color_space.isValid()) {
+    return;
+  }
+
+  auto working_image = image->colorSpace().isValid() ? *image : normalize_preview_color_space(*image);
+  const auto source_color_space = working_image.colorSpace().isValid()
+                                      ? working_image.colorSpace()
+                                      : preview_target_color_space();
+  if (source_color_space == target_color_space) {
+    working_image.setColorSpace(target_color_space);
+    *image = std::move(working_image);
+    return;
+  }
+
+  const auto converted = working_image.convertedToColorSpace(target_color_space);
+  if (!converted.isNull()) {
+    *image = converted;
+    return;
+  }
+
+  working_image.setColorSpace(source_color_space);
+  *image = std::move(working_image);
+}
+
+QImage normalize_preview_color_space(QImage image) {
+  if (image.isNull()) {
+    return image;
+  }
+
+  const auto target_color_space = preview_target_color_space();
+  const auto source_color_space = image.colorSpace();
+  if (source_color_space.isValid() && source_color_space != target_color_space) {
+    const auto converted = image.convertedToColorSpace(target_color_space);
+    if (!converted.isNull()) {
+      image = converted;
+    }
+  }
+
+  if (image.format() != QImage::Format_ARGB32) {
+    image = image.convertToFormat(QImage::Format_ARGB32);
+  }
+  image.setColorSpace(target_color_space);
+  return image;
 }
 
 QString raw_decode_settings_key(const EditState& state) {
@@ -266,10 +375,6 @@ QRect normalized_rect_to_image_rect(const QSize& size, const QRectF& normalized_
   return QRect(x, y, right - x, bottom - y);
 }
 
-int clamp_channel(double value) {
-  return qBound(0, static_cast<int>(qRound(value)), 255);
-}
-
 double clamp_signed_percent(double value) {
   return qBound(-100.0, value, 100.0);
 }
@@ -284,6 +389,84 @@ double smoothstep(double edge0, double edge1, double value) {
   }
   const auto t = clamp_unit((value - edge0) / (edge1 - edge0));
   return t * t * (3.0 - 2.0 * t);
+}
+
+struct WhiteBalancePatchSample final {
+  double red = 0.0;
+  double green = 0.0;
+  double blue = 0.0;
+  int sample_count = 0;
+  bool valid = false;
+};
+
+WhiteBalancePatchSample sample_white_balance_patch(
+    const QImage& image,
+    int center_x,
+    int center_y,
+    int radius) {
+  WhiteBalancePatchSample result;
+  if (image.isNull() || radius < 0) {
+    return result;
+  }
+
+  std::vector<std::array<double, 3>> samples;
+  samples.reserve(static_cast<std::size_t>((radius * 2 + 1) * (radius * 2 + 1)));
+
+  const auto append_samples = [&](bool reject_extremes) {
+    samples.clear();
+    for (int y = std::max(0, center_y - radius); y <= std::min(image.height() - 1, center_y + radius); ++y) {
+      for (int x = std::max(0, center_x - radius); x <= std::min(image.width() - 1, center_x + radius); ++x) {
+        const QColor sampled(image.pixel(x, y));
+        const auto red = photo_editor::pipeline::srgb_to_linear(sampled.redF());
+        const auto green = photo_editor::pipeline::srgb_to_linear(sampled.greenF());
+        const auto blue = photo_editor::pipeline::srgb_to_linear(sampled.blueF());
+        const auto luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+        const auto max_channel = std::max({red, green, blue});
+        if (reject_extremes &&
+            (luminance <= 1e-4 || luminance >= 0.98 || max_channel >= 0.995)) {
+          continue;
+        }
+        samples.push_back({red, green, blue});
+      }
+    }
+  };
+
+  append_samples(true);
+  if (samples.empty()) {
+    append_samples(false);
+  }
+  if (samples.empty()) {
+    return result;
+  }
+
+  std::sort(samples.begin(), samples.end(), [](const auto& left, const auto& right) {
+    const auto left_luma = left[0] * 0.2126 + left[1] * 0.7152 + left[2] * 0.0722;
+    const auto right_luma = right[0] * 0.2126 + right[1] * 0.7152 + right[2] * 0.0722;
+    return left_luma < right_luma;
+  });
+
+  const auto trim = samples.size() >= 9 ? samples.size() / 8 : std::size_t{0};
+  const auto begin = trim;
+  const auto end = samples.size() > trim ? samples.size() - trim : samples.size();
+  if (begin >= end) {
+    return result;
+  }
+
+  auto red_sum = 0.0;
+  auto green_sum = 0.0;
+  auto blue_sum = 0.0;
+  for (auto index = begin; index < end; ++index) {
+    red_sum += samples[index][0];
+    green_sum += samples[index][1];
+    blue_sum += samples[index][2];
+  }
+
+  result.sample_count = static_cast<int>(end - begin);
+  result.red = red_sum / static_cast<double>(result.sample_count);
+  result.green = green_sum / static_cast<double>(result.sample_count);
+  result.blue = blue_sum / static_cast<double>(result.sample_count);
+  result.valid = true;
+  return result;
 }
 
 bool map_bool_value(const QVariantMap& map, const QString& key, bool fallback) {
@@ -3148,10 +3331,6 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& 
   };
 }
 
-double srgb_to_linear(double value) { return photo_editor::pipeline::srgb_to_linear(value); }
-
-double linear_to_srgb(double value) { return photo_editor::pipeline::linear_to_srgb(value); }
-
 double channel_weight_for_selection(double hue, const QString& hsl_channel) {
   return photo_editor::pipeline::channel_weight_for_selection(hue, hsl_channel.toStdString());
 }
@@ -3313,6 +3492,15 @@ bool requires_cpu_only_preview_pipeline(const EditState& state) {
          std::abs(state.chromatic_aberration) > 1e-6;
 }
 
+bool has_extended_range_pixels(const std::vector<photo_editor::pipeline::ColorPixel>& pixels) {
+  constexpr auto kTolerance = 1.0e-6F;
+  return std::any_of(pixels.cbegin(), pixels.cend(), [](const auto& pixel) {
+    return pixel.red > 1.0F + kTolerance || pixel.green > 1.0F + kTolerance ||
+           pixel.blue > 1.0F + kTolerance || pixel.red < -kTolerance ||
+           pixel.green < -kTolerance || pixel.blue < -kTolerance;
+  });
+}
+
 bool has_rendered_local_masks(const EditState& state) {
   auto ordinal = 1;
   for (const auto& value : state.mask_stack) {
@@ -3362,7 +3550,177 @@ EditState reference_preview_cache_state(const EditState& state) {
   cached_state.crop_rect_height = state.crop_rect_height;
   cached_state.crop_zoom = state.crop_zoom;
   cached_state.crop_preset = state.crop_preset;
+  cached_state.output_color_space = state.output_color_space;
   return cached_state;
+}
+
+EditState base_linear_cache_state(const EditState& state, bool bypass_crop) {
+  auto cached_state = reference_preview_cache_state(state);
+  cached_state.output_color_space = QStringLiteral("sRGB");
+  if (!bypass_crop) {
+    return cached_state;
+  }
+
+  cached_state.crop_rect_x = 0.0;
+  cached_state.crop_rect_y = 0.0;
+  cached_state.crop_rect_width = 0.0;
+  cached_state.crop_rect_height = 0.0;
+  cached_state.crop_zoom = 1.0;
+  cached_state.crop_preset = QStringLiteral("Original");
+  return cached_state;
+}
+
+QString base_linear_cache_key(const RenderRequest& request) {
+  if (request.full_resolution || request.max_edge <= 0 || request.file_path.isEmpty() ||
+      request.preview_overlay_rect.isValid()) {
+    return {};
+  }
+
+  const QFileInfo source_info(request.file_path);
+  if (!source_info.exists()) {
+    return {};
+  }
+
+  const auto fingerprint = QStringLiteral("%1|%2|%3|%4")
+                               .arg(decoded_image_cache_key(source_info, request.max_edge))
+                               .arg(QStringLiteral("linear-base-v1"))
+                               .arg(request.bypass_crop ? QStringLiteral("uncropped")
+                                                        : QStringLiteral("cropped"))
+                               .arg(serialize_edit_recipe_json(
+                                   base_linear_cache_state(request.state, request.bypass_crop)));
+  const auto digest =
+      QCryptographicHash::hash(fingerprint.toUtf8(), QCryptographicHash::Sha1).toHex();
+  return QString::fromLatin1(digest);
+}
+
+std::shared_ptr<LinearImageBuffer> linearize_preview_image(
+    const QImage& image,
+    const RenderRequest* request) {
+  if (image.isNull()) {
+    return {};
+  }
+
+  const auto linear_qimage = working_image_qimage(image);
+  if (linear_qimage.isNull()) {
+    return {};
+  }
+
+  auto linear_image = std::make_shared<LinearImageBuffer>();
+  linear_image->width = linear_qimage.width();
+  linear_image->height = linear_qimage.height();
+  linear_image->pixels.resize(
+      static_cast<std::size_t>(linear_image->width * linear_image->height));
+
+  for (int y = 0; y < linear_image->height; ++y) {
+    if (request != nullptr && render_request_superseded(*request)) {
+      return {};
+    }
+    const auto* scanline =
+        reinterpret_cast<const QRgbaFloat16*>(linear_qimage.constScanLine(y));
+    for (int x = 0; x < linear_image->width; ++x) {
+      const auto& pixel = scanline[x];
+      linear_image->pixels[static_cast<std::size_t>(y * linear_image->width + x)] =
+          photo_editor::pipeline::ColorPixel{
+              .red = std::max(0.0F, static_cast<float>(pixel.r)),
+              .green = std::max(0.0F, static_cast<float>(pixel.g)),
+              .blue = std::max(0.0F, static_cast<float>(pixel.b)),
+              .alpha = static_cast<float>(clamp_unit(static_cast<double>(pixel.a))),
+          };
+    }
+  }
+
+  return linear_image;
+}
+
+std::shared_ptr<LinearImageBuffer> decode_linear_source_image(const RenderRequest& request) {
+  if (request.file_path.isEmpty() || request.preview_overlay_rect.isValid()) {
+    return {};
+  }
+
+  const QFileInfo source_info(request.file_path);
+  if (!source_info.exists() || !source_info.isReadable()) {
+    return {};
+  }
+
+  QImage decoded;
+  if (native_image_supported(request.file_path)) {
+    if (!decode_native_linear_image(request.file_path, &decoded, request.max_edge)) {
+      return {};
+    }
+  } else {
+    QImageReader reader(request.file_path);
+    reader.setAutoTransform(true);
+    if (reader.canRead()) {
+      if (request.max_edge > 0) {
+        const auto source_size = reader.size();
+        if (source_size.isValid()) {
+          const auto target_size = scaled_size_for_max_edge(source_size, request.max_edge);
+          if (target_size.isValid() && target_size != source_size) {
+            reader.setScaledSize(target_size);
+          }
+        }
+      }
+      decoded = reader.read();
+      if (decoded.isNull()) {
+        return {};
+      }
+      if (!decoded.colorSpace().isValid()) {
+        decoded.setColorSpace(preview_target_color_space());
+      }
+    } else if (!decode_raw_linear_image(
+                   request.file_path,
+                   &decoded,
+                   request.max_edge,
+                   raw_decode_settings_for_state(request.state))) {
+      return {};
+    }
+  }
+
+  auto linear_image = linearize_preview_image(decoded, &request);
+  if (!linear_image || render_request_superseded(request)) {
+    return {};
+  }
+
+  if (!request.bypass_crop) {
+    *linear_image = crop_working_image(
+        *linear_image,
+        crop_rect_for_image(QSize(linear_image->width, linear_image->height), request.state));
+    if (linear_image->isNull()) {
+      return {};
+    }
+  }
+
+  return linear_image;
+}
+
+std::shared_ptr<LinearImageBuffer> cached_linear_preview_image(
+    const QImage& image,
+    const RenderRequest* request) {
+  const auto cache_key = request == nullptr ? QString{} : base_linear_cache_key(*request);
+  if (cache_key.isEmpty()) {
+    return linearize_preview_image(image, request);
+  }
+
+  {
+    auto& cache = linear_image_cache();
+    QMutexLocker locker(&cache.mutex);
+    const auto cached = cache.images.constFind(cache_key);
+    if (cached != cache.images.cend()) {
+      cache.touch(cache_key);
+      return cached.value();
+    }
+  }
+
+  auto linear_image = request != nullptr ? decode_linear_source_image(*request)
+                                         : linearize_preview_image(image, request);
+  if (!linear_image || (request != nullptr && render_request_superseded(*request))) {
+    return {};
+  }
+
+  auto& cache = linear_image_cache();
+  QMutexLocker locker(&cache.mutex);
+  cache.insert(cache_key, linear_image);
+  return linear_image;
 }
 
 bool decode_source_image(
@@ -3405,7 +3763,7 @@ bool decode_source_image(
       return false;
     }
 
-    *image = decoded;
+    *image = normalize_preview_color_space(std::move(decoded));
     if (should_cache && !image->isNull()) {
       auto& cache = decoded_image_cache();
       QMutexLocker locker(&cache.mutex);
@@ -3420,7 +3778,7 @@ bool decode_source_image(
       return false;
     }
 
-    *image = decoded;
+    *image = normalize_preview_color_space(std::move(decoded));
     if (should_cache && !image->isNull()) {
       auto& cache = decoded_image_cache();
       QMutexLocker locker(&cache.mutex);
@@ -3450,7 +3808,7 @@ bool decode_source_image(
     return false;
   }
 
-  *image = decoded.convertToFormat(QImage::Format_ARGB32);
+  *image = normalize_preview_color_space(std::move(decoded));
   if (should_cache && !image->isNull()) {
     auto& cache = decoded_image_cache();
     QMutexLocker locker(&cache.mutex);
@@ -3531,7 +3889,10 @@ bool decode_qt_source_image_region(
     return false;
   }
 
-  *image = decoded.convertToFormat(QImage::Format_ARGB32);
+  *image = decoded;
+  if (!image->colorSpace().isValid()) {
+    image->setColorSpace(preview_target_color_space());
+  }
   return !image->isNull();
 }
 
@@ -3571,6 +3932,7 @@ QImage render_preview_overlay_patch(const RenderRequest& request, bool edited) {
       !apply_color_adjustments(&overlay_image, request.state, &request)) {
     return {};
   }
+  apply_output_color_space_transform(&overlay_image, request.state.output_color_space);
 
   const auto target_size =
       scaled_size_for_max_edge(source_clip_rect.size(), request.preview_overlay_max_edge);
@@ -3591,26 +3953,18 @@ photo_editor::pipeline::metal::MetalPipelineBackend& metal_backend() {
 #endif
 
 bool apply_color_adjustments(QImage* image, const EditState& state, const RenderRequest* request = nullptr) {
-  const auto width = image->width();
-  const auto height = image->height();
-  std::vector<photo_editor::pipeline::ColorPixel> pixels(static_cast<std::size_t>(width * height));
-
-  for (int y = 0; y < height; ++y) {
-    if (request != nullptr && render_request_superseded(*request)) {
-      return false;
-    }
-    const auto* scanline = reinterpret_cast<const QRgb*>(image->constScanLine(y));
-    for (int x = 0; x < width; ++x) {
-      const QColor color = QColor::fromRgb(scanline[x]);
-      pixels[static_cast<std::size_t>(y * width + x)] = photo_editor::pipeline::ColorPixel{
-          .red = static_cast<float>(srgb_to_linear(color.redF())),
-          .green = static_cast<float>(srgb_to_linear(color.greenF())),
-          .blue = static_cast<float>(srgb_to_linear(color.blueF())),
-          .alpha = color.alphaF(),
-      };
-    }
+  if (image == nullptr || image->isNull()) {
+    return false;
   }
 
+  const auto linear_source = cached_linear_preview_image(*image, request);
+  if (!linear_source) {
+    return false;
+  }
+
+  auto pixels = linear_source->pixels;
+  const auto width = linear_source->width;
+  const auto height = linear_source->height;
   if (request != nullptr && render_request_superseded(*request)) {
     return false;
   }
@@ -3626,6 +3980,7 @@ bool apply_color_adjustments(QImage* image, const EditState& state, const Render
       pipeline_state.local_mask_sets.empty() &&
       pipeline_state.retouch_masks.empty() &&
       pipeline_state.local_masks.empty() &&
+      !has_extended_range_pixels(pixels) &&
       !requires_full_pipeline) {
     const auto lut = photo_editor::pipeline::build_color_lut(pipeline_state);
     metal.apply_masks(&pixels, width, height, pipeline_state);
@@ -3641,20 +3996,13 @@ bool apply_color_adjustments(QImage* image, const EditState& state, const Render
     return false;
   }
 
-  for (int y = 0; y < height; ++y) {
-    if (request != nullptr && render_request_superseded(*request)) {
-      return false;
-    }
-    auto* scanline = reinterpret_cast<QRgb*>(image->scanLine(y));
-    for (int x = 0; x < width; ++x) {
-      auto& pixel = pixels[static_cast<std::size_t>(y * width + x)];
-      scanline[x] = qRgba(
-          clamp_channel(linear_to_srgb(pixel.red) * 255.0),
-          clamp_channel(linear_to_srgb(pixel.green) * 255.0),
-          clamp_channel(linear_to_srgb(pixel.blue) * 255.0),
-          clamp_channel(clamp_unit(pixel.alpha) * 255.0));
-    }
-  }
+  *image = qimage_from_working_image(
+      WorkingImage{
+          .width = width,
+          .height = height,
+          .pixels = std::move(pixels),
+      },
+      preview_target_color_space());
   return true;
 }
 
@@ -3763,6 +4111,7 @@ RenderResult render_preview_request(const RenderRequest& request) {
       return result;
     }
   }
+  apply_output_color_space_transform(&edited_image, request.state.output_color_space);
   result.edit_elapsed_ms = edit_timer.elapsed();
   result.output_width = edited_image.width();
   result.output_height = edited_image.height();
@@ -3841,6 +4190,7 @@ RenderResult render_preview_request(const RenderRequest& request) {
       result.cancelled = true;
       return result;
     }
+    apply_output_color_space_transform(&reference_image, request.state.output_color_space);
     if (request.use_in_memory_preview) {
       result.reference_preview_image = reference_image;
       result.display_reference_preview_source =
@@ -3982,6 +4332,9 @@ QVariantList EditorPreviewController::histogramRed() const { return histogram_re
 QVariantList EditorPreviewController::histogramGreen() const { return histogram_green_; }
 QVariantList EditorPreviewController::histogramBlue() const { return histogram_blue_; }
 QVariantList EditorPreviewController::histogramLuminance() const { return histogram_luminance_; }
+int EditorPreviewController::histogramShadowClipCount() const { return histogram_shadow_clip_count_; }
+int EditorPreviewController::histogramHighlightClipCount() const { return histogram_highlight_clip_count_; }
+int EditorPreviewController::histogramSampleCount() const { return histogram_sample_count_; }
 int EditorPreviewController::previewTargetEdge() const { return clamp_preview_target_edge(preview_target_edge_); }
 QString EditorPreviewController::withDisplayRevision(const QString& source) const {
   return with_preview_revision(source, preview_revision_);
@@ -3996,6 +4349,7 @@ void EditorPreviewController::setImageProvider(EditorPreviewImageSink* image_pro
 }
 QString EditorPreviewController::debugInfo() const { return debug_info_; }
 QString EditorPreviewController::status() const { return status_; }
+QString EditorPreviewController::assetId() const { return asset_id_; }
 QString EditorPreviewController::cameraLabel() const { return camera_label_; }
 QString EditorPreviewController::captureDate() const { return capture_date_; }
 QString EditorPreviewController::lensModel() const { return lens_model_; }
@@ -4012,6 +4366,7 @@ bool EditorPreviewController::hasCopiedSettings() const { return has_copied_sett
 QStringList EditorPreviewController::presetNames() const { return presets_.keys(); }
 bool EditorPreviewController::compareMode() const { return compare_mode_; }
 bool EditorPreviewController::cropEditing() const { return crop_editing_; }
+QString EditorPreviewController::outputColorSpace() const { return output_color_space_; }
 bool EditorPreviewController::rawControlsAvailable() const { return raw_image_supported(file_path_); }
 double EditorPreviewController::rawExposure() const { return raw_exposure_; }
 double EditorPreviewController::rawBoost() const { return raw_boost_; }
@@ -4609,6 +4964,18 @@ void EditorPreviewController::setRawExposure(double raw_exposure) {
   }
   rememberStateForUndo();
   raw_exposure_ = raw_exposure;
+  persistCurrentState();
+  emit controlsChanged();
+  renderPreview();
+}
+
+void EditorPreviewController::setOutputColorSpace(const QString& output_color_space) {
+  const auto normalized = normalized_output_color_space_name(output_color_space);
+  if (output_color_space_ == normalized) {
+    return;
+  }
+  rememberStateForUndo();
+  output_color_space_ = normalized;
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -5946,6 +6313,7 @@ void EditorPreviewController::resetAdjustments() {
   crop_rect_height_ = 0.0;
   crop_zoom_ = 1.0;
   crop_preset_ = QStringLiteral("Original");
+  output_color_space_ = QStringLiteral("sRGB");
   mask_stack_.clear();
   invalidateMaskDerivedCaches();
   active_mask_index_ = -1;
@@ -7083,11 +7451,20 @@ void EditorPreviewController::sampleWhiteBalanceAt(double normalized_x, double n
 
   const auto sample_x = qBound(0, static_cast<int>(qRound(normalized_x * (image.width() - 1))), image.width() - 1);
   const auto sample_y = qBound(0, static_cast<int>(qRound(normalized_y * (image.height() - 1))), image.height() - 1);
-  const QColor sampled(image.pixel(sample_x, sample_y));
+  const auto patch_radius = qBound(
+      1,
+      static_cast<int>(qRound(static_cast<double>(std::min(image.width(), image.height())) * 0.015)),
+      12);
+  const auto patch_sample = sample_white_balance_patch(image, sample_x, sample_y, patch_radius);
+  if (!patch_sample.valid) {
+    setStatus(QStringLiteral("Unable to measure white balance from the selected patch."));
+    setWhiteBalanceSampling(false);
+    return;
+  }
 
-  const auto red = srgb_to_linear(sampled.redF());
-  const auto green = srgb_to_linear(sampled.greenF());
-  const auto blue = srgb_to_linear(sampled.blueF());
+  const auto red = patch_sample.red;
+  const auto green = patch_sample.green;
+  const auto blue = patch_sample.blue;
   const auto average_rb = qMax(1e-6, (red + blue) * 0.5);
   const auto red_blue_balance = std::log2((blue + 1e-6) / (red + 1e-6));
   const auto green_balance = std::log2((green + 1e-6) / average_rb);
@@ -7101,7 +7478,9 @@ void EditorPreviewController::sampleWhiteBalanceAt(double normalized_x, double n
     setTint(tint_ + green_balance * 60.0);
   }
   setWhiteBalanceSampling(false);
-  setStatus(QStringLiteral("White balance sampled from preview."));
+  setStatus(
+      QStringLiteral("White balance sampled from a %1 px patch.")
+          .arg(patch_radius * 2 + 1));
 }
 
 void EditorPreviewController::renderPreview(bool schedule_full_resolution) {
@@ -7444,13 +7823,14 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
 void EditorPreviewController::refreshDebugInfo() {
   const QFileInfo source_info(file_path_);
   const auto info = QStringLiteral(
-                        "status=%1 | file=%2 | exists=%3 | readable=%4 | thumb=%5 | preview=%6 | display=%7 | "
-                        "reference=%8 | displayReference=%9 | renderMs(i=%10,f=%11,d=%12,e=%13,w=%14) | "
-                        "source=%15x%16 | output=%17x%18 | adjusted=%19")
+                        "status=%1 | file=%2 | exists=%3 | readable=%4 | output=%5 | thumb=%6 | preview=%7 | display=%8 | "
+                        "reference=%9 | displayReference=%10 | renderMs(i=%11,f=%12,d=%13,e=%14,w=%15) | "
+                        "source=%16x%17 | output=%18x%19 | adjusted=%20")
                         .arg(status_)
                         .arg(file_path_.isEmpty() ? QStringLiteral("<none>") : file_path_)
                         .arg(source_info.exists() ? QStringLiteral("yes") : QStringLiteral("no"))
                         .arg(source_info.isReadable() ? QStringLiteral("yes") : QStringLiteral("no"))
+                        .arg(output_color_space_)
                         .arg(fallback_thumbnail_source_.isEmpty() ? QStringLiteral("<none>") : fallback_thumbnail_source_)
                         .arg(preview_source_.isEmpty() ? QStringLiteral("<none>") : preview_source_)
                         .arg(display_preview_source_.isEmpty() ? QStringLiteral("<none>") : display_preview_source_)
@@ -7648,6 +8028,7 @@ void EditorPreviewController::applyState(const EditState& state) {
   crop_rect_height_ = state.crop_rect_height;
   crop_zoom_ = state.crop_zoom;
   crop_preset_ = state.crop_preset;
+  output_color_space_ = normalized_output_color_space_name(state.output_color_space);
   mask_stack_ = normalize_mask_stack(state.mask_stack);
   invalidateMaskDerivedCaches();
   active_mask_index_ = -1;
@@ -7723,6 +8104,7 @@ EditState EditorPreviewController::currentState() const {
       .crop_rect_height = crop_rect_height_,
       .crop_zoom = crop_zoom_,
       .crop_preset = crop_preset_,
+      .output_color_space = output_color_space_,
       .mask_stack = mask_stack_,
       .linear_mask_enabled = linear_mask_enabled_,
       .linear_mask_exposure = linear_mask_exposure_,
@@ -8360,6 +8742,9 @@ void EditorPreviewController::computeHistogram(const QImage& image) {
 
   const auto w = image.width();
   const auto h = image.height();
+  histogram_sample_count_ = std::max(0, w * h);
+  histogram_shadow_clip_count_ = 0;
+  histogram_highlight_clip_count_ = 0;
   for (int y = 0; y < h; ++y) {
     const auto* scanline = reinterpret_cast<const QRgb*>(image.constScanLine(y));
     for (int x = 0; x < w; ++x) {
@@ -8367,6 +8752,12 @@ void EditorPreviewController::computeHistogram(const QImage& image) {
       const auto r = qRed(pixel);
       const auto g = qGreen(pixel);
       const auto b = qBlue(pixel);
+      if (r == 0 || g == 0 || b == 0) {
+        ++histogram_shadow_clip_count_;
+      }
+      if (r == 255 || g == 255 || b == 255) {
+        ++histogram_highlight_clip_count_;
+      }
       ++red_bins[static_cast<std::size_t>(r)];
       ++green_bins[static_cast<std::size_t>(g)];
       ++blue_bins[static_cast<std::size_t>(b)];
@@ -8385,6 +8776,11 @@ void EditorPreviewController::computeHistogram(const QImage& image) {
   });
 
   if (max_count <= 0) {
+    histogram_red_.clear();
+    histogram_green_.clear();
+    histogram_blue_.clear();
+    histogram_luminance_.clear();
+    emit histogramChanged();
     return;
   }
 

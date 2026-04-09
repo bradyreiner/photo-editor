@@ -256,6 +256,7 @@ ApplicationWindow {
     }
 
     function loadSelectedAssetIntoEditor() {
+        syncEditorRecipeToCatalog(catalogAssets.selectedAssetId)
         if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo")
             return
 
@@ -283,6 +284,23 @@ ApplicationWindow {
             "",
             ""
         )
+    }
+
+    function syncEditorRecipeToCatalog(nextAssetId) {
+        if (editorUsesLocalAsset)
+            return
+
+        const currentAssetId = editorPreview.assetId
+        if (currentAssetId.length === 0)
+            return
+
+        if (nextAssetId !== undefined && nextAssetId.length > 0 && nextAssetId === currentAssetId)
+            return
+
+        catalogAssets.applyRecipeJsonToAssetIds(
+                    [currentAssetId],
+                    editorPreview.currentRecipeJson(),
+                    ["raw", "tone", "color", "crop", "masks", "detail"])
     }
 
     function beginImportWorkspace() {
@@ -1042,6 +1060,9 @@ ApplicationWindow {
         if (workspaceInitialized)
             appShell.currentWorkspace = currentWorkspace
 
+        if (currentWorkspace !== editWorkspaceIndex)
+            syncEditorRecipeToCatalog()
+
         if (currentWorkspace === editWorkspaceIndex) {
             if (editorUsesLocalAsset)
                 loadLocalAssetIntoEditor()
@@ -1076,7 +1097,7 @@ ApplicationWindow {
         spacing: 6
 
         Rectangle {
-            Layout.preferredWidth: 112
+            Layout.preferredWidth: 56
             Layout.fillHeight: true
             radius: theme.radius12
             color: theme.ink850
@@ -1088,12 +1109,22 @@ ApplicationWindow {
                 anchors.margins: 8
                 spacing: 8
 
-                Label {
-                    text: "PhotoEditor"
-                    color: theme.textStrong
-                    font.family: theme.fontUi
-                    font.pixelSize: 12
-                    font.weight: Font.DemiBold
+                Rectangle {
+                    Layout.alignment: Qt.AlignHCenter
+                    implicitWidth: 30
+                    implicitHeight: 30
+                    radius: 10
+                    color: theme.alpha(theme.ink900, 0.78)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.22)
+
+                    AppIcon {
+                        anchors.centerIn: parent
+                        name: "media"
+                        color: theme.textStrong
+                        implicitWidth: 14
+                        implicitHeight: 14
+                    }
                 }
 
                 Rectangle {
@@ -1109,10 +1140,13 @@ ApplicationWindow {
                         required property int index
                         required property string modelData
 
-                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: implicitWidth
+                        Layout.preferredHeight: implicitHeight
                         title: modelData
                         tooltipText: modelData + "  •  " + workspaceSubtitles[index]
                         compact: false
+                        iconOnly: true
                         kind: window.workspaceKinds[index]
                         accent: window.workspaceAccent(index)
                         badgeText: window.workspaceBadgeText(index)

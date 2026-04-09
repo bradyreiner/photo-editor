@@ -17,9 +17,9 @@ QtObject {
     readonly property color lineSoft: darkMode ? "#252320" : "#d8d4cc"
 
     readonly property color textStrong: darkMode ? "#efede8" : "#1a1917"
-    readonly property color textMain: darkMode ? "#d8d2ca" : "#33302b"
-    readonly property color textMuted: darkMode ? "#9f968b" : "#706960"
-    readonly property color textFaint: darkMode ? "#746c62" : "#9f968b"
+    readonly property color textMain: darkMode ? "#ddd8d0" : "#33302b"
+    readonly property color textMuted: darkMode ? "#b2a99e" : "#655e55"
+    readonly property color textFaint: darkMode ? "#8a8177" : "#877f74"
 
     readonly property color accentWarm500: "#b57a60"
     readonly property color accentWarm400: "#c89078"
@@ -34,6 +34,8 @@ QtObject {
     readonly property color success: "#7fa87c"
     readonly property color warning: "#b98f54"
     readonly property color error: "#a56a5e"
+    readonly property color focusRing: darkMode ? "#d2a364" : "#8d6338"
+    readonly property color focusFill: darkMode ? "#2e2119" : "#f2e4d7"
 
     readonly property int space4: 4
     readonly property int space6: 6
@@ -53,17 +55,17 @@ QtObject {
     readonly property int radius12: 8
     readonly property int radius16: 10
 
-    readonly property int controlHeightDense: 28
-    readonly property int controlHeight: 32
-    readonly property int controlHeightTall: 36
-    readonly property int panelPadding: 14
-    readonly property int panelPaddingCompact: 10
-    readonly property int sectionPadding: 12
-    readonly property int sectionPaddingCompact: 10
+    readonly property int controlHeightDense: 26
+    readonly property int controlHeight: 30
+    readonly property int controlHeightTall: 34
+    readonly property int panelPadding: 12
+    readonly property int panelPaddingCompact: 8
+    readonly property int sectionPadding: 10
+    readonly property int sectionPaddingCompact: 8
     readonly property int gapDense: 6
-    readonly property int gapControl: 8
-    readonly property int gapPanel: 10
-    readonly property int radiusControl: radius4
+    readonly property int gapControl: 7
+    readonly property int gapPanel: 9
+    readonly property int radiusControl: radius6
     readonly property int radiusChip: radius6
     readonly property int radiusPanel: radius8
     readonly property int radiusSurface: radius12

@@ -9,7 +9,7 @@ TextField {
     Theme { id: theme }
 
     implicitHeight: theme.controlHeightTall
-    color: theme.textStrong
+    color: root.enabled ? theme.textStrong : theme.alpha(theme.textMuted, 0.68)
     placeholderTextColor: theme.textFaint
     selectedTextColor: theme.ink950
     selectionColor: Qt.rgba(root.accent.r, root.accent.g, root.accent.b, 0.85)
@@ -17,12 +17,21 @@ TextField {
     font.pixelSize: 12
     leftPadding: theme.space12
     rightPadding: theme.space12
+    activeFocusOnTab: true
 
     background: Rectangle {
-        radius: theme.radiusPanel
-        color: theme.ink900
-        border.width: 1
-        border.color: root.activeFocus ? root.accent : theme.alpha(theme.lineSoft, 0.92)
+        radius: theme.radiusControl
+        color: root.enabled ? theme.alpha(theme.ink900, 0.88) : theme.alpha(theme.ink900, 0.58)
+        border.width: root.activeFocus ? 2 : 1
+        border.color: root.activeFocus ? theme.alpha(theme.focusRing, 0.9) : theme.alpha(theme.lineSoft, 0.16)
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 1
+            radius: Math.max(1, parent.radius - 1)
+            visible: root.activeFocus
+            color: theme.alpha(theme.focusFill, 0.2)
+        }
 
         Behavior on border.color {
             ColorAnimation { duration: theme.durationFast }

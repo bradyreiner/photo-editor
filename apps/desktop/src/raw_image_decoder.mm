@@ -1,9 +1,11 @@
 #include "raw_image_decoder.h"
+#include "working_image.h"
 
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreImage/CoreImage.h>
 #import <ImageIO/ImageIO.h>
 
+#include <QColorSpace>
 #include <QFileInfo>
 #include <QStringList>
 
@@ -69,7 +71,7 @@ CIContext* shared_ci_context() {
   return context;
 }
 
-QImage qimage_from_cgimage(CGImageRef cg_image) {
+[[maybe_unused]] QImage qimage_from_cgimage(CGImageRef cg_image) {
   if (cg_image == nullptr) {
     return {};
   }
@@ -85,7 +87,10 @@ QImage qimage_from_cgimage(CGImageRef cg_image) {
     return {};
   }
 
-  CGColorSpaceRef color_space = CGColorSpaceCreateDeviceRGB();
+  CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  if (color_space == nullptr) {
+    color_space = CGColorSpaceCreateDeviceRGB();
+  }
   CGContextRef context = CGBitmapContextCreate(
       image.bits(),
       static_cast<size_t>(width),
@@ -109,7 +114,48 @@ QImage qimage_from_cgimage(CGImageRef cg_image) {
 
   CGContextRelease(context);
   CGColorSpaceRelease(color_space);
-  return image.convertToFormat(QImage::Format_ARGB32);
+  auto output = image.convertToFormat(QImage::Format_ARGB32);
+  output.setColorSpace(preview_color_space());
+  return output;
+}
+
+bool render_ciimage_to_linear_qimage(CIImage* input_image, QImage* image) {
+  if (input_image == nil || image == nullptr) {
+    return false;
+  }
+
+  const CGRect extent = CGRectIntegral(input_image.extent);
+  if (CGRectIsEmpty(extent)) {
+    return false;
+  }
+
+  const auto width = static_cast<int>(CGRectGetWidth(extent));
+  const auto height = static_cast<int>(CGRectGetHeight(extent));
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+
+  QImage linear_image(width, height, QImage::Format_RGBA16FPx4);
+  if (linear_image.isNull()) {
+    return false;
+  }
+  linear_image.setColorSpace(working_color_space());
+
+  CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+  if (color_space == nullptr) {
+    return false;
+  }
+
+  [shared_ci_context() render:input_image
+                     toBitmap:linear_image.bits()
+                     rowBytes:static_cast<ptrdiff_t>(linear_image.bytesPerLine())
+                       bounds:extent
+                       format:kCIFormatRGBAh
+                   colorSpace:color_space];
+  CGColorSpaceRelease(color_space);
+
+  *image = std::move(linear_image);
+  return !image->isNull();
 }
 
 CGImageSourceRef image_source_for_path(const QString& file_path) {
@@ -289,6 +335,20 @@ bool decode_raw_image(
     QImage* image,
     int max_edge,
     const RawDecodeSettings& settings) {
+  QImage linear_image;
+  if (!decode_raw_linear_image(file_path, &linear_image, max_edge, settings)) {
+    return false;
+  }
+
+  *image = finalize_output_image(std::move(linear_image), preview_color_space());
+  return !image->isNull();
+}
+
+bool decode_raw_linear_image(
+    const QString& file_path,
+    QImage* image,
+    int max_edge,
+    const RawDecodeSettings& settings) {
   if (image == nullptr || !has_raw_extension(file_path)) {
     return false;
   }
@@ -314,23 +374,24 @@ bool decode_raw_image(
       return false;
     }
 
-    const CGRect extent = CGRectIntegral(output_image.extent);
-    if (CGRectIsEmpty(extent)) {
-      return false;
-    }
-
-    CGImageRef cg_image = [shared_ci_context() createCGImage:output_image fromRect:extent];
-    if (cg_image == nullptr) {
-      return false;
-    }
-
-    *image = qimage_from_cgimage(cg_image);
-    CGImageRelease(cg_image);
-    return !image->isNull();
+    return render_ciimage_to_linear_qimage(output_image, image);
   }
 }
 
 bool decode_native_image(
+    const QString& file_path,
+    QImage* image,
+    int max_edge) {
+  QImage linear_image;
+  if (!decode_native_linear_image(file_path, &linear_image, max_edge)) {
+    return false;
+  }
+
+  *image = finalize_output_image(std::move(linear_image), preview_color_space());
+  return !image->isNull();
+}
+
+bool decode_native_linear_image(
     const QString& file_path,
     QImage* image,
     int max_edge) {
@@ -355,9 +416,13 @@ bool decode_native_image(
       return false;
     }
 
-    *image = qimage_from_cgimage(cg_image);
+    CIImage* ci_image = [[CIImage alloc] initWithCGImage:cg_image];
     CGImageRelease(cg_image);
-    return !image->isNull();
+    if (ci_image == nil) {
+      return false;
+    }
+
+    return render_ciimage_to_linear_qimage(ci_image, image);
   }
 }
 

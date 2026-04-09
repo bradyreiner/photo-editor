@@ -208,8 +208,8 @@ pub fn extract_metadata(path: &Path) -> std::io::Result<ExtractedMetadata> {
     metadata.shutter_speed = field_string(&exif, Tag::ExposureTime).unwrap_or_default();
     metadata.aperture = field_rational_f64(&exif, Tag::FNumber);
 
-    if metadata.capture_year == 0 {
-        return Ok(fallback_metadata(path));
+    if metadata.capture_year == 0 || metadata.capture_month == 0 || metadata.capture_day == 0 {
+        merge_missing_capture_date(&mut metadata, fallback_metadata(path));
     }
 
     Ok(metadata)
@@ -232,6 +232,20 @@ pub fn fallback_metadata(path: &Path) -> ExtractedMetadata {
     }
 
     metadata
+}
+
+fn merge_missing_capture_date(metadata: &mut ExtractedMetadata, fallback: ExtractedMetadata) {
+    if metadata.capture_year != 0 && metadata.capture_month != 0 && metadata.capture_day != 0 {
+        return;
+    }
+
+    if fallback.capture_year == 0 || fallback.capture_month == 0 || fallback.capture_day == 0 {
+        return;
+    }
+
+    metadata.capture_year = fallback.capture_year;
+    metadata.capture_month = fallback.capture_month;
+    metadata.capture_day = fallback.capture_day;
 }
 
 fn field_string(exif: &exif::Exif, tag: Tag) -> Option<String> {
@@ -372,5 +386,38 @@ mod tests {
         let summary = discover_assets(&request).expect("discovery should succeed");
         assert_eq!(summary.assets.len(), 1);
         assert_eq!(summary.assets[0].location.relative_path, "set-a/keep.NEF");
+    }
+
+    #[test]
+    fn fallback_capture_date_preserves_extracted_camera_settings() {
+        let mut metadata = ExtractedMetadata {
+            camera_make: "Canon".to_string(),
+            camera_model: "EOS R5".to_string(),
+            lens_model: "RF 28-70mm F2L USM".to_string(),
+            iso: Some(400),
+            shutter_speed: "1/250 s".to_string(),
+            aperture: Some(2.8),
+            ..ExtractedMetadata::default()
+        };
+
+        merge_missing_capture_date(
+            &mut metadata,
+            ExtractedMetadata {
+                capture_year: 2026,
+                capture_month: 4,
+                capture_day: 8,
+                ..ExtractedMetadata::default()
+            },
+        );
+
+        assert_eq!(metadata.capture_year, 2026);
+        assert_eq!(metadata.capture_month, 4);
+        assert_eq!(metadata.capture_day, 8);
+        assert_eq!(metadata.camera_make, "Canon");
+        assert_eq!(metadata.camera_model, "EOS R5");
+        assert_eq!(metadata.lens_model, "RF 28-70mm F2L USM");
+        assert_eq!(metadata.iso, Some(400));
+        assert_eq!(metadata.shutter_speed, "1/250 s");
+        assert_eq!(metadata.aperture, Some(2.8));
     }
 }

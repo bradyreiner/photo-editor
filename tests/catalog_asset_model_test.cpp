@@ -12,6 +12,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -29,6 +30,10 @@ photo_editor::desktop::CatalogAssetItem make_asset(const QString& asset_id, cons
   item.file_path = QStringLiteral("/tmp/%1").arg(file_name.isEmpty() ? asset_id + QStringLiteral(".jpg") : file_name);
   item.capture_date = QStringLiteral("Mar 28, 2026");
   item.capture_date_value = QDate(2026, 3, 28);
+  item.lens_model = QStringLiteral("RF 28-70mm F2L USM");
+  item.iso_label = QStringLiteral("ISO 400");
+  item.shutter_speed = QStringLiteral("1/250 s");
+  item.aperture_label = QStringLiteral("f/2.8");
   item.imported_at = QStringLiteral("Mar 28, 2026  1:00 PM");
   item.imported_at_value = QDateTime(QDate(2026, 3, 28), QTime(13, 0));
   item.media_type = QStringLiteral("photo");
@@ -91,6 +96,26 @@ bool wait_for_thumbnail(
   return false;
 }
 
+QString wait_for_thumbnail_change(
+    photo_editor::desktop::CatalogAssetModel* model,
+    int row,
+    const QString& previous_thumbnail,
+    int timeout_ms = 3000) {
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < timeout_ms) {
+    const auto thumbnail =
+        model->data(model->index(row, 0), photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole).toString();
+    if (!thumbnail.isEmpty() && thumbnail != previous_thumbnail) {
+      return thumbnail;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  }
+
+  return {};
+}
+
 bool wait_for_import_completion(
     photo_editor::desktop::CatalogAssetModel* model,
     int timeout_ms = 15000) {
@@ -129,6 +154,9 @@ int main(int argc, char** argv) {
     });
     model.selectIndex(0);
 
+    if (model.selectedAssetCount() != 0) {
+      return fail("opening a photo should not auto-select it for batch actions");
+    }
     if (model.selectedRating() != 0 || model.selectedPicked() || model.selectedRejected()) {
       return fail("new selections should start with default culling state");
     }
@@ -155,7 +183,31 @@ int main(int argc, char** argv) {
     if (model.selectedBurstSize() != 3 || model.selectedBurstPosition() != 1) {
       return fail("burst metadata should group sequential related assets");
     }
+    if (model.selectedLensModel() != QStringLiteral("RF 28-70mm F2L USM")) {
+      return fail("selected lens metadata should be exposed");
+    }
+    if (model.selectedIso() != QStringLiteral("ISO 400")) {
+      return fail("selected iso metadata should be exposed");
+    }
+    if (model.selectedShutterSpeed() != QStringLiteral("1/250 s")) {
+      return fail("selected shutter metadata should be exposed");
+    }
+    if (model.selectedAperture() != QStringLiteral("f/2.8")) {
+      return fail("selected aperture metadata should be exposed");
+    }
 
+    const auto selected_asset = model.assetAt(0);
+    if (selected_asset.value(QStringLiteral("iso")).toString() != QStringLiteral("ISO 400")) {
+      return fail("asset maps should include iso metadata");
+    }
+    if (selected_asset.value(QStringLiteral("shutterSpeed")).toString() != QStringLiteral("1/250 s")) {
+      return fail("asset maps should include shutter metadata");
+    }
+    if (selected_asset.value(QStringLiteral("aperture")).toString() != QStringLiteral("f/2.8")) {
+      return fail("asset maps should include aperture metadata");
+    }
+
+    model.toggleSelectionIndex(0);
     model.toggleSelectionIndex(1);
     if (model.selectedAssetCount() != 2 || !model.assetSelected(QStringLiteral("asset-1")) ||
         !model.assetSelected(QStringLiteral("asset-2"))) {
@@ -180,6 +232,12 @@ int main(int argc, char** argv) {
     }
     if (std::abs(asset_1_recipe.temperature) > 1e-6 || std::abs(asset_2_recipe.temperature) > 1e-6) {
       return fail("tone-only sync should leave color settings untouched");
+    }
+
+    model.toggleSelectionIndex(1);
+    model.toggleSelectionIndex(0);
+    if (model.selectedAssetCount() != 0) {
+      return fail("manual selection should clear back to zero items");
     }
 
     model.selectIndex(1);
@@ -327,6 +385,59 @@ int main(int argc, char** argv) {
     }
     if (!wait_for_thumbnail(&thumbnail_model, 0)) {
       return fail("background thumbnail generation should eventually populate the model role");
+    }
+  }
+
+  {
+    const auto image_path = runtime_root.filePath(QStringLiteral("thumbs/IMG_recipe.ppm"));
+    if (!write_ppm_fixture(image_path)) {
+      return fail("recipe thumbnail source image should be created");
+    }
+
+    auto thumbnail_asset = make_asset(QStringLiteral("asset-recipe-thumb"), QStringLiteral("IMG_recipe.ppm"));
+    thumbnail_asset.file_path = image_path;
+    thumbnail_asset.location_path = image_path;
+
+    photo_editor::desktop::CatalogAssetModel thumbnail_model;
+    thumbnail_model.replaceAssetsForTesting({thumbnail_asset});
+
+    if (!wait_for_thumbnail(&thumbnail_model, 0)) {
+      return fail("initial recipe thumbnail should be generated");
+    }
+
+    const auto initial_thumbnail =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole).toString();
+    const QImage initial_image(QUrl(initial_thumbnail).toLocalFile());
+    if (initial_image.isNull()) {
+      return fail("initial thumbnail image should be readable from disk");
+    }
+
+    photo_editor::desktop::EditRecipeState edited_state;
+    edited_state.exposure = 1.0;
+    const auto edited_recipe = photo_editor::desktop::serialize_edit_recipe_json(edited_state);
+    if (thumbnail_model.applyRecipeJsonToAssetIds(
+            {QStringLiteral("asset-recipe-thumb")},
+            edited_recipe,
+            {QStringLiteral("tone")}) != 1) {
+      return fail("recipe apply should update the thumbnail test asset");
+    }
+
+    const auto edited_thumbnail = wait_for_thumbnail_change(&thumbnail_model, 0, initial_thumbnail);
+    if (edited_thumbnail.isEmpty()) {
+      return fail("thumbnail should be regenerated after applying recipe edits");
+    }
+
+    const QImage edited_image(QUrl(edited_thumbnail).toLocalFile());
+    if (edited_image.isNull()) {
+      return fail("edited thumbnail image should be readable from disk");
+    }
+
+    const auto initial_value = qGray(initial_image.pixel(0, 0));
+    const auto edited_value = qGray(edited_image.pixel(0, 0));
+    if (edited_value <= initial_value) {
+      return fail("edited thumbnail should reflect brighter exposure");
     }
   }
 

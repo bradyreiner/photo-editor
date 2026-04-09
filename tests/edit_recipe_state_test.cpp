@@ -102,6 +102,12 @@ int main() {
   if (!default_document.value(QStringLiteral("guideSettings")).isObject()) {
     return fail("structured recipe output should include guide settings placeholder");
   }
+  if (default_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("colorSpace"))
+          .toString() != QStringLiteral("sRGB")) {
+    return fail("structured recipe output should include the default output color space");
+  }
   if (!default_document.value(QStringLiteral("maskStack")).toArray().isEmpty()) {
     return fail("default recipe should not serialize an empty linear mask into maskStack");
   }
@@ -163,6 +169,22 @@ int main() {
       !almost_equal(reparsed_crop_rect.crop_rect_height, crop_rect_state.crop_rect_height) ||
       reparsed_crop_rect.crop_preset != crop_rect_state.crop_preset) {
     return fail("structured recipe should round-trip explicit crop rectangle geometry");
+  }
+
+  EditRecipeState output_transform_state;
+  output_transform_state.output_color_space = QStringLiteral("Display P3");
+  const auto output_transform_document =
+      QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(output_transform_state).toUtf8()).object();
+  if (output_transform_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("colorSpace"))
+          .toString() != QStringLiteral("Display P3")) {
+    return fail("structured recipe should serialize the requested output color space");
+  }
+  const auto reparsed_output_transform =
+      photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(output_transform_document).toJson(QJsonDocument::Compact)));
+  if (reparsed_output_transform.output_color_space != QStringLiteral("Display P3")) {
+    return fail("structured recipe should round-trip the output color space");
   }
 
   EditRecipeState radial_mask_state;

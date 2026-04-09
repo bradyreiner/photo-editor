@@ -1848,11 +1848,12 @@ Rectangle {
                                 onClicked: carouselDocument.addSlide()
                             }
 
-                            ActionButton {
+                            ConfirmActionButton {
                                 Layout.fillWidth: true
                                 text: "Remove"
                                 enabled: carouselDocument.slideCount > 1
-                                onClicked: carouselDocument.removeCurrentSlide()
+                                helperText: "Remove the current board"
+                                onConfirmed: carouselDocument.removeCurrentSlide()
                             }
                         }
 
@@ -2200,11 +2201,14 @@ Rectangle {
                             wrapMode: Text.WordWrap
                         }
 
-                        ActionButton {
+                        ConfirmActionButton {
                             Layout.fillWidth: true
                             text: "Remove Selected"
                             enabled: selection.hasSelection
-                            onClicked: carouselDocument.removeSelectedItem()
+                            helperText: selection.hasMultipleSelection
+                                        ? "Remove the selected layers"
+                                        : "Remove the selected layer"
+                            onConfirmed: carouselDocument.removeSelectedItem()
                         }
 
                         RowLayout {

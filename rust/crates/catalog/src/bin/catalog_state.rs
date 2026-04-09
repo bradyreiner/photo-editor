@@ -32,6 +32,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .remove_asset_from_project(asset_id, project_name)
                 .await?;
         }
+        "delete-asset" => {
+            let asset_id = required_arg(&arguments, 2, "missing asset_id argument")?;
+            catalog.delete_asset(asset_id).await?;
+        }
         "set-review-state" => {
             let asset_id = required_arg(&arguments, 2, "missing asset_id argument")?;
             let rating = required_arg(&arguments, 3, "missing rating argument")?.parse::<i32>()?;
@@ -66,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             eprintln!(
-                "Usage: {} <create-project|add-asset-to-project|remove-asset-from-project|set-review-state|set-relink-path|set-edit-recipe> ...",
+                "Usage: {} <create-project|add-asset-to-project|remove-asset-from-project|delete-asset|set-review-state|set-relink-path|set-edit-recipe> ...",
                 arguments.first().map(String::as_str).unwrap_or("catalog_state")
             );
             std::process::exit(1);

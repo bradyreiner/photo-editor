@@ -5,6 +5,7 @@ qt_policy(SET QTP0004 NEW)
 
 set(photo_editor_desktop_sources
   src/app_shell_controller.cpp
+  src/macos_updater.h
   src/brush_live_preview_item.cpp
   src/brush_preview_compositor.cpp
   src/carousel_document_controller.cpp
@@ -112,6 +113,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/BrandPanel.qml
     qml/components/ColorChannelButton.qml
     qml/components/CommandPaletteDialog.qml
+    qml/components/ConfirmActionButton.qml
     qml/components/CropOverlay.qml
     qml/components/FilterChip.qml
     qml/components/GalleryPickerDialog.qml

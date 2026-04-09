@@ -23,6 +23,9 @@ struct CatalogAssetItem final {
   QDate capture_date_value;
   QString camera_label;
   QString lens_model;
+  QString iso_label;
+  QString shutter_speed;
+  QString aperture_label;
   QString location_path;
   QString file_path;
   QString thumbnail_source;
@@ -68,6 +71,7 @@ struct ProjectRecord final {
 struct ThumbnailTaskResult final {
   QString asset_id;
   QString file_path;
+  QString recipe_json;
   QString thumbnail_source;
 };
 
@@ -99,6 +103,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(QString selectedCaptureDate READ selectedCaptureDate NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedImportedAt READ selectedImportedAt NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedLensModel READ selectedLensModel NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedIso READ selectedIso NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedShutterSpeed READ selectedShutterSpeed NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedAperture READ selectedAperture NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedFilePath READ selectedFilePath NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedLocationPath READ selectedLocationPath NOTIFY selectedAssetChanged)
   Q_PROPERTY(QString selectedThumbnailSource READ selectedThumbnailSource NOTIFY selectedAssetChanged)
@@ -195,6 +202,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString selectedCaptureDate() const;
   [[nodiscard]] QString selectedImportedAt() const;
   [[nodiscard]] QString selectedLensModel() const;
+  [[nodiscard]] QString selectedIso() const;
+  [[nodiscard]] QString selectedShutterSpeed() const;
+  [[nodiscard]] QString selectedAperture() const;
   [[nodiscard]] QString selectedFilePath() const;
   [[nodiscard]] QString selectedLocationPath() const;
   [[nodiscard]] QString selectedThumbnailSource() const;
@@ -241,7 +251,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE void createProject(const QString& name);
   Q_INVOKABLE void openProject(const QString& project_name);
   Q_INVOKABLE void addAssetToProject(const QString& asset_id, const QString& project_name);
+  Q_INVOKABLE void addSelectedAssetsToProject(const QString& project_name);
   Q_INVOKABLE void removeAssetFromProject(const QString& asset_id, const QString& project_name);
+  Q_INVOKABLE void deleteSelectedAssets();
   Q_INVOKABLE bool assetInProject(const QString& asset_id, const QString& project_name) const;
   Q_INVOKABLE int assetCountForProject(const QString& project_name) const;
   Q_INVOKABLE QVariantList timelinePickerAssets(const QString& project_name = QString()) const;
@@ -252,6 +264,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE void toggleSelectedReject();
   Q_INVOKABLE void clearSelectedCullState();
   Q_INVOKABLE void toggleSelectionIndex(int index);
+  Q_INVOKABLE void clearSelection();
   Q_INVOKABLE void clearSecondarySelection();
   Q_INVOKABLE int applyRecipeJsonToAssetIds(
       const QStringList& asset_ids,
@@ -324,7 +337,6 @@ class CatalogAssetModel final : public QAbstractListModel {
   void rebuildCaptureYears();
   void rebuildBurstMetadata();
   void rebuildIntelligenceMetadata();
-  void ensurePrimarySelectionTracked();
   void reconcileSelection(const QString& preferred_asset_id = {});
   void loadTimelineAssets();
   void loadProjects();

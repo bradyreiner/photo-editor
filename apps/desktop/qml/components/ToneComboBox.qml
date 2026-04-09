@@ -13,6 +13,7 @@ ComboBox {
     font.family: theme.fontUi
     font.pixelSize: 11
     hoverEnabled: true
+    activeFocusOnTab: true
 
     delegate: ItemDelegate {
         id: optionDelegate
@@ -33,13 +34,13 @@ ComboBox {
         }
 
         background: Rectangle {
-            color: optionDelegate.highlighted ? theme.ink750 : theme.ink900
+            color: optionDelegate.highlighted ? theme.alpha(theme.ink750, 0.96) : theme.alpha(theme.ink900, 0.94)
         }
     }
 
     indicator: AppIcon {
         name: "chevron-right"
-        color: theme.textFaint
+        color: root.enabled ? theme.textFaint : theme.alpha(theme.textMuted, 0.62)
         rotation: 90
         width: 10
         height: 10
@@ -50,7 +51,7 @@ ComboBox {
 
     contentItem: Text {
         text: root.displayText
-        color: theme.textStrong
+        color: root.enabled ? theme.textStrong : theme.alpha(theme.textMuted, 0.68)
         leftPadding: theme.space12
         rightPadding: theme.space24 + theme.space4
         verticalAlignment: Text.AlignVCenter
@@ -60,10 +61,20 @@ ComboBox {
     }
 
     background: Rectangle {
-        radius: theme.radiusPanel
-        color: theme.ink900
-        border.width: 1
-        border.color: root.hovered ? theme.alpha(root.accent, 0.22) : theme.alpha(theme.lineSoft, 0.92)
+        radius: theme.radiusControl
+        color: root.enabled ? theme.alpha(theme.ink900, 0.88) : theme.alpha(theme.ink900, 0.58)
+        border.width: root.visualFocus ? 2 : 1
+        border.color: root.visualFocus
+                      ? theme.alpha(theme.focusRing, 0.9)
+                      : (root.hovered ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.lineSoft, 0.16))
+
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 1
+            radius: Math.max(1, parent.radius - 1)
+            visible: root.visualFocus
+            color: theme.alpha(theme.focusFill, 0.2)
+        }
 
         Behavior on border.color {
             ColorAnimation { duration: theme.durationFast }
@@ -84,9 +95,9 @@ ComboBox {
 
         background: Rectangle {
             radius: theme.radiusPanel
-            color: theme.ink900
+            color: theme.alpha(theme.ink900, 0.96)
             border.width: 1
-            border.color: theme.lineSoft
+            border.color: theme.alpha(theme.lineSoft, 0.2)
         }
     }
 }

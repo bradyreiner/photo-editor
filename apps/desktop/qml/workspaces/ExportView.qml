@@ -239,10 +239,11 @@ Rectangle {
                                         onClicked: jobQueue.cancelJob(jobId)
                                     }
 
-                                    ActionButton {
+                                    ConfirmActionButton {
                                         text: "Remove"
                                         enabled: status !== "Running" && status !== "Canceling"
-                                        onClicked: jobQueue.removeJob(jobId)
+                                        helperText: "Remove this job from the queue"
+                                        onConfirmed: jobQueue.removeJob(jobId)
                                     }
                                 }
 

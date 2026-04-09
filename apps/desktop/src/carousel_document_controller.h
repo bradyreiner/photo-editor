@@ -278,6 +278,7 @@ class CarouselDocumentController final : public QObject {
   bool loadDocumentObject(const QJsonObject& object);
   [[nodiscard]] QImage renderSlideBaseImage(int index, const QSize& size, bool preview) const;
   [[nodiscard]] QImage renderSlideImage(int index, const QSize& size, bool preview) const;
+  [[nodiscard]] QString outputColorSpaceForSlide(int index) const;
   [[nodiscard]] QImage renderVideoPlaceholder(const MediaItem& media, const QSize& size) const;
   [[nodiscard]] bool decodeEditedImage(
       const MediaItem& media,

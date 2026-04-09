@@ -7,30 +7,76 @@ Column {
     id: root
 
     required property var editRoot
+    Theme { id: theme }
+
+    readonly property var activeMaskData: editorPreview.hasActiveMask &&
+                                          editorPreview.activeMaskIndex >= 0 &&
+                                          editorPreview.activeMaskIndex < editorPreview.maskStack.length
+                                          ? editorPreview.maskStack[editorPreview.activeMaskIndex]
+                                          : null
+    readonly property color activeMaskAccent: activeMaskData ? editRoot.maskAccent(activeMaskData) : theme.accentCool400
+
+    function retouchAccent(mode) {
+        if (mode === "clone")
+            return "#7cb5ff"
+        if (mode === "heal")
+            return "#72cbb2"
+        return "#d98962"
+    }
+
     spacing: 10
 
     InspectorSection {
         width: parent.width
         title: "Tools"
-        subtitle: "Start with Subject or Object, paint the mask directly, and keep retouch separate."
+        subtitle: ""
 
         Rectangle {
-            width: parent.width
+            Layout.fillWidth: true
             radius: 10
             color: "#161a1e"
-            border.width: 1
-            border.color: editorPreview.hasActiveMask
-                          ? Qt.alpha(editRoot.maskAccent(
-                                         editorPreview.maskStack[editorPreview.activeMaskIndex]),
-                                     0.45)
-                          : "#2b3138"
+            border.width: 0
+            border.color: "transparent"
             implicitHeight: statusColumn.implicitHeight + 20
 
             Column {
                 id: statusColumn
                 anchors.fill: parent
                 anchors.margins: 10
-                spacing: 4
+                spacing: 6
+
+                RowLayout {
+                    width: parent.width
+                    spacing: 6
+
+                    Rectangle {
+                        radius: 5
+                        color: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+                               ? Qt.alpha(root.retouchAccent(editorPreview.activeMaskRetouchMode), 0.16)
+                               : Qt.alpha(root.activeMaskAccent, 0.16)
+                        border.width: 1
+                        border.color: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+                                      ? Qt.alpha(root.retouchAccent(editorPreview.activeMaskRetouchMode), 0.34)
+                                      : Qt.alpha(root.activeMaskAccent, 0.34)
+                        implicitWidth: modeChip.implicitWidth + 12
+                        implicitHeight: 18
+
+                        Label {
+                            id: modeChip
+                            anchors.centerIn: parent
+                            text: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch" ? "Retouch" : "Select"
+                            color: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+                                   ? root.retouchAccent(editorPreview.activeMaskRetouchMode)
+                                   : root.activeMaskAccent
+                            font.family: theme.fontDisplay
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0.2
+                        }
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
 
                 Label {
                     width: parent.width
@@ -40,7 +86,7 @@ Column {
                              : "Editing " + editorPreview.activeMaskName)
                           : "No active mask"
                     color: "#f2f4f6"
-                    font.family: "Avenir Next"
+                    font.family: theme.fontDisplay
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
@@ -49,63 +95,60 @@ Column {
                 Label {
                     width: parent.width
                     text: editRoot.maskFallbackMode === "polygon"
-                          ? "AI missed the target. Continue the polygon on the canvas and double-click to finish."
+                          ? "Continue the polygon on-canvas."
                           : editRoot.maskFallbackMode === "brush"
-                            ? "AI missed the target. Remove Brush is active so you can keep painting."
+                            ? "Remove Brush is active."
                               : editRoot.cloneSourcePickArmed
-                              ? "Click the source area for the Clone Stamp."
+                              ? "Click a clone source."
                               : editRoot.objectPickArmed && editRoot.objectPickMode === "remove"
-                                ? (editRoot.objectPickCreateNew
-                                   ? "Click or drag across a removable object to start a new retouch stroke."
-                                   : "Click or drag across removable objects to expand the current staged removal.")
+                                ? "Click or drag a target."
                                 : editRoot.objectPickArmed && editRoot.objectPickMode === "selection-subtract"
-                                  ? "Click an object to subtract it from the current selection."
+                                  ? "Click an object to subtract."
                                 : editRoot.objectPickArmed
-                                  ? (editRoot.objectPickCreateNew
-                                     ? "Click an object to start a new selection."
-                                     : "Click an object to add it to the current selection.")
+                                  ? "Click an object to select."
                                   : editRoot.polygonDrawArmed
-                                    ? "Click to place polygon points. Double-click to finish."
+                                    ? "Click points. Double-click to finish."
                                     : editRoot.lassoDrawArmed
-                                      ? "Drag directly on the canvas to draw a freehand selection."
-                                      : "Start with Subject or Object Select, then use Brush Add or Brush Erase to paint the mask directly."
+                                      ? "Drag on the canvas."
+                                      : "Choose a tool to begin."
                     wrapMode: Text.WordWrap
                     color: "#8f98a2"
-                    font.family: "Avenir Next"
-                    font.pixelSize: 11
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
                 }
             }
         }
 
         Label {
-            width: parent.width
-            text: "PREVIEW MODE"
-            color: "#6b7580"
-            font.family: "Menlo"
-            font.pixelSize: 8
+            Layout.fillWidth: true
+            text: "Preview"
+            color: "#d8d2ca"
+            font.family: theme.fontDisplay
+            font.pixelSize: 9
             font.weight: Font.DemiBold
-            font.letterSpacing: 0.8
+            font.letterSpacing: 0.2
         }
 
-        GridLayout {
+        Flow {
+            Layout.fillWidth: true
             width: parent.width
-            columns: 2
-            columnSpacing: 8
-            rowSpacing: 8
+            spacing: 6
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Overlay"
                 compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "overlay"
                 enabled: editorPreview.hasAsset
                 onClicked: editorPreview.maskPreviewMode = "overlay"
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Gray"
                 compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "grayscale"
                 enabled: editorPreview.hasAsset
                 tooltipText: "Show a neutral grayscale matte."
@@ -113,9 +156,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Black / White"
                 compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "black-on-white"
                 enabled: editorPreview.hasAsset
                 tooltipText: "Show the mask as black on a white field."
@@ -123,9 +167,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "White / Black"
                 compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "white-on-black"
                 enabled: editorPreview.hasAsset
                 tooltipText: "Show the mask as white on a dark field."
@@ -134,25 +179,26 @@ Column {
         }
 
         Label {
-            width: parent.width
-            text: "SELECTION SOURCES"
-            color: "#6b7580"
-            font.family: "Menlo"
-            font.pixelSize: 8
+            Layout.fillWidth: true
+            text: "Select"
+            color: "#d8d2ca"
+            font.family: theme.fontDisplay
+            font.pixelSize: 9
             font.weight: Font.DemiBold
-            font.letterSpacing: 0.8
+            font.letterSpacing: 0.2
         }
 
-        GridLayout {
+        Flow {
+            Layout.fillWidth: true
             width: parent.width
-            columns: 2
-            columnSpacing: 8
-            rowSpacing: 8
+            spacing: 6
 
             ActionButton {
-                Layout.fillWidth: true
-                text: editorPreview.hasActiveMask ? "Add Object" : "Object Select"
+                text: editorPreview.hasActiveMask ? "Object" : "Object"
+                iconName: "smart-select"
                 compact: true
+                accent: "#5e95d3"
+                tone: active ? "primary" : "secondary"
                 active: editRoot.objectPickArmed &&
                         editRoot.objectPickMode === "selection" &&
                         !editRoot.objectPickCreateNew
@@ -164,9 +210,11 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "New Selection"
+                text: "New"
+                iconName: "smart-select"
                 compact: true
+                accent: "#5e95d3"
+                tone: active ? "primary" : "secondary"
                 visible: editorPreview.hasActiveMask
                 active: editRoot.objectPickArmed &&
                         editRoot.objectPickMode === "selection" &&
@@ -179,9 +227,11 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "Subtract Object"
+                text: "Subtract"
+                iconName: "smart-select"
                 compact: true
+                accent: "#5e95d3"
+                tone: active ? "primary" : "secondary"
                 active: editRoot.objectPickArmed &&
                         editRoot.objectPickMode === "selection-subtract"
                 enabled: editorPreview.hasAsset &&
@@ -194,17 +244,21 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Lasso"
+                iconName: "lasso"
                 compact: true
+                accent: "#7ec97a"
+                tone: active ? "primary" : "secondary"
                 active: editRoot.lassoDrawArmed
                 onClicked: editRoot.selectTool(editRoot.lassoDrawArmed ? "" : "lasso")
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Polygon"
+                iconName: "polygon-tool"
                 compact: true
+                accent: "#7ec97a"
+                tone: active ? "primary" : "secondary"
                 active: editRoot.polygonDrawArmed
                 onClicked: {
                     if (!editRoot.polygonDrawArmed && editorPreview.activeMaskKind !== "polygon")
@@ -214,9 +268,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "AI Subject"
+                text: "Subject"
+                iconName: "smart-select"
                 compact: true
+                accent: "#5fc9b5"
                 enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
                 onClicked: {
                     editRoot.clearTransientTools()
@@ -225,9 +280,9 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Linear"
                 compact: true
+                accent: "#8ab8d8"
                 onClicked: {
                     editRoot.clearTransientTools()
                     editorPreview.addMask("linear")
@@ -235,9 +290,9 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Radial"
                 compact: true
+                accent: "#8ab8d8"
                 onClicked: {
                     editRoot.clearTransientTools()
                     editorPreview.addMask("radial")
@@ -245,9 +300,9 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "Luma Range"
+                text: "Luma"
                 compact: true
+                accent: "#d8d27a"
                 onClicked: {
                     editRoot.clearTransientTools()
                     editorPreview.addMask("luminance")
@@ -255,9 +310,9 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "Color Range"
+                text: "Color"
                 compact: true
+                accent: "#c77dd8"
                 onClicked: {
                     editRoot.clearTransientTools()
                     editorPreview.addMask("color")
@@ -266,24 +321,26 @@ Column {
         }
 
         Label {
-            width: parent.width
-            text: "PAINT THE SELECTION"
-            color: "#6b7580"
-            font.family: "Menlo"
-            font.pixelSize: 8
+            Layout.fillWidth: true
+            text: "Brush"
+            color: "#d8d2ca"
+            font.family: theme.fontDisplay
+            font.pixelSize: 9
             font.weight: Font.DemiBold
-            font.letterSpacing: 0.8
-            topPadding: 4
+            font.letterSpacing: 0.2
         }
 
         RowLayout {
-            width: parent.width
+            Layout.fillWidth: true
             spacing: 8
 
             ActionButton {
                 Layout.fillWidth: true
-                text: "Brush Add"
+                text: "Add"
+                iconName: "brush-tool"
                 compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.activeMaskKind === "brush" &&
                         editorPreview.activeMaskOperation === "add" &&
                         editorPreview.activeMaskRetouchMode.length === 0
@@ -296,8 +353,11 @@ Column {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: "Brush Erase"
+                text: "Erase"
+                iconName: "brush-subtract"
                 compact: true
+                accent: "#d36a5e"
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.activeMaskKind === "brush" &&
                         editorPreview.activeMaskOperation === "subtract" &&
                         editorPreview.activeMaskRetouchMode.length === 0
@@ -310,26 +370,26 @@ Column {
         }
 
         Label {
-            width: parent.width
-            text: "RETOUCH"
-            color: "#6b7580"
-            font.family: "Menlo"
-            font.pixelSize: 8
+            Layout.fillWidth: true
+            text: "Retouch"
+            color: "#d8d2ca"
+            font.family: theme.fontDisplay
+            font.pixelSize: 9
             font.weight: Font.DemiBold
-            font.letterSpacing: 0.8
-            topPadding: 4
+            font.letterSpacing: 0.2
         }
 
-        GridLayout {
+        Flow {
+            Layout.fillWidth: true
             width: parent.width
-            columns: 2
-            columnSpacing: 8
-            rowSpacing: 8
+            spacing: 6
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "Remove Object"
+                text: "Remove"
+                iconName: "erase-tool"
                 compact: true
+                accent: root.retouchAccent("remove")
+                tone: active ? "primary" : "secondary"
                 active: editRoot.objectPickArmed &&
                         editRoot.objectPickMode === "remove" &&
                         !editRoot.objectPickCreateNew
@@ -341,9 +401,11 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
-                text: "New Remove"
+                text: "New"
+                iconName: "erase-tool"
                 compact: true
+                accent: root.retouchAccent("remove")
+                tone: active ? "primary" : "secondary"
                 active: editRoot.objectPickArmed &&
                         editRoot.objectPickMode === "remove" &&
                         editRoot.objectPickCreateNew
@@ -355,9 +417,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Remove Brush"
                 compact: true
+                accent: root.retouchAccent("remove")
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.activeMaskKind === "brush" &&
                         editorPreview.activeMaskRetouchMode === "remove"
                 onClicked: {
@@ -367,9 +430,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Heal"
                 compact: true
+                accent: root.retouchAccent("heal")
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.activeMaskKind === "brush" &&
                         editorPreview.activeMaskRetouchMode === "heal"
                 onClicked: {
@@ -379,9 +443,10 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
                 text: "Clone"
                 compact: true
+                accent: root.retouchAccent("clone")
+                tone: active ? "primary" : "secondary"
                 active: editorPreview.activeMaskKind === "brush" &&
                         editorPreview.activeMaskRetouchMode === "clone"
                 onClicked: {
@@ -398,10 +463,10 @@ Column {
         }
 
         RowLayout {
+            Layout.fillWidth: true
             visible: editorPreview.hasActiveMask &&
                      editorPreview.activeMaskToolRole === "retouch" &&
                      !editorPreview.activeMaskCommitted
-            width: parent.width
             spacing: 8
 
             ActionButton {
@@ -410,6 +475,8 @@ Column {
                       ? "Remove"
                       : (editorPreview.activeMaskRetouchMode === "heal" ? "Apply Heal" : "Apply")
                 compact: true
+                accent: root.retouchAccent(editorPreview.activeMaskRetouchMode)
+                tone: "primary"
                 onClicked: editorPreview.applyActiveRetouch()
             }
 
@@ -426,7 +493,7 @@ Column {
 
         Label {
             visible: !editorPreview.subjectMaskAvailable
-            width: parent.width
+            Layout.fillWidth: true
             text: "AI Subject, Object Select, and Remove Object require macOS 14 or later."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
@@ -672,11 +739,12 @@ Column {
                 onClicked: editorPreview.duplicateActiveMask()
             }
 
-            ActionButton {
+            ConfirmActionButton {
                 Layout.fillWidth: true
                 text: "Delete"
                 compact: true
-                onClicked: editorPreview.removeActiveMask()
+                helperText: "Delete the active mask"
+                onConfirmed: editorPreview.removeActiveMask()
             }
         }
     }

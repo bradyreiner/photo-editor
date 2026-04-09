@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
@@ -16,19 +17,19 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 4
+        spacing: theme.space8
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: theme.space8
 
             Item { Layout.fillWidth: true }
 
             Rectangle {
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.58)
+                radius: theme.radiusPanel
+                color: theme.alpha(theme.ink950, 0.5)
                 border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
+                border.color: theme.alpha(theme.lineSoft, 0.18)
                 implicitHeight: 30
                 implicitWidth: modeRow.implicitWidth + 6
 
@@ -39,13 +40,21 @@ Rectangle {
                     spacing: 3
 
                     ActionButton {
-                        text: "Catalog"
+                        text: "Gallery"
+                        iconName: "grid"
+                        showText: true
+                        compact: true
+                        tooltipText: "Gallery"
                         active: root.mode === "catalog"
                         onClicked: root.modeSelected("catalog")
                     }
 
                     ActionButton {
                         text: "Import"
+                        iconName: "source"
+                        showText: true
+                        compact: true
+                        tooltipText: "Import"
                         active: root.mode === "import"
                         onClicked: root.modeSelected("import")
                     }

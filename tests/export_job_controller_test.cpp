@@ -13,6 +13,7 @@
 #include "export_job_controller.h"
 #include "job_runner.h"
 #include "job_store.h"
+#include "photo_render_utils.h"
 
 namespace {
 

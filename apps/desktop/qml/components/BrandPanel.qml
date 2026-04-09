@@ -17,12 +17,21 @@ Rectangle {
     radius: theme.radiusPanel
     color: theme.alpha(theme.ink850, 0.94)
     border.width: 1
-    border.color: theme.alpha(theme.lineSoft, 0.34)
+    border.color: theme.alpha(theme.lineSoft, 0.14)
 
     gradient: Gradient {
-        GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.04) }
+        GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.025) }
         GradientStop { position: 0.12; color: theme.alpha(theme.ink850, 0.98) }
         GradientStop { position: 1.0; color: theme.ink900 }
+    }
+
+    Rectangle {
+        anchors.fill: parent
+        anchors.margins: 1
+        radius: Math.max(1, parent.radius - 1)
+        color: "transparent"
+        border.width: 1
+        border.color: theme.alpha(theme.ink950, 0.08)
     }
 
     ColumnLayout {

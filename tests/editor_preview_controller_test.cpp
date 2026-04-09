@@ -1,13 +1,20 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 
 #include <QCoreApplication>
+#include <QColorSpace>
 #include <QImage>
 #include <QTemporaryDir>
 #include <QThread>
 
 #include "editor_preview_controller.h"
+#include "editor_preview_image_sink.h"
+#include "photo_render_utils.h"
+#include "photo_editor/pipeline/color_adjustments.h"
+#include "raw_image_decoder.h"
+#include "working_image.h"
 
 namespace {
 
@@ -18,6 +25,24 @@ int fail(const char* message) {
 
 bool almost_equal(double left, double right, double tolerance = 1e-6) {
   return std::abs(left - right) <= tolerance;
+}
+
+int max_channel_delta(const QImage& left, const QImage& right) {
+  if (left.size() != right.size()) {
+    return 255;
+  }
+
+  auto max_delta = 0;
+  for (int y = 0; y < left.height(); ++y) {
+    for (int x = 0; x < left.width(); ++x) {
+      const auto lhs = left.pixelColor(x, y);
+      const auto rhs = right.pixelColor(x, y);
+      max_delta = std::max(max_delta, std::abs(lhs.red() - rhs.red()));
+      max_delta = std::max(max_delta, std::abs(lhs.green() - rhs.green()));
+      max_delta = std::max(max_delta, std::abs(lhs.blue() - rhs.blue()));
+    }
+  }
+  return max_delta;
 }
 
 unsigned char mask_value_at(
@@ -54,6 +79,17 @@ struct EditorPreviewControllerTestAccess {
   }
 };
 
+class TestImageSink final : public EditorPreviewImageSink {
+ public:
+  void setImage(const QString& key, const QImage& image) override { images_.insert(key, image); }
+  void clearImage(const QString& key) override { images_.remove(key); }
+
+  [[nodiscard]] QImage image(const QString& key) const { return images_.value(key); }
+
+ private:
+  QHash<QString, QImage> images_;
+};
+
 }  // namespace photo_editor::desktop
 
 int main(int argc, char** argv) {
@@ -69,6 +105,20 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
 
   photo_editor::desktop::EditorPreviewController controller;
+  const auto wait_for_preview_idle = [](photo_editor::desktop::EditorPreviewController& preview_controller,
+                                        int timeout_ms = 2000) {
+    auto elapsed_ms = 0;
+    while (elapsed_ms < timeout_ms) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      if (!preview_controller.processing()) {
+        return true;
+      }
+      QThread::msleep(25);
+      elapsed_ms += 25;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    return !preview_controller.processing();
+  };
   controller.loadAsset(
       QStringLiteral("asset-a"),
       QString(),
@@ -416,6 +466,219 @@ int main(int argc, char** argv) {
   if (reference_cache_after_crop == reference_cache_after_exposure ||
       edited_cache_after_crop == edited_cache_before_crop) {
     return fail("preview cache paths should still change when crop-dependent content changes");
+  }
+
+  const auto wb_histogram_path = runtime_root.filePath(QStringLiteral("wb-histogram-source.png"));
+  QImage wb_histogram_source(48, 48, QImage::Format_ARGB32);
+  wb_histogram_source.fill(QColor(122, 122, 122));
+  for (int y = 0; y < wb_histogram_source.height(); ++y) {
+    for (int x = 0; x < 8; ++x) {
+      wb_histogram_source.setPixelColor(x, y, Qt::black);
+    }
+    for (int x = wb_histogram_source.width() - 8; x < wb_histogram_source.width(); ++x) {
+      wb_histogram_source.setPixelColor(x, y, Qt::white);
+    }
+  }
+  for (int y = 20; y <= 28; ++y) {
+    for (int x = 20; x <= 28; ++x) {
+      wb_histogram_source.setPixelColor(x, y, QColor(230, 210, 180));
+    }
+  }
+  wb_histogram_source.setPixelColor(24, 24, QColor(90, 120, 255));
+  if (!wb_histogram_source.save(wb_histogram_path)) {
+    return fail("wb histogram source image should be writable");
+  }
+
+  controller.loadAsset(
+      QStringLiteral("asset-wb-histogram"),
+      wb_histogram_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(controller)) {
+    return fail("wb histogram preview should finish rendering");
+  }
+  if (controller.histogramSampleCount() <= 0 ||
+      controller.histogramShadowClipCount() <= 0 ||
+      controller.histogramHighlightClipCount() <= 0) {
+    return fail("preview histogram should report sample count and clipping diagnostics");
+  }
+
+  controller.setWhiteBalanceSampling(true);
+  controller.sampleWhiteBalanceAt(0.5, 0.5);
+  if (controller.whiteBalanceSampling()) {
+    return fail("white balance sampling should exit sampling mode after applying a patch sample");
+  }
+  if (!(controller.temperature() < -1.0)) {
+    return fail("white balance sampling should average a local patch instead of following a noisy center pixel outlier");
+  }
+
+  photo_editor::desktop::TestImageSink image_sink;
+  controller.setImageProvider(&image_sink);
+
+  const auto color_space_path = runtime_root.filePath(QStringLiteral("preview-color-space.png"));
+  QImage color_space_source(24, 16, QImage::Format_ARGB32);
+  for (int y = 0; y < color_space_source.height(); ++y) {
+    for (int x = 0; x < color_space_source.width(); ++x) {
+      color_space_source.setPixelColor(
+          x,
+          y,
+          QColor(
+              32 + ((x * 200) / std::max(1, color_space_source.width() - 1)),
+              48 + ((y * 160) / std::max(1, color_space_source.height() - 1)),
+              96));
+    }
+  }
+  color_space_source.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+  if (!color_space_source.save(color_space_path)) {
+    return fail("preview color space source image should be writable");
+  }
+
+  controller.loadAsset(
+      QStringLiteral("asset-color-space"),
+      color_space_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(controller)) {
+    return fail("preview color space render should finish rendering");
+  }
+
+  const auto preview_image = image_sink.image(QStringLiteral("edited"));
+  const auto expected_srgb = QColorSpace(QColorSpace::SRgb);
+  if (preview_image.isNull()) {
+    return fail("image sink should receive the rendered in-memory preview");
+  }
+  if (!preview_image.colorSpace().isValid() || preview_image.colorSpace() != expected_srgb) {
+    return fail("rendered preview should normalize decoded images into the sRGB working space");
+  }
+
+  controller.setOutputColorSpace(QStringLiteral("Display P3"));
+  if (!wait_for_preview_idle(controller)) {
+    return fail("display-p3 preview render should finish rendering");
+  }
+  const auto display_p3_preview_image = image_sink.image(QStringLiteral("edited"));
+  const auto expected_display_p3 = QColorSpace(QColorSpace::DisplayP3);
+  if (controller.outputColorSpace() != QStringLiteral("Display P3")) {
+    return fail("controller should expose the selected output color space");
+  }
+  if (display_p3_preview_image.isNull() ||
+      !display_p3_preview_image.colorSpace().isValid() ||
+      display_p3_preview_image.colorSpace() != expected_display_p3) {
+    return fail("rendered preview should apply the selected output color space transform");
+  }
+
+  controller.setOutputColorSpace(QStringLiteral("sRGB"));
+  const auto hdr_ramp_path = runtime_root.filePath(QStringLiteral("preview-hdr-ramp.tiff"));
+  QImage hdr_ramp_source(512, 24, QImage::Format_RGBA64);
+  hdr_ramp_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  for (int y = 0; y < hdr_ramp_source.height(); ++y) {
+    for (int x = 0; x < hdr_ramp_source.width(); ++x) {
+      const auto t = static_cast<double>(x) / static_cast<double>(std::max(1, hdr_ramp_source.width() - 1));
+      const auto value = 0.84 + t * 0.10;
+      hdr_ramp_source.setPixelColor(
+          x,
+          y,
+          QColor::fromRgbF(
+              static_cast<float>(value),
+              static_cast<float>(value),
+              static_cast<float>(value),
+              1.0F));
+    }
+  }
+  if (!hdr_ramp_source.save(hdr_ramp_path)) {
+    return fail("16-bit preview ramp source should be writable");
+  }
+
+  controller.loadAsset(
+      QStringLiteral("asset-hdr-preview-ramp"),
+      hdr_ramp_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  controller.setExposure(0.9);
+  controller.setContrast(65.0);
+  if (!wait_for_preview_idle(controller)) {
+    return fail("16-bit preview ramp render should finish rendering");
+  }
+  const auto hdr_preview_image = image_sink.image(QStringLiteral("edited"));
+  if (hdr_preview_image.isNull()) {
+    return fail("16-bit preview ramp should produce an in-memory preview image");
+  }
+
+  QImage hdr_linear_decode;
+  if (!photo_editor::desktop::decode_native_linear_image(hdr_ramp_path, &hdr_linear_decode, 0)) {
+    return fail("16-bit preview ramp should decode through the native linear path");
+  }
+  auto expected_working = photo_editor::desktop::working_image_from_qimage(hdr_linear_decode);
+  if (expected_working.isNull()) {
+    return fail("native linear preview ramp decode should produce a working image");
+  }
+  photo_editor::pipeline::ColorAdjustmentState expected_state;
+  expected_state.exposure = 0.9;
+  expected_state.contrast = 65.0;
+  photo_editor::pipeline::apply_color_adjustments(
+      &expected_working.pixels,
+      expected_working.width,
+      expected_working.height,
+      expected_state);
+  const auto expected_preview_image = photo_editor::desktop::qimage_from_working_image(
+      expected_working,
+      QColorSpace(QColorSpace::SRgb));
+  if (expected_preview_image.isNull()) {
+    return fail("preview reference image should render from the linear working buffer");
+  }
+  if (max_channel_delta(hdr_preview_image, expected_preview_image) > 6) {
+    return fail("preview rendering should match the linear reference path for 16-bit sources under strong edits");
+  }
+
+  QImage hdr_chroma_source(4, 1, QImage::Format_RGBA16FPx4);
+  if (hdr_chroma_source.isNull()) {
+    return fail("half-float chroma source should allocate");
+  }
+  hdr_chroma_source.setColorSpace(photo_editor::desktop::working_color_space());
+  auto* hdr_chroma_scanline = reinterpret_cast<QRgbaFloat16*>(hdr_chroma_source.scanLine(0));
+  hdr_chroma_scanline[0] = QRgbaFloat16{qfloat16(0.95F), qfloat16(0.52F), qfloat16(0.24F), qfloat16(1.0F)};
+  hdr_chroma_scanline[1] = QRgbaFloat16{qfloat16(1.05F), qfloat16(0.52F), qfloat16(0.24F), qfloat16(1.0F)};
+  hdr_chroma_scanline[2] = QRgbaFloat16{qfloat16(1.20F), qfloat16(0.52F), qfloat16(0.24F), qfloat16(1.0F)};
+  hdr_chroma_scanline[3] = QRgbaFloat16{qfloat16(1.35F), qfloat16(0.52F), qfloat16(0.24F), qfloat16(1.0F)};
+
+  photo_editor::desktop::RenderEditState hdr_chroma_state;
+  hdr_chroma_state.exposure = 1.0;
+  hdr_chroma_state.contrast = 10.0;
+
+  auto hdr_chroma_preview = hdr_chroma_source;
+  photo_editor::desktop::apply_color_adjustments(&hdr_chroma_preview, hdr_chroma_state);
+  if (hdr_chroma_preview.isNull()) {
+    return fail("desktop render helper should render over-range chroma previews");
+  }
+
+  auto hdr_chroma_expected = photo_editor::desktop::working_image_from_qimage(hdr_chroma_source);
+  if (hdr_chroma_expected.isNull()) {
+    return fail("half-float chroma source should convert to a working image");
+  }
+  photo_editor::pipeline::ColorAdjustmentState hdr_chroma_pipeline_state;
+  hdr_chroma_pipeline_state.exposure = 1.0;
+  hdr_chroma_pipeline_state.contrast = 10.0;
+  photo_editor::pipeline::apply_color_adjustments(
+      &hdr_chroma_expected.pixels,
+      hdr_chroma_expected.width,
+      hdr_chroma_expected.height,
+      hdr_chroma_pipeline_state);
+  const auto hdr_chroma_expected_preview = photo_editor::desktop::qimage_from_working_image(
+      hdr_chroma_expected,
+      QColorSpace(QColorSpace::SRgb));
+  if (hdr_chroma_expected_preview.isNull()) {
+    return fail("desktop render helper reference image should be valid");
+  }
+  if (max_channel_delta(hdr_chroma_preview, hdr_chroma_expected_preview) > 3) {
+    return fail("desktop render helper should match the direct path for over-range chroma highlights");
   }
 
   const auto smart_select_path = runtime_root.filePath(QStringLiteral("smart-select-source.png"));

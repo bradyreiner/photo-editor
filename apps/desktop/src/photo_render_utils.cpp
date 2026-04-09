@@ -3,11 +3,13 @@
 #include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "raw_image_decoder.h"
+#include "working_image.h"
 
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
 #include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
 #endif
 
+#include <QColorSpace>
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
@@ -31,6 +33,52 @@ struct DecodedImageCache final {
 };
 
 constexpr qint64 kMaxCacheMemoryBytes = 512 * 1024 * 1024;
+
+QImage normalize_preview_color_space(QImage image);
+QColorSpace preview_target_color_space() {
+  return preview_color_space();
+}
+
+QColorSpace output_color_space_for_name(const QString& name) {
+  const auto normalized = normalized_output_color_space_name(name);
+  if (normalized == QStringLiteral("Display P3")) {
+    return QColorSpace(QColorSpace::DisplayP3);
+  }
+  return preview_target_color_space();
+}
+
+bool has_extended_range_pixels(const std::vector<photo_editor::pipeline::ColorPixel>& pixels) {
+  constexpr auto kTolerance = 1.0e-6F;
+  return std::any_of(pixels.cbegin(), pixels.cend(), [](const auto& pixel) {
+    return pixel.red > 1.0F + kTolerance || pixel.green > 1.0F + kTolerance ||
+           pixel.blue > 1.0F + kTolerance || pixel.red < -kTolerance ||
+           pixel.green < -kTolerance || pixel.blue < -kTolerance;
+  });
+}
+
+void apply_output_color_space_transform(QImage* image, const QString& output_color_space_name) {
+  if (image == nullptr || image->isNull()) {
+    return;
+  }
+
+  const auto target_color_space = output_color_space_for_name(output_color_space_name);
+  if (!target_color_space.isValid()) {
+    return;
+  }
+
+  *image = finalize_output_image(std::move(*image), target_color_space);
+}
+
+QImage normalize_preview_color_space(QImage image) {
+  if (image.isNull()) {
+    return image;
+  }
+
+  if (!image.colorSpace().isValid()) {
+    image.setColorSpace(preview_target_color_space());
+  }
+  return image;
+}
 
 DecodedImageCache& decoded_image_cache() {
   static DecodedImageCache cache;
@@ -101,10 +149,6 @@ void insert_cached_image(DecodedImageCache* cache, const QString& key, const QIm
 
 double clamp_unit(double value) {
   return qBound(0.0, value, 1.0);
-}
-
-int clamp_channel(double value) {
-  return qBound(0, static_cast<int>(qRound(value)), 255);
 }
 
 double map_double_value(const QVariantMap& map, const QString& key, double fallback) {
@@ -466,11 +510,11 @@ bool decode_source_image(
 
   if (native_supported) {
     auto decoded = QImage{};
-    if (!decode_native_image(file_path, &decoded, max_edge)) {
+    if (!decode_native_linear_image(file_path, &decoded, max_edge)) {
       return false;
     }
 
-    *image = decoded;
+    *image = normalize_preview_color_space(std::move(decoded));
     if (should_cache && !image->isNull()) {
       auto& cache = decoded_image_cache();
       QMutexLocker locker(&cache.mutex);
@@ -481,11 +525,11 @@ bool decode_source_image(
 
   if (!qt_supported) {
     auto decoded = QImage{};
-    if (!decode_raw_image(file_path, &decoded, max_edge, raw_decode_settings_for_state(state))) {
+    if (!decode_raw_linear_image(file_path, &decoded, max_edge, raw_decode_settings_for_state(state))) {
       return false;
     }
 
-    *image = decoded;
+    *image = normalize_preview_color_space(std::move(decoded));
     if (should_cache && !image->isNull()) {
       auto& cache = decoded_image_cache();
       QMutexLocker locker(&cache.mutex);
@@ -495,6 +539,7 @@ bool decode_source_image(
   }
 
   QImageReader reader(file_path);
+  reader.setAutoTransform(true);
   if (!reader.canRead()) {
     return false;
   }
@@ -506,7 +551,7 @@ bool decode_source_image(
     }
   }
 
-  *image = reader.read().convertToFormat(QImage::Format_ARGB32);
+  *image = normalize_preview_color_space(reader.read());
   if (should_cache && !image->isNull()) {
     auto& cache = decoded_image_cache();
     QMutexLocker locker(&cache.mutex);
@@ -619,22 +664,14 @@ void apply_color_adjustments(QImage* image, const RenderEditState& state) {
     return;
   }
 
-  const auto width = image->width();
-  const auto height = image->height();
-  std::vector<photo_editor::pipeline::ColorPixel> pixels(static_cast<std::size_t>(width * height));
-
-  for (int y = 0; y < height; ++y) {
-    const auto* scanline = reinterpret_cast<const QRgb*>(image->constScanLine(y));
-    for (int x = 0; x < width; ++x) {
-      const QColor color = QColor::fromRgb(scanline[x]);
-      pixels[static_cast<std::size_t>(y * width + x)] = photo_editor::pipeline::ColorPixel{
-          .red = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.redF())),
-          .green = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.greenF())),
-          .blue = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.blueF())),
-          .alpha = color.alphaF(),
-      };
-    }
+  auto working = working_image_from_qimage(*image);
+  if (working.isNull()) {
+    return;
   }
+
+  auto& pixels = working.pixels;
+  const auto width = working.width;
+  const auto height = working.height;
 
   const auto pipeline_state = to_pipeline_state(state);
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
@@ -649,6 +686,7 @@ void apply_color_adjustments(QImage* image, const RenderEditState& state) {
       pipeline_state.local_mask_sets.empty() &&
       pipeline_state.retouch_masks.empty() &&
       pipeline_state.local_masks.empty() &&
+      !has_extended_range_pixels(pixels) &&
       !requires_cpu_pipeline) {
     const auto lut = photo_editor::pipeline::build_color_lut(pipeline_state);
     metal.apply_masks(&pixels, width, height, pipeline_state);
@@ -662,17 +700,8 @@ void apply_color_adjustments(QImage* image, const RenderEditState& state) {
       &pixels, width, height, pipeline_state, photo_editor::pipeline::RemovalQuality::Final);
 #endif
 
-  for (int y = 0; y < height; ++y) {
-    auto* scanline = reinterpret_cast<QRgb*>(image->scanLine(y));
-    for (int x = 0; x < width; ++x) {
-      const auto& pixel = pixels[static_cast<std::size_t>(y * width + x)];
-      scanline[x] = qRgba(
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.red) * 255.0),
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.green) * 255.0),
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.blue) * 255.0),
-          clamp_channel(photo_editor::pipeline::clamp_unit(pixel.alpha) * 255.0));
-    }
-  }
+  *image = qimage_from_working_image(working, preview_target_color_space());
+  apply_output_color_space_transform(image, state.output_color_space);
 }
 
 }  // namespace photo_editor::desktop

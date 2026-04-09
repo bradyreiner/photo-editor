@@ -273,10 +273,22 @@ Canvas {
             rect(ctx, w * 0.42, h * 0.18, w * 0.18, h * 0.58, false)
             rect(ctx, w * 0.64, h * 0.28, w * 0.16, h * 0.48, false)
             break
+        case "adjust":
+            line(ctx, w * 0.18, h * 0.28, w * 0.82, h * 0.28)
+            line(ctx, w * 0.18, midY, w * 0.82, midY)
+            line(ctx, w * 0.18, h * 0.72, w * 0.82, h * 0.72)
+            circle(ctx, w * 0.34, h * 0.28, w * 0.06, true)
+            circle(ctx, w * 0.62, midY, w * 0.06, true)
+            circle(ctx, w * 0.46, h * 0.72, w * 0.06, true)
+            break
         case "edit":
             line(ctx, w * 0.24, h * 0.76, w * 0.76, h * 0.24)
             line(ctx, w * 0.58, h * 0.2, w * 0.8, h * 0.42)
             line(ctx, w * 0.2, h * 0.58, w * 0.42, h * 0.8)
+            break
+        case "masks":
+            circle(ctx, w * 0.42, h * 0.44, w * 0.2, false)
+            circle(ctx, w * 0.6, h * 0.56, w * 0.2, false)
             break
         case "carousel":
             rect(ctx, w * 0.14, h * 0.28, w * 0.28, h * 0.44, false)
@@ -294,6 +306,48 @@ Canvas {
             line(ctx, midX, h * 0.16, midX, h * 0.62)
             poly(ctx, [[w * 0.34, h * 0.5], [midX, h * 0.76], [w * 0.66, h * 0.5]], true)
             rect(ctx, w * 0.22, h * 0.76, w * 0.56, h * 0.08, true)
+            break
+        case "grid":
+            rect(ctx, w * 0.18, h * 0.2, w * 0.22, h * 0.22, false)
+            rect(ctx, w * 0.6, h * 0.2, w * 0.22, h * 0.22, false)
+            rect(ctx, w * 0.18, h * 0.58, w * 0.22, h * 0.22, false)
+            rect(ctx, w * 0.6, h * 0.58, w * 0.22, h * 0.22, false)
+            break
+        case "survey":
+            rect(ctx, w * 0.18, h * 0.24, w * 0.28, h * 0.22, false)
+            rect(ctx, w * 0.54, h * 0.24, w * 0.28, h * 0.22, false)
+            rect(ctx, w * 0.18, h * 0.54, w * 0.64, h * 0.22, false)
+            break
+        case "refresh":
+            ctx.beginPath()
+            ctx.arc(midX, midY, w * 0.24, Math.PI * 0.2, Math.PI * 1.55)
+            ctx.stroke()
+            line(ctx, w * 0.34, h * 0.2, w * 0.48, h * 0.2)
+            line(ctx, w * 0.48, h * 0.2, w * 0.48, h * 0.34)
+            break
+        case "crop":
+            line(ctx, w * 0.22, h * 0.18, w * 0.22, h * 0.64)
+            line(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.22)
+            line(ctx, w * 0.78, h * 0.36, w * 0.78, h * 0.82)
+            line(ctx, w * 0.36, h * 0.78, w * 0.82, h * 0.78)
+            break
+        case "compare":
+            rect(ctx, w * 0.16, h * 0.2, w * 0.3, h * 0.6, false)
+            rect(ctx, w * 0.54, h * 0.2, w * 0.3, h * 0.6, false)
+            break
+        case "split-view":
+            rect(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.56, false)
+            line(ctx, midX, h * 0.24, midX, h * 0.76)
+            break
+        case "wipe":
+            rect(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.56, false)
+            line(ctx, w * 0.34, h * 0.24, w * 0.66, h * 0.76)
+            break
+        case "eyedropper":
+            line(ctx, w * 0.3, h * 0.7, w * 0.68, h * 0.32)
+            line(ctx, w * 0.42, h * 0.82, w * 0.8, h * 0.44)
+            circle(ctx, w * 0.28, h * 0.74, w * 0.06, false)
+            rect(ctx, w * 0.68, h * 0.2, w * 0.12, h * 0.12, false)
             break
         default:
             line(ctx, w * 0.2, midY, w * 0.8, midY)

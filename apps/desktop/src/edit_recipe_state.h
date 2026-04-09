@@ -82,6 +82,7 @@ struct EditRecipeState final {
   double crop_rect_height = 0.0;
   double crop_zoom = 1.0;
   QString crop_preset = QStringLiteral("Original");
+  QString output_color_space = QStringLiteral("sRGB");
   bool linear_mask_enabled = false;
   double linear_mask_exposure = 0.0;
   double linear_mask_temperature = 0.0;
@@ -156,6 +157,7 @@ struct EditRecipeState final {
            feq(crop_rect_x, other.crop_rect_x) && feq(crop_rect_y, other.crop_rect_y) &&
            feq(crop_rect_width, other.crop_rect_width) && feq(crop_rect_height, other.crop_rect_height) &&
            feq(crop_zoom, other.crop_zoom) && crop_preset == other.crop_preset &&
+           output_color_space == other.output_color_space &&
            linear_mask_enabled == other.linear_mask_enabled &&
            feq(linear_mask_exposure, other.linear_mask_exposure) &&
            feq(linear_mask_temperature, other.linear_mask_temperature) &&
@@ -783,6 +785,16 @@ inline QStringList normalize_adjustment_groups(const QStringList& groups) {
   return normalized_groups;
 }
 
+inline QString normalized_output_color_space_name(const QString& value) {
+  const auto trimmed = value.trimmed();
+  if (trimmed.compare(QStringLiteral("Display P3"), Qt::CaseInsensitive) == 0 ||
+      trimmed.compare(QStringLiteral("display-p3"), Qt::CaseInsensitive) == 0 ||
+      trimmed.compare(QStringLiteral("p3"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("Display P3");
+  }
+  return QStringLiteral("sRGB");
+}
+
 inline EditRecipeState merge_edit_recipe_state_by_groups(
     const EditRecipeState& base,
     const EditRecipeState& source,
@@ -823,6 +835,7 @@ inline EditRecipeState merge_edit_recipe_state_by_groups(
   if (normalized_groups.contains(QStringLiteral("color"))) {
     merged.temperature = source.temperature;
     merged.tint = source.tint;
+    merged.output_color_space = source.output_color_space;
     merged.vibrance = source.vibrance;
     merged.saturation = source.saturation;
     merged.hsl_channel = source.hsl_channel;
@@ -936,6 +949,7 @@ inline EditRecipeState parse_edit_recipe_json(const QString& recipe_json) {
   const auto crop_transform = detail::object_value(object, QStringLiteral("cropTransform"));
   const auto optics = detail::object_value(object, QStringLiteral("optics"));
   const auto raw_adjustments = detail::object_value(object, QStringLiteral("rawAdjustments"));
+  const auto output_transform = detail::object_value(object, QStringLiteral("outputTransform"));
 
   EditRecipeState state;
   state.raw_exposure = raw_adjustments.value(QStringLiteral("exposure")).toDouble();
@@ -1088,6 +1102,10 @@ inline EditRecipeState parse_edit_recipe_json(const QString& recipe_json) {
   state.crop_rect_y = crop_transform.value(QStringLiteral("y")).toDouble();
   state.crop_rect_width = crop_transform.value(QStringLiteral("width")).toDouble();
   state.crop_rect_height = crop_transform.value(QStringLiteral("height")).toDouble();
+  state.output_color_space = normalized_output_color_space_name(
+      output_transform.contains(QStringLiteral("colorSpace"))
+          ? output_transform.value(QStringLiteral("colorSpace")).toString()
+          : object.value(QStringLiteral("outputColorSpace")).toString());
 
   QVariantList parsed_mask_stack;
   auto linear_mask_ordinal = 1;
@@ -1581,6 +1599,11 @@ inline QJsonObject build_edit_recipe_object(const EditRecipeState& state) {
     crop_transform.insert(QStringLiteral("height"), state.crop_rect_height);
   }
 
+  QJsonObject output_transform;
+  output_transform.insert(
+      QStringLiteral("colorSpace"),
+      normalized_output_color_space_name(state.output_color_space));
+
   QJsonArray mask_stack;
   QJsonArray retouch_stack;
   const auto serialize_mask_object = [](const QVariantMap& candidate, int ordinal) {
@@ -1943,6 +1966,7 @@ inline QJsonObject build_edit_recipe_object(const EditRecipeState& state) {
   object.insert(QStringLiteral("colorMixer"), color_mixer);
   object.insert(QStringLiteral("colorGrading"), color_grading);
   object.insert(QStringLiteral("cropTransform"), crop_transform);
+  object.insert(QStringLiteral("outputTransform"), output_transform);
   object.insert(QStringLiteral("optics"), optics);
   object.insert(QStringLiteral("maskStack"), mask_stack);
   object.insert(QStringLiteral("maskSets"), mask_sets);

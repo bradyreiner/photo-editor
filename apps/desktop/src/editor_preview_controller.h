@@ -99,6 +99,9 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QVariantList histogramGreen READ histogramGreen NOTIFY histogramChanged)
   Q_PROPERTY(QVariantList histogramBlue READ histogramBlue NOTIFY histogramChanged)
   Q_PROPERTY(QVariantList histogramLuminance READ histogramLuminance NOTIFY histogramChanged)
+  Q_PROPERTY(int histogramShadowClipCount READ histogramShadowClipCount NOTIFY histogramChanged)
+  Q_PROPERTY(int histogramHighlightClipCount READ histogramHighlightClipCount NOTIFY histogramChanged)
+  Q_PROPERTY(int histogramSampleCount READ histogramSampleCount NOTIFY histogramChanged)
   Q_PROPERTY(int previewTargetEdge READ previewTargetEdge WRITE setPreviewTargetEdge NOTIFY previewTargetEdgeChanged)
   Q_PROPERTY(QString referencePreviewSource READ referencePreviewSource NOTIFY previewChanged)
   Q_PROPERTY(QString displayReferencePreviewSource READ displayReferencePreviewSource NOTIFY previewChanged)
@@ -106,6 +109,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QRectF displayPreviewOverlayRect READ displayPreviewOverlayRect NOTIFY previewChanged)
   Q_PROPERTY(QString debugInfo READ debugInfo NOTIFY debugInfoChanged)
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+  Q_PROPERTY(QString assetId READ assetId NOTIFY assetChanged)
   Q_PROPERTY(QString cameraLabel READ cameraLabel NOTIFY assetChanged)
   Q_PROPERTY(QString captureDate READ captureDate NOTIFY assetChanged)
   Q_PROPERTY(QString lensModel READ lensModel NOTIFY assetChanged)
@@ -118,6 +122,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QStringList presetNames READ presetNames NOTIFY presetsChanged)
   Q_PROPERTY(bool compareMode READ compareMode WRITE setCompareMode NOTIFY compareModeChanged)
   Q_PROPERTY(bool cropEditing READ cropEditing WRITE setCropEditing NOTIFY controlsChanged)
+  Q_PROPERTY(QString outputColorSpace READ outputColorSpace WRITE setOutputColorSpace NOTIFY controlsChanged)
   Q_PROPERTY(bool rawControlsAvailable READ rawControlsAvailable NOTIFY assetChanged)
   Q_PROPERTY(double rawExposure READ rawExposure WRITE setRawExposure NOTIFY controlsChanged)
   Q_PROPERTY(double rawBoost READ rawBoost WRITE setRawBoost NOTIFY controlsChanged)
@@ -272,9 +277,13 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QVariantList histogramGreen() const;
   [[nodiscard]] QVariantList histogramBlue() const;
   [[nodiscard]] QVariantList histogramLuminance() const;
+  [[nodiscard]] int histogramShadowClipCount() const;
+  [[nodiscard]] int histogramHighlightClipCount() const;
+  [[nodiscard]] int histogramSampleCount() const;
   [[nodiscard]] int previewTargetEdge() const;
   [[nodiscard]] QString debugInfo() const;
   [[nodiscard]] QString status() const;
+  [[nodiscard]] QString assetId() const;
   [[nodiscard]] QString cameraLabel() const;
   [[nodiscard]] QString captureDate() const;
   [[nodiscard]] QString lensModel() const;
@@ -287,6 +296,7 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QStringList presetNames() const;
   [[nodiscard]] bool compareMode() const;
   [[nodiscard]] bool cropEditing() const;
+  [[nodiscard]] QString outputColorSpace() const;
   [[nodiscard]] bool rawControlsAvailable() const;
   [[nodiscard]] double rawExposure() const;
   [[nodiscard]] double rawBoost() const;
@@ -433,6 +443,7 @@ class EditorPreviewController final : public QObject {
   void setPreviewTargetEdge(int edge);
   void setCompareMode(bool compare_mode);
   void setCropEditing(bool crop_editing);
+  void setOutputColorSpace(const QString& output_color_space);
   void setRawExposure(double raw_exposure);
   void setRawBoost(double raw_boost);
   void setRawShadowBoost(double raw_shadow_boost);
@@ -727,6 +738,9 @@ signals:
   QVariantList histogram_green_;
   QVariantList histogram_blue_;
   QVariantList histogram_luminance_;
+  int histogram_shadow_clip_count_ = 0;
+  int histogram_highlight_clip_count_ = 0;
+  int histogram_sample_count_ = 0;
 
   QString asset_id_;
   QString file_path_;
@@ -758,6 +772,7 @@ signals:
   bool processing_ = false;
   bool compare_mode_ = false;
   bool crop_editing_ = false;
+  QString output_color_space_ = QStringLiteral("sRGB");
   double raw_exposure_ = 0.0;
   double raw_boost_ = 0.0;
   double raw_shadow_boost_ = 1.0;

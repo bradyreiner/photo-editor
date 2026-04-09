@@ -247,11 +247,12 @@ Rectangle {
                                             elide: Text.ElideRight
                                         }
 
-                                        ActionButton {
+                                        ConfirmActionButton {
                                             text: "Remove"
                                             compact: true
                                             enabled: root.hasSelection
-                                            onClicked: if (root.documentController) root.documentController.removeSelectedClipEffect(modelData)
+                                            helperText: "Remove this effect from the selected clip"
+                                            onConfirmed: if (root.documentController) root.documentController.removeSelectedClipEffect(modelData)
                                         }
                                     }
                                 }

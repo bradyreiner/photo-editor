@@ -44,6 +44,10 @@ double luminance(const ColorPixel& pixel) {
   return (pixel.red * 0.2126) + (pixel.green * 0.7152) + (pixel.blue * 0.0722);
 }
 
+double stop_delta(double input_luminance, const ColorPixel& output_pixel) {
+  return std::abs(std::log2(std::max(luminance(output_pixel), 1e-6) / std::max(input_luminance, 1e-6)));
+}
+
 ColorPixel apply_single_pixel(const ColorPixel& pixel, const ColorAdjustmentState& state) {
   std::vector<ColorPixel> pixels{pixel};
   photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
@@ -104,6 +108,43 @@ int main() {
   const auto neutral_passthrough = apply_single_pixel(neutral_input, ColorAdjustmentState{});
   if (!almost_equal(luminance(neutral_passthrough), luminance(neutral_input), 1e-6)) {
     return fail("neutral pipeline should preserve in-range luminance when no tone controls are active");
+  }
+
+  ColorAdjustmentState positive_contrast_state;
+  positive_contrast_state.contrast = 100.0;
+  const auto positive_mid = apply_single_pixel(
+      ColorPixel{.red = 0.35F, .green = 0.35F, .blue = 0.35F, .alpha = 1.0F},
+      positive_contrast_state);
+  const auto positive_high = apply_single_pixel(
+      ColorPixel{.red = 0.95F, .green = 0.95F, .blue = 0.95F, .alpha = 1.0F},
+      positive_contrast_state);
+  if (!(stop_delta(0.35, positive_mid) > stop_delta(0.95, positive_high) + 0.08)) {
+    return fail("positive contrast should focus more on midtones than highlight extremes");
+  }
+
+  ColorAdjustmentState negative_contrast_state;
+  negative_contrast_state.contrast = -100.0;
+  const auto negative_mid = apply_single_pixel(
+      ColorPixel{.red = 0.35F, .green = 0.35F, .blue = 0.35F, .alpha = 1.0F},
+      negative_contrast_state);
+  const auto negative_high = apply_single_pixel(
+      ColorPixel{.red = 0.95F, .green = 0.95F, .blue = 0.95F, .alpha = 1.0F},
+      negative_contrast_state);
+  if (!(stop_delta(0.35, negative_mid) > stop_delta(0.95, negative_high) + 0.08)) {
+    return fail("negative contrast should flatten midtones more than bright highlights");
+  }
+
+  const auto extended_highlights = apply_pixels(
+      {
+          ColorPixel{.red = 1.05F, .green = 0.52F, .blue = 0.24F, .alpha = 1.0F},
+          ColorPixel{.red = 1.35F, .green = 0.52F, .blue = 0.24F, .alpha = 1.0F},
+      },
+      2,
+      1,
+      ColorAdjustmentState{});
+  if (!(extended_highlights[1].red > extended_highlights[0].red + 0.10F &&
+        luminance(extended_highlights[1]) > luminance(extended_highlights[0]) + 0.02)) {
+    return fail("over-range chromatic highlights should not collapse at the LUT edge");
   }
 
   ColorAdjustmentState chroma_state;

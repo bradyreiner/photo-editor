@@ -35,14 +35,16 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: theme.radiusPanel
-        color: control.pressed ? theme.ink750 : theme.ink900
-        border.width: 1
-        border.color: control.pressed ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.lineSoft, 0.18)
+        color: control.pressed ? theme.alpha(theme.ink750, 0.98) : theme.alpha(theme.ink900, 0.94)
+        border.width: control.activeFocus ? 2 : 1
+        border.color: control.activeFocus
+                      ? theme.alpha(theme.focusRing, 0.82)
+                      : (control.pressed ? theme.alpha(root.accent, 0.32) : theme.alpha(theme.lineSoft, 0.14))
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: theme.sectionPaddingCompact
+        anchors.margins: theme.sectionPaddingCompact + 1
         spacing: theme.gapControl
 
         RowLayout {
@@ -50,7 +52,7 @@ Item {
 
             Label {
                 text: root.label
-                color: theme.textMain
+                color: theme.textStrong
                 font.family: theme.fontUi
                 font.pixelSize: 11
                 font.weight: Font.Medium
@@ -62,17 +64,17 @@ Item {
 
             Rectangle {
                 radius: theme.radiusChip
-                color: control.pressed ? theme.alpha(root.accent, 0.16) : theme.ink850
+                color: control.pressed ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.ink850, 0.94)
                 border.width: 1
-                border.color: control.pressed ? theme.alpha(root.accent, 0.14) : theme.alpha(theme.lineSoft, 0.16)
-                implicitWidth: Math.max(44, valueLabel.implicitWidth + theme.space12)
+                border.color: control.pressed ? theme.alpha(root.accent, 0.2) : theme.alpha(theme.lineSoft, 0.14)
+                implicitWidth: Math.max(48, valueLabel.implicitWidth + theme.space12)
                 implicitHeight: 20
 
                 Label {
                     id: valueLabel
                     anchors.centerIn: parent
                     text: root.valueText
-                    color: root.pressed ? theme.textStrong : theme.textMuted
+                    color: root.pressed ? theme.textStrong : theme.textMain
                     font.family: theme.fontMono
                     font.pixelSize: 10
                 }
@@ -81,7 +83,7 @@ Item {
 
         Item {
             Layout.fillWidth: true
-            implicitHeight: 20
+            implicitHeight: 22
 
             Slider {
                 id: control
@@ -95,9 +97,9 @@ Item {
 
                 background: Item {
                     x: control.leftPadding
-                    y: control.topPadding + control.availableHeight / 2 - 1.5
+                    y: control.topPadding + control.availableHeight / 2 - 2
                     width: control.availableWidth
-                    height: 3
+                    height: 4
 
                     Canvas {
                         id: trackCanvas
@@ -118,7 +120,7 @@ Item {
                                 ctx.fillStyle = theme.lineStrong;
                             }
 
-                            const radius = Math.min(1.5, width / 2, height / 2);
+                            const radius = Math.min(2, width / 2, height / 2);
                             ctx.beginPath();
                             ctx.moveTo(radius, 0);
                             ctx.lineTo(width - radius, 0);
@@ -139,7 +141,7 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         radius: 2
-                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? theme.alpha(theme.ink950, 0.46) : theme.lineStrong
+                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? theme.alpha(theme.ink950, 0.34) : theme.alpha(theme.lineStrong, 0.9)
                     }
 
                     Rectangle {
@@ -154,7 +156,7 @@ Item {
                         visible: root.hasCenterMarker
                         x: Math.max(0, Math.min(parent.width - width, root.centerMarkerPosition * parent.width - width / 2))
                         width: 2
-                        height: 10
+                        height: 11
                         radius: 1
                         anchors.verticalCenter: parent.verticalCenter
                         color: theme.textFaint
@@ -164,8 +166,8 @@ Item {
                 handle: Rectangle {
                     x: control.leftPadding + control.visualPosition * (control.availableWidth - width)
                     y: control.topPadding + control.availableHeight / 2 - height / 2
-                    width: 12
-                    height: 12
+                    width: 14
+                    height: 14
                     radius: theme.radiusChip
                     color: root.accent
                     border.width: 1
@@ -173,9 +175,9 @@ Item {
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 3
-                        height: 3
-                        radius: 1.5
+                        width: 4
+                        height: 4
+                        radius: 2
                         color: theme.textStrong
                         opacity: control.pressed ? 1.0 : 0.8
                     }

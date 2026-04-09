@@ -135,6 +135,35 @@ struct LocalAdjustmentSettings final {
       });
 }
 
+[[nodiscard]] bool has_color_grading_adjustments(const ColorAdjustmentState& state) {
+  return std::abs(state.grading_shadows_hue) > 1e-9 ||
+         std::abs(state.grading_shadows_saturation) > 1e-9 ||
+         std::abs(state.grading_shadows_luminance) > 1e-9 ||
+         std::abs(state.grading_midtones_hue) > 1e-9 ||
+         std::abs(state.grading_midtones_saturation) > 1e-9 ||
+         std::abs(state.grading_midtones_luminance) > 1e-9 ||
+         std::abs(state.grading_highlights_hue) > 1e-9 ||
+         std::abs(state.grading_highlights_saturation) > 1e-9 ||
+         std::abs(state.grading_highlights_luminance) > 1e-9;
+}
+
+[[nodiscard]] bool has_legacy_color_mixer_adjustments(const ColorAdjustmentState& state) {
+  return std::abs(state.hue_adjustment) > 1e-9 ||
+         std::abs(state.saturation_adjustment) > 1e-9 ||
+         std::abs(state.luminance_adjustment) > 1e-9;
+}
+
+[[nodiscard]] bool has_post_tone_color_adjustments(
+    const ColorAdjustmentState& state,
+    double saturation_strength,
+    double vibrance_strength) {
+  return std::abs(saturation_strength) > 1e-9 ||
+         std::abs(vibrance_strength) > 1e-9 ||
+         has_per_channel_color_mixer_adjustments(state) ||
+         has_legacy_color_mixer_adjustments(state) ||
+         has_color_grading_adjustments(state);
+}
+
 [[nodiscard]] ColorPixel scale_pixel_to_luminance(const ColorPixel& pixel, double target_luminance) {
   const auto clamped_target = std::max(0.0, target_luminance);
   const auto current_luminance = luminance_for_pixel(pixel);
@@ -297,8 +326,14 @@ struct LocalAdjustmentSettings final {
 
 [[nodiscard]] double apply_pivoted_contrast(double value, double amount) {
   const auto safe_value = std::max(1e-6, value);
-  const auto contrast = std::clamp(1.0 + amount * 0.60, 0.55, 1.85);
-  return kMiddleGray * std::pow(safe_value / kMiddleGray, contrast);
+  const auto contrast = std::clamp(1.0 + amount * 0.48, 0.72, 1.52);
+  const auto contrasted = kMiddleGray * std::pow(safe_value / kMiddleGray, contrast);
+  const auto stop_distance = std::abs(std::log2(safe_value / kMiddleGray));
+  const auto edge_protection =
+      smoothstep(1.10, amount >= 0.0 ? 3.20 : 2.70, stop_distance);
+  const auto blend_to_original =
+      std::clamp(edge_protection * (0.40 + std::abs(amount) * 0.38), 0.0, 0.82);
+  return std::lerp(contrasted, safe_value, blend_to_original);
 }
 
 [[nodiscard]] double apply_global_tone(double value, const ColorAdjustmentState& state) {
@@ -333,6 +368,13 @@ struct LocalAdjustmentSettings final {
 
   const auto shoulder_scale = std::max(1e-6, 1.0 - threshold);
   return threshold + shoulder_scale * (1.0 - std::exp(-(value - threshold) / shoulder_scale));
+}
+
+[[nodiscard]] bool has_extended_range_rgb(const ColorPixel& pixel) {
+  constexpr auto kTolerance = 1.0e-6F;
+  return pixel.red > 1.0F + kTolerance || pixel.green > 1.0F + kTolerance ||
+         pixel.blue > 1.0F + kTolerance || pixel.red < -kTolerance ||
+         pixel.green < -kTolerance || pixel.blue < -kTolerance;
 }
 
 [[nodiscard]] std::array<double, 3> white_balance_multipliers(double temperature, double tint) {
@@ -2369,6 +2411,10 @@ ColorPixel apply_global_color_pipeline(
     pixel.blue = static_cast<float>(apply_perceptual_point_curve(pixel.blue, blue_curve));
   }
 
+  if (!has_post_tone_color_adjustments(state, saturation_strength, vibrance_strength)) {
+    return pixel;
+  }
+
   auto oklab = linear_rgb_to_oklab(pixel);
   auto lightness = clamp_unit(oklab.lightness);
   auto chroma = std::hypot(oklab.a, oklab.b);
@@ -2714,7 +2760,7 @@ void apply_color_adjustments(
       const auto max_diff = std::max({std::abs(pixel.red - pixel.green),
                                        std::abs(pixel.green - pixel.blue),
                                        std::abs(pixel.red - pixel.blue)});
-      if (max_diff < 1e-9) {
+      if (max_diff < 1e-9 || has_extended_range_rgb(pixel)) {
         pixel = apply_global_color_pipeline(
             pixel, fast_exposure_gain, fast_white_balance, state,
             fast_parametric_curve,
@@ -2997,6 +3043,10 @@ void apply_color_adjustments(
     }
     if (blue_curve.points.size() >= 2) {
       pixel.blue = static_cast<float>(apply_perceptual_point_curve(pixel.blue, blue_curve));
+    }
+
+    if (!has_post_tone_color_adjustments(state, saturation_strength, vibrance_strength)) {
+      continue;
     }
 
     auto oklab = linear_rgb_to_oklab(pixel);

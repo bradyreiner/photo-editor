@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
 #include <QApplication>
 #include <QColor>
+#include <QColorSpace>
 #include <QDir>
 #include <QFile>
 #include <QImage>
@@ -96,6 +98,50 @@ int main(int argc, char** argv) {
         !color_matches(second_slide.pixelColor(second_slide.width() / 2, second_slide.height() / 2),
                        QColor(QStringLiteral("#0a84ff")))) {
       return fail("linked template export should still cut a slot-based spread cleanly across two canvases");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    QImage display_p3_source(QSize(1080, 1350), QImage::Format_ARGB32);
+    for (int y = 0; y < display_p3_source.height(); ++y) {
+      for (int x = 0; x < display_p3_source.width(); ++x) {
+        display_p3_source.setPixelColor(
+            x,
+            y,
+            QColor(
+                24 + ((x * 180) / std::max(1, display_p3_source.width() - 1)),
+                36 + ((y * 140) / std::max(1, display_p3_source.height() - 1)),
+                120));
+      }
+    }
+    display_p3_source.setColorSpace(QColorSpace(QColorSpace::DisplayP3));
+
+    const auto display_p3_path = write_image(
+        dir,
+        QStringLiteral("display-p3-source.png"),
+        display_p3_source);
+    if (display_p3_path.isEmpty()) {
+      return fail("display-p3 source image should save");
+    }
+
+    CarouselDocumentController::RecipeState recipe_state;
+    recipe_state.output_color_space = QStringLiteral("Display P3");
+    controller.assignPrimaryImage(
+        display_p3_path,
+        QStringLiteral("display-p3"),
+        photo_editor::desktop::serialize_edit_recipe_json(recipe_state));
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-display-p3"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("display-p3 export should succeed");
+    }
+
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (slide.isNull() || !slide.colorSpace().isValid() ||
+        slide.colorSpace() != QColorSpace(QColorSpace::DisplayP3)) {
+      return fail("carousel export should preserve the requested output color space");
     }
   }
 

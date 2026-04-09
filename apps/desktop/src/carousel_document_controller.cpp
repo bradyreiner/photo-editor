@@ -3,8 +3,10 @@
 #include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "raw_image_decoder.h"
+#include "working_image.h"
 
 #include <QColor>
+#include <QColorSpace>
 #include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -37,6 +39,43 @@ constexpr int kPreviewLongEdge = 1600;
 constexpr double kMinItemSize = 36.0;
 constexpr double kMinTextPointSize = 12.0;
 constexpr auto kTextFontFamily = "Avenir Next";
+
+QImage normalize_preview_color_space(QImage image);
+QColorSpace preview_target_color_space() {
+  return preview_color_space();
+}
+
+QColorSpace output_color_space_for_name(const QString& name) {
+  const auto normalized = normalized_output_color_space_name(name);
+  if (normalized == QStringLiteral("Display P3")) {
+    return QColorSpace(QColorSpace::DisplayP3);
+  }
+  return preview_target_color_space();
+}
+
+void apply_output_color_space_transform(QImage* image, const QString& output_color_space_name) {
+  if (image == nullptr || image->isNull()) {
+    return;
+  }
+
+  const auto target_color_space = output_color_space_for_name(output_color_space_name);
+  if (!target_color_space.isValid()) {
+    return;
+  }
+
+  *image = finalize_output_image(std::move(*image), target_color_space);
+}
+
+QImage normalize_preview_color_space(QImage image) {
+  if (image.isNull()) {
+    return image;
+  }
+
+  if (!image.colorSpace().isValid()) {
+    image.setColorSpace(preview_target_color_space());
+  }
+  return image;
+}
 
 double clamp_unit_interval(double value) {
   return qBound(-1.0, value, 1.0);
@@ -226,45 +265,21 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
   };
 }
 
-int clamp_channel(double value) {
-  return qBound(0, static_cast<int>(qRound(value)), 255);
-}
-
-double clamp_alpha(double value) {
-  return qBound(0.0, value, 1.0);
-}
-
 void apply_color_adjustments(QImage* image, const CarouselDocumentController::RecipeState& state) {
-  const auto width = image->width();
-  const auto height = image->height();
-  std::vector<photo_editor::pipeline::ColorPixel> pixels(static_cast<std::size_t>(width * height));
-
-  for (int y = 0; y < height; ++y) {
-    const auto* scanline = reinterpret_cast<const QRgb*>(image->constScanLine(y));
-    for (int x = 0; x < width; ++x) {
-      const QColor color = QColor::fromRgb(scanline[x]);
-      pixels[static_cast<std::size_t>(y * width + x)] = photo_editor::pipeline::ColorPixel{
-          .red = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.redF())),
-          .green = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.greenF())),
-          .blue = static_cast<float>(photo_editor::pipeline::srgb_to_linear(color.blueF())),
-          .alpha = color.alphaF(),
-      };
-    }
+  if (image == nullptr || image->isNull()) {
+    return;
   }
 
-  photo_editor::pipeline::apply_color_adjustments(&pixels, width, height, to_pipeline_state(state));
-
-  for (int y = 0; y < height; ++y) {
-    auto* scanline = reinterpret_cast<QRgb*>(image->scanLine(y));
-    for (int x = 0; x < width; ++x) {
-      auto& pixel = pixels[static_cast<std::size_t>(y * width + x)];
-      scanline[x] = qRgba(
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.red) * 255.0),
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.green) * 255.0),
-          clamp_channel(photo_editor::pipeline::linear_to_srgb(pixel.blue) * 255.0),
-          clamp_channel(clamp_alpha(pixel.alpha) * 255.0));
-    }
+  auto working = working_image_from_qimage(*image);
+  if (working.isNull()) {
+    return;
   }
+
+  photo_editor::pipeline::apply_color_adjustments(
+      &working.pixels, working.width, working.height, to_pipeline_state(state));
+
+  *image = qimage_from_working_image(working, preview_target_color_space());
+  apply_output_color_space_transform(image, state.output_color_space);
 }
 
 QString summary_label(const CarouselDocumentController::CanvasItem& item) {
@@ -2920,6 +2935,7 @@ bool CarouselDocumentController::exportVideoSlide(
 
 QImage CarouselDocumentController::renderSlideBaseImage(int index, const QSize& size, bool preview) const {
   QImage canvas(size, QImage::Format_ARGB32_Premultiplied);
+  canvas.setColorSpace(output_color_space_for_name(outputColorSpaceForSlide(index)));
   canvas.fill(QColor(QStringLiteral("#fbf7f1")));
   QPainter painter(&canvas);
   painter.setRenderHint(QPainter::Antialiasing, true);
@@ -2992,7 +3008,45 @@ QImage CarouselDocumentController::renderSlideImage(int index, const QSize& size
   for (const auto& item : items_) {
     renderItemIntoSlide(&painter, item, index, size, preview);
   }
+  canvas.setColorSpace(output_color_space_for_name(outputColorSpaceForSlide(index)));
   return canvas;
+}
+
+QString CarouselDocumentController::outputColorSpaceForSlide(int index) const {
+  const auto normalized_from_media = [](const MediaItem& media) {
+    return media.type == MediaType::Image
+               ? normalized_output_color_space_name(media.recipe_state.output_color_space)
+               : QStringLiteral("sRGB");
+  };
+  const auto normalized_from_item = [](const CanvasItem& item) {
+    return item.kind == ItemKind::Image
+               ? normalized_output_color_space_name(item.recipe_state.output_color_space)
+               : QStringLiteral("sRGB");
+  };
+
+  if (const auto* group = groupForIndex(index)) {
+    return normalized_from_media(group->media);
+  }
+
+  if (const auto* slide = slideAt(index)) {
+    if (slide->primary.type == MediaType::Image) {
+      return normalized_from_media(slide->primary);
+    }
+    if (slide->secondary.type == MediaType::Image) {
+      return normalized_from_media(slide->secondary);
+    }
+    if (slide->tertiary.type == MediaType::Image) {
+      return normalized_from_media(slide->tertiary);
+    }
+  }
+
+  for (const auto& item : items_) {
+    if (slideIndexForItem(item) == index && item.kind == ItemKind::Image) {
+      return normalized_from_item(item);
+    }
+  }
+
+  return QStringLiteral("sRGB");
 }
 
 QImage CarouselDocumentController::renderVideoPlaceholder(const MediaItem& media, const QSize& size) const {
@@ -3037,11 +3091,12 @@ bool CarouselDocumentController::decodeEditedImage(
   }
 
   if (native_image_supported(media.file_path)) {
-    if (!decode_native_image(media.file_path, image, preview ? max_edge : 0)) {
+    if (!decode_native_linear_image(media.file_path, image, preview ? max_edge : 0)) {
       return false;
     }
   } else {
     QImageReader reader(media.file_path);
+    reader.setAutoTransform(true);
     if (reader.canRead()) {
       if (preview && max_edge > 0) {
         const auto source_size = reader.size();
@@ -3050,8 +3105,8 @@ bool CarouselDocumentController::decodeEditedImage(
         }
       }
 
-      *image = reader.read().convertToFormat(QImage::Format_ARGB32);
-    } else if (!decode_raw_image(media.file_path, image, preview ? max_edge : 0)) {
+      *image = normalize_preview_color_space(reader.read());
+    } else if (!decode_raw_linear_image(media.file_path, image, preview ? max_edge : 0)) {
       return false;
     }
   }
@@ -3059,6 +3114,8 @@ bool CarouselDocumentController::decodeEditedImage(
   if (image->isNull()) {
     return false;
   }
+
+  *image = normalize_preview_color_space(std::move(*image));
 
   if (has_explicit_crop_rect(media.recipe_state) ||
       media.recipe_state.crop_preset != QStringLiteral("Original") ||

@@ -1164,10 +1164,11 @@ Rectangle {
                                 onClicked: editorPreview.duplicateActiveMask()
                             }
 
-                            ActionButton {
+                            ConfirmActionButton {
                                 Layout.fillWidth: true
                                 text: "Delete"
-                                onClicked: editorPreview.removeActiveMask()
+                                helperText: "Delete the active mask"
+                                onConfirmed: editorPreview.removeActiveMask()
                             }
                         }
                     }

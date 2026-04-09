@@ -11,12 +11,12 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitHeight: 32
+    implicitHeight: 34
     implicitWidth: Math.max(96, textColumn.implicitWidth + 18)
-    radius: 6
-    color: theme.alpha(theme.ink900, 0.9)
+    radius: theme.radiusChip
+    color: theme.alpha(theme.ink950, 0.18)
     border.width: 1
-    border.color: theme.alpha(theme.lineSoft, 0.9)
+    border.color: theme.alpha(theme.lineSoft, 0.18)
 
     RowLayout {
         anchors.fill: parent
@@ -30,15 +30,21 @@ Rectangle {
             color: root.accent
         }
 
+        Rectangle {
+            Layout.preferredWidth: 1
+            Layout.preferredHeight: 16
+            color: theme.alpha(theme.lineSoft, 0.12)
+        }
+
         ColumnLayout {
             id: textColumn
             spacing: 1
 
             Label {
                 text: root.label
-                color: theme.textFaint
+                color: theme.textMuted
                 font.family: theme.fontMono
-                font.pixelSize: 8
+                font.pixelSize: 9
                 font.letterSpacing: 0.7
             }
 
@@ -46,7 +52,7 @@ Rectangle {
                 text: root.value
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 11
+                font.pixelSize: 12
                 font.weight: Font.Medium
             }
         }

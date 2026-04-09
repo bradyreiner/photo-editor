@@ -16,15 +16,21 @@ Rectangle {
 
     implicitHeight: sectionLayout.implicitHeight + theme.space18
     radius: theme.radiusPanel
-    color: theme.alpha(theme.ink800, 0.9)
-    border.width: 1
-    border.color: expanded ? theme.alpha(theme.lineSoft, 0.32) : theme.alpha(theme.lineSoft, 0.2)
+    color: theme.alpha(theme.ink850, 0.94)
+    border.width: 0
+    border.color: "transparent"
+
+    gradient: Gradient {
+        GradientStop { position: 0.0; color: theme.alpha(root.accent, 0.02) }
+        GradientStop { position: 0.18; color: theme.alpha(theme.ink850, 0.96) }
+        GradientStop { position: 1.0; color: theme.alpha(theme.ink900, 0.98) }
+    }
 
     ColumnLayout {
         id: sectionLayout
         anchors.fill: parent
         anchors.margins: theme.sectionPadding
-        spacing: theme.gapPanel
+        spacing: theme.gapPanel + 1
 
         Item {
             Layout.fillWidth: true
@@ -49,17 +55,17 @@ Rectangle {
                     Rectangle {
                         Layout.preferredWidth: 18
                         Layout.preferredHeight: 2
-                        radius: 1
+                        radius: 1.5
                         color: root.accent
                     }
 
                     Label {
                         text: root.title.toUpperCase()
-                        color: theme.textMain
+                        color: theme.textStrong
                         font.family: theme.fontMono
                         font.pixelSize: 10
                         font.weight: Font.DemiBold
-                        font.letterSpacing: 1.1
+                        font.letterSpacing: 0.9
                     }
 
                     Item {
@@ -81,7 +87,7 @@ Rectangle {
                     text: root.subtitle
                     color: theme.textMuted
                     font.family: theme.fontUi
-                    font.pixelSize: 11
+                    font.pixelSize: 10
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }
@@ -94,7 +100,7 @@ Rectangle {
             id: body
             visible: !root.expandable || root.expanded
             Layout.fillWidth: true
-            spacing: theme.gapControl
+            spacing: theme.gapControl + 1
         }
     }
 }

@@ -12,12 +12,15 @@ Rectangle {
 
     Theme { id: theme }
 
+    implicitWidth: 168
+    implicitHeight: metricColumn.implicitHeight + (theme.panelPaddingCompact * 2)
     radius: theme.radiusSurface
-    color: theme.alpha(theme.ink850, 0.96)
-    border.color: theme.alpha(root.accent, 0.18)
+    color: theme.alpha(theme.ink950, 0.18)
+    border.color: theme.alpha(theme.lineSoft, 0.18)
     border.width: 1
 
     ColumnLayout {
+        id: metricColumn
         anchors.fill: parent
         anchors.margins: theme.panelPaddingCompact
         spacing: theme.gapDense
@@ -31,7 +34,7 @@ Rectangle {
 
         Label {
             text: root.label
-            color: theme.textFaint
+            color: theme.textMuted
             font.family: theme.fontMono
             font.pixelSize: 10
             font.letterSpacing: 0.8

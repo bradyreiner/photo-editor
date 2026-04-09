@@ -26,9 +26,18 @@ struct RawDecodeSettings final {
     QImage* image,
     int max_edge = 0,
     const RawDecodeSettings& settings = {});
+[[nodiscard]] bool decode_raw_linear_image(
+    const QString& file_path,
+    QImage* image,
+    int max_edge = 0,
+    const RawDecodeSettings& settings = {});
 [[nodiscard]] bool native_image_supported(const QString& file_path);
 [[nodiscard]] QSize native_image_size(const QString& file_path);
 [[nodiscard]] bool decode_native_image(
+    const QString& file_path,
+    QImage* image,
+    int max_edge = 0);
+[[nodiscard]] bool decode_native_linear_image(
     const QString& file_path,
     QImage* image,
     int max_edge = 0);

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
@@ -17,15 +18,34 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: theme.space10
+
+            ColumnLayout {
+                spacing: 2
+
+                Label {
+                    text: "Sequence"
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    text: root.mode === "timeline" ? "Edit timing, tracks, and playback" : "Arrange boards, text, and media layouts"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                }
+            }
 
             Item { Layout.fillWidth: true }
 
             Rectangle {
-                radius: theme.radius8
-                color: theme.alpha(theme.ink950, 0.58)
+                radius: theme.radiusPanel
+                color: theme.alpha(theme.ink950, 0.5)
                 border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.34)
+                border.color: theme.alpha(theme.lineSoft, 0.18)
                 implicitHeight: 30
                 implicitWidth: modeRow.implicitWidth + 6
 

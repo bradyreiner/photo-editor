@@ -20,10 +20,10 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: theme.gapDense + 1
+            spacing: theme.gapDense
 
             Rectangle {
-                Layout.preferredWidth: 18
+                Layout.preferredWidth: 16
                 Layout.preferredHeight: 2
                 radius: 2
                 color: root.accent
@@ -33,7 +33,7 @@ Item {
                 text: root.title
                 color: theme.textStrong
                 font.family: theme.fontDisplay
-                font.pixelSize: 16
+                font.pixelSize: 15
                 font.weight: Font.DemiBold
             }
 

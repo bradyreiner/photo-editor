@@ -552,6 +552,43 @@ impl CatalogService {
         Ok(())
     }
 
+    pub async fn delete_asset(&self, asset_id: &str) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM edit_recipes
+            WHERE asset_id = $1
+            "#,
+        )
+        .bind(asset_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM timeline_documents
+            WHERE asset_id = $1
+            "#,
+        )
+        .bind(asset_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        sqlx::query(
+            r#"
+            DELETE FROM assets
+            WHERE asset_id = $1
+            "#,
+        )
+        .bind(asset_id)
+        .execute(&mut *transaction)
+        .await?;
+
+        transaction.commit().await?;
+        Ok(())
+    }
+
     pub async fn list_asset_review_states(
         &self,
     ) -> Result<Vec<AssetReviewStateRecord>, sqlx::Error> {

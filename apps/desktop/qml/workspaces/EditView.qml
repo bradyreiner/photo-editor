@@ -33,10 +33,15 @@ Rectangle {
     property string maskFallbackMode: ""
     property real selectionOutlinePhase: 0
     property string cropGuideMode: "Thirds"
+    property string compareViewMode: "side-by-side"
+    property real compareWipePosition: 0.5
     property string editedDisplaySource: ""
     property string referenceDisplaySource: ""
     property string presetDraftName: ""
     property string selectedPresetName: ""
+    property bool histogramShowLuminance: true
+    property bool histogramShowRgb: true
+    property bool histogramLogScale: true
     property var hslChannels: [
         {
             name: "Reds",
@@ -175,6 +180,37 @@ Rectangle {
         return "Adjust"
     }
 
+    function maskWorkspaceAccentColor() {
+        if (editorPreview.hasActiveMask &&
+                editorPreview.activeMaskIndex >= 0 &&
+                editorPreview.activeMaskIndex < editorPreview.maskStack.length)
+            return maskAccent(editorPreview.maskStack[editorPreview.activeMaskIndex])
+        if (objectPickArmed || polygonDrawArmed || lassoDrawArmed)
+            return "#5e95d3"
+        if (cloneSourcePickArmed)
+            return "#7cb5ff"
+        return theme.accentCool400
+    }
+
+    function previewStatusText() {
+        if (inspectorMode !== "masks" || !editorPreview.hasAsset)
+            return editorPreview.processing ? "Rendering preview..." : editorPreview.status
+
+        if (cloneSourcePickArmed)
+            return "Masks · " + activeToolLabel() + " · Choose a clean source area"
+        if (objectPickArmed && objectPickMode === "remove")
+            return "Masks · " + activeToolLabel() + " · Click or drag over the target"
+        if (objectPickArmed)
+            return "Masks · " + activeToolLabel() + " · Click the image to build the selection"
+        if (polygonDrawArmed)
+            return "Masks · Polygon · Click points and double-click to finish"
+        if (lassoDrawArmed)
+            return "Masks · Lasso · Drag directly on the canvas"
+        if (editorPreview.hasActiveMask)
+            return "Masks · " + activeToolLabel() + " · " + editorPreview.activeMaskName
+        return "Masks · Choose a selection source or start painting"
+    }
+
     function activeMaskHasAdjustments() {
         return Math.abs(editorPreview.activeMaskExposure) > 0.001 ||
                Math.abs(editorPreview.activeMaskContrast) > 0.001 ||
@@ -263,6 +299,18 @@ Rectangle {
         return Math.max(0, zoomPreviewContent.width - zoomPreviewFlick.width);
     }
 
+    function sideBySideCompareEnabled() {
+        return editorPreview.compareMode &&
+               compareViewMode === "side-by-side" &&
+               referenceDisplaySource.length > 0
+    }
+
+    function wipeCompareEnabled() {
+        return editorPreview.compareMode &&
+               compareViewMode === "wipe" &&
+               referenceDisplaySource.length > 0
+    }
+
     function maxPanY() {
         return Math.max(0, zoomPreviewContent.height - zoomPreviewFlick.height);
     }
@@ -280,7 +328,7 @@ Rectangle {
     function updatePreviewTargetEdge() {
         const viewportWidth = Math.max(1, previewSurface.width - 4);
         const viewportHeight = Math.max(1, previewSurface.height - 4);
-        const compareWidth = editorPreview.compareMode ? Math.max(1, (viewportWidth - 8) / 2) : viewportWidth;
+        const compareWidth = sideBySideCompareEnabled() ? Math.max(1, (viewportWidth - 8) / 2) : viewportWidth;
         const zoomMultiplier = fitToView ? 1.0 : Math.min(2.0, Math.max(1.0, manualZoom));
         editorPreview.previewTargetEdge = Math.round(Math.max(compareWidth, viewportHeight) * Screen.devicePixelRatio * zoomMultiplier);
     }
@@ -333,7 +381,7 @@ Rectangle {
 
         const imageWidth = imagePixelWidth(editedPreviewZoom);
         const imageHeight = imagePixelHeight(editedPreviewZoom);
-        const availableWidth = editorPreview.compareMode
+        const availableWidth = sideBySideCompareEnabled()
                                ? Math.max(1, (fitPreviewRow.width - 8) / 2)
                                : Math.max(1, fitPreviewRow.width);
         const availableHeight = Math.max(1, fitPreviewRow.height);
@@ -360,10 +408,17 @@ Rectangle {
         updatePreviewTargetEdge()
         updatePreviewViewport()
     }
+    onCompareViewModeChanged: {
+        compareWipePosition = 0.5
+        updatePreviewTargetEdge()
+        updatePreviewViewport()
+    }
 
     Connections {
         target: editorPreview
         function onCompareModeChanged() {
+            if (editorPreview.compareMode && editorPreview.whiteBalanceSampling)
+                editorPreview.whiteBalanceSampling = false;
             updatePreviewTargetEdge();
             updatePreviewViewport();
         }
@@ -371,10 +426,10 @@ Rectangle {
 
     function contentWidthForZoom(zoomLevel) {
         const editedWidth = editedDisplaySource.length > 0 ? imagePixelWidth(editedPreviewZoom) * zoomLevel : 0;
-        const referenceWidth = editorPreview.compareMode && referenceDisplaySource.length > 0
+        const referenceWidth = sideBySideCompareEnabled()
                                ? imagePixelWidth(referencePreviewZoom) * zoomLevel
                                : 0;
-        const combinedWidth = editorPreview.compareMode && referenceWidth > 0
+        const combinedWidth = sideBySideCompareEnabled() && referenceWidth > 0
                               ? editedWidth + referenceWidth + 16
                               : editedWidth;
         return Math.max(zoomPreviewFlick.width, combinedWidth);
@@ -382,7 +437,7 @@ Rectangle {
 
     function contentHeightForZoom(zoomLevel) {
         const editedHeight = editedDisplaySource.length > 0 ? imagePixelHeight(editedPreviewZoom) * zoomLevel : 0;
-        const referenceHeight = editorPreview.compareMode && referenceDisplaySource.length > 0
+        const referenceHeight = sideBySideCompareEnabled()
                                 ? imagePixelHeight(referencePreviewZoom) * zoomLevel
                                 : 0;
         return Math.max(zoomPreviewFlick.height, Math.max(editedHeight, referenceHeight));
@@ -623,6 +678,8 @@ Rectangle {
                     Layout.fillHeight: true
                     radius: theme.radius12
                     color: theme.ink900
+                    border.width: 0
+                    border.color: "transparent"
                     clip: true
                     onWidthChanged: {
                         updatePreviewTargetEdge()
@@ -639,16 +696,17 @@ Rectangle {
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.topMargin: 8
                         z: 120
-                        spacing: 4
+                        spacing: 6
                         visible: inspectorMode === "masks" && editorPreview.hasAsset
 
                         Rectangle {
-                            width: selectToolRow.implicitWidth + 16
-                            height: 36
-                            radius: 10
-                            color: Qt.alpha("#101419", 0.92)
-                            border.width: 1
-                            border.color: "#2d3339"
+                            width: selectToolRow.implicitWidth + 12
+                            height: 44
+                            radius: 12
+                            color: objectPickArmed || lassoDrawArmed || polygonDrawArmed
+                                   ? Qt.alpha("#101419", 0.86)
+                                   : Qt.alpha("#101419", 0.7)
+                            border.width: 0
 
                             Row {
                                 id: selectToolRow
@@ -658,6 +716,11 @@ Rectangle {
                                 ActionButton {
                                     compact: true
                                     text: "Object Select"
+                                    iconName: "smart-select"
+                                    showText: false
+                                    tooltipText: "Object Select"
+                                    accent: "#5e95d3"
+                                    tone: active ? "primary" : "secondary"
                                     active: objectPickArmed && objectPickMode === "selection" && !objectPickCreateNew
                                     enabled: editorPreview.hasAsset
                                     onClicked: selectTool(objectPickArmed && objectPickMode === "selection" && !objectPickCreateNew ? "" : "smart")
@@ -666,6 +729,11 @@ Rectangle {
                                 ActionButton {
                                     compact: true
                                     text: "Subtract Object"
+                                    iconName: "smart-select"
+                                    showText: false
+                                    tooltipText: "Subtract Object"
+                                    accent: "#5e95d3"
+                                    tone: active ? "primary" : "secondary"
                                     active: objectPickArmed && objectPickMode === "selection-subtract"
                                     enabled: editorPreview.hasAsset && editorPreview.hasActiveMask
                                     onClicked: selectTool(objectPickArmed && objectPickMode === "selection-subtract" ? "" : "smart-subtract")
@@ -674,6 +742,11 @@ Rectangle {
                                 ActionButton {
                                     compact: true
                                     text: "Lasso"
+                                    iconName: "lasso"
+                                    showText: false
+                                    tooltipText: "Lasso"
+                                    accent: "#7ec97a"
+                                    tone: active ? "primary" : "secondary"
                                     active: lassoDrawArmed
                                     onClicked: selectTool(lassoDrawArmed ? "" : "lasso")
                                 }
@@ -681,6 +754,11 @@ Rectangle {
                                 ActionButton {
                                     compact: true
                                     text: "Polygon"
+                                    iconName: "polygon-tool"
+                                    showText: false
+                                    tooltipText: "Polygon"
+                                    accent: "#7ec97a"
+                                    tone: active ? "primary" : "secondary"
                                     active: polygonDrawArmed
                                     onClicked: {
                                         if (!polygonDrawArmed && editorPreview.activeMaskKind !== "polygon")
@@ -688,12 +766,32 @@ Rectangle {
                                         selectTool(polygonDrawArmed ? "" : "polygon")
                                     }
                                 }
+                            }
+                        }
 
-                                Rectangle { width: 1; height: 22; color: "#3a424a"; radius: 1 }
+                        Rectangle {
+                            width: brushToolRow.implicitWidth + 12
+                            height: 44
+                            radius: 12
+                            color: editorPreview.activeMaskKind === "brush" &&
+                                   editorPreview.activeMaskRetouchMode.length === 0
+                                   ? Qt.alpha("#101419", 0.84)
+                                   : Qt.alpha("#101419", 0.66)
+                            border.width: 0
+
+                            Row {
+                                id: brushToolRow
+                                anchors.centerIn: parent
+                                spacing: 4
 
                                 ActionButton {
                                     compact: true
                                     text: "Brush Add"
+                                    iconName: "brush-tool"
+                                    showText: false
+                                    tooltipText: "Brush Add"
+                                    accent: maskWorkspaceAccentColor()
+                                    tone: active ? "primary" : "secondary"
                                     active: editorPreview.activeMaskKind === "brush" &&
                                             editorPreview.activeMaskOperation === "add" &&
                                             editorPreview.activeMaskRetouchMode.length === 0
@@ -706,6 +804,11 @@ Rectangle {
                                 ActionButton {
                                     compact: true
                                     text: "Brush Erase"
+                                    iconName: "brush-subtract"
+                                    showText: false
+                                    tooltipText: "Brush Erase"
+                                    accent: "#d36a5e"
+                                    tone: active ? "primary" : "secondary"
                                     active: editorPreview.activeMaskKind === "brush" &&
                                             editorPreview.activeMaskOperation === "subtract" &&
                                             editorPreview.activeMaskRetouchMode.length === 0
@@ -714,18 +817,16 @@ Rectangle {
                                         editorPreview.startSelectionBrush(true)
                                     }
                                 }
-
                             }
                         }
 
                         Rectangle {
-                            visible: editorPreview.hasActiveMask
-                            width: canvasToolLabel.implicitWidth + 14
-                            height: 36
-                            radius: 10
-                            color: Qt.alpha("#101419", 0.82)
-                            border.width: 1
-                            border.color: "#2d3339"
+                            visible: editorPreview.hasActiveMask || objectPickArmed || polygonDrawArmed || lassoDrawArmed || cloneSourcePickArmed
+                            width: canvasToolLabel.implicitWidth + 18
+                            height: 40
+                            radius: 12
+                            color: Qt.alpha(maskWorkspaceAccentColor(), 0.16)
+                            border.width: 0
 
                             Label {
                                 id: canvasToolLabel
@@ -750,18 +851,18 @@ Rectangle {
                         anchors.left: parent.left
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        anchors.right: editorPreview.compareMode ? compareFitDivider.left : parent.right
-                        anchors.rightMargin: editorPreview.compareMode ? 8 : 0
+                        anchors.right: sideBySideCompareEnabled() ? compareFitDivider.left : parent.right
+                        anchors.rightMargin: sideBySideCompareEnabled() ? 8 : 0
                         source: editedDisplaySource
                         fillMode: Image.PreserveAspectFit
                         asynchronous: false
                         cache: false
-                        visible: editedDisplaySource.length > 0
+                        visible: editedDisplaySource.length > 0 && !wipeCompareEnabled()
                     }
 
                     Rectangle {
                         id: compareFitDivider
-                        visible: editorPreview.compareMode && editedPreviewFit.visible
+                        visible: sideBySideCompareEnabled() && editedPreviewFit.visible
                         width: 1
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
@@ -780,7 +881,77 @@ Rectangle {
                         fillMode: Image.PreserveAspectFit
                         asynchronous: false
                         cache: false
-                        visible: editorPreview.compareMode && referenceDisplaySource.length > 0
+                        visible: sideBySideCompareEnabled()
+                    }
+
+                    Image {
+                        id: referencePreviewFitWipe
+                        anchors.fill: parent
+                        source: referenceDisplaySource
+                        fillMode: Image.PreserveAspectFit
+                        asynchronous: false
+                        cache: false
+                        visible: wipeCompareEnabled()
+                    }
+
+                    Item {
+                        id: editedPreviewFitWipeClip
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: parent.width * compareWipePosition
+                        clip: true
+                        visible: wipeCompareEnabled()
+
+                        Image {
+                            id: editedPreviewFitWipe
+                            x: 0
+                            y: 0
+                            width: fitPreviewRow.width
+                            height: fitPreviewRow.height
+                            source: editedDisplaySource
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: false
+                            cache: false
+                            visible: editedDisplaySource.length > 0
+                        }
+                    }
+
+                    Rectangle {
+                        id: compareFitWipeHandle
+                        visible: wipeCompareEnabled() && editedPreviewFitWipe.visible
+                        x: Math.round(fitPreviewRow.width * compareWipePosition) - width / 2
+                        y: 0
+                        width: 2
+                        height: parent.height
+                        color: theme.alpha(theme.accentWarm400, 0.92)
+
+                        Rectangle {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.top: parent.top
+                            anchors.topMargin: 10
+                            width: 18
+                            height: 24
+                            radius: 9
+                            color: theme.alpha(theme.ink950, 0.82)
+                            border.width: 1
+                            border.color: theme.alpha(theme.accentWarm400, 0.5)
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.margins: -8
+                            cursorShape: Qt.SizeHorCursor
+                            drag.target: null
+                            onPressed: function(mouse) {
+                                compareWipePosition = clamp((parent.x + mouse.x) / Math.max(1, fitPreviewRow.width), 0.05, 0.95)
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed)
+                                    return
+                                compareWipePosition = clamp((parent.x + mouse.x) / Math.max(1, fitPreviewRow.width), 0.05, 0.95)
+                            }
+                        }
                     }
 
                     CropOverlay {
@@ -814,7 +985,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: fitPreviewRow
-                    visible: fitToView && editorPreview.whiteBalanceSampling && !editorPreview.cropEditing && editedPreviewFit.visible
+                    visible: fitToView && editorPreview.whiteBalanceSampling && !editorPreview.compareMode &&
+                             !editorPreview.cropEditing && editedPreviewFit.visible
                     cursorShape: Qt.CrossCursor
                     onClicked: function (mouse) {
                         const imageX = editedPreviewFit.x + (editedPreviewFit.width - editedPreviewFit.paintedWidth) / 2;
@@ -850,14 +1022,14 @@ Rectangle {
 
                     Item {
                         id: zoomPreviewContent
-                        width: editorPreview.compareMode
+                        width: sideBySideCompareEnabled()
                                ? Math.max(zoomPreviewFlick.width, editedPreviewZoom.width + referencePreviewZoom.width + 16)
                                : Math.max(zoomPreviewFlick.width, editedPreviewZoom.width)
                         height: Math.max(zoomPreviewFlick.height, Math.max(editedPreviewZoom.height, referencePreviewZoom.height))
 
                         Image {
                             id: editedPreviewZoom
-                            x: editorPreview.compareMode
+                            x: sideBySideCompareEnabled()
                                ? Math.max(0, (zoomPreviewContent.width - (editedPreviewZoom.width + referencePreviewZoom.width + 16)) / 2)
                                : Math.max(0, (zoomPreviewContent.width - editedPreviewZoom.width) / 2)
                             y: Math.max(0, (zoomPreviewContent.height - editedPreviewZoom.height) / 2)
@@ -867,7 +1039,7 @@ Rectangle {
                             fillMode: Image.Stretch
                             asynchronous: true
                             cache: false
-                            visible: editedDisplaySource.length > 0
+                            visible: editedDisplaySource.length > 0 && !wipeCompareEnabled()
                         }
 
                         Image {
@@ -886,7 +1058,7 @@ Rectangle {
 
                         Image {
                             id: referencePreviewZoom
-                            x: editorPreview.compareMode ? editedPreviewZoom.x + editedPreviewZoom.width + 16 : 0
+                            x: sideBySideCompareEnabled() ? editedPreviewZoom.x + editedPreviewZoom.width + 16 : editedPreviewZoom.x
                             y: Math.max(0, (zoomPreviewContent.height - referencePreviewZoom.height) / 2)
                             width: imagePixelWidth(referencePreviewZoom) * manualZoom
                             height: imagePixelHeight(referencePreviewZoom) * manualZoom
@@ -894,12 +1066,72 @@ Rectangle {
                             fillMode: Image.Stretch
                             asynchronous: true
                             cache: false
-                            visible: editorPreview.compareMode && referenceDisplaySource.length > 0
+                            visible: sideBySideCompareEnabled()
+                        }
+
+                        Image {
+                            id: referencePreviewZoomWipe
+                            x: Math.max(0, (zoomPreviewContent.width - referencePreviewZoomWipe.width) / 2)
+                            y: Math.max(0, (zoomPreviewContent.height - referencePreviewZoomWipe.height) / 2)
+                            width: imagePixelWidth(referencePreviewZoom) * manualZoom
+                            height: imagePixelHeight(referencePreviewZoom) * manualZoom
+                            source: referenceDisplaySource
+                            fillMode: Image.Stretch
+                            asynchronous: true
+                            cache: false
+                            visible: wipeCompareEnabled()
+                        }
+
+                        Item {
+                            id: editedPreviewZoomWipeClip
+                            x: referencePreviewZoomWipe.x
+                            y: referencePreviewZoomWipe.y
+                            width: referencePreviewZoomWipe.width * compareWipePosition
+                            height: referencePreviewZoomWipe.height
+                            clip: true
+                            visible: wipeCompareEnabled() && editedDisplaySource.length > 0
+
+                            Image {
+                                id: editedPreviewZoomWipe
+                                x: 0
+                                y: 0
+                                width: referencePreviewZoomWipe.width
+                                height: referencePreviewZoomWipe.height
+                                source: editedDisplaySource
+                                fillMode: Image.Stretch
+                                asynchronous: true
+                                cache: false
+                            }
+                        }
+
+                        Rectangle {
+                            id: compareZoomWipeHandle
+                            visible: wipeCompareEnabled() && referencePreviewZoomWipe.visible
+                            x: editedPreviewZoomWipeClip.x + editedPreviewZoomWipeClip.width - width / 2
+                            y: editedPreviewZoomWipeClip.y
+                            width: 2
+                            height: editedPreviewZoomWipeClip.height
+                            color: theme.alpha(theme.accentWarm400, 0.92)
+
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -8
+                                cursorShape: Qt.SizeHorCursor
+                                onPressed: function(mouse) {
+                                    compareWipePosition = clamp((parent.x + mouse.x - referencePreviewZoomWipe.x) / Math.max(1, referencePreviewZoomWipe.width), 0.05, 0.95)
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (!pressed)
+                                        return
+                                    compareWipePosition = clamp((parent.x + mouse.x - referencePreviewZoomWipe.x) / Math.max(1, referencePreviewZoomWipe.width), 0.05, 0.95)
+                                }
+                            }
                         }
 
                         MouseArea {
                             anchors.fill: parent
-                            visible: editorPreview.whiteBalanceSampling && !editorPreview.cropEditing && editedPreviewZoom.visible
+                            visible: editorPreview.whiteBalanceSampling && !editorPreview.compareMode &&
+                                     !editorPreview.cropEditing && editedPreviewZoom.visible
                             cursorShape: Qt.CrossCursor
                             onClicked: function (mouse) {
                                 if (mouse.x < editedPreviewZoom.x || mouse.x > editedPreviewZoom.x + editedPreviewZoom.width || mouse.y < editedPreviewZoom.y || mouse.y > editedPreviewZoom.y + editedPreviewZoom.height) {
@@ -1012,7 +1244,7 @@ Rectangle {
                             font.family: theme.fontUi
                             font.pixelSize: 12
                             wrapMode: Text.WordWrap
-                            width: 420
+                            Layout.preferredWidth: 420
                             horizontalAlignment: Text.AlignHCenter
                         }
                     }
@@ -1021,9 +1253,11 @@ Rectangle {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 74
+                Layout.preferredHeight: 92
                 radius: theme.radius8
-                color: theme.alpha(theme.ink800, 0.82)
+                color: theme.alpha(theme.ink850, 0.9)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.2)
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -1032,161 +1266,214 @@ Rectangle {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 6
+                        spacing: 8
 
                         Label {
                             Layout.fillWidth: true
-                            text: editorPreview.processing ? "Rendering preview..." : editorPreview.status
-                            color: theme.textMuted
+                            text: previewStatusText()
+                            color: inspectorMode === "masks" ? theme.alpha(maskWorkspaceAccentColor(), 0.95) : theme.textMuted
                             font.family: theme.fontUi
-                            font.pixelSize: 10
+                            font.pixelSize: 11
                             elide: Text.ElideRight
                         }
 
                         Rectangle {
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 24
-                            radius: theme.radius8
-                            color: fitToView ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
+                            radius: theme.radiusPanel
+                            color: theme.alpha(theme.ink900, 0.72)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.14)
+                            implicitWidth: zoomModeRow.implicitWidth + 6
+                            implicitHeight: 30
 
-                            Label {
-                                anchors.centerIn: parent
-                                text: "Fit"
-                                color: fitToView ? theme.textStrong : theme.textMain
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.Medium
-                            }
-
-                            MouseArea {
+                            RowLayout {
+                                id: zoomModeRow
                                 anchors.fill: parent
-                                onClicked: {
-                                    fitToView = true;
-                                    zoomPreviewFlick.contentX = 0;
-                                    zoomPreviewFlick.contentY = 0;
+                                anchors.margins: 3
+                                spacing: 3
+
+                                ActionButton {
+                                    text: "Fit"
+                                    iconName: "crop"
+                                    compact: true
+                                    active: fitToView
+                                    showText: false
+                                    tooltipText: "Fit preview to canvas"
+                                    onClicked: {
+                                        fitToView = true;
+                                        zoomPreviewFlick.contentX = 0;
+                                        zoomPreviewFlick.contentY = 0;
+                                    }
                                 }
-                            }
-                        }
 
-                        Rectangle {
-                            Layout.preferredWidth: 48
-                            Layout.preferredHeight: 24
-                            radius: theme.radius8
-                            color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: "1:1"
-                                color: !fitToView && Math.abs(manualZoom - 1.0) < 0.01 ? theme.textStrong : theme.textMain
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: {
-                                    setZoomLevel(1.0);
-                                    centerZoomPreview();
+                                ActionButton {
+                                    text: "1:1"
+                                    compact: true
+                                    active: !fitToView && Math.abs(manualZoom - 1.0) < 0.01
+                                    iconText: "1:1"
+                                    showText: false
+                                    tooltipText: "View at 1:1"
+                                    onClicked: {
+                                        setZoomLevel(1.0);
+                                        centerZoomPreview();
+                                    }
                                 }
-                            }
-                        }
 
-                        Rectangle {
-                            Layout.preferredWidth: 74
-                            Layout.preferredHeight: 24
-                            radius: theme.radius8
-                            color: editorPreview.compareMode ? theme.alpha(theme.accentWarm500, 0.12) : theme.ink850
-                            opacity: editorPreview.hasAsset ? 1.0 : 0.55
+                                ActionButton {
+                                    text: "Compare"
+                                    iconName: "compare"
+                                    compact: true
+                                    active: editorPreview.compareMode
+                                    enabled: editorPreview.hasAsset
+                                    showText: false
+                                    tooltipText: "Toggle compare"
+                                    onClicked: editorPreview.compareMode = !editorPreview.compareMode
+                                }
 
-                            Label {
-                                anchors.centerIn: parent
-                                text: "Compare"
-                                color: editorPreview.compareMode ? theme.textStrong : theme.textMain
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.Medium
-                            }
+                                ActionButton {
+                                    text: "Split"
+                                    iconName: "split-view"
+                                    compact: true
+                                    visible: editorPreview.compareMode
+                                    active: compareViewMode === "side-by-side"
+                                    accent: theme.accentCool500
+                                    showText: false
+                                    tooltipText: "Split compare"
+                                    onClicked: compareViewMode = "side-by-side"
+                                }
 
-                            MouseArea {
-                                anchors.fill: parent
-                                enabled: editorPreview.hasAsset
-                                onClicked: editorPreview.compareMode = !editorPreview.compareMode
+                                ActionButton {
+                                    text: "Wipe"
+                                    iconName: "wipe"
+                                    compact: true
+                                    visible: editorPreview.compareMode
+                                    active: compareViewMode === "wipe"
+                                    accent: theme.accentCool500
+                                    showText: false
+                                    tooltipText: "Wipe compare"
+                                    onClicked: compareViewMode = "wipe"
+                                }
                             }
                         }
 
                         Label {
-                            text: fitToView ? "Fit" : (Math.round(manualZoom * 100) + "%")
+                            text: (fitToView ? "Fit" : (Math.round(manualZoom * 100) + "%")) +
+                                  (editorPreview.compareMode
+                                   ? (compareViewMode === "wipe" ? " · Wipe" : " · Split")
+                                   : "")
                             color: theme.textMuted
                             font.family: theme.fontMono
                             font.pixelSize: 10
                         }
                     }
 
-                    ListView {
-                        id: filmstripView
+                    Item {
+                        id: filmstripHolder
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        clip: true
-                        orientation: ListView.Horizontal
-                        boundsBehavior: Flickable.StopAtBounds
-                        spacing: 8
-                        model: catalogAssets
-                        currentIndex: catalogAssets.selectedIndex
 
-                        delegate: Rectangle {
-                            required property int index
-                            required property string assetId
-                            required property string thumbnailSource
+                        readonly property int thumbWidth: 70
+                        readonly property int thumbHeight: 56
+                        readonly property int thumbOuterWidth: 74
 
-                            readonly property bool isCurrent: catalogAssets.selectedIndex === index
-                            readonly property bool isInSelection: catalogAssets.assetSelected(assetId)
+                        ListView {
+                            id: filmstripView
+                            width: filmstripHolder.width
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.left: parent.left
+                            clip: true
+                            orientation: ListView.Horizontal
+                            boundsBehavior: Flickable.StopAtBounds
+                            spacing: 8
+                            model: catalogAssets
+                            currentIndex: catalogAssets.selectedIndex
 
-                            width: 52
-                            height: filmstripView.height
-                            radius: theme.radius6
-                            color: isCurrent
-                                   ? theme.alpha(theme.ink700, 0.82)
-                                   : (isInSelection ? theme.alpha(theme.ink750, 0.62) : theme.ink900)
-                            border.width: isInSelection ? (isCurrent ? 2 : 1) : 0
-                            border.color: isCurrent ? theme.accentWarm400 : theme.accentCool500
+                            delegate: Rectangle {
+                                required property int index
+                                required property string assetId
+                                required property string thumbnailSource
 
-                            Rectangle {
-                                anchors.fill: parent
-                                anchors.margins: 3
-                                radius: theme.radius4
-                                color: theme.ink950
-                                clip: true
+                                readonly property bool isCurrent: catalogAssets.selectedIndex === index
+                                readonly property bool isInSelection: catalogAssets.assetSelected(assetId)
 
-                                Image {
-                                    anchors.fill: parent
-                                    source: thumbnailSource
-                                    fillMode: Image.PreserveAspectFit
-                                    asynchronous: true
-                                    cache: false
-                                    visible: thumbnailSource.length > 0
-                                }
+                                width: filmstripHolder.thumbOuterWidth
+                                height: filmstripView.height
+                                radius: theme.radiusChip
+                                color: isCurrent
+                                       ? theme.alpha(theme.ink700, 0.9)
+                                       : (isInSelection ? theme.alpha(theme.ink750, 0.62) : theme.ink900)
+                                border.width: isInSelection ? (isCurrent ? 2 : 1) : 0
+                                border.color: isCurrent ? theme.alpha(theme.accentWarm400, 0.95) : theme.alpha(theme.accentCool500, 0.56)
 
                                 Rectangle {
                                     anchors.fill: parent
-                                    color: theme.ink800
-                                    visible: thumbnailSource.length === 0
+                                    anchors.margins: 1
+                                    radius: parent.radius - 1
+                                    visible: isCurrent
+                                    color: theme.alpha(theme.accentWarm500, 0.1)
+                                }
+
+                                Rectangle {
+                                    width: filmstripHolder.thumbWidth
+                                    height: filmstripHolder.thumbHeight
+                                    anchors.centerIn: parent
+                                    radius: theme.radius4
+                                    color: theme.ink950
+                                    clip: true
+
+                                    Image {
+                                        anchors.fill: parent
+                                        source: thumbnailSource
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                        cache: false
+                                        visible: thumbnailSource.length > 0
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: theme.ink800
+                                        visible: thumbnailSource.length === 0
+                                    }
+                                }
+
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    anchors.leftMargin: 6
+                                    anchors.rightMargin: 6
+                                    anchors.bottomMargin: 2
+                                    height: 2
+                                    radius: 1
+                                    visible: isCurrent
+                                    color: theme.accentWarm400
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: function(mouse) {
+                                        if (mouse.modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                                            catalogAssets.toggleSelectionIndex(index)
+                                        else
+                                            catalogAssets.selectIndex(index)
+                                    }
                                 }
                             }
 
-                            MouseArea {
-                                anchors.fill: parent
-                                onClicked: function(mouse) {
-                                    if (mouse.modifiers & (Qt.ControlModifier | Qt.MetaModifier))
-                                        catalogAssets.toggleSelectionIndex(index)
-                                    else
-                                        catalogAssets.selectIndex(index)
-                                }
+                            footer: Item {
+                                width: 10
+                                height: filmstripView.height
                             }
                         }
 
-                        footer: Item {
-                            width: 10
-                            height: filmstripView.height
+                        Label {
+                            anchors.centerIn: parent
+                            visible: catalogAssets.assetCount === 0
+                            text: "Filmstrip follows your library selection"
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
                         }
                     }
                 }
@@ -1264,27 +1551,33 @@ Rectangle {
 
                             ActionButton {
                                 text: "Adjust"
+                                iconName: "adjust"
+                                showText: false
+                                tooltipText: "Adjust"
                                 compact: true
                                 active: inspectorMode === "adjust"
-                                font.pixelSize: 10
                                 implicitHeight: 28
                                 onClicked: inspectorMode = "adjust"
                             }
 
                             ActionButton {
                                 text: "Masks"
+                                iconName: "masks"
+                                showText: false
+                                tooltipText: "Masks"
                                 compact: true
                                 active: inspectorMode === "masks"
-                                font.pixelSize: 10
                                 implicitHeight: 28
                                 onClicked: inspectorMode = "masks"
                             }
 
                             ActionButton {
                                 text: "Crop"
+                                iconName: "crop"
+                                showText: false
+                                tooltipText: "Crop"
                                 compact: true
                                 active: inspectorMode === "crop"
-                                font.pixelSize: 10
                                 implicitHeight: 28
                                 onClicked: inspectorMode = "crop"
                             }
@@ -1308,23 +1601,42 @@ Rectangle {
                             spacing: 6
 
                             ActionButton {
-                                text: editorPreview.whiteBalanceSampling ? "Cancel WB" : "Pick WB"
-                                active: editorPreview.whiteBalanceSampling
-                                compact: true
-                                enabled: editorPreview.hasAsset
-                                font.pixelSize: 10
-                                implicitHeight: 24
-                                onClicked: editorPreview.whiteBalanceSampling = !editorPreview.whiteBalanceSampling
-                            }
-
-                            ActionButton {
                                 text: editorPreview.compareMode ? "Compare On" : "Compare"
+                                iconName: "compare"
                                 active: editorPreview.compareMode
                                 compact: true
                                 enabled: editorPreview.hasAsset
+                                showText: false
+                                tooltipText: editorPreview.compareMode ? "Disable compare" : "Enable compare"
                                 font.pixelSize: 10
                                 implicitHeight: 24
                                 onClicked: editorPreview.compareMode = !editorPreview.compareMode
+                            }
+
+                            ActionButton {
+                                text: compareViewMode === "wipe" ? "Wipe" : "Split"
+                                iconName: compareViewMode === "wipe" ? "wipe" : "split-view"
+                                compact: true
+                                visible: editorPreview.compareMode
+                                showText: false
+                                tooltipText: compareViewMode === "wipe" ? "Switch to split compare" : "Switch to wipe compare"
+                                font.pixelSize: 10
+                                implicitHeight: 24
+                                onClicked: compareViewMode = compareViewMode === "wipe" ? "side-by-side" : "wipe"
+                            }
+
+                            Label {
+                                text: "Output"
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                            }
+
+                            ToneComboBox {
+                                Layout.preferredWidth: 108
+                                model: ["sRGB", "Display P3"]
+                                currentIndex: editorPreview.outputColorSpace === "Display P3" ? 1 : 0
+                                onActivated: editorPreview.outputColorSpace = currentText
                             }
 
                             Item {
@@ -1334,6 +1646,7 @@ Rectangle {
                             Label {
                                 text: (catalogAssets.selectedRecipeJson.length > 0 ? "Edited" : "Base")
                                       + (editorPreview.maskCount > 0 ? " · Masks" : "")
+                                      + " · " + editorPreview.outputColorSpace
                                 color: theme.textMuted
                                 font.family: theme.fontMono
                                 font.pixelSize: 9
@@ -1492,6 +1805,7 @@ Rectangle {
                                         ActionButton {
                                             text: "Apply"
                                             compact: true
+                                            tone: "primary"
                                             enabled: selectedPresetName.length > 0 && editorPreview.presetRecipeJson(selectedPresetName).length > 0
                                             onClicked: applyPresetToSelection(selectedPresetName)
                                         }
@@ -1512,15 +1826,17 @@ Rectangle {
                                         ActionButton {
                                             text: "Save"
                                             compact: true
+                                            tone: "primary"
                                             enabled: editorPreview.hasAsset && presetDraftName.trim().length > 0
                                             onClicked: saveCurrentPreset()
                                         }
 
-                                        ActionButton {
+                                        ConfirmActionButton {
                                             text: "Delete"
                                             compact: true
                                             enabled: selectedPresetName.length > 0 && editorPreview.presetRecipeJson(selectedPresetName).length > 0
-                                            onClicked: {
+                                            helperText: "Delete this saved preset"
+                                            onConfirmed: {
                                                 if (editorPreview.deletePreset(selectedPresetName)) {
                                                     selectedPresetName = ""
                                                     presetDraftName = ""
@@ -1545,13 +1861,109 @@ Rectangle {
                         width: inspectorScroll.availableWidth
                         spacing: 10
 
-                        HistogramDisplay {
+                        Rectangle {
                             width: parent.width
-                            height: 80
-                            redData: editorPreview.histogramRed
-                            greenData: editorPreview.histogramGreen
-                            blueData: editorPreview.histogramBlue
-                            luminanceData: editorPreview.histogramLuminance
+                            radius: theme.radius8
+                            color: inspectorMode === "masks"
+                                   ? theme.alpha(theme.ink900, 0.56)
+                                   : theme.alpha(theme.ink900, 0.72)
+                            border.width: 1
+                            border.color: inspectorMode === "masks"
+                                          ? theme.alpha(theme.lineSoft, 0.16)
+                                          : theme.alpha(theme.lineSoft, 0.24)
+                            implicitHeight: histogramColumn.implicitHeight + (inspectorMode === "masks" ? 10 : 14)
+
+                            ColumnLayout {
+                                id: histogramColumn
+                                anchors.fill: parent
+                                anchors.margins: 7
+                                spacing: 6
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        text: "Histogram"
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    ActionButton {
+                                        text: "RGB"
+                                        compact: true
+                                        active: histogramShowRgb
+                                        onClicked: histogramShowRgb = !histogramShowRgb
+                                    }
+
+                                    ActionButton {
+                                        text: "Luma"
+                                        compact: true
+                                        active: histogramShowLuminance
+                                        onClicked: histogramShowLuminance = !histogramShowLuminance
+                                    }
+
+                                    ActionButton {
+                                        text: histogramLogScale ? "Log" : "Lin"
+                                        compact: true
+                                        active: histogramLogScale
+                                        onClicked: histogramLogScale = !histogramLogScale
+                                    }
+                                }
+
+                                HistogramDisplay {
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: inspectorMode === "masks" ? 74 : 88
+                                    redData: editorPreview.histogramRed
+                                    greenData: editorPreview.histogramGreen
+                                    blueData: editorPreview.histogramBlue
+                                    luminanceData: editorPreview.histogramLuminance
+                                    showRgb: histogramShowRgb
+                                    showLuminance: histogramShowLuminance
+                                    logScale: histogramLogScale
+                                    shadowClipRatio: editorPreview.histogramSampleCount > 0
+                                                     ? editorPreview.histogramShadowClipCount / editorPreview.histogramSampleCount
+                                                     : 0
+                                    highlightClipRatio: editorPreview.histogramSampleCount > 0
+                                                        ? editorPreview.histogramHighlightClipCount / editorPreview.histogramSampleCount
+                                                        : 0
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Label {
+                                        text: "Blk " + editorPreview.histogramShadowClipCount
+                                        color: editorPreview.histogramShadowClipCount > 0 ? "#8fb4ff" : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+
+                                    Label {
+                                        text: "Wht " + editorPreview.histogramHighlightClipCount
+                                        color: editorPreview.histogramHighlightClipCount > 0 ? "#f2bc79" : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    Label {
+                                        text: editorPreview.histogramSampleCount > 0
+                                              ? Math.round((editorPreview.histogramShadowClipCount / editorPreview.histogramSampleCount) * 100) + "% / " +
+                                                Math.round((editorPreview.histogramHighlightClipCount / editorPreview.histogramSampleCount) * 100) + "%"
+                                              : "0% / 0%"
+                                        color: theme.textFaint
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                    }
+                                }
+                            }
                         }
 
                         MaskInspectorSections {
@@ -1743,6 +2155,23 @@ Rectangle {
                             subtitle: "White balance and global color intensity."
                             expandable: true
                             expanded: true
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Item { Layout.fillWidth: true }
+
+                                ActionButton {
+                                    compact: true
+                                    iconName: "eyedropper"
+                                    showText: false
+                                    tooltipText: editorPreview.whiteBalanceSampling ? "Cancel white balance picker" : "Sample white balance from image"
+                                    active: editorPreview.whiteBalanceSampling
+                                    enabled: editorPreview.hasAsset && !editorPreview.compareMode
+                                    onClicked: editorPreview.whiteBalanceSampling = !editorPreview.whiteBalanceSampling
+                                }
+                            }
 
                             InspectorSlider {
                                 Layout.fillWidth: true

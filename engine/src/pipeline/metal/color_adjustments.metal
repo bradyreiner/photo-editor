@@ -369,8 +369,14 @@ static float bell_weight(float value, float center, float radius) {
 static float apply_pivoted_contrast(float value, float amount) {
   constexpr float kMiddleGray = 0.18f;
   const float safe_value = max(1.0e-6f, value);
-  const float contrast = clamp(1.0f + amount * 0.60f, 0.55f, 1.85f);
-  return kMiddleGray * pow(safe_value / kMiddleGray, contrast);
+  const float contrast = clamp(1.0f + amount * 0.48f, 0.72f, 1.52f);
+  const float contrasted = kMiddleGray * pow(safe_value / kMiddleGray, contrast);
+  const float stop_distance = fabs(log2(safe_value / kMiddleGray));
+  const float edge_protection =
+      smoothstep(1.10f, amount >= 0.0f ? 3.20f : 2.70f, stop_distance);
+  const float blend_to_original =
+      clamp(edge_protection * (0.40f + fabs(amount) * 0.38f), 0.0f, 0.82f);
+  return mix(contrasted, safe_value, blend_to_original);
 }
 
 static float apply_global_tone(float value, constant PreToneUniforms& uniforms) {
