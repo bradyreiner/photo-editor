@@ -67,7 +67,7 @@ detect_postgres_runtime_dir() {
   if command -v brew >/dev/null 2>&1; then
     for formula in postgresql@16 postgresql@15 postgresql@14 postgresql; do
       candidate="$(brew --prefix "${formula}" 2>/dev/null || true)"
-      if [ -n "${candidate}" ] && [ -d "${candidate}/bin" ]; then
+      if [ -n "${candidate}" ] && postgres_runtime_has_required_tools "${candidate}"; then
         printf '%s\n' "${candidate}"
         return 0
       fi
@@ -86,6 +86,12 @@ detect_postgres_runtime_dir() {
   fi
 
   return 1
+}
+
+postgres_runtime_has_required_tools() {
+  local runtime_root="$1"
+
+  [ -x "${runtime_root}/bin/initdb" ] && [ -x "${runtime_root}/bin/pg_ctl" ]
 }
 
 while [ "$#" -gt 0 ]; do
@@ -205,6 +211,10 @@ case "${host_os}" in
     ;;
 esac
 
+if [ "${use_postgres_runtime}" -eq 1 ] && ! postgres_runtime_has_required_tools "${postgres_runtime_dir}"; then
+  fail "PostgreSQL runtime was requested but initdb/pg_ctl were not found. Install postgresql@16, set PHOTO_EDITOR_POSTGRES_RUNTIME_DIR, pass --postgres-runtime-dir, or pass --no-postgres-runtime."
+fi
+
 if [ "${run_tests}" -eq 1 ]; then
   log "Running Rust tests"
   cargo test --manifest-path "${REPO_ROOT}/rust/Cargo.toml" --workspace
@@ -227,11 +237,11 @@ configure_args=(
 )
 
 if [ "${use_postgres_runtime}" -eq 1 ]; then
-  if [ -n "${postgres_runtime_dir}" ] && [ -d "${postgres_runtime_dir}/bin" ]; then
+  if [ -n "${postgres_runtime_dir}" ] && postgres_runtime_has_required_tools "${postgres_runtime_dir}"; then
     configure_args+=("-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=${postgres_runtime_dir}")
     log "Bundling PostgreSQL runtime from ${postgres_runtime_dir}"
   else
-    fail "PostgreSQL runtime was requested but not found. Install postgresql@16, set PHOTO_EDITOR_POSTGRES_RUNTIME_DIR, pass --postgres-runtime-dir, or pass --no-postgres-runtime."
+    fail "PostgreSQL runtime was requested but initdb/pg_ctl were not found. Install postgresql@16, set PHOTO_EDITOR_POSTGRES_RUNTIME_DIR, pass --postgres-runtime-dir, or pass --no-postgres-runtime."
   fi
 else
   log "Building without bundled PostgreSQL runtime"

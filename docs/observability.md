@@ -17,7 +17,7 @@ The current implementation is intentionally minimal and vendor-neutral:
 - per-run correlation via `PHOTO_EDITOR_SESSION_ID`
 - helper-process propagation via `PHOTO_EDITOR_OBSERVABILITY_RUN_DIR`
 - latency measurements around startup, preview render stages, catalog helpers, and jobs
-- optional OpenTelemetry traces for Rust helper processes and the MCP server when an OTLP endpoint is configured
+- optional OpenTelemetry traces for Rust helper processes when an OTLP endpoint is configured
 
 ## Environment
 
@@ -30,7 +30,7 @@ The current implementation is intentionally minimal and vendor-neutral:
 - `PHOTO_EDITOR_OBSERVABILITY_RUN_DIR`
   - Optional override for the current run directory.
 - `OTEL_EXPORTER_OTLP_ENDPOINT`
-  - Optional OTLP collector endpoint for Rust helper processes and `photo-editor-mcp`.
+  - Optional OTLP collector endpoint for Rust helper processes.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
   - Optional traces-only endpoint. Takes precedence over `OTEL_EXPORTER_OTLP_ENDPOINT`.
 - `OTEL_SERVICE_NAMESPACE`
@@ -47,7 +47,7 @@ The current implementation is intentionally minimal and vendor-neutral:
 - `catalog_local_db.jsonl`, `import_catalog.jsonl`, `catalog_migrate.jsonl`
   - Rust helper activity for catalog bootstrap, imports, and migrations.
 - OTLP traces
-  - `photo-editor-mcp` and Rust helper binaries emit spans when either OTLP endpoint variable is set.
+  - Rust helper binaries emit spans when either OTLP endpoint variable is set.
   - The current desktop Qt/C++ layer still emits JSONL only; OTLP there is a future step.
 
 Each JSON line contains an event name plus timing and context fields. Typical useful filters:

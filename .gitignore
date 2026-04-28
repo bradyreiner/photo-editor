@@ -1,15 +1,38 @@
+# Build products
 build/
+compile_commands.json
+CMakeUserPresets.json
+
+# OS/editor noise
 .DS_Store
+**/.DS_Store
+._*
+.AppleDouble
+.LSOverride
 *.user
 *.swp
 *.swo
 *.log
+
+# Local agent/tool state
+.agents/
+.claude/
+.codex/
+.codex-appdata/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+docs/ai-agent-operations.md
+plugins/photo-editor-codex/
+rust/crates/mcp/
+scripts/ai/
 
 # Local runtime data
 .env
 .env.local
 .env.*.local
 .photo-editor/
+.photo-editor-runtime-check/
 data/
 logs/
 backups/

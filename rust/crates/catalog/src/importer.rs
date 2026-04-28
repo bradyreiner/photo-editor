@@ -294,12 +294,12 @@ fn parse_exif_date(value: &str) -> Option<(u16, u8, u8)> {
 }
 
 fn path_to_utf8(path: &Path) -> std::io::Result<String> {
-    path.to_str()
-        .map(|s| s.to_owned())
-        .ok_or_else(|| std::io::Error::new(
+    path.to_str().map(|s| s.to_owned()).ok_or_else(|| {
+        std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("path is not valid UTF-8: {}", path.display()),
-        ))
+        )
+    })
 }
 
 fn stable_asset_id(drive_id: &str, relative_path: &str) -> String {
