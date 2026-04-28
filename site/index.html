@@ -12,10 +12,10 @@
   <meta property="og:type" content="website">
   <meta name="theme-color" content="#111418">
   <title>Download PhotoEditor</title>
-  <link rel="icon" href="./favicon.svg?v=2" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=2">
-  <script defer src="./download-config.js?v=2"></script>
-  <script defer src="./download-page.js?v=2"></script>
+  <link rel="icon" href="./favicon.svg?v=3" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css?v=3">
+  <script defer src="./download-config.js?v=3"></script>
+  <script defer src="./download-page.js?v=3"></script>
 </head>
 <body>
   <header class="topbar" aria-label="Site header">
@@ -83,54 +83,89 @@
         </p>
       </div>
 
-      <div class="product-panel" aria-label="PhotoEditor interface preview">
+      <div class="product-panel app-preview" aria-label="PhotoEditor interface preview">
         <div class="window-chrome">
           <div class="traffic-lights" aria-hidden="true">
             <span></span>
             <span></span>
             <span></span>
           </div>
-          <span class="window-title">Library / Edit</span>
+          <span class="window-title">Edited · Masks · sRGB</span>
         </div>
         <div class="workspace-preview">
           <aside class="preview-sidebar" aria-hidden="true">
-            <div class="sidebar-pill active"></div>
-            <div class="sidebar-pill"></div>
-            <div class="sidebar-pill"></div>
-            <div class="sidebar-pill short"></div>
+            <div class="tool-button grid-tool"></div>
+            <div class="tool-button library-tool"></div>
+            <div class="tool-button active brush-tool"></div>
+            <div class="tool-button stack-tool"></div>
+            <div class="tool-button export-tool"></div>
           </aside>
           <section class="preview-stage">
             <div class="preview-toolbar" aria-hidden="true">
-              <span></span>
-              <span></span>
-              <span class="active-tool"></span>
+              <span class="toolbar-chip active-tool">Edit</span>
+              <span class="toolbar-chip">Mask</span>
+              <span class="toolbar-chip">Sync</span>
             </div>
             <div class="image-preview" aria-hidden="true">
-              <div class="subject"></div>
-              <div class="mountain one"></div>
-              <div class="mountain two"></div>
-              <div class="selection-box"></div>
-              <div class="mask-dot one"></div>
-              <div class="mask-dot two"></div>
+              <div class="sky-band"></div>
+              <div class="cloud cloud-a"></div>
+              <div class="cloud cloud-b"></div>
+              <div class="cloud cloud-c"></div>
+              <div class="ridge ridge-back"></div>
+              <div class="ridge ridge-front"></div>
+              <div class="forest"></div>
+              <div class="road"></div>
+              <div class="mask-outline"></div>
             </div>
-            <div class="filmstrip" aria-hidden="true">
-              <span></span>
-              <span></span>
-              <span></span>
-              <span></span>
+            <div class="filmstrip-wrap" aria-hidden="true">
+              <span class="filmstrip-status">Edit recipe save is unavailable.</span>
+              <div class="filmstrip">
+                <span></span>
+                <span></span>
+                <span class="selected"></span>
+                <span></span>
+                <span></span>
+              </div>
             </div>
           </section>
           <aside class="preview-controls" aria-hidden="true">
-            <div class="histogram"></div>
-            <div class="control-label"></div>
-            <div class="slider"></div>
-            <div class="control-label short"></div>
-            <div class="slider warm"></div>
-            <div class="control-label"></div>
-            <div class="toggle-row">
+            <div class="panel-actions">
               <span></span>
+              <span class="active"></span>
               <span></span>
             </div>
+            <div class="mode-row">
+              <span>Output</span>
+              <strong>sRGB</strong>
+            </div>
+            <section class="inspector-block">
+              <div class="inspector-title">
+                <strong>Histogram</strong>
+                <span>RGB</span>
+              </div>
+              <div class="histogram">
+                <i class="hist-r"></i>
+                <i class="hist-g"></i>
+                <i class="hist-b"></i>
+              </div>
+            </section>
+            <section class="inspector-block">
+              <div class="inspector-title">
+                <strong>Light</strong>
+                <span>0.00 EV</span>
+              </div>
+              <div class="slider-row val-54"><b>Exposure</b><i></i></div>
+              <div class="slider-row val-49"><b>Contrast</b><i></i></div>
+              <div class="slider-row val-47"><b>Highlights</b><i></i></div>
+              <div class="slider-row val-52"><b>Shadows</b><i></i></div>
+            </section>
+            <section class="inspector-block tone-block">
+              <div class="inspector-title">
+                <strong>Tone Curve</strong>
+                <span>IN / OUT</span>
+              </div>
+              <div class="curve-grid"></div>
+            </section>
           </aside>
         </div>
       </div>
