@@ -6,53 +6,112 @@
   <meta name="color-scheme" content="dark light">
   <meta
     name="description"
-    content="Download PhotoEditor for macOS or Windows.">
+    content="Download the latest private alpha build of PhotoEditor for macOS or Windows.">
+  <meta property="og:title" content="Download PhotoEditor">
+  <meta property="og:description" content="Private alpha downloads for PhotoEditor on macOS and Windows.">
+  <meta property="og:type" content="website">
+  <meta name="theme-color" content="#111418">
   <title>Download PhotoEditor</title>
-  <link rel="stylesheet" href="./styles.css">
-  <script defer src="./download-config.js"></script>
-  <script defer src="./download-page.js"></script>
+  <link rel="icon" href="./favicon.svg?v=2" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css?v=2">
+  <script defer src="./download-config.js?v=2"></script>
+  <script defer src="./download-page.js?v=2"></script>
 </head>
 <body>
+  <header class="topbar" aria-label="Site header">
+    <a class="brand-mark" href="./" aria-label="PhotoEditor download home">
+      <span class="brand-icon" aria-hidden="true"></span>
+      <span>PhotoEditor</span>
+    </a>
+    <nav class="topnav" aria-label="Page sections">
+      <a href="#downloads">Downloads</a>
+      <a href="#install">Install</a>
+      <a href="#testing">Testing</a>
+    </nav>
+  </header>
+
   <main class="page-shell">
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
-        <p class="eyebrow">Alpha desktop release</p>
+        <div class="release-pill" id="channel-pill">Private alpha</div>
         <h1 id="page-title">PhotoEditor</h1>
         <p class="lede">
-          A native photo workflow app for importing, culling, editing, and
-          exporting image libraries on macOS and Windows.
+          A native desktop workflow for importing, culling, editing, and
+          exporting photo libraries on macOS and Windows.
         </p>
-        <div class="download-actions" aria-label="Download installers">
-          <a id="mac-download" class="download-button primary disabled" href="#" aria-disabled="true">
-            <span class="platform">macOS</span>
-            <span class="file-type" id="mac-label">DMG coming soon</span>
+
+        <div class="hero-proof" aria-label="Release qualities">
+          <span>Native desktop app</span>
+          <span>Local-first catalog</span>
+          <span>Alpha feedback build</span>
+        </div>
+
+        <div id="downloads" class="download-grid" aria-label="Download installers">
+          <a
+            id="mac-download"
+            class="download-card primary disabled"
+            href="#"
+            aria-disabled="true"
+            tabindex="-1"
+            data-platform-card="mac">
+            <span class="download-kicker">macOS</span>
+            <span class="download-title">Download for Mac</span>
+            <span class="download-meta" id="mac-label">DMG not configured</span>
+            <span class="download-checksum" id="mac-checksum"></span>
           </a>
-          <a id="windows-download" class="download-button disabled" href="#" aria-disabled="true">
-            <span class="platform">Windows</span>
-            <span class="file-type" id="windows-label">MSIX coming soon</span>
+
+          <a
+            id="windows-download"
+            class="download-card disabled"
+            href="#"
+            aria-disabled="true"
+            tabindex="-1"
+            data-platform-card="windows">
+            <span class="download-kicker">Windows</span>
+            <span class="download-title">Download for Windows</span>
+            <span class="download-meta" id="windows-label">Installer not configured</span>
+            <span class="download-checksum" id="windows-checksum"></span>
           </a>
         </div>
+
         <p id="release-status" class="release-status" role="status">
-          Checking the latest release...
+          Checking available builds...
+        </p>
+        <p class="tester-note">
+          Private builds are for invited testers. Keep installer links off public
+          forums until code signing and public release hosting are finalized.
         </p>
       </div>
 
       <div class="product-panel" aria-label="PhotoEditor interface preview">
         <div class="window-chrome">
-          <span></span>
-          <span></span>
-          <span></span>
+          <div class="traffic-lights" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <span class="window-title">Library / Edit</span>
         </div>
         <div class="workspace-preview">
-          <aside class="preview-sidebar">
+          <aside class="preview-sidebar" aria-hidden="true">
             <div class="sidebar-pill active"></div>
             <div class="sidebar-pill"></div>
             <div class="sidebar-pill"></div>
+            <div class="sidebar-pill short"></div>
           </aside>
           <section class="preview-stage">
-            <div class="image-preview">
-              <div class="horizon"></div>
+            <div class="preview-toolbar" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span class="active-tool"></span>
+            </div>
+            <div class="image-preview" aria-hidden="true">
               <div class="subject"></div>
+              <div class="mountain one"></div>
+              <div class="mountain two"></div>
+              <div class="selection-box"></div>
+              <div class="mask-dot one"></div>
+              <div class="mask-dot two"></div>
             </div>
             <div class="filmstrip" aria-hidden="true">
               <span></span>
@@ -61,37 +120,113 @@
               <span></span>
             </div>
           </section>
-          <aside class="preview-controls">
-            <div class="meter"></div>
-            <div class="control-line long"></div>
-            <div class="control-line"></div>
+          <aside class="preview-controls" aria-hidden="true">
+            <div class="histogram"></div>
+            <div class="control-label"></div>
             <div class="slider"></div>
-            <div class="control-line long"></div>
+            <div class="control-label short"></div>
             <div class="slider warm"></div>
+            <div class="control-label"></div>
+            <div class="toggle-row">
+              <span></span>
+              <span></span>
+            </div>
           </aside>
         </div>
       </div>
     </section>
 
-    <section class="details" aria-label="Release details">
+    <section class="release-summary" aria-label="Release summary">
+      <div>
+        <span class="summary-label">Version</span>
+        <strong id="version-value">0.1.0</strong>
+      </div>
+      <div>
+        <span class="summary-label">Updated</span>
+        <strong id="updated-value">Not published</strong>
+      </div>
+      <div>
+        <span class="summary-label">Access</span>
+        <strong id="access-value">Invited testers</strong>
+      </div>
+      <div>
+        <span class="summary-label">Channel</span>
+        <strong id="channel-value">Alpha</strong>
+      </div>
+    </section>
+
+    <section id="install" class="content-grid" aria-label="Download details">
       <article>
-        <h2>Current Build</h2>
-        <p id="version-value">Version 0.1.0</p>
+        <h2>Install Notes</h2>
+        <ul>
+          <li id="mac-requirement">macOS 14 or newer recommended.</li>
+          <li id="windows-requirement">Windows 10 22H2 or newer recommended.</li>
+          <li>
+            Early builds may show Gatekeeper or SmartScreen warnings until
+            signing and notarization are finalized.
+          </li>
+        </ul>
       </article>
+
       <article>
-        <h2>Before Installing</h2>
-        <p>
-          Early MVP builds may still show macOS Gatekeeper or Windows SmartScreen
-          warnings until signing and notarization are finalized.
+        <h2>Private Alpha</h2>
+        <p id="access-note">
+          This page can be public, but private GitHub Release assets only work
+          for testers who have repository access. Use direct installer links
+          while the repository stays private.
         </p>
       </article>
+
       <article>
         <h2>Release Notes</h2>
         <p>
-          <a id="release-notes" href="#" aria-disabled="true">Release notes will appear here</a>
+          <a id="release-notes" href="#" aria-disabled="true">Release notes are not configured yet</a>
+        </p>
+      </article>
+
+      <article>
+        <h2>Need Help?</h2>
+        <p>
+          <a id="support-link" href="#" aria-disabled="true">Support contact is not configured yet</a>
         </p>
       </article>
     </section>
+
+    <section id="testing" class="tester-section" aria-labelledby="testing-title">
+      <div class="section-heading">
+        <p class="section-kicker">Tester workflow</p>
+        <h2 id="testing-title">What to try first</h2>
+      </div>
+      <div class="test-grid">
+        <article>
+          <span>01</span>
+          <h3>Install cleanly</h3>
+          <p>Download the build for your platform and confirm the app opens from a normal install location.</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h3>Import a folder</h3>
+          <p>Point PhotoEditor at a small photo folder and check that catalog browsing feels stable.</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h3>Edit and export</h3>
+          <p>Make a few basic adjustments, export images, and compare the output with the preview.</p>
+        </article>
+        <article>
+          <span>04</span>
+          <h3>Report friction</h3>
+          <p>Send crashes, confusing moments, missing files, and installer warnings with your OS version.</p>
+        </article>
+      </div>
+    </section>
+
+    <noscript>
+      <p class="noscript">
+        JavaScript is required to load the latest release links. Direct download
+        links can also be added manually in `download-config.js`.
+      </p>
+    </noscript>
   </main>
 </body>
 </html>
