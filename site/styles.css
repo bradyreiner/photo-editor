@@ -91,7 +91,7 @@ a {
 }
 
 .topnav a {
-  padding: 8px 10px;
+  padding: 8px 9px;
   border-radius: 3px;
   color: var(--text-muted);
   font-size: 0.9rem;
@@ -115,8 +115,8 @@ a {
 .hero {
   min-height: calc(100vh - 174px);
   display: grid;
-  grid-template-columns: minmax(420px, 0.78fr) minmax(560px, 1.22fr);
-  gap: 42px;
+  grid-template-columns: minmax(420px, 0.82fr) minmax(560px, 1.18fr);
+  gap: 34px;
   align-items: center;
 }
 
@@ -148,7 +148,7 @@ p {
 h1 {
   margin-bottom: 20px;
   color: var(--text-strong);
-  font-size: 5.9rem;
+  font-size: 5.6rem;
   line-height: 0.9;
   letter-spacing: 0;
 }
@@ -296,6 +296,23 @@ h1 {
   box-shadow: var(--shadow);
 }
 
+.app-screenshot {
+  display: none;
+  width: 100%;
+  height: auto;
+  max-height: 660px;
+  object-fit: contain;
+  background: var(--ink950);
+}
+
+.app-preview.has-real-screenshot .app-screenshot {
+  display: block;
+}
+
+.app-preview.has-real-screenshot .workspace-preview {
+  display: none;
+}
+
 .window-chrome {
   display: flex;
   align-items: center;
@@ -326,8 +343,8 @@ h1 {
 
 .workspace-preview {
   display: grid;
-  min-height: 520px;
-  grid-template-columns: 70px minmax(0, 1fr) 216px;
+  min-height: 500px;
+  grid-template-columns: 64px minmax(0, 1fr) 206px;
   background: var(--ink950);
 }
 
@@ -343,8 +360,8 @@ h1 {
 
 .tool-button {
   position: relative;
-  width: 42px;
-  height: 42px;
+  width: 38px;
+  height: 38px;
   border: 1px solid rgba(44, 48, 54, 0.88);
   border-radius: 2px;
   background: var(--ink850);
@@ -436,7 +453,7 @@ h1 {
 .preview-stage {
   display: grid;
   min-width: 0;
-  grid-template-rows: 36px minmax(0, 1fr) 78px;
+  grid-template-rows: 34px minmax(0, 1fr) 74px;
   gap: 8px;
   padding: 10px;
   border-right: 1px solid var(--line-soft);
@@ -451,7 +468,7 @@ h1 {
 }
 
 .toolbar-chip {
-  min-width: 74px;
+  min-width: 68px;
   padding: 7px 9px;
   border: 1px solid var(--line-soft);
   border-radius: 2px;
@@ -471,8 +488,8 @@ h1 {
 .image-preview {
   position: relative;
   overflow: hidden;
-  width: min(100%, 580px);
-  aspect-ratio: 1 / 1.15;
+  width: min(100%, 560px);
+  aspect-ratio: 1 / 1.08;
   align-self: center;
   justify-self: center;
   border: 1px solid rgba(244, 247, 250, 0.06);
@@ -594,7 +611,7 @@ h1 {
 
 .filmstrip-wrap {
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-columns: 128px minmax(0, 1fr);
   gap: 10px;
   align-items: end;
   padding: 7px;
@@ -635,7 +652,7 @@ h1 {
 
 .preview-controls {
   overflow: hidden;
-  padding: 10px;
+  padding: 9px;
   background: var(--ink900);
 }
 
@@ -677,7 +694,7 @@ h1 {
 }
 
 .inspector-block {
-  padding: 10px 8px;
+  padding: 9px 8px;
   border: 1px solid rgba(44, 48, 54, 0.72);
   background: rgba(14, 16, 18, 0.62);
 }
@@ -835,7 +852,7 @@ h1 {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 42px;
+  margin-bottom: 34px;
 }
 
 .content-grid article {
@@ -874,9 +891,16 @@ h1 {
   text-decoration: none;
 }
 
+.feature-section,
+.limits-section,
 .tester-section {
   padding: 34px 0 6px;
   border-top: 1px solid var(--line-soft);
+}
+
+.limits-section,
+.tester-section {
+  margin-top: 34px;
 }
 
 .section-heading {
@@ -901,10 +925,37 @@ h1 {
   font-size: 1.8rem;
 }
 
+.feature-grid,
+.limits-grid,
 .test-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
+}
+
+.feature-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.limits-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.test-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.feature-grid article,
+.limits-grid article,
+.test-grid article {
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  background: rgba(14, 16, 18, 0.78);
+}
+
+.feature-grid article,
+.limits-grid article {
+  min-height: 154px;
+  padding: 18px;
 }
 
 .test-grid article {
@@ -920,12 +971,16 @@ h1 {
   font-weight: 850;
 }
 
+.feature-grid h3,
+.limits-grid h3,
 .test-grid h3 {
   margin: 0 0 10px;
   color: var(--text-strong);
   font-size: 1.02rem;
 }
 
+.feature-grid p,
+.limits-grid p,
 .test-grid p {
   margin-bottom: 0;
   color: var(--text-muted);
@@ -980,6 +1035,8 @@ h1 {
   }
 
   .content-grid,
+  .feature-grid,
+  .limits-grid,
   .test-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1005,6 +1062,8 @@ h1 {
   .download-grid,
   .release-summary,
   .content-grid,
+  .feature-grid,
+  .limits-grid,
   .test-grid {
     grid-template-columns: 1fr;
   }

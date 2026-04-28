@@ -12,10 +12,10 @@
   <meta property="og:type" content="website">
   <meta name="theme-color" content="#111418">
   <title>Download PhotoEditor</title>
-  <link rel="icon" href="./favicon.svg?v=3" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=3">
-  <script defer src="./download-config.js?v=3"></script>
-  <script defer src="./download-page.js?v=3"></script>
+  <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css?v=4">
+  <script defer src="./download-config.js?v=4"></script>
+  <script defer src="./download-page.js?v=4"></script>
 </head>
 <body>
   <header class="topbar" aria-label="Site header">
@@ -26,6 +26,7 @@
     <nav class="topnav" aria-label="Page sections">
       <a href="#downloads">Downloads</a>
       <a href="#install">Install</a>
+      <a href="#included">Included</a>
       <a href="#testing">Testing</a>
     </nav>
   </header>
@@ -43,7 +44,7 @@
         <div class="hero-proof" aria-label="Release qualities">
           <span>Native desktop app</span>
           <span>Local-first catalog</span>
-          <span>Alpha feedback build</span>
+          <span>Mask and tone workflow</span>
         </div>
 
         <div id="downloads" class="download-grid" aria-label="Download installers">
@@ -92,7 +93,12 @@
           </div>
           <span class="window-title">Edited · Masks · sRGB</span>
         </div>
-        <div class="workspace-preview">
+        <img
+          id="app-screenshot"
+          class="app-screenshot"
+          src="./assets/app-preview.png?v=1"
+          alt="PhotoEditor edit workspace with image preview, filmstrip, histogram, and tone controls.">
+        <div class="workspace-preview css-preview">
           <aside class="preview-sidebar" aria-hidden="true">
             <div class="tool-button grid-tool"></div>
             <div class="tool-button library-tool"></div>
@@ -225,6 +231,52 @@
           <a id="support-link" href="#" aria-disabled="true">Support contact is not configured yet</a>
         </p>
       </article>
+    </section>
+
+    <section id="included" class="feature-section" aria-labelledby="included-title">
+      <div class="section-heading">
+        <p class="section-kicker">Alpha scope</p>
+        <h2 id="included-title">What is included</h2>
+      </div>
+      <div class="feature-grid">
+        <article>
+          <h3>Import and browse</h3>
+          <p>Bring in a small photo folder and move through the library, carousel, and edit workspace.</p>
+        </article>
+        <article>
+          <h3>Tone controls</h3>
+          <p>Exercise exposure, contrast, highlights, shadows, whites, blacks, and the point curve.</p>
+        </article>
+        <article>
+          <h3>Mask workflow</h3>
+          <p>Try brush, object, and selection paths enough to surface rough edges and missing interactions.</p>
+        </article>
+        <article>
+          <h3>Export path</h3>
+          <p>Run edited images through export and compare the output with the preview you saw in the app.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="limits-section" aria-labelledby="limits-title">
+      <div class="section-heading">
+        <p class="section-kicker">Known rough edges</p>
+        <h2 id="limits-title">What to expect</h2>
+      </div>
+      <div class="limits-grid">
+        <article>
+          <h3>Installer trust warnings</h3>
+          <p>Gatekeeper and SmartScreen warnings are expected until signing and notarization are finished.</p>
+        </article>
+        <article>
+          <h3>Small test libraries</h3>
+          <p>Use focused folders first. Large production catalogs are not the goal for this private alpha.</p>
+        </article>
+        <article>
+          <h3>Feature gaps</h3>
+          <p>Some controls may be present before every edge case is wired, especially around masks and batch flows.</p>
+        </article>
+      </div>
     </section>
 
     <section id="testing" class="tester-section" aria-labelledby="testing-title">

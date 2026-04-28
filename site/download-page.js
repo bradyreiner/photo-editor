@@ -29,7 +29,9 @@
     support: document.getElementById("support-link"),
     macRequirement: document.getElementById("mac-requirement"),
     windowsRequirement: document.getElementById("windows-requirement"),
-    accessNote: document.getElementById("access-note")
+    accessNote: document.getElementById("access-note"),
+    previewPanel: document.querySelector(".app-preview"),
+    previewImage: document.getElementById("app-screenshot")
   };
 
   function normalizePattern(pattern, fallback) {
@@ -121,6 +123,32 @@
     }
   }
 
+  function initializeScreenshotPreview() {
+    if (!elements.previewPanel || !elements.previewImage) {
+      return;
+    }
+
+    function showRealScreenshot() {
+      elements.previewPanel.classList.add("has-real-screenshot");
+    }
+
+    function showCssPreview() {
+      elements.previewPanel.classList.remove("has-real-screenshot");
+      elements.previewImage.removeAttribute("src");
+    }
+
+    elements.previewImage.addEventListener("load", showRealScreenshot);
+    elements.previewImage.addEventListener("error", showCssPreview);
+
+    if (elements.previewImage.complete) {
+      if (elements.previewImage.naturalWidth > 0) {
+        showRealScreenshot();
+      } else {
+        showCssPreview();
+      }
+    }
+  }
+
   function render() {
     elements.version.textContent = state.version;
     elements.updated.textContent = formatDate(state.updatedAt);
@@ -187,6 +215,7 @@
 
   detectPlatform();
   renderStaticConfig();
+  initializeScreenshotPreview();
   loadLatestRelease().catch(() => {
     state.errorMessage =
       "Could not read the latest release. Check download-config.js or use direct URLs.";
