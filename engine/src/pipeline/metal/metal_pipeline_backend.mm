@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 
 namespace photo_editor::pipeline::metal {
@@ -12,6 +13,7 @@ namespace photo_editor::pipeline::metal {
 namespace {
 
 constexpr double kPi = std::numbers::pi_v<double>;
+static_assert(sizeof(ColorPixel) == sizeof(float) * 4);
 
 struct ColorAdjustmentUniforms {
   float exposure_gain;
@@ -235,6 +237,45 @@ std::array<float, 3> wb_multipliers(double temperature, double tint) {
   const auto norm = r * 0.2126 + g * 0.7152 + b * 0.0722;
   if (norm <= 1e-6) return {1.0f, 1.0f, 1.0f};
   return {static_cast<float>(r / norm), static_cast<float>(g / norm), static_cast<float>(b / norm)};
+}
+
+MaskUniforms make_mask_uniforms(const ColorAdjustmentState& state, int width, int height) {
+  const auto linear_wb = wb_multipliers(state.linear_mask_temperature, 0.0);
+  const auto radial_wb = wb_multipliers(state.radial_mask_temperature, 0.0);
+
+  MaskUniforms uniforms{};
+  uniforms.has_linear_mask = state.linear_mask_enabled ? 1 : 0;
+  uniforms.linear_exposure = static_cast<float>(state.linear_mask_exposure);
+  uniforms.linear_temperature = static_cast<float>(state.linear_mask_temperature);
+  uniforms.linear_feather = static_cast<float>(state.linear_mask_feather);
+  uniforms.linear_position = static_cast<float>(state.linear_mask_position);
+  uniforms.linear_rotation_rad = static_cast<float>(state.linear_mask_rotation * kPi / 180.0);
+  uniforms.linear_wb_red = linear_wb[0];
+  uniforms.linear_wb_green = linear_wb[1];
+  uniforms.linear_wb_blue = linear_wb[2];
+  uniforms.has_radial_mask = state.radial_mask_enabled ? 1 : 0;
+  uniforms.radial_exposure = static_cast<float>(state.radial_mask_exposure);
+  uniforms.radial_temperature = static_cast<float>(state.radial_mask_temperature);
+  uniforms.radial_feather = static_cast<float>(state.radial_mask_feather);
+  uniforms.radial_center_x = static_cast<float>(state.radial_mask_center_x);
+  uniforms.radial_center_y = static_cast<float>(state.radial_mask_center_y);
+  uniforms.radial_radius_x = static_cast<float>(state.radial_mask_radius_x);
+  uniforms.radial_radius_y = static_cast<float>(state.radial_mask_radius_y);
+  uniforms.radial_rotation_rad = static_cast<float>(state.radial_mask_rotation * kPi / 180.0);
+  uniforms.radial_wb_red = radial_wb[0];
+  uniforms.radial_wb_green = radial_wb[1];
+  uniforms.radial_wb_blue = radial_wb[2];
+  uniforms.width = width;
+  uniforms.height = height;
+  return uniforms;
+}
+
+void copy_pixels_to_float_buffer(float* destination, const std::vector<ColorPixel>& pixels) {
+  std::memcpy(destination, pixels.data(), pixels.size() * sizeof(ColorPixel));
+}
+
+void copy_pixels_from_float_buffer(std::vector<ColorPixel>* pixels, const float* source) {
+  std::memcpy(pixels->data(), source, pixels->size() * sizeof(ColorPixel));
 }
 
 }  // namespace
@@ -507,24 +548,14 @@ void MetalPipelineBackend::apply_color_lut(
     id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:buffer_size
                                                             options:MTLResourceStorageModeShared];
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
 
     // Upload LUT
     const auto lut_buffer_size = lut.table.size() * sizeof(float) * 4;
     id<MTLBuffer> lut_buffer = [impl_->device newBufferWithLength:lut_buffer_size
                                                            options:MTLResourceStorageModeShared];
     auto* lut_data = static_cast<float*>([lut_buffer contents]);
-    for (std::size_t i = 0; i < lut.table.size(); ++i) {
-      lut_data[i * 4 + 0] = static_cast<float>(lut.table[i].red);
-      lut_data[i * 4 + 1] = static_cast<float>(lut.table[i].green);
-      lut_data[i * 4 + 2] = static_cast<float>(lut.table[i].blue);
-      lut_data[i * 4 + 3] = static_cast<float>(lut.table[i].alpha);
-    }
+    copy_pixels_to_float_buffer(lut_data, lut.table);
 
     ColorAdjustmentUniforms uniforms{};
     uniforms.lut_size = kLutSize;
@@ -548,12 +579,7 @@ void MetalPipelineBackend::apply_color_lut(
     [command_buffer waitUntilCompleted];
 
     // Read back results
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
-    }
+    copy_pixels_from_float_buffer(pixels, pixel_data);
   }
 }
 
@@ -572,40 +598,9 @@ void MetalPipelineBackend::apply_masks(
     id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:buffer_size
                                                             options:MTLResourceStorageModeShared];
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
 
-    const auto linear_wb = wb_multipliers(state.linear_mask_temperature, 0.0);
-    const auto radial_wb = wb_multipliers(state.radial_mask_temperature, 0.0);
-
-    MaskUniforms uniforms{};
-    uniforms.has_linear_mask = state.linear_mask_enabled ? 1 : 0;
-    uniforms.linear_exposure = static_cast<float>(state.linear_mask_exposure);
-    uniforms.linear_temperature = static_cast<float>(state.linear_mask_temperature);
-    uniforms.linear_feather = static_cast<float>(state.linear_mask_feather);
-    uniforms.linear_position = static_cast<float>(state.linear_mask_position);
-    uniforms.linear_rotation_rad = static_cast<float>(state.linear_mask_rotation * kPi / 180.0);
-    uniforms.linear_wb_red = linear_wb[0];
-    uniforms.linear_wb_green = linear_wb[1];
-    uniforms.linear_wb_blue = linear_wb[2];
-    uniforms.has_radial_mask = state.radial_mask_enabled ? 1 : 0;
-    uniforms.radial_exposure = static_cast<float>(state.radial_mask_exposure);
-    uniforms.radial_temperature = static_cast<float>(state.radial_mask_temperature);
-    uniforms.radial_feather = static_cast<float>(state.radial_mask_feather);
-    uniforms.radial_center_x = static_cast<float>(state.radial_mask_center_x);
-    uniforms.radial_center_y = static_cast<float>(state.radial_mask_center_y);
-    uniforms.radial_radius_x = static_cast<float>(state.radial_mask_radius_x);
-    uniforms.radial_radius_y = static_cast<float>(state.radial_mask_radius_y);
-    uniforms.radial_rotation_rad = static_cast<float>(state.radial_mask_rotation * kPi / 180.0);
-    uniforms.radial_wb_red = radial_wb[0];
-    uniforms.radial_wb_green = radial_wb[1];
-    uniforms.radial_wb_blue = radial_wb[2];
-    uniforms.width = width;
-    uniforms.height = height;
+    const auto uniforms = make_mask_uniforms(state, width, height);
 
     id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
     id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
@@ -622,12 +617,73 @@ void MetalPipelineBackend::apply_masks(
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
+    copy_pixels_from_float_buffer(pixels, pixel_data);
+  }
+}
+
+void MetalPipelineBackend::apply_masks_and_color_lut(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const ColorAdjustmentState& state,
+    const ColorLut3D& lut) {
+  if (!available() || !pixels || !lut.valid) return;
+  const auto pixel_count = static_cast<std::size_t>(width * height);
+  if (pixels->size() != pixel_count) return;
+
+  @autoreleasepool {
+    const auto buffer_size = pixel_count * sizeof(float) * 4;
+    id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:buffer_size
+                                                            options:MTLResourceStorageModeShared];
+    const auto lut_buffer_size = lut.table.size() * sizeof(float) * 4;
+    id<MTLBuffer> lut_buffer = [impl_->device newBufferWithLength:lut_buffer_size
+                                                          options:MTLResourceStorageModeShared];
+    if (!pixel_buffer || !lut_buffer) return;
+
+    auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
+
+    auto* lut_data = static_cast<float*>([lut_buffer contents]);
+    copy_pixels_to_float_buffer(lut_data, lut.table);
+
+    id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    if (!command_buffer) return;
+
+    if (state.linear_mask_enabled || state.radial_mask_enabled) {
+      const auto mask_uniforms = make_mask_uniforms(state, width, height);
+      id<MTLComputeCommandEncoder> mask_encoder = [command_buffer computeCommandEncoder];
+      [mask_encoder setComputePipelineState:impl_->mask_pipeline];
+      [mask_encoder setBuffer:pixel_buffer offset:0 atIndex:0];
+      [mask_encoder setBytes:&mask_uniforms length:sizeof(mask_uniforms) atIndex:1];
+
+      NSUInteger thread_group_size = impl_->mask_pipeline.maxTotalThreadsPerThreadgroup;
+      if (thread_group_size > 256) thread_group_size = 256;
+      [mask_encoder dispatchThreads:MTLSizeMake(pixel_count, 1, 1)
+               threadsPerThreadgroup:MTLSizeMake(thread_group_size, 1, 1)];
+      [mask_encoder endEncoding];
     }
+
+    ColorAdjustmentUniforms lut_uniforms{};
+    lut_uniforms.lut_size = kLutSize;
+    lut_uniforms.width = width;
+    lut_uniforms.height = height;
+
+    id<MTLComputeCommandEncoder> lut_encoder = [command_buffer computeCommandEncoder];
+    [lut_encoder setComputePipelineState:impl_->lut_pipeline];
+    [lut_encoder setBuffer:pixel_buffer offset:0 atIndex:0];
+    [lut_encoder setBuffer:lut_buffer offset:0 atIndex:1];
+    [lut_encoder setBytes:&lut_uniforms length:sizeof(lut_uniforms) atIndex:2];
+
+    NSUInteger thread_group_size = impl_->lut_pipeline.maxTotalThreadsPerThreadgroup;
+    if (thread_group_size > 256) thread_group_size = 256;
+    [lut_encoder dispatchThreads:MTLSizeMake(pixel_count, 1, 1)
+            threadsPerThreadgroup:MTLSizeMake(thread_group_size, 1, 1)];
+    [lut_encoder endEncoding];
+
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+
+    copy_pixels_from_float_buffer(pixels, pixel_data);
   }
 }
 
@@ -658,11 +714,15 @@ std::vector<float> MetalPipelineBackend::gaussian_approximate_blur(
     auto* source_data = static_cast<float*>([source_buffer contents]);
     std::copy(input.begin(), input.end(), source_data);
 
-    const auto dispatch_pass = ^(id<MTLComputePipelineState> pipeline,
-                                 id<MTLBuffer> in_buffer,
-                                 id<MTLBuffer> out_buffer,
-                                 const BlurUniforms& uniforms) {
-      id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    if (!command_buffer) {
+      return input;
+    }
+
+    const auto dispatch_pass = [&](id<MTLComputePipelineState> pipeline,
+                                   id<MTLBuffer> in_buffer,
+                                   id<MTLBuffer> out_buffer,
+                                   const BlurUniforms& uniforms) {
       id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
       [encoder setComputePipelineState:pipeline];
       [encoder setBuffer:in_buffer offset:0 atIndex:0];
@@ -675,8 +735,6 @@ std::vector<float> MetalPipelineBackend::gaussian_approximate_blur(
       MTLSize group_size = MTLSizeMake(thread_group_size, 1, 1);
       [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
       [encoder endEncoding];
-      [command_buffer commit];
-      [command_buffer waitUntilCompleted];
     };
 
     id<MTLBuffer> current_input = source_buffer;
@@ -696,6 +754,8 @@ std::vector<float> MetalPipelineBackend::gaussian_approximate_blur(
       dispatch_pass(impl_->blur_vertical_pipeline, current_input, current_output, uniforms);
       std::swap(current_input, current_output);
     }
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
 
     std::vector<float> output(pixel_count, 0.0F);
     const auto* result_data = static_cast<const float*>([current_input contents]);
@@ -747,12 +807,7 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
     }
 
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
 
     const SpatialToneUniforms uniforms{
         .texture_strength = static_cast<float>(texture_strength),
@@ -762,12 +817,16 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
         .height = height,
     };
 
+    id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    if (!command_buffer) {
+      return false;
+    }
+
     const auto dispatch_pipeline = [&](id<MTLComputePipelineState> pipeline,
                                        const std::vector<id<MTLBuffer>>& buffers,
                                        int uniforms_index,
                                        const void* raw_uniforms,
                                        size_t uniforms_size) {
-      id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
       id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
       [encoder setComputePipelineState:pipeline];
       for (std::size_t index = 0; index < buffers.size(); ++index) {
@@ -781,17 +840,12 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
       MTLSize group_size = MTLSizeMake(thread_group_size, 1, 1);
       [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
       [encoder endEncoding];
-      [command_buffer commit];
-      [command_buffer waitUntilCompleted];
     };
 
     const auto copy_buffer = [&](id<MTLBuffer> source, id<MTLBuffer> destination) {
-      id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
       id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
       [encoder copyFromBuffer:source sourceOffset:0 toBuffer:destination destinationOffset:0 size:scalar_buffer_size];
       [encoder endEncoding];
-      [command_buffer commit];
-      [command_buffer waitUntilCompleted];
     };
 
     const auto run_gaussian_blur = [&](id<MTLBuffer> source, id<MTLBuffer> output, int radius) {
@@ -843,12 +897,10 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
         &uniforms,
         sizeof(uniforms));
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
-    }
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+
+    copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
 }
@@ -939,12 +991,7 @@ bool MetalPipelineBackend::apply_post_color_effects(
     }
 
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
 
     std::copy(master_curve_lut.begin(), master_curve_lut.end(), static_cast<float*>([master_curve_buffer contents]));
     std::copy(red_curve_lut.begin(), red_curve_lut.end(), static_cast<float*>([red_curve_buffer contents]));
@@ -1005,12 +1052,7 @@ bool MetalPipelineBackend::apply_post_color_effects(
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
-    }
+    copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
 }
@@ -1073,12 +1115,7 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     }
 
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
     std::copy(parametric_curve_lut.begin(), parametric_curve_lut.end(), static_cast<float*>([curve_buffer contents]));
     auto* local_mask_data = static_cast<float*>([local_mask_buffer contents]);
     if (local_mask_weights != nullptr) {
@@ -1087,14 +1124,16 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
       std::fill(local_mask_data, local_mask_data + pixel_count, 0.0F);
     }
 
-    const auto global_wb = wb_multipliers(state.temperature, state.tint);
+    const auto global_wb = wb_multipliers(
+        effective_input_temperature(state),
+        effective_input_tint(state));
     const auto linear_wb = wb_multipliers(state.linear_mask_temperature, 0.0);
     const auto radial_wb = wb_multipliers(state.radial_mask_temperature, 0.0);
     const auto local_wb = wb_multipliers(local_mask_temperature, 0.0);
     const auto use_legacy_masks = state.local_masks.empty();
 
     PreToneUniforms uniforms{};
-    uniforms.exposure_gain = static_cast<float>(std::pow(2.0, state.exposure));
+    uniforms.exposure_gain = static_cast<float>(std::pow(2.0, effective_input_exposure(state)));
     uniforms.global_wb_red = global_wb[0];
     uniforms.global_wb_green = global_wb[1];
     uniforms.global_wb_blue = global_wb[2];
@@ -1139,6 +1178,9 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
                                        const void* raw_uniforms,
                                        size_t uniforms_size) {
       id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+      if (!command_buffer) {
+        return;
+      }
       id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
       [encoder setComputePipelineState:pipeline];
       for (std::size_t index = 0; index < buffers.size(); ++index) {
@@ -1179,12 +1221,7 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
         &uniforms,
         sizeof(uniforms));
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
-    }
+    copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
 }
@@ -1235,12 +1272,7 @@ bool MetalPipelineBackend::apply_detail_effects(
     }
 
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      pixel_data[i * 4 + 0] = static_cast<float>((*pixels)[i].red);
-      pixel_data[i * 4 + 1] = static_cast<float>((*pixels)[i].green);
-      pixel_data[i * 4 + 2] = static_cast<float>((*pixels)[i].blue);
-      pixel_data[i * 4 + 3] = static_cast<float>((*pixels)[i].alpha);
-    }
+    copy_pixels_to_float_buffer(pixel_data, *pixels);
 
     const DetailUniforms uniforms{
         .sharpen_strength = static_cast<float>(sharpen_strength),
@@ -1251,12 +1283,16 @@ bool MetalPipelineBackend::apply_detail_effects(
         .height = height,
     };
 
+    id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
+    if (!command_buffer) {
+      return false;
+    }
+
     const auto dispatch_pipeline = [&](id<MTLComputePipelineState> pipeline,
                                        const std::vector<id<MTLBuffer>>& buffers,
                                        int uniforms_index,
                                        const void* raw_uniforms,
                                        size_t uniforms_size) {
-      id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
       id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
       [encoder setComputePipelineState:pipeline];
       for (std::size_t index = 0; index < buffers.size(); ++index) {
@@ -1270,17 +1306,12 @@ bool MetalPipelineBackend::apply_detail_effects(
       MTLSize group_size = MTLSizeMake(thread_group_size, 1, 1);
       [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
       [encoder endEncoding];
-      [command_buffer commit];
-      [command_buffer waitUntilCompleted];
     };
 
     const auto copy_buffer = [&](id<MTLBuffer> source, id<MTLBuffer> destination) {
-      id<MTLCommandBuffer> command_buffer = [impl_->command_queue commandBuffer];
       id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
       [encoder copyFromBuffer:source sourceOffset:0 toBuffer:destination destinationOffset:0 size:scalar_buffer_size];
       [encoder endEncoding];
-      [command_buffer commit];
-      [command_buffer waitUntilCompleted];
     };
 
     const auto run_gaussian_blur = [&](id<MTLBuffer> source, id<MTLBuffer> output, int radius) {
@@ -1361,12 +1392,10 @@ bool MetalPipelineBackend::apply_detail_effects(
         &uniforms,
         sizeof(uniforms));
 
-    for (std::size_t i = 0; i < pixel_count; ++i) {
-      (*pixels)[i].red = pixel_data[i * 4 + 0];
-      (*pixels)[i].green = pixel_data[i * 4 + 1];
-      (*pixels)[i].blue = pixel_data[i * 4 + 2];
-      (*pixels)[i].alpha = pixel_data[i * 4 + 3];
-    }
+    [command_buffer commit];
+    [command_buffer waitUntilCompleted];
+
+    copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
 }

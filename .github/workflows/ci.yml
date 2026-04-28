@@ -20,9 +20,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cargo fmt
+        working-directory: rust
+        run: cargo fmt --all --check
+
       - name: Cargo test
         working-directory: rust
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: Configure CMake
         run: cmake --preset ci-headless
@@ -32,3 +36,56 @@ jobs:
 
       - name: Run CTest
         run: ctest --preset test-ci-headless --output-on-failure
+
+  headless-linux-tsan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure CMake (ThreadSanitizer)
+        run: cmake --preset ci-headless-tsan
+        env:
+          CC: clang
+          CXX: clang++
+
+      - name: Build headless targets (ThreadSanitizer)
+        run: cmake --build --preset build-ci-headless-tsan
+
+      - name: Run CTest (ThreadSanitizer)
+        run: ctest --preset test-ci-headless-tsan --output-on-failure
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+
+  desktop-macos:
+    runs-on: macos-14
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.3"
+          modules: "qtdeclarative qtmultimedia qtshadertools qt5compat qtimageformats"
+          cache: true
+
+      - name: Configure desktop build
+        run: cmake --preset dev-macos-debug
+
+      - name: Build focused desktop smoke targets
+        run: cmake --build --preset build-dev-macos-debug --target app_bootstrap_test app_shell_controller_test desktop_shell_smoke_test
+
+      - name: Run focused desktop smoke tests
+        run: ctest --test-dir build/dev-macos-debug -R "desktop_shell_smoke_test|app_shell_controller_test|app_bootstrap_test" --output-on-failure

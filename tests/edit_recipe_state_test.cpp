@@ -108,6 +108,36 @@ int main() {
           .toString() != QStringLiteral("sRGB")) {
     return fail("structured recipe output should include the default output color space");
   }
+  if (default_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("inputProfile"))
+          .toString() != QStringLiteral("Embedded")) {
+    return fail("structured recipe output should include the default input color profile");
+  }
+  if (default_document.value(QStringLiteral("rawAdjustments"))
+          .toObject()
+          .value(QStringLiteral("inputTransformEnabled"))
+          .toBool() != true) {
+    return fail("structured recipe output should include the default input transform enable flag");
+  }
+  if (default_document.value(QStringLiteral("rawAdjustments"))
+          .toObject()
+          .value(QStringLiteral("chromaticAdaptationMethod"))
+          .toString() != QStringLiteral("Bradford")) {
+    return fail("structured recipe output should include the default chromatic adaptation method");
+  }
+  if (default_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("workingColorSpace"))
+          .toString() != QStringLiteral("Linear ProPhoto RGB")) {
+    return fail("structured recipe output should include the default working color profile");
+  }
+  if (default_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("renderIntent"))
+          .toString() != QStringLiteral("Perceptual")) {
+    return fail("structured recipe output should include the default render intent");
+  }
   if (!default_document.value(QStringLiteral("maskStack")).toArray().isEmpty()) {
     return fail("default recipe should not serialize an empty linear mask into maskStack");
   }
@@ -185,6 +215,54 @@ int main() {
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(output_transform_document).toJson(QJsonDocument::Compact)));
   if (reparsed_output_transform.output_color_space != QStringLiteral("Display P3")) {
     return fail("structured recipe should round-trip the output color space");
+  }
+
+  EditRecipeState color_pipeline_state;
+  color_pipeline_state.input_color_profile = QStringLiteral("Camera Native");
+  color_pipeline_state.working_color_profile = QStringLiteral("Linear Rec.2020");
+  color_pipeline_state.preview_color_space = QStringLiteral("Display P3");
+  color_pipeline_state.output_color_space = QStringLiteral("Rec.2020");
+  color_pipeline_state.render_intent = QStringLiteral("Relative Colorimetric");
+  color_pipeline_state.raw_input_transform_enabled = false;
+  color_pipeline_state.highlight_reconstruction_mode = QStringLiteral("Disabled");
+  color_pipeline_state.chromatic_adaptation_method = QStringLiteral("CAT02");
+  const auto color_pipeline_document =
+      QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(color_pipeline_state).toUtf8()).object();
+  if (color_pipeline_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("inputProfile"))
+          .toString() != QStringLiteral("Camera Native")) {
+    return fail("structured recipe should serialize the input color profile");
+  }
+  if (color_pipeline_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("previewColorSpace"))
+          .toString() != QStringLiteral("Display P3")) {
+    return fail("structured recipe should serialize the preview output color space");
+  }
+  if (color_pipeline_document.value(QStringLiteral("outputTransform"))
+          .toObject()
+          .value(QStringLiteral("colorSpace"))
+          .toString() != QStringLiteral("Rec.2020")) {
+    return fail("structured recipe should serialize expanded output color spaces");
+  }
+  if (color_pipeline_document.value(QStringLiteral("rawAdjustments"))
+          .toObject()
+          .value(QStringLiteral("highlightReconstructionMode"))
+          .toString() != QStringLiteral("Disabled")) {
+    return fail("structured recipe should serialize the highlight reconstruction mode");
+  }
+  const auto reparsed_color_pipeline =
+      photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(color_pipeline_document).toJson(QJsonDocument::Compact)));
+  if (reparsed_color_pipeline.input_color_profile != QStringLiteral("Camera Native") ||
+      reparsed_color_pipeline.preview_color_space != QStringLiteral("Display P3") ||
+      reparsed_color_pipeline.working_color_profile != QStringLiteral("Linear Rec.2020") ||
+      reparsed_color_pipeline.output_color_space != QStringLiteral("Rec.2020") ||
+      reparsed_color_pipeline.render_intent != QStringLiteral("Relative Colorimetric") ||
+      reparsed_color_pipeline.raw_input_transform_enabled != false ||
+      reparsed_color_pipeline.highlight_reconstruction_mode != QStringLiteral("Disabled") ||
+      reparsed_color_pipeline.chromatic_adaptation_method != QStringLiteral("CAT02")) {
+    return fail("structured recipe should round-trip color pipeline state");
   }
 
   EditRecipeState radial_mask_state;
@@ -380,6 +458,8 @@ int main() {
   subject_mask.insert(QStringLiteral("removeStrength"), 55.0);
   subject_mask.insert(QStringLiteral("selectionInvert"), true);
   subject_mask.insert(QStringLiteral("selectionExpand"), 18.0);
+  subject_mask.insert(QStringLiteral("selectionEdgeContrast"), 62.0);
+  subject_mask.insert(QStringLiteral("selectionDecontaminate"), 36.0);
   subject_mask.insert(QStringLiteral("feather"), 0.5);
   subject_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("00ff7f3f"));
   subject_mask.insert(QStringLiteral("segmentationWidth"), 2);
@@ -420,7 +500,9 @@ int main() {
       !almost_equal(subject_adjustments.value(QStringLiteral("saturationShift")).toDouble(), 18.0) ||
       !almost_equal(subject_adjustments.value(QStringLiteral("colorizeStrength")).toDouble(), 72.0) ||
       !subject_adjustments.value(QStringLiteral("selectionInvert")).toBool() ||
-      !almost_equal(subject_adjustments.value(QStringLiteral("selectionExpand")).toDouble(), 18.0)) {
+      !almost_equal(subject_adjustments.value(QStringLiteral("selectionExpand")).toDouble(), 18.0) ||
+      !almost_equal(subject_adjustments.value(QStringLiteral("selectionEdgeContrast")).toDouble(), 62.0) ||
+      !almost_equal(subject_adjustments.value(QStringLiteral("selectionDecontaminate")).toDouble(), 36.0)) {
     return fail("structured recipe should serialize local recolor adjustments");
   }
 
@@ -438,6 +520,8 @@ int main() {
       !almost_equal(reparsed_subject.value(QStringLiteral("colorizeStrength")).toDouble(), 72.0) ||
       !reparsed_subject.value(QStringLiteral("selectionInvert")).toBool() ||
       !almost_equal(reparsed_subject.value(QStringLiteral("selectionExpand")).toDouble(), 18.0) ||
+      !almost_equal(reparsed_subject.value(QStringLiteral("selectionEdgeContrast")).toDouble(), 62.0) ||
+      !almost_equal(reparsed_subject.value(QStringLiteral("selectionDecontaminate")).toDouble(), 36.0) ||
       reparsed_subject.value(QStringLiteral("segmentationWidth")).toInt() != 2 ||
       reparsed_subject.value(QStringLiteral("segmentationHeight")).toInt() != 2) {
     return fail("structured recipe should round-trip AI subject segmentation payloads");
@@ -571,19 +655,38 @@ int main() {
   remove_object_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff00"));
   remove_object_mask.insert(QStringLiteral("segmentationWidth"), 2);
   remove_object_mask.insert(QStringLiteral("segmentationHeight"), 1);
+  remove_object_mask.insert(QStringLiteral("inpaintPatchData"), QByteArray("patch-png"));
+  remove_object_mask.insert(QStringLiteral("inpaintPatchX"), 3);
+  remove_object_mask.insert(QStringLiteral("inpaintPatchY"), 5);
+  remove_object_mask.insert(QStringLiteral("inpaintPatchWidth"), 7);
+  remove_object_mask.insert(QStringLiteral("inpaintPatchHeight"), 9);
+  remove_object_mask.insert(QStringLiteral("inpaintModelName"), QStringLiteral("test-fake-lama"));
   remove_object_state.mask_stack = {remove_object_mask};
   const auto remove_object_document =
       QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(remove_object_state).toUtf8()).object();
+  const auto remove_object_geometry = remove_object_document
+                                          .value(QStringLiteral("maskStack"))
+                                          .toArray()
+                                          .at(0)
+                                          .toObject()
+                                          .value(QStringLiteral("geometry"))
+                                          .toObject();
   if (remove_object_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().value(QStringLiteral("toolRole")).toString() !=
           QStringLiteral("retouch") ||
-      remove_object_document.value(QStringLiteral("retouchStack")).toArray().size() != 1) {
+      remove_object_document.value(QStringLiteral("retouchStack")).toArray().size() != 1 ||
+      remove_object_geometry.value(QStringLiteral("inpaintPatchData")).toString().isEmpty() ||
+      remove_object_geometry.value(QStringLiteral("inpaintPatchWidth")).toInt() != 7) {
     return fail("remove-only object masks should serialize into the retouch stack");
   }
   const auto reparsed_remove_object =
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(remove_object_document).toJson(QJsonDocument::Compact)));
   if (reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("toolRole")).toString() !=
-      QStringLiteral("retouch")) {
-    return fail("remove-only object masks should round-trip as retouch entries");
+          QStringLiteral("retouch") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintPatchData")).toByteArray() !=
+          QByteArray("patch-png") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintModelName")).toString() !=
+          QStringLiteral("test-fake-lama")) {
+    return fail("remove-only object masks should round-trip as retouch entries with inpaint patch payloads");
   }
 
   EditRecipeState optics_state;

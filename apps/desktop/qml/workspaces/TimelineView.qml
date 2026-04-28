@@ -922,9 +922,14 @@ Rectangle {
 
         background: Rectangle {
             radius: 12
-            color: theme.ink900
+            color: theme.alpha(theme.glassBase, 0.92)
             border.width: 1
-            border.color: theme.alpha(theme.lineStrong, 0.55)
+            border.color: theme.alpha(theme.glassEdge, 0.46)
+
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: theme.alpha(theme.polar, 0.09) }
+                GradientStop { position: 1.0; color: theme.alpha(theme.ink950, 0.34) }
+            }
         }
 
         contentItem: ColumnLayout {

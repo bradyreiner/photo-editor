@@ -214,6 +214,15 @@ int main(int argc, char** argv) {
       return fail("toggle selection should build a multi-photo batch selection");
     }
 
+    model.clearSelection();
+    model.selectAll();
+    if (model.selectedAssetCount() != 3 || !model.assetSelected(QStringLiteral("asset-3"))) {
+      return fail("select all should include every visible asset in the batch selection");
+    }
+    model.clearSelection();
+    model.toggleSelectionIndex(0);
+    model.toggleSelectionIndex(1);
+
     photo_editor::desktop::EditRecipeState copied_state;
     copied_state.exposure = 1.15;
     copied_state.temperature = 18.0;

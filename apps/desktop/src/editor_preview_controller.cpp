@@ -1,10 +1,13 @@
 #include "editor_preview_controller.h"
 
+#include "ai_model_runtime.h"
 #include "app_bootstrap.h"
 #include "brush_preview_compositor.h"
 #include "editor_preview_image_sink.h"
+#include "editor_preview_texture.h"
 #include "observability.h"
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/color_pipeline.h"
 #include "raw_image_decoder.h"
 #include "vision_segmentation.h"
 #include "working_image.h"
@@ -58,12 +61,15 @@ namespace {
 constexpr int kDefaultInteractivePreviewEdge = 960;
 constexpr int kMinimumInteractivePreviewEdge = 512;
 constexpr int kMaximumInteractivePreviewEdge = 4096;
-constexpr int kExpensiveInteractivePreviewEdge = 1536;
+constexpr int kExpensiveInteractivePreviewEdge = 2048;
+constexpr int kDraftInteractivePreviewEdge = 1024;
+constexpr int kExpensiveDraftInteractivePreviewEdge = 512;
 constexpr int kHistogramPreviewEdge = 1024;
-constexpr int kFullRenderDebounceMs = 420;
-constexpr int kExpensiveInteractiveRenderDebounceMs = 70;
-constexpr int kExpensiveFullRenderDebounceMs = 650;
+constexpr int kFullRenderDebounceMs = 700;
+constexpr int kExpensiveInteractiveRenderDebounceMs = 45;
+constexpr int kExpensiveFullRenderDebounceMs = 900;
 constexpr int kSmartSelectPreviewDebounceMs = 45;
+constexpr qint64 kInteractiveDraftBurstWindowMs = 180;
 constexpr qint64 kMaxCacheMemoryBytes = 512 * 1024 * 1024;  // 512 MB
 constexpr qint64 kMaxLinearCacheMemoryBytes = 256 * 1024 * 1024;  // 256 MB
 constexpr int kMaxEditHistoryDepth = 100;
@@ -160,6 +166,10 @@ QString decoded_image_cache_key(const QFileInfo& file_info, int max_edge) {
 
 RawDecodeSettings raw_decode_settings_for_state(const EditState& state) {
   return RawDecodeSettings{
+      .input_transform_enabled = state.raw_input_transform_enabled,
+      .input_color_profile = state.input_color_profile,
+      .highlight_reconstruction_mode = state.highlight_reconstruction_mode,
+      .chromatic_adaptation_method = state.chromatic_adaptation_method,
       .exposure = state.raw_exposure,
       .boost_amount = state.raw_boost,
       .boost_shadow_amount = state.raw_shadow_boost,
@@ -179,11 +189,7 @@ QColorSpace preview_target_color_space() {
 }
 
 QColorSpace output_color_space_for_name(const QString& name) {
-  const auto normalized = normalized_output_color_space_name(name);
-  if (normalized == QStringLiteral("Display P3")) {
-    return QColorSpace(QColorSpace::DisplayP3);
-  }
-  return preview_target_color_space();
+  return preview_color_space_for_name(normalized_output_color_space_name(name));
 }
 
 void apply_output_color_space_transform(QImage* image, const QString& output_color_space_name) {
@@ -237,8 +243,47 @@ QImage normalize_preview_color_space(QImage image) {
   return image;
 }
 
+QString preview_output_color_space_for_state(const EditState& state) {
+  return state.preview_color_space.trimmed().isEmpty() ? state.output_color_space : state.preview_color_space;
+}
+
+photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(const EditState& state) {
+  return photo_editor::pipeline::ColorPipelineConfig{
+      .input_profile =
+          photo_editor::pipeline::input_color_profile_from_name(state.input_color_profile.toStdString()),
+      .working_profile =
+          photo_editor::pipeline::working_color_profile_from_name(state.working_color_profile.toStdString()),
+      .preview_output_profile = photo_editor::pipeline::output_color_profile_from_name(
+          preview_output_color_space_for_state(state).toStdString()),
+      .export_output_profile =
+          photo_editor::pipeline::output_color_profile_from_name(state.output_color_space.toStdString()),
+      .camera_profile = {},
+      .input_transform_recipe = {},
+      .render_intent =
+          photo_editor::pipeline::render_intent_from_name(state.render_intent.toStdString()),
+  };
+}
+
+photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(
+    const EditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata) {
+  auto config = color_pipeline_config_for_state(state);
+  if (metadata != nullptr && metadata->valid) {
+    config.camera_profile = photo_editor::pipeline::resolve_camera_profile(*metadata);
+    config.input_transform_recipe = photo_editor::pipeline::resolve_input_transform_recipe(
+        config.input_profile,
+        config.camera_profile,
+        *metadata);
+  }
+  return config;
+}
+
 QString raw_decode_settings_key(const EditState& state) {
-  return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10")
+  return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14")
+      .arg(state.raw_input_transform_enabled ? 1 : 0)
+      .arg(normalized_input_color_profile_name(state.input_color_profile))
+      .arg(normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode))
+      .arg(normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method))
       .arg(state.raw_exposure, 0, 'f', 6)
       .arg(state.raw_boost, 0, 'f', 6)
       .arg(state.raw_shadow_boost, 0, 'f', 6)
@@ -280,37 +325,43 @@ QString with_preview_revision(const QString& source, int revision) {
   return url.toString();
 }
 
-QColor brush_preview_color_for_mask(const QVariantMap& mask) {
-  const auto tool_role = mask.value(QStringLiteral("toolRole")).toString();
-  const auto operation = normalized_mask_operation(mask.value(QStringLiteral("operation")).toString());
-  const auto retouch_mode =
-      mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
-
-  if (tool_role == QStringLiteral("retouch")) {
-    if (retouch_mode == QStringLiteral("remove")) {
-      return QColor(217, 137, 98);
-    }
-    if (retouch_mode == QStringLiteral("clone")) {
-      return QColor(124, 181, 255);
-    }
-    if (retouch_mode == QStringLiteral("heal")) {
-      return QColor(114, 203, 178);
-    }
+QColor brush_preview_color_for_mask(
+    const QVariantMap& mask,
+    const QString& preview_mode) {
+  const auto normalized_mode = preview_mode.trimmed().toLower();
+  if (normalized_mode == QStringLiteral("grayscale") ||
+      normalized_mode == QStringLiteral("gray")) {
+    return QColor(QStringLiteral("#edf1f4"));
+  }
+  if (normalized_mode == QStringLiteral("black-on-white") ||
+      normalized_mode == QStringLiteral("black on white")) {
+    return QColor(QStringLiteral("#101419"));
+  }
+  if (normalized_mode == QStringLiteral("white-on-black") ||
+      normalized_mode == QStringLiteral("white on black")) {
+    return QColor(QStringLiteral("#f4f7fa"));
   }
 
-  if (operation == QStringLiteral("subtract")) {
-    return QColor(211, 106, 94);
-  }
-  return QColor(94, 149, 211);
+  Q_UNUSED(mask);
+  return QColor(QStringLiteral("#cf3b32"));
 }
 
-double brush_preview_opacity_for_mask(const QVariantMap& mask) {
-  const auto tool_role = mask.value(QStringLiteral("toolRole")).toString();
-  if (tool_role == QStringLiteral("retouch")) {
-    return 0.52;
+double brush_preview_opacity_for_mask(
+    const QVariantMap& mask,
+    const QString& preview_mode) {
+  const auto normalized_mode = preview_mode.trimmed().toLower();
+  if (normalized_mode == QStringLiteral("grayscale") ||
+      normalized_mode == QStringLiteral("gray")) {
+    return 0.72;
   }
-  const auto operation = normalized_mask_operation(mask.value(QStringLiteral("operation")).toString());
-  return operation == QStringLiteral("subtract") ? 0.42 : 0.38;
+  if (normalized_mode == QStringLiteral("black-on-white") ||
+      normalized_mode == QStringLiteral("black on white") ||
+      normalized_mode == QStringLiteral("white-on-black") ||
+      normalized_mode == QStringLiteral("white on black")) {
+    return 0.92;
+  }
+  Q_UNUSED(mask);
+  return 0.30;
 }
 
 bool edit_states_equal(const EditState& left, const EditState& right) {
@@ -699,6 +750,27 @@ int instance_id_from_map(
   return direct_instance;
 }
 
+int instance_pixel_count_in_map(
+    const QByteArray& instance_data,
+    int width,
+    int height,
+    int instance_id) {
+  if (instance_data.isEmpty() || width <= 0 || height <= 0 || instance_id <= 0) {
+    return 0;
+  }
+
+  auto pixel_count = 0;
+  const auto total_pixels = std::min<qsizetype>(
+      instance_data.size(),
+      static_cast<qsizetype>(width) * static_cast<qsizetype>(height));
+  for (qsizetype index = 0; index < total_pixels; ++index) {
+    if (static_cast<int>(static_cast<unsigned char>(instance_data.at(index))) == instance_id) {
+      ++pixel_count;
+    }
+  }
+  return pixel_count;
+}
+
 int instance_id_at_map_point(
     const QByteArray& instance_data,
     int width,
@@ -1000,6 +1072,44 @@ QRect localized_object_pick_bounds(
   return QRect(left, top, crop_width, crop_height);
 }
 
+QRect segmentation_result_bounds(const SegmentationResult& result);
+
+bool segmentation_result_is_localized_square_failure(
+    const QImage& source_image,
+    const SegmentationResult& result,
+    double normalized_x,
+    double normalized_y) {
+  if (source_image.isNull() ||
+      !valid_segmentation_payload(result.mask_data, result.width, result.height) ||
+      result.width <= 0 || result.height <= 0) {
+    return false;
+  }
+
+  const auto bounds = segmentation_result_bounds(result);
+  const auto localized_bounds =
+      localized_object_pick_bounds(source_image.size(), normalized_x, normalized_y);
+  if (!bounds.isValid() || !localized_bounds.isValid()) {
+    return false;
+  }
+
+  const auto bounds_area = static_cast<double>(bounds.width()) *
+                           static_cast<double>(bounds.height());
+  if (bounds_area <= 0.0) {
+    return false;
+  }
+  const auto fill_ratio =
+      static_cast<double>(segmentation_result_nonzero_count(result)) / bounds_area;
+  const auto covers_localized_crop =
+      bounds.width() >= static_cast<int>(std::lround(localized_bounds.width() * 0.88)) &&
+      bounds.height() >= static_cast<int>(std::lround(localized_bounds.height() * 0.88)) &&
+      std::abs(bounds.center().x() - localized_bounds.center().x()) <=
+          std::max(4, localized_bounds.width() / 12) &&
+      std::abs(bounds.center().y() - localized_bounds.center().y()) <=
+          std::max(4, localized_bounds.height() / 12);
+
+  return covers_localized_crop && fill_ratio >= 0.72;
+}
+
 SegmentationResult remap_localized_segmentation_result(
     const SegmentationResult& local_result,
     const QRect& bounds,
@@ -1158,96 +1268,13 @@ QRect segmentation_result_bounds(const SegmentationResult& result) {
   return QRect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
 }
 
-LocalColorSample average_segmentation_color(
-    const QImage& image,
-    const SegmentationResult& result,
-    const QRect& bounds) {
-  if (image.isNull() || !bounds.isValid() ||
-      !valid_segmentation_payload(result.mask_data, result.width, result.height)) {
-    return {};
-  }
-
-  auto red = 0.0;
-  auto green = 0.0;
-  auto blue = 0.0;
-  auto count = 0.0;
-  const auto max_x = std::min(bounds.right(), image.width() - 1);
-  const auto max_y = std::min(bounds.bottom(), image.height() - 1);
-  for (int y = std::max(bounds.y(), 0); y <= max_y; ++y) {
-    const auto row_offset = y * result.width;
-    for (int x = std::max(bounds.x(), 0); x <= max_x; ++x) {
-      if (static_cast<unsigned char>(result.mask_data.at(row_offset + x)) < 96) {
-        continue;
-      }
-      const auto sample = local_color_sample(image, x, y);
-      red += sample.red;
-      green += sample.green;
-      blue += sample.blue;
-      count += 1.0;
-    }
-  }
-
-  if (count <= 0.0) {
-    return {};
-  }
-  return LocalColorSample{
-      .red = red / count,
-      .green = green / count,
-      .blue = blue / count,
-  };
-}
-
-LocalColorSample average_perimeter_color_for_bounds(
-    const QImage& image,
-    const QRect& bounds) {
-  if (image.isNull() || !bounds.isValid()) {
-    return {};
-  }
-
-  const auto padding = qBound(
-      2,
-      std::max(bounds.width(), bounds.height()) / 6,
-      24);
-  const auto left = std::max(0, bounds.x() - padding);
-  const auto top = std::max(0, bounds.y() - padding);
-  const auto right = std::min(image.width() - 1, bounds.right() + padding);
-  const auto bottom = std::min(image.height() - 1, bounds.bottom() + padding);
-
-  auto red = 0.0;
-  auto green = 0.0;
-  auto blue = 0.0;
-  auto count = 0.0;
-  for (int y = top; y <= bottom; ++y) {
-    for (int x = left; x <= right; ++x) {
-      if (x >= bounds.x() && x <= bounds.right() &&
-          y >= bounds.y() && y <= bounds.bottom()) {
-        continue;
-      }
-      const auto sample = local_color_sample(image, x, y);
-      red += sample.red;
-      green += sample.green;
-      blue += sample.blue;
-      count += 1.0;
-    }
-  }
-
-  if (count <= 0.0) {
-    return average_local_perimeter_color(image);
-  }
-  return LocalColorSample{
-      .red = red / count,
-      .green = green / count,
-      .blue = blue / count,
-  };
-}
-
 SegmentationResult generate_localized_object_mask(
     const QImage& source_image,
     double normalized_x,
     double normalized_y);
 
 bool single_point_prompt_result_is_plausible(
-    const QImage& source_image,
+    const QImage& /*source_image*/,
     const SegmentationResult& result,
     double normalized_x,
     double normalized_y) {
@@ -1265,37 +1292,13 @@ bool single_point_prompt_result_is_plausible(
     return false;
   }
 
-  const auto seed_x = qBound(
-      0,
-      static_cast<int>(std::lround(std::clamp(normalized_x, 0.0, 1.0) *
-                                   static_cast<double>(std::max(source_image.width() - 1, 0)))),
-      std::max(source_image.width() - 1, 0));
-  const auto seed_y = qBound(
-      0,
-      static_cast<int>(std::lround(std::clamp(normalized_y, 0.0, 1.0) *
-                                   static_cast<double>(std::max(source_image.height() - 1, 0)))),
-      std::max(source_image.height() - 1, 0));
-  const auto seed_color = average_local_patch_color(source_image, seed_x, seed_y, 1);
-  const auto image_perimeter_color = average_local_perimeter_color(source_image);
-  if (local_color_distance(seed_color, image_perimeter_color) < 0.06) {
-    return false;
-  }
-
   const auto coverage = segmentation_result_coverage(result);
-  if (!(coverage > 0.0 && coverage <= 0.30)) {
+  if (!(coverage > 0.0 && coverage <= 0.92)) {
     return false;
   }
 
   const auto bounds = segmentation_result_bounds(result);
-  if (!bounds.isValid()) {
-    return false;
-  }
-
-  const auto segmentation_color =
-      average_segmentation_color(source_image, result, bounds);
-  const auto perimeter_color =
-      average_perimeter_color_for_bounds(source_image, bounds);
-  return local_color_distance(segmentation_color, perimeter_color) >= 0.08;
+  return bounds.isValid() && bounds.width() > 1 && bounds.height() > 1;
 }
 
 SegmentationResult compute_single_point_object_pick_result(
@@ -1319,6 +1322,13 @@ SegmentationResult compute_single_point_object_pick_result(
           normalized_y)) {
     return {};
   }
+  if (segmentation_result_is_localized_square_failure(
+          source_image,
+          prompt_result,
+          normalized_x,
+          normalized_y)) {
+    return {};
+  }
   return prompt_result;
 }
 
@@ -1326,6 +1336,21 @@ SegmentationResult compute_smart_select_result(
     const QImage& source_image,
     const QVariantList& points) {
   const auto normalized_points = normalized_smart_select_path(points);
+  if (!normalized_points.isEmpty()) {
+    const auto ai_status = ai_model_runtime_status();
+    if (ai_status.smart_selection_available) {
+      auto ai_result =
+          generate_ai_smart_selection_mask(source_image, smart_select_prompts_for_path(points));
+      if (ai_result.success) {
+        return ai_result;
+      }
+      if (ai_result.error_message.isEmpty()) {
+        ai_result.error_message =
+            QStringLiteral("AI smart selection did not return a mask.");
+      }
+      return ai_result;
+    }
+  }
   if (normalized_points.size() == 1) {
     const auto point = normalized_points.constFirst();
     return compute_single_point_object_pick_result(source_image, point.x(), point.y());
@@ -1512,8 +1537,8 @@ QVariantMap brush_point_variant(
     double brush_size,
     double brush_flow) {
   QVariantMap point;
-  point.insert(QStringLiteral("x"), clamp_unit(normalized_x));
-  point.insert(QStringLiteral("y"), clamp_unit(normalized_y));
+  point.insert(QStringLiteral("x"), normalized_x);
+  point.insert(QStringLiteral("y"), normalized_y);
   point.insert(QStringLiteral("size"), std::max(0.01, brush_size));
   point.insert(QStringLiteral("flow"), clamp_unit(brush_flow));
   return point;
@@ -1529,8 +1554,8 @@ BrushPreviewPoint brush_preview_point(
     double brush_size,
     double brush_flow) {
   return BrushPreviewPoint{
-      .x = clamp_unit(normalized_x),
-      .y = clamp_unit(normalized_y),
+      .x = normalized_x,
+      .y = normalized_y,
       .size = std::max(0.01, brush_size),
       .flow = clamp_unit(brush_flow),
   };
@@ -1673,6 +1698,7 @@ QVector<int> smart_select_instance_candidates_from_map(
   const auto collect_candidates =
       [&](const QVector<QPoint>& search_seeds) -> QVector<int> {
     QHash<int, int> best_distance_by_instance;
+    auto first_hit_radius = -1;
     for (auto radius = 1; radius <= max_radius; ++radius) {
       for (const auto& seed : search_seeds) {
         for (int dy = -radius; dy <= radius; ++dy) {
@@ -1700,6 +1726,14 @@ QVector<int> smart_select_instance_candidates_from_map(
       }
 
       if (!best_distance_by_instance.isEmpty()) {
+        if (first_hit_radius < 0) {
+          first_hit_radius = radius;
+          continue;
+        }
+        if (radius < first_hit_radius + 1) {
+          continue;
+        }
+
         auto best_distance = std::numeric_limits<int>::max();
         for (auto it = best_distance_by_instance.cbegin();
              it != best_distance_by_instance.cend();
@@ -1707,17 +1741,61 @@ QVector<int> smart_select_instance_candidates_from_map(
           best_distance = std::min(best_distance, it.value());
         }
 
+        const auto best_radius = std::sqrt(static_cast<double>(best_distance));
+        const auto candidate_distance_limit =
+            std::pow(best_radius + 1.0, 2.0);
         QVector<int> candidates;
         for (auto it = best_distance_by_instance.cbegin();
              it != best_distance_by_instance.cend();
              ++it) {
-          if (it.value() == best_distance) {
+          if (static_cast<double>(it.value()) <= candidate_distance_limit) {
             candidates.append(it.key());
           }
         }
-        std::sort(candidates.begin(), candidates.end());
+        std::sort(candidates.begin(), candidates.end(), [&](int left, int right) {
+          const auto left_coverage =
+              instance_pixel_count_in_map(instance_data, width, height, left);
+          const auto right_coverage =
+              instance_pixel_count_in_map(instance_data, width, height, right);
+          if (left_coverage != right_coverage) {
+            return left_coverage > right_coverage;
+          }
+          return left < right;
+        });
         return candidates;
       }
+    }
+
+    if (!best_distance_by_instance.isEmpty()) {
+      auto best_distance = std::numeric_limits<int>::max();
+      for (auto it = best_distance_by_instance.cbegin();
+           it != best_distance_by_instance.cend();
+           ++it) {
+        best_distance = std::min(best_distance, it.value());
+      }
+
+      const auto best_radius = std::sqrt(static_cast<double>(best_distance));
+      const auto candidate_distance_limit =
+          std::pow(best_radius + 1.0, 2.0);
+      QVector<int> candidates;
+      for (auto it = best_distance_by_instance.cbegin();
+           it != best_distance_by_instance.cend();
+           ++it) {
+        if (static_cast<double>(it.value()) <= candidate_distance_limit) {
+          candidates.append(it.key());
+        }
+      }
+      std::sort(candidates.begin(), candidates.end(), [&](int left, int right) {
+        const auto left_coverage =
+            instance_pixel_count_in_map(instance_data, width, height, left);
+        const auto right_coverage =
+            instance_pixel_count_in_map(instance_data, width, height, right);
+        if (left_coverage != right_coverage) {
+          return left_coverage > right_coverage;
+        }
+        return left < right;
+      });
+      return candidates;
     }
 
     return {};
@@ -1788,7 +1866,7 @@ QVector<int> smart_select_instance_candidates_for_path(
 
   const auto inclusion_threshold = std::max(
       1,
-      static_cast<int>(std::ceil(static_cast<double>(max_touch_count) * 0.25)));
+      static_cast<int>(std::ceil(static_cast<double>(max_touch_count) * 0.5)));
   QVector<int> candidates;
   for (auto it = touch_count_by_instance.cbegin(); it != touch_count_by_instance.cend(); ++it) {
     if (it.value() >= inclusion_threshold) {
@@ -1797,6 +1875,18 @@ QVector<int> smart_select_instance_candidates_for_path(
   }
 
   std::sort(candidates.begin(), candidates.end(), [&](int left, int right) {
+    const auto left_touch_count = touch_count_by_instance.value(left, 0);
+    const auto right_touch_count = touch_count_by_instance.value(right, 0);
+    if (left_touch_count != right_touch_count) {
+      return left_touch_count > right_touch_count;
+    }
+    const auto left_coverage =
+        instance_pixel_count_in_map(instance_data, width, height, left);
+    const auto right_coverage =
+        instance_pixel_count_in_map(instance_data, width, height, right);
+    if (left_coverage != right_coverage) {
+      return left_coverage > right_coverage;
+    }
     const auto left_first_seen = first_seen_by_instance.value(left, std::numeric_limits<int>::max());
     const auto right_first_seen = first_seen_by_instance.value(right, std::numeric_limits<int>::max());
     if (left_first_seen != right_first_seen) {
@@ -1846,6 +1936,18 @@ QVariantMap segmentation_mask_for_instances(
   mask.insert(QStringLiteral("segmentationWidth"), width);
   mask.insert(QStringLiteral("segmentationHeight"), height);
   return mask;
+}
+
+QVector<int> single_smart_select_candidate_instance_ids(
+    const QVector<int>& candidate_instance_ids,
+    int candidate_index) {
+  if (candidate_instance_ids.isEmpty()) {
+    return {};
+  }
+
+  const auto bounded_index =
+      qBound(0, candidate_index, static_cast<int>(candidate_instance_ids.size()) - 1);
+  return {candidate_instance_ids.at(bounded_index)};
 }
 
 double polygon_cross(const QPointF& origin, const QPointF& left, const QPointF& right) {
@@ -2052,10 +2154,10 @@ QVariantList bounding_box_points_for_segmentation_mask(const QVariantMap& mask) 
   return outline;
 }
 
-QVariantList traced_outline_points_for_segmentation_mask(const QVariantMap& mask) {
-  const auto data = mask.value(QStringLiteral("segmentationData")).toByteArray();
-  const auto width = mask.value(QStringLiteral("segmentationWidth")).toInt();
-  const auto height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+QVariantList traced_outline_paths_for_alpha_mask(
+    const QByteArray& data,
+    int width,
+    int height) {
   if (data.isEmpty() || width <= 1 || height <= 1) {
     return {};
   }
@@ -2089,11 +2191,11 @@ QVariantList traced_outline_points_for_segmentation_mask(const QVariantMap& mask
   }
 
   if (adjacency.isEmpty()) {
-    return hull_points_for_segmentation_mask(mask);
+    return {};
   }
 
   QSet<quint64> visited_edges;
-  QVector<QPoint> best_loop;
+  QVector<QVector<QPoint>> loops;
   const auto starts = adjacency.keys();
   for (const auto start : starts) {
     const auto outgoing = adjacency.value(start);
@@ -2151,59 +2253,73 @@ QVariantList traced_outline_points_for_segmentation_mask(const QVariantMap& mask
         current_direction = cardinal_direction(current_start, current_end);
       }
 
-      if (loop.size() >= 4 && loop.first() == loop.last() && loop.size() > best_loop.size()) {
-        best_loop = std::move(loop);
+      if (loop.size() >= 4 && loop.first() == loop.last()) {
+        loops.append(std::move(loop));
       }
     }
   }
 
-  if (best_loop.size() < 4) {
-    return hull_points_for_segmentation_mask(mask);
+  if (loops.isEmpty()) {
+    return {};
   }
 
-  best_loop.removeLast();
-  QVector<QPoint> simplified;
-  simplified.reserve(best_loop.size());
-  for (int index = 0; index < best_loop.size(); ++index) {
-    const auto& previous = best_loop[(index + best_loop.size() - 1) % best_loop.size()];
-    const auto& current = best_loop[index];
-    const auto& next = best_loop[(index + 1) % best_loop.size()];
-    const auto collinear =
-        (previous.x() == current.x() && current.x() == next.x()) ||
-        (previous.y() == current.y() && current.y() == next.y());
-    if (!collinear) {
-      simplified.append(current);
+  std::sort(loops.begin(), loops.end(), [](const QVector<QPoint>& left, const QVector<QPoint>& right) {
+    return left.size() > right.size();
+  });
+
+  QVariantList outline_paths;
+  for (auto loop : loops) {
+    if (loop.size() < 4) {
+      continue;
+    }
+
+    loop.removeLast();
+    QVector<QPoint> simplified;
+    simplified.reserve(loop.size());
+    for (int index = 0; index < loop.size(); ++index) {
+      const auto& previous = loop[(index + loop.size() - 1) % loop.size()];
+      const auto& current = loop[index];
+      const auto& next = loop[(index + 1) % loop.size()];
+      const auto collinear =
+          (previous.x() == current.x() && current.x() == next.x()) ||
+          (previous.y() == current.y() && current.y() == next.y());
+      if (!collinear) {
+        simplified.append(current);
+      }
+    }
+
+    if (simplified.size() < 3) {
+      continue;
+    }
+
+    const auto step = std::max(1, static_cast<int>(simplified.size() / 320));
+    QVariantList outline;
+    for (int index = 0; index < simplified.size(); index += step) {
+      const auto& point = simplified[index];
+      QVariantMap point_map;
+      point_map.insert(
+          QStringLiteral("x"),
+          clamp_unit(static_cast<double>(point.x()) / static_cast<double>(width)));
+      point_map.insert(
+          QStringLiteral("y"),
+          clamp_unit(static_cast<double>(point.y()) / static_cast<double>(height)));
+      outline.append(point_map);
+    }
+
+    if (outline.size() >= 4) {
+      outline_paths.append(outline);
     }
   }
 
-  if (simplified.size() < 3) {
-    return hull_points_for_segmentation_mask(mask);
-  }
-
-  const auto step = std::max(1, static_cast<int>(simplified.size() / 320));
-  QVariantList outline;
-  for (int index = 0; index < simplified.size(); index += step) {
-    const auto& point = simplified[index];
-    QVariantMap point_map;
-    point_map.insert(
-        QStringLiteral("x"),
-        clamp_unit(static_cast<double>(point.x()) / static_cast<double>(width)));
-    point_map.insert(
-        QStringLiteral("y"),
-        clamp_unit(static_cast<double>(point.y()) / static_cast<double>(height)));
-    outline.append(point_map);
-  }
-
-  if (outline.size() < 3) {
-    return bounding_box_points_for_segmentation_mask(mask);
-  }
-  return outline;
+  return outline_paths;
 }
 
-QVariantList outline_points_for_mask(const QVariantMap& mask) {
+QVariantList outline_paths_for_mask(const QVariantMap& mask) {
   const auto kind = normalized_mask_kind(mask.value(QStringLiteral("kind")).toString());
   if (kind == QStringLiteral("polygon")) {
-    return mask.value(QStringLiteral("polygonPoints")).toList();
+    QVariantList outline_paths;
+    outline_paths.append(mask.value(QStringLiteral("polygonPoints")).toList());
+    return outline_paths;
   }
   const auto segmentation_data = mask.value(QStringLiteral("segmentationData")).toByteArray();
   const auto segmentation_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
@@ -2211,11 +2327,36 @@ QVariantList outline_points_for_mask(const QVariantMap& mask) {
   if ((kind == QStringLiteral("subject") || kind == QStringLiteral("object") ||
        kind == QStringLiteral("brush")) &&
       valid_segmentation_payload(segmentation_data, segmentation_width, segmentation_height)) {
-    const auto traced_outline = traced_outline_points_for_segmentation_mask(mask);
-    if (traced_outline.size() >= 4) {
-      return traced_outline;
+    const auto traced_outlines =
+        traced_outline_paths_for_alpha_mask(segmentation_data, segmentation_width, segmentation_height);
+    if (!traced_outlines.isEmpty()) {
+      return traced_outlines;
     }
-    return bounding_box_points_for_segmentation_mask(mask);
+    const auto hull_outline = hull_points_for_segmentation_mask(mask);
+    if (hull_outline.size() >= 3) {
+      QVariantList outline_paths;
+      outline_paths.append(hull_outline);
+      return outline_paths;
+    }
+    QVariantList outline_paths;
+    outline_paths.append(bounding_box_points_for_segmentation_mask(mask));
+    return outline_paths;
+  }
+  return {};
+}
+
+QVariantList outline_points_for_mask(const QVariantMap& mask) {
+  const auto outline_paths = outline_paths_for_mask(mask);
+  if (outline_paths.isEmpty()) {
+    return {};
+  }
+  const auto first_path = outline_paths.first().toList();
+  if (!first_path.isEmpty()) {
+    return first_path;
+  }
+  const auto first_value = outline_paths.first();
+  if (first_value.metaType().id() == QMetaType::QVariantMap) {
+    return outline_paths;
   }
   return {};
 }
@@ -2365,40 +2506,28 @@ double apply_selection_expand_to_preview_weight(
   return smoothstep(threshold - ramp, threshold + ramp, clamp_unit(base_weight));
 }
 
+double apply_selection_edge_contrast_to_preview_weight(
+    double base_weight,
+    const photo_editor::pipeline::LocalMask& mask) {
+  const auto contrast =
+      clamp_unit(mask.selection_edge_contrast / 100.0);
+  if (contrast <= 1e-6) {
+    return clamp_unit(base_weight);
+  }
+
+  const auto ramp = std::lerp(0.24, 0.035, contrast);
+  return smoothstep(0.5 - ramp, 0.5 + ramp, clamp_unit(base_weight));
+}
+
 double apply_selection_refine_to_preview_weight(
     double base_weight,
     const photo_editor::pipeline::LocalMask& mask) {
   auto refined = apply_selection_expand_to_preview_weight(base_weight, mask);
+  refined = apply_selection_edge_contrast_to_preview_weight(refined, mask);
   if (mask.selection_invert) {
     refined = 1.0 - refined;
   }
   return clamp_unit(refined);
-}
-
-QColor preview_color_for_mask(const QVariantMap& mask) {
-  const auto tool_role =
-      normalized_mask_tool_role(mask.value(QStringLiteral("toolRole")).toString());
-  const auto retouch_mode =
-      mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
-  const auto operation =
-      normalized_mask_operation(mask.value(QStringLiteral("operation")).toString());
-
-  if (tool_role == QStringLiteral("retouch")) {
-    if (retouch_mode == QStringLiteral("remove")) {
-      return QColor(QStringLiteral("#d98962"));
-    }
-    if (retouch_mode == QStringLiteral("heal")) {
-      return QColor(QStringLiteral("#72cbb2"));
-    }
-    if (retouch_mode == QStringLiteral("clone")) {
-      return QColor(QStringLiteral("#7cb5ff"));
-    }
-  }
-
-  if (operation == QStringLiteral("subtract")) {
-    return QColor(QStringLiteral("#d36a5e"));
-  }
-  return QColor(QStringLiteral("#5e95d3"));
 }
 
 enum class MaskPreviewMode {
@@ -2459,7 +2588,8 @@ QColor preview_fill_color_for_mode(const QVariantMap& mask, MaskPreviewMode mode
       return QColor(QStringLiteral("#f4f7fa"));
     case MaskPreviewMode::Overlay:
     default:
-      return preview_color_for_mask(mask);
+      Q_UNUSED(mask);
+      return QColor(QStringLiteral("#cf3b32"));
   }
 }
 
@@ -2473,6 +2603,8 @@ int preview_fill_alpha_for_mode(
       normalized_mask_tool_role(mask.value(QStringLiteral("toolRole")).toString());
   const auto retouch_mode =
       mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
+  const auto operation =
+      normalized_mask_operation(mask.value(QStringLiteral("operation")).toString());
   switch (mode) {
     case MaskPreviewMode::Grayscale:
       return qBound(0, static_cast<int>(std::lround(clamped_weight * 255.0 * 0.92)), 255);
@@ -2481,20 +2613,13 @@ int preview_fill_alpha_for_mode(
       return qBound(0, static_cast<int>(std::lround(clamped_weight * 255.0)), 255);
     case MaskPreviewMode::Overlay:
     default:
-      if (tool_role == QStringLiteral("retouch")) {
-        const auto overlay_scale =
-            retouch_mode == QStringLiteral("remove")
-                ? 0.88
-                : (retouch_mode == QStringLiteral("heal") ? 0.72 : 0.64);
-        return qBound(
-            0,
-            static_cast<int>(std::lround(clamped_weight * 255.0 *
-                                         std::max(clamp_unit(alpha_scale), overlay_scale))),
-            255);
-      }
+      Q_UNUSED(tool_role);
+      Q_UNUSED(retouch_mode);
+      Q_UNUSED(operation);
       return qBound(
           0,
-          static_cast<int>(std::lround(clamped_weight * 255.0 * clamp_unit(alpha_scale))),
+          static_cast<int>(std::lround(clamped_weight * 255.0 *
+                                       std::min(clamp_unit(alpha_scale), 0.34))),
           255);
   }
 }
@@ -2514,6 +2639,25 @@ QString encode_preview_png_source(const QImage& image) {
 
   return QStringLiteral("data:image/png;base64,%1")
       .arg(QString::fromLatin1(encoded.toBase64()));
+}
+
+QByteArray encode_png_bytes(const QImage& image) {
+  if (image.isNull()) {
+    return {};
+  }
+
+  QByteArray encoded;
+  QBuffer buffer(&encoded);
+  if (!buffer.open(QIODevice::WriteOnly)) {
+    return {};
+  }
+
+  QImageWriter writer(&buffer, "PNG");
+  writer.setCompression(1);
+  if (!writer.write(image)) {
+    return {};
+  }
+  return encoded;
 }
 
 QString segmentation_mask_preview_source(
@@ -2611,13 +2755,19 @@ QVariantList normalize_curve_points(const QVariantList& points) {
     return left.value(QStringLiteral("x")).toDouble() < right.value(QStringLiteral("x")).toDouble();
   });
 
+  auto black_point_y = 0.0;
+  auto white_point_y = 1.0;
   QVariantList normalized;
-  normalized.append(curve_point(0.0, 0.0));
   auto previous_x = 0.0;
   for (const auto& point : interior_points) {
     auto x = clamp_unit(point.value(QStringLiteral("x")).toDouble());
     auto y = clamp_unit(point.value(QStringLiteral("y")).toDouble());
     if (x <= 0.0 + 1e-6 || x >= 1.0 - 1e-6) {
+      if (x <= 0.0 + 1e-6) {
+        black_point_y = y;
+      } else {
+        white_point_y = y;
+      }
       continue;
     }
 
@@ -2630,7 +2780,8 @@ QVariantList normalize_curve_points(const QVariantList& points) {
     normalized.append(curve_point(x, y));
     previous_x = x;
   }
-  normalized.append(curve_point(1.0, 1.0));
+  normalized.prepend(curve_point(0.0, black_point_y));
+  normalized.append(curve_point(1.0, white_point_y));
 
   if (is_identity_curve_points(normalized)) {
     return {};
@@ -2648,6 +2799,45 @@ std::vector<photo_editor::pipeline::CurvePoint> pipeline_curve_points(const QVar
     });
   }
   return curve_points;
+}
+
+void populate_inpaint_patch(
+    photo_editor::pipeline::LocalMask* local_mask,
+    const QVariantMap& mask) {
+  if (local_mask == nullptr) {
+    return;
+  }
+
+  const auto patch_data = mask.value(QStringLiteral("inpaintPatchData")).toByteArray();
+  const auto patch_x = mask.value(QStringLiteral("inpaintPatchX")).toInt();
+  const auto patch_y = mask.value(QStringLiteral("inpaintPatchY")).toInt();
+  const auto patch_width = mask.value(QStringLiteral("inpaintPatchWidth")).toInt();
+  const auto patch_height = mask.value(QStringLiteral("inpaintPatchHeight")).toInt();
+  if (patch_data.isEmpty() || patch_width <= 0 || patch_height <= 0) {
+    return;
+  }
+
+  auto patch_image = QImage::fromData(patch_data, "PNG");
+  if (patch_image.isNull() || patch_image.width() != patch_width ||
+      patch_image.height() != patch_height) {
+    return;
+  }
+  if (!patch_image.colorSpace().isValid()) {
+    patch_image.setColorSpace(preview_target_color_space());
+  }
+
+  const auto working_patch = working_image_from_qimage(patch_image);
+  if (working_patch.isNull()) {
+    return;
+  }
+
+  local_mask->inpaint_patch_pixels = working_patch.pixels;
+  local_mask->inpaint_patch_x = patch_x;
+  local_mask->inpaint_patch_y = patch_y;
+  local_mask->inpaint_patch_width = working_patch.width;
+  local_mask->inpaint_patch_height = working_patch.height;
+  local_mask->inpaint_model_name =
+      mask.value(QStringLiteral("inpaintModelName")).toString().toStdString();
 }
 
 photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
@@ -2676,6 +2866,10 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   local_mask.remove_strength = map_double_value(mask, QStringLiteral("removeStrength"), 0.0);
   local_mask.selection_invert = map_bool_value(mask, QStringLiteral("selectionInvert"), false);
   local_mask.selection_expand = map_double_value(mask, QStringLiteral("selectionExpand"), 0.0);
+  local_mask.selection_edge_contrast =
+      map_double_value(mask, QStringLiteral("selectionEdgeContrast"), 0.0);
+  local_mask.selection_decontaminate =
+      map_double_value(mask, QStringLiteral("selectionDecontaminate"), 0.0);
   local_mask.feather = map_double_value(
       mask, QStringLiteral("feather"), local_mask.kind == "radial" ? 0.25 : 0.22);
   local_mask.rotation = map_double_value(mask, QStringLiteral("rotation"), 0.0);
@@ -2753,6 +2947,7 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
       local_mask.segmentation_height = seg_height;
     }
   }
+  populate_inpaint_patch(&local_mask, mask);
   return local_mask;
 }
 
@@ -3180,6 +3375,66 @@ QString composite_mask_preview_source(
   return encode_preview_png_source(image);
 }
 
+QVariantList composite_mask_outline_paths(
+    const QImage& source_image,
+    const std::vector<photo_editor::pipeline::LocalMask>& masks,
+    double exposure_gain,
+    const std::array<double, 3>& white_balance) {
+  if (source_image.isNull() || source_image.width() <= 0 || source_image.height() <= 0 ||
+      masks.empty()) {
+    return {};
+  }
+
+  const auto width = source_image.width();
+  const auto height = source_image.height();
+  QByteArray alpha_mask(width * height, '\0');
+  for (int y = 0; y < height; ++y) {
+    const auto* source_scanline =
+        reinterpret_cast<const QRgb*>(source_image.constScanLine(y));
+    for (int x = 0; x < width; ++x) {
+      const auto rgb = QColor::fromRgb(source_scanline[x]);
+      const auto pixel = photo_editor::pipeline::ColorPixel{
+          .red = static_cast<float>(std::max(
+              0.0,
+              photo_editor::pipeline::srgb_to_linear(rgb.redF()) * exposure_gain *
+                  white_balance[0])),
+          .green = static_cast<float>(std::max(
+              0.0,
+              photo_editor::pipeline::srgb_to_linear(rgb.greenF()) * exposure_gain *
+                  white_balance[1])),
+          .blue = static_cast<float>(std::max(
+              0.0,
+              photo_editor::pipeline::srgb_to_linear(rgb.blueF()) * exposure_gain *
+                  white_balance[2])),
+          .alpha = rgb.alphaF(),
+      };
+
+      const auto normalized_x =
+          width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
+      const auto normalized_y =
+          height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
+      auto composite_weight = 0.0;
+      auto initialized = false;
+      for (const auto& mask : masks) {
+        const auto raw_weight =
+            local_mask_weight_for_preview(normalized_x, normalized_y, pixel, mask);
+        accumulate_composite_weight_for_preview(
+            raw_weight,
+            QString::fromStdString(mask.operation),
+            &composite_weight,
+            &initialized);
+      }
+
+      alpha_mask[y * width + x] =
+          static_cast<char>(initialized
+                                ? static_cast<int>(std::lround(clamp_unit(composite_weight) * 255.0))
+                                : 0);
+    }
+  }
+
+  return traced_outline_paths_for_alpha_mask(alpha_mask, width, height);
+}
+
 std::vector<photo_editor::pipeline::LocalMaskSet> pipeline_local_mask_sets(const QVariantList& masks) {
   std::vector<photo_editor::pipeline::LocalMaskSet> mask_sets;
   QHash<QString, int> indices_by_id;
@@ -3257,8 +3512,29 @@ std::vector<photo_editor::pipeline::LocalMask> pipeline_retouch_masks(const QVar
   return retouch_masks;
 }
 
-photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& state) {
+photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
+    const EditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr) {
   return photo_editor::pipeline::ColorAdjustmentState{
+      .input_transform =
+          photo_editor::pipeline::InputTransformSettings{
+              .input_profile_name = normalized_input_color_profile_name(state.input_color_profile).toStdString(),
+              .exposure = state.exposure,
+              .temperature = state.temperature,
+              .tint = state.tint,
+              .raw_input_transform_enabled = state.raw_input_transform_enabled,
+              .highlight_recovery_enabled = state.raw_highlight_recovery,
+              .highlight_reconstruction_mode =
+                  normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode).toStdString(),
+              .chromatic_adaptation_method =
+                  normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method).toStdString(),
+              .gamut_mapping_enabled = state.raw_gamut_mapping,
+              .lens_correction_enabled = state.raw_lens_correction,
+              .raw_white_balance_override_enabled = state.raw_white_balance_override,
+              .raw_white_balance_temperature = state.raw_white_balance_temperature,
+              .raw_white_balance_tint = state.raw_white_balance_tint,
+          },
+      .color_pipeline = color_pipeline_config_for_state(state, metadata),
       .exposure = state.exposure,
       .contrast = state.contrast,
       .highlights = state.highlights,
@@ -3329,6 +3605,29 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const EditState& 
       .local_mask_sets = pipeline_local_mask_sets(state.mask_stack),
       .retouch_masks = pipeline_retouch_masks(state.mask_stack),
   };
+}
+
+void reduce_pipeline_state_for_draft_preview(
+    photo_editor::pipeline::ColorAdjustmentState* state) {
+  if (state == nullptr) {
+    return;
+  }
+
+  state->texture = 0.0;
+  state->clarity = 0.0;
+  state->dehaze = 0.0;
+  state->sharpening = 0.0;
+  state->sharpen_masking = 0.0;
+  state->luminance_nr = 0.0;
+  state->color_nr = 0.0;
+  state->lens_distortion = 0.0;
+  state->lens_vignette = 0.0;
+  state->chromatic_aberration = 0.0;
+  state->linear_mask_enabled = false;
+  state->radial_mask_enabled = false;
+  state->local_mask_sets.clear();
+  state->local_masks.clear();
+  state->retouch_masks.clear();
 }
 
 double channel_weight_for_selection(double hue, const QString& hsl_channel) {
@@ -3524,6 +3823,13 @@ int interactive_preview_edge_for_state(const EditState& state, int requested_edg
   return std::min(clamped_requested, kExpensiveInteractivePreviewEdge);
 }
 
+int draft_interactive_preview_edge_for_state(const EditState& state, int requested_edge) {
+  return std::min(
+      interactive_preview_edge_for_state(state, requested_edge),
+      uses_expensive_interactive_preview(state) ? kExpensiveDraftInteractivePreviewEdge
+                                                : kDraftInteractivePreviewEdge);
+}
+
 int interactive_render_debounce_ms_for_state(const EditState& state) {
   return uses_expensive_interactive_preview(state) ? kExpensiveInteractiveRenderDebounceMs : 20;
 }
@@ -3534,6 +3840,13 @@ int full_render_debounce_ms_for_state(const EditState& state) {
 
 EditState reference_preview_cache_state(const EditState& state) {
   EditState cached_state;
+  cached_state.input_color_profile = state.input_color_profile;
+  cached_state.working_color_profile = state.working_color_profile;
+  cached_state.preview_color_space = state.preview_color_space;
+  cached_state.render_intent = state.render_intent;
+  cached_state.raw_input_transform_enabled = state.raw_input_transform_enabled;
+  cached_state.highlight_reconstruction_mode = state.highlight_reconstruction_mode;
+  cached_state.chromatic_adaptation_method = state.chromatic_adaptation_method;
   cached_state.raw_exposure = state.raw_exposure;
   cached_state.raw_boost = state.raw_boost;
   cached_state.raw_shadow_boost = state.raw_shadow_boost;
@@ -3932,7 +4245,7 @@ QImage render_preview_overlay_patch(const RenderRequest& request, bool edited) {
       !apply_color_adjustments(&overlay_image, request.state, &request)) {
     return {};
   }
-  apply_output_color_space_transform(&overlay_image, request.state.output_color_space);
+  apply_output_color_space_transform(&overlay_image, preview_output_color_space_for_state(request.state));
 
   const auto target_size =
       scaled_size_for_max_edge(source_clip_rect.size(), request.preview_overlay_max_edge);
@@ -3969,9 +4282,21 @@ bool apply_color_adjustments(QImage* image, const EditState& state, const Render
     return false;
   }
 
+  photo_editor::pipeline::DecodedImageMetadata decoded_metadata;
+  const auto* metadata = request != nullptr &&
+                                  read_raw_decoded_metadata(
+                                      request->file_path,
+                                      &decoded_metadata,
+                                     raw_decode_settings_for_state(request->state))
+                             ? &decoded_metadata
+                             : nullptr;
+
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   auto& metal = metal_backend();
-  const auto pipeline_state = to_pipeline_state(state);
+  auto pipeline_state = to_pipeline_state(state, metadata);
+  if (request != nullptr && request->draft_interactive) {
+    reduce_pipeline_state_for_draft_preview(&pipeline_state);
+  }
   // The reduced controller fast path only supports mask compositing plus the LUT stage.
   // Spatial tone/detail effects still go through the full engine pipeline, which can
   // selectively use Metal per stage.
@@ -3982,14 +4307,45 @@ bool apply_color_adjustments(QImage* image, const EditState& state, const Render
       pipeline_state.local_masks.empty() &&
       !has_extended_range_pixels(pixels) &&
       !requires_full_pipeline) {
+    if (request != nullptr && render_request_superseded(*request)) {
+      return false;
+    }
     const auto lut = photo_editor::pipeline::build_color_lut(pipeline_state);
-    metal.apply_masks(&pixels, width, height, pipeline_state);
-    metal.apply_color_lut(&pixels, width, height, lut);
+    if (request != nullptr && render_request_superseded(*request)) {
+      return false;
+    }
+    metal.apply_masks_and_color_lut(&pixels, width, height, pipeline_state, lut);
   } else {
-    photo_editor::pipeline::apply_color_adjustments(&pixels, width, height, pipeline_state);
+    photo_editor::pipeline::apply_color_adjustments(
+        &pixels,
+        width,
+        height,
+        pipeline_state,
+        photo_editor::pipeline::RemovalQuality::Interactive,
+        request != nullptr
+            ? photo_editor::pipeline::CancellationToken{
+                  request->latest_generation.get(),
+                  request->generation,
+              }
+            : photo_editor::pipeline::CancellationToken{});
   }
 #else
-  photo_editor::pipeline::apply_color_adjustments(&pixels, width, height, to_pipeline_state(state));
+  auto pipeline_state = to_pipeline_state(state, metadata);
+  if (request != nullptr && request->draft_interactive) {
+    reduce_pipeline_state_for_draft_preview(&pipeline_state);
+  }
+  photo_editor::pipeline::apply_color_adjustments(
+      &pixels,
+      width,
+      height,
+      pipeline_state,
+      photo_editor::pipeline::RemovalQuality::Interactive,
+      request != nullptr
+          ? photo_editor::pipeline::CancellationToken{
+                request->latest_generation.get(),
+                request->generation,
+            }
+          : photo_editor::pipeline::CancellationToken{});
 #endif
 
   if (request != nullptr && render_request_superseded(*request)) {
@@ -4002,7 +4358,9 @@ bool apply_color_adjustments(QImage* image, const EditState& state, const Render
           .height = height,
           .pixels = std::move(pixels),
       },
-      preview_target_color_space());
+      preview_target_color_space(),
+      QImage::Format_ARGB32,
+      state.working_color_profile);
   return true;
 }
 
@@ -4111,7 +4469,7 @@ RenderResult render_preview_request(const RenderRequest& request) {
       return result;
     }
   }
-  apply_output_color_space_transform(&edited_image, request.state.output_color_space);
+  apply_output_color_space_transform(&edited_image, preview_output_color_space_for_state(request.state));
   result.edit_elapsed_ms = edit_timer.elapsed();
   result.output_width = edited_image.width();
   result.output_height = edited_image.height();
@@ -4190,7 +4548,7 @@ RenderResult render_preview_request(const RenderRequest& request) {
       result.cancelled = true;
       return result;
     }
-    apply_output_color_space_transform(&reference_image, request.state.output_color_space);
+    apply_output_color_space_transform(&reference_image, preview_output_color_space_for_state(request.state));
     if (request.use_in_memory_preview) {
       result.reference_preview_image = reference_image;
       result.display_reference_preview_source =
@@ -4260,6 +4618,8 @@ RenderResult render_preview_request(const RenderRequest& request) {
           {QStringLiteral("has_adjustments"), result.had_adjustments},
           {QStringLiteral("compare_mode"), request.compare_mode},
           {QStringLiteral("in_memory_preview"), request.use_in_memory_preview},
+          {QStringLiteral("draft_interactive"), request.draft_interactive},
+          {QStringLiteral("max_edge"), request.max_edge},
           {QStringLiteral("decode_ms"), result.decode_elapsed_ms},
           {QStringLiteral("edit_ms"), result.edit_elapsed_ms},
           {QStringLiteral("encode_ms"), result.encode_elapsed_ms},
@@ -4272,6 +4632,7 @@ RenderResult render_preview_request(const RenderRequest& request) {
 
 EditorPreviewController::EditorPreviewController(QObject* parent) : QObject(parent) {
   brush_preview_compositor_ = BrushPreviewCompositor::create();
+  display_preview_texture_ = EditorPreviewTexture::create();
   loadPresets();
 
   interactive_render_timer_.setSingleShot(true);
@@ -4317,6 +4678,21 @@ QString EditorPreviewController::displayPreviewSource() const {
 QString EditorPreviewController::displayPreviewOverlaySource() const {
   return display_preview_overlay_source_;
 }
+bool EditorPreviewController::displayPreviewNativeAvailable() const {
+  return display_preview_texture_ != nullptr &&
+         display_preview_texture_->hasNativeTexture() &&
+         display_preview_texture_->nativeTextureHandle() != 0 &&
+         display_preview_texture_->nativeTextureSize().isValid();
+}
+quint64 EditorPreviewController::displayPreviewNativeHandle() const {
+  return display_preview_texture_ != nullptr ? display_preview_texture_->nativeTextureHandle() : 0;
+}
+QSize EditorPreviewController::displayPreviewNativeSize() const {
+  return display_preview_texture_ != nullptr ? display_preview_texture_->nativeTextureSize() : QSize{};
+}
+int EditorPreviewController::displayPreviewNativeRevision() const {
+  return display_preview_native_revision_;
+}
 QString EditorPreviewController::referencePreviewSource() const { return reference_preview_source_; }
 QString EditorPreviewController::displayReferencePreviewSource() const {
   return display_reference_preview_source_.isEmpty() ? reference_preview_source_
@@ -4355,6 +4731,13 @@ QString EditorPreviewController::captureDate() const { return capture_date_; }
 QString EditorPreviewController::lensModel() const { return lens_model_; }
 bool EditorPreviewController::hasAsset() const { return !file_path_.isEmpty() || !fallback_thumbnail_source_.isEmpty(); }
 bool EditorPreviewController::subjectMaskAvailable() const { return vision_segmentation_available(); }
+QString EditorPreviewController::aiModelStatus() const { return ai_model_runtime_status().summary; }
+bool EditorPreviewController::aiSmartSelectionAvailable() const {
+  return ai_model_runtime_status().smart_selection_available;
+}
+bool EditorPreviewController::aiInpaintAvailable() const {
+  return ai_model_runtime_status().inpaint_available;
+}
 bool EditorPreviewController::processing() const { return processing_; }
 bool EditorPreviewController::canUndo() const {
   return !asset_id_.isEmpty() && !asset_undo_states_.value(asset_id_).isEmpty();
@@ -4547,6 +4930,12 @@ bool EditorPreviewController::activeMaskSelectionInverted() const {
 double EditorPreviewController::activeMaskSelectionExpand() const {
   return map_double_value(activeMaskDefinition(), QStringLiteral("selectionExpand"), 0.0);
 }
+double EditorPreviewController::activeMaskSelectionEdgeContrast() const {
+  return map_double_value(activeMaskDefinition(), QStringLiteral("selectionEdgeContrast"), 0.0);
+}
+double EditorPreviewController::activeMaskSelectionDecontaminate() const {
+  return map_double_value(activeMaskDefinition(), QStringLiteral("selectionDecontaminate"), 0.0);
+}
 double EditorPreviewController::activeMaskFeather() const {
   const auto mask = activeMaskDefinition();
   return map_double_value(
@@ -4652,7 +5041,68 @@ int EditorPreviewController::activeMaskPolygonPointCount() const {
   return static_cast<int>(activeMaskPolygonPoints().size());
 }
 QVariantList EditorPreviewController::activeMaskOutlinePoints() const {
-  return outline_points_for_mask(activeMaskDefinition());
+  const auto outline_paths = activeMaskOutlinePaths();
+  if (outline_paths.isEmpty()) {
+    return {};
+  }
+  const auto first_path = outline_paths.first().toList();
+  if (!first_path.isEmpty()) {
+    return first_path;
+  }
+  const auto first_value = outline_paths.first();
+  if (first_value.metaType().id() == QMetaType::QVariantMap) {
+    return outline_paths;
+  }
+  return {};
+}
+QVariantList EditorPreviewController::activeMaskOutlinePaths() const {
+  const auto mask = activeMaskDefinition();
+  if (mask.isEmpty()) {
+    return {};
+  }
+
+  if (activeMaskToolRole() != QStringLiteral("selection") || file_path_.isEmpty()) {
+    return outline_paths_for_mask(mask);
+  }
+
+  QVariantList preview_masks;
+  auto ordinal = 1;
+  const auto set_id = mask.value(QStringLiteral("maskSetId")).toString();
+  for (const auto& value : mask_stack_) {
+    const auto candidate = normalized_mask_definition(value.toMap(), ordinal);
+    ++ordinal;
+    if (candidate.value(QStringLiteral("toolRole")).toString() != QStringLiteral("selection")) {
+      continue;
+    }
+    if (!set_id.isEmpty() && candidate.value(QStringLiteral("maskSetId")).toString() != set_id) {
+      continue;
+    }
+    preview_masks.append(candidate);
+  }
+  if (preview_masks.size() <= 1) {
+    return outline_paths_for_mask(mask);
+  }
+
+  QImage source_image;
+  if (!decodeSourceImage(&source_image, 512)) {
+    return outline_paths_for_mask(mask);
+  }
+
+  std::vector<photo_editor::pipeline::LocalMask> composite_masks;
+  composite_masks.reserve(static_cast<std::size_t>(preview_masks.size()));
+  for (const auto& preview_mask_value : preview_masks) {
+    composite_masks.push_back(pipeline_local_mask(preview_mask_value.toMap()));
+  }
+  const auto state = currentState();
+  const auto cropped_image = applyCrop(source_image);
+  const auto exposure_gain = std::pow(2.0, state.exposure);
+  const auto white_balance = preview_white_balance_multipliers(state.temperature, state.tint);
+  const auto composite_paths =
+      composite_mask_outline_paths(cropped_image, composite_masks, exposure_gain, white_balance);
+  if (!composite_paths.isEmpty()) {
+    return composite_paths;
+  }
+  return outline_paths_for_mask(mask);
 }
 QString EditorPreviewController::activeMaskPreviewSource() const {
   const auto mask = activeMaskDefinition();
@@ -4790,6 +5240,21 @@ QString EditorPreviewController::smartSelectPreviewSource() const {
 }
 QVariantList EditorPreviewController::smartSelectPreviewOutlinePoints() const {
   return outline_points_for_mask(smart_select_preview_mask_);
+}
+int EditorPreviewController::smartSelectCandidateCount() const {
+  return static_cast<int>(smart_select_preview_candidate_instance_ids_.size());
+}
+int EditorPreviewController::smartSelectCandidateIndex() const {
+  if (smart_select_preview_candidate_instance_ids_.isEmpty()) {
+    return 0;
+  }
+  return qBound(
+      0,
+      smart_select_preview_candidate_index_,
+      static_cast<int>(smart_select_preview_candidate_instance_ids_.size()) - 1);
+}
+bool EditorPreviewController::smartSelectCanCycleCandidates() const {
+  return smart_select_preview_candidate_instance_ids_.size() > 1;
 }
 double EditorPreviewController::activeMaskLuminanceMin() const {
   return map_double_value(activeMaskDefinition(), QStringLiteral("luminanceMin"), 0.2);
@@ -4933,6 +5398,7 @@ void EditorPreviewController::setMaskPreviewMode(const QString& mode) {
   smart_select_preview_cache_source_.clear();
   emit controlsChanged();
   emit maskOverlayChanged();
+  emit activeBrushStrokeChanged();
   emit smartSelectPreviewChanged();
 }
 
@@ -4976,6 +5442,7 @@ void EditorPreviewController::setOutputColorSpace(const QString& output_color_sp
   }
   rememberStateForUndo();
   output_color_space_ = normalized;
+  preview_color_space_ = normalized;
   persistCurrentState();
   emit controlsChanged();
   renderPreview();
@@ -5919,6 +6386,24 @@ void EditorPreviewController::setActiveMaskSelectionExpand(double selection_expa
   updateActiveMaskDefinition(mask);
 }
 
+void EditorPreviewController::setActiveMaskSelectionEdgeContrast(double edge_contrast) {
+  auto mask = activeMaskDefinition();
+  if (mask.isEmpty()) {
+    return;
+  }
+  mask.insert(QStringLiteral("selectionEdgeContrast"), qBound(0.0, edge_contrast, 100.0));
+  updateActiveMaskDefinition(mask);
+}
+
+void EditorPreviewController::setActiveMaskSelectionDecontaminate(double decontaminate) {
+  auto mask = activeMaskDefinition();
+  if (mask.isEmpty()) {
+    return;
+  }
+  mask.insert(QStringLiteral("selectionDecontaminate"), qBound(0.0, decontaminate, 100.0));
+  updateActiveMaskDefinition(mask);
+}
+
 void EditorPreviewController::setActiveMaskFeather(double local_feather) {
   auto mask = activeMaskDefinition();
   if (mask.isEmpty()) {
@@ -6313,6 +6798,13 @@ void EditorPreviewController::resetAdjustments() {
   crop_rect_height_ = 0.0;
   crop_zoom_ = 1.0;
   crop_preset_ = QStringLiteral("Original");
+  input_color_profile_ = QStringLiteral("Embedded");
+  working_color_profile_ = QStringLiteral("Linear ProPhoto RGB");
+  preview_color_space_ = QStringLiteral("sRGB");
+  render_intent_ = QStringLiteral("Perceptual");
+  raw_input_transform_enabled_ = true;
+  highlight_reconstruction_mode_ = QStringLiteral("Enabled");
+  chromatic_adaptation_method_ = QStringLiteral("Bradford");
   output_color_space_ = QStringLiteral("sRGB");
   mask_stack_.clear();
   invalidateMaskDerivedCaches();
@@ -6535,14 +7027,26 @@ QString EditorPreviewController::pickMaskPath(
 
   const auto pick_intent = normalized_pick_intent(intent);
   const auto normalized_points = normalized_smart_select_path(points);
+  const auto prefer_single_candidate = normalized_points.size() == 1;
 
   if (vision_segmentation_available() && ensureSmartSelectInstanceMap()) {
     const auto candidate_instance_ids = smartSelectCandidateInstanceIdsForPath(points);
-    auto preview_mask = smartSelectPreviewMaskForInstances(candidate_instance_ids);
+    const auto preview_instance_ids =
+        prefer_single_candidate
+            ? single_smart_select_candidate_instance_ids(
+                  candidate_instance_ids,
+                  candidate_instance_ids == smart_select_preview_candidate_instance_ids_
+                      ? smart_select_preview_candidate_index_
+                      : 0)
+            : candidate_instance_ids;
+    auto preview_mask = smartSelectPreviewMaskForInstances(preview_instance_ids);
     if (!preview_mask.isEmpty()) {
-      updateSmartSelectPreviewState(preview_mask, candidate_instance_ids);
+      updateSmartSelectPreviewState(
+          preview_mask,
+          preview_instance_ids,
+          prefer_single_candidate ? candidate_instance_ids : QVector<int>{});
 
-      auto result = generate_object_mask_for_instances(source_image, candidate_instance_ids);
+      auto result = generate_object_mask_for_instances(source_image, preview_instance_ids);
       if (!result.success) {
         result = segmentation_result_from_mask_variant(preview_mask);
       }
@@ -6572,11 +7076,13 @@ QString EditorPreviewController::pickMaskPath(
   const auto result = compute_smart_select_result(source_image, points);
   if (!result.success) {
     resetSmartSelectPreview();
-    const auto fallback_point =
-        normalized_points.isEmpty() ? QPointF(0.5, 0.5) : normalized_points.constFirst();
+    setStatus(
+        pick_intent == QStringLiteral("remove")
+            ? QStringLiteral("AI could not isolate that target. Drag across the target again or choose Remove Brush explicitly.")
+            : QStringLiteral("AI could not isolate that target. Drag across the object again or refine with Brush Add/Erase."));
     return pick_intent == QStringLiteral("remove")
-               ? startManualRemoveFallbackAt(fallback_point.x(), fallback_point.y())
-               : startManualSelectionFallbackAt(fallback_point.x(), fallback_point.y());
+               ? QStringLiteral("remove-missed")
+               : QStringLiteral("selection-missed");
   }
 
   updateSmartSelectPreviewResult(result);
@@ -6626,11 +7132,22 @@ void EditorPreviewController::scheduleSmartSelectPreviewPath(const QVariantList&
   const auto generation = ++smart_select_preview_generation_;
   if (vision_segmentation_available() && ensureSmartSelectInstanceMap()) {
     const auto candidate_instance_ids = smartSelectCandidateInstanceIdsForPath(quantized_points);
-    const auto preview_mask = smartSelectPreviewMaskForInstances(candidate_instance_ids);
+    const auto preview_instance_ids =
+        quantized_points.size() == 1
+            ? single_smart_select_candidate_instance_ids(
+                  candidate_instance_ids,
+                  candidate_instance_ids == smart_select_preview_candidate_instance_ids_
+                      ? smart_select_preview_candidate_index_
+                      : 0)
+            : candidate_instance_ids;
+    const auto preview_mask = smartSelectPreviewMaskForInstances(preview_instance_ids);
     if (!preview_mask.isEmpty()) {
       smart_select_preview_timer_.stop();
       smart_select_preview_request_pending_ = false;
-      updateSmartSelectPreviewState(preview_mask, candidate_instance_ids);
+      updateSmartSelectPreviewState(
+          preview_mask,
+          preview_instance_ids,
+          quantized_points.size() == 1 ? candidate_instance_ids : QVector<int>{});
       return;
     }
   }
@@ -6651,9 +7168,21 @@ void EditorPreviewController::updateSmartSelectPreviewPath(const QVariantList& p
   smart_select_preview_request_pending_ = false;
   if (vision_segmentation_available() && ensureSmartSelectInstanceMap()) {
     const auto candidate_instance_ids = smartSelectCandidateInstanceIdsForPath(points);
-    const auto preview_mask = smartSelectPreviewMaskForInstances(candidate_instance_ids);
+    const auto normalized_points = normalized_smart_select_path(points);
+    const auto preview_instance_ids =
+        normalized_points.size() == 1
+            ? single_smart_select_candidate_instance_ids(
+                  candidate_instance_ids,
+                  candidate_instance_ids == smart_select_preview_candidate_instance_ids_
+                      ? smart_select_preview_candidate_index_
+                      : 0)
+            : candidate_instance_ids;
+    const auto preview_mask = smartSelectPreviewMaskForInstances(preview_instance_ids);
     if (!preview_mask.isEmpty()) {
-      updateSmartSelectPreviewState(preview_mask, candidate_instance_ids);
+      updateSmartSelectPreviewState(
+          preview_mask,
+          preview_instance_ids,
+          normalized_points.size() == 1 ? candidate_instance_ids : QVector<int>{});
       return;
     }
   }
@@ -6674,6 +7203,37 @@ void EditorPreviewController::updateSmartSelectPreviewPath(const QVariantList& p
 
 void EditorPreviewController::clearSmartSelectPreview() {
   resetSmartSelectPreview();
+}
+
+void EditorPreviewController::cycleSmartSelectCandidate(int delta) {
+  if (smart_select_preview_candidate_instance_ids_.size() <= 1 || delta == 0) {
+    return;
+  }
+
+  const auto candidate_count =
+      static_cast<int>(smart_select_preview_candidate_instance_ids_.size());
+  auto next_index = smart_select_preview_candidate_index_;
+  next_index = ((next_index + delta) % candidate_count + candidate_count) % candidate_count;
+  if (next_index == smart_select_preview_candidate_index_) {
+    return;
+  }
+
+  const auto next_instance_ids = single_smart_select_candidate_instance_ids(
+      smart_select_preview_candidate_instance_ids_,
+      next_index);
+  const auto next_preview_mask = smartSelectPreviewMaskForInstances(next_instance_ids);
+  if (next_preview_mask.isEmpty()) {
+    return;
+  }
+
+  updateSmartSelectPreviewState(
+      next_preview_mask,
+      next_instance_ids,
+      smart_select_preview_candidate_instance_ids_);
+  setStatus(
+      QStringLiteral("Smart select candidate %1 of %2.")
+          .arg(next_index + 1)
+          .arg(candidate_count));
 }
 
 void EditorPreviewController::deselectActiveMask() {
@@ -6836,26 +7396,6 @@ QString EditorPreviewController::pickObjectRemoveMask(
   return QStringLiteral("remove-ai");
 }
 
-QString EditorPreviewController::startManualSelectionFallbackAt(
-    double normalized_x,
-    double normalized_y) {
-  startPolygonSelection();
-  appendActivePolygonPoint(normalized_x, normalized_y);
-  setStatus(
-      QStringLiteral("AI could not isolate that target. Polygon selection started so you can finish it manually."));
-  return QStringLiteral("selection-fallback-polygon");
-}
-
-QString EditorPreviewController::startManualRemoveFallbackAt(
-    double normalized_x,
-    double normalized_y) {
-  startRemoveBrush();
-  addBrushPoint(normalized_x, normalized_y);
-  setStatus(
-      QStringLiteral("AI could not isolate that target. Remove Brush started so you can paint the area manually."));
-  return QStringLiteral("remove-fallback-brush");
-}
-
 void EditorPreviewController::startSelectionBrush(bool subtract) {
   auto next_stack = mask_stack_;
   const auto insert_index =
@@ -7005,41 +7545,156 @@ void EditorPreviewController::startCloneBrush() {
 }
 
 void EditorPreviewController::applyActiveRetouch() {
+  if (!hasActiveMask()) {
+    return;
+  }
+
+  const auto active_mask = mask_stack_.at(active_mask_index_).toMap();
+  const auto active_retouch_mode =
+      active_mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
+  if (active_mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+      active_mask.value(QStringLiteral("committed")).toBool() ||
+      active_retouch_mode.isEmpty()) {
+    return;
+  }
+
   auto next_stack = mask_stack_;
   auto changed = false;
+  auto inpaint_result = AiInpaintResult{};
+  QByteArray encoded_inpaint_patch;
+  auto has_inpaint_patch = false;
+  auto inpaint_error = QString{};
+  if (active_retouch_mode == QStringLiteral("remove") ||
+      active_retouch_mode == QStringLiteral("heal")) {
+    QImage source_image;
+    if (decodeSourceImage(&source_image, 1024)) {
+      QByteArray merged_mask_data;
+      auto merged_width = 0;
+      auto merged_height = 0;
+      auto has_merged_mask = false;
+      for (int index = 0; index < next_stack.size(); ++index) {
+        const auto mask = next_stack.at(index).toMap();
+        if (mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+            mask.value(QStringLiteral("committed")).toBool() ||
+            mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower() !=
+                active_retouch_mode) {
+          continue;
+        }
+
+        const auto mask_data = mask.value(QStringLiteral("segmentationData")).toByteArray();
+        const auto mask_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
+        const auto mask_height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+        if (!valid_segmentation_payload(mask_data, mask_width, mask_height) ||
+            mask_width != source_image.width() || mask_height != source_image.height()) {
+          continue;
+        }
+
+        merged_mask_data = union_segmentation_masks(
+            merged_mask_data,
+            merged_width,
+            merged_height,
+            mask_data,
+            mask_width,
+            mask_height);
+        merged_width = mask_width;
+        merged_height = mask_height;
+        has_merged_mask = true;
+      }
+
+      if (has_merged_mask &&
+          valid_segmentation_payload(merged_mask_data, merged_width, merged_height)) {
+        inpaint_result = run_ai_inpaint(AiInpaintRequest{
+            .source_image = source_image,
+            .mask_data = merged_mask_data,
+            .mask_width = merged_width,
+            .mask_height = merged_height,
+            .retouch_mode = active_retouch_mode,
+        });
+        if (inpaint_result.success && !inpaint_result.patch_image.isNull() &&
+            inpaint_result.patch_width > 0 && inpaint_result.patch_height > 0) {
+          encoded_inpaint_patch = encode_png_bytes(inpaint_result.patch_image);
+          has_inpaint_patch = !encoded_inpaint_patch.isEmpty();
+          if (!has_inpaint_patch) {
+            inpaint_error = QStringLiteral("The inpaint patch could not be encoded.");
+          }
+        } else {
+          inpaint_error = inpaint_result.error_message;
+        }
+      }
+    } else {
+      inpaint_error = QStringLiteral("Unable to decode the source image for inpainting.");
+    }
+  }
   for (int index = 0; index < next_stack.size(); ++index) {
     auto mask = next_stack.at(index).toMap();
     if (mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
-        mask.value(QStringLiteral("committed")).toBool()) {
+        mask.value(QStringLiteral("committed")).toBool() ||
+        mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower() != active_retouch_mode) {
       continue;
     }
     mask.insert(QStringLiteral("committed"), true);
+    if (has_inpaint_patch) {
+      mask.insert(QStringLiteral("inpaintPatchData"), encoded_inpaint_patch);
+      mask.insert(QStringLiteral("inpaintPatchX"), inpaint_result.patch_x);
+      mask.insert(QStringLiteral("inpaintPatchY"), inpaint_result.patch_y);
+      mask.insert(QStringLiteral("inpaintPatchWidth"), inpaint_result.patch_width);
+      mask.insert(QStringLiteral("inpaintPatchHeight"), inpaint_result.patch_height);
+      mask.insert(QStringLiteral("inpaintModelName"), inpaint_result.model_name);
+    }
     next_stack[index] = mask;
     changed = true;
   }
-
   if (!changed) {
     return;
   }
 
   applyMaskStackChange(next_stack, active_mask_index_, true);
-  setStatus(QStringLiteral("Retouch applied."));
+  auto status =
+      QStringLiteral("%1 retouch applied.")
+          .arg(active_retouch_mode.left(1).toUpper() + active_retouch_mode.mid(1));
+  if (active_retouch_mode == QStringLiteral("remove") ||
+      active_retouch_mode == QStringLiteral("heal")) {
+    if (has_inpaint_patch) {
+      status += QStringLiteral(" AI inpaint patch baked.");
+    } else if (!inpaint_error.isEmpty()) {
+      status += QStringLiteral(" CPU fill fallback rendered this edit: %1").arg(inpaint_error);
+    } else {
+      const auto ai_status = ai_model_runtime_status();
+      status += ai_status.inpaint_available
+                    ? QStringLiteral(" AI inpaint model did not return a patch.")
+                    : QStringLiteral(" AI inpaint model is missing, so the CPU fill fallback rendered this edit.");
+    }
+  }
+  setStatus(status);
 }
 
 void EditorPreviewController::cancelActiveRetouch() {
+  if (!hasActiveMask()) {
+    return;
+  }
+
+  const auto active_mask = mask_stack_.at(active_mask_index_).toMap();
+  const auto active_retouch_mode =
+      active_mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
+  if (active_mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
+      active_mask.value(QStringLiteral("committed")).toBool() ||
+      active_retouch_mode.isEmpty()) {
+    return;
+  }
+
   auto next_stack = mask_stack_;
   auto changed = false;
   for (qsizetype index = next_stack.size(); index > 0; --index) {
     const auto mask_index = index - 1;
     const auto mask = next_stack.at(mask_index).toMap();
     if (mask.value(QStringLiteral("toolRole")).toString() != QStringLiteral("retouch") ||
-        mask.value(QStringLiteral("committed")).toBool()) {
+        mask.value(QStringLiteral("committed")).toBool() ||
+        mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower() != active_retouch_mode) {
       continue;
     }
     next_stack.removeAt(mask_index);
     changed = true;
   }
-
   if (!changed) {
     return;
   }
@@ -7049,18 +7704,24 @@ void EditorPreviewController::cancelActiveRetouch() {
           ? -1
           : qBound(0, active_mask_index_, static_cast<int>(next_stack.size()) - 1);
   applyMaskStackChange(next_stack, next_index, false);
-  setStatus(QStringLiteral("Pending retouch cleared."));
+  setStatus(
+      QStringLiteral("%1 retouch cleared.")
+          .arg(active_retouch_mode.left(1).toUpper() + active_retouch_mode.mid(1)));
 }
 
-void EditorPreviewController::startPolygonSelection() {
+void EditorPreviewController::startPolygonSelection(bool subtract) {
   auto next_stack = mask_stack_;
   const auto insert_index =
       hasActiveMask() ? qBound(0, active_mask_index_ + 1, static_cast<int>(next_stack.size()))
                       : static_cast<int>(next_stack.size());
 
   auto mask_def = default_mask_definition(QStringLiteral("polygon"), insert_index + 1);
-  mask_def.insert(QStringLiteral("name"), QStringLiteral("Polygon Select %1").arg(insert_index + 1));
-  mask_def.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  mask_def.insert(
+      QStringLiteral("name"),
+      subtract ? QStringLiteral("Polygon Subtract %1").arg(insert_index + 1)
+               : QStringLiteral("Polygon Select %1").arg(insert_index + 1));
+  mask_def.insert(QStringLiteral("operation"), subtract ? QStringLiteral("subtract")
+                                                        : QStringLiteral("add"));
   if (hasActiveMask()) {
     const auto active_mask = activeMaskDefinition();
     if (is_selection_mask(active_mask)) {
@@ -7070,7 +7731,9 @@ void EditorPreviewController::startPolygonSelection() {
   mask_def.insert(QStringLiteral("feather"), 0.04);
   next_stack.insert(insert_index, mask_def);
   applyMaskStackChange(next_stack, insert_index);
-  setStatus(QStringLiteral("Polygon selection started. Click to place points."));
+  setStatus(
+      subtract ? QStringLiteral("Polygon subtract started. Click to remove areas from the selection.")
+               : QStringLiteral("Polygon selection started. Click to place points."));
 }
 
 void EditorPreviewController::appendActivePolygonPoint(double normalized_x, double normalized_y) {
@@ -7255,8 +7918,6 @@ void EditorPreviewController::addBrushPoint(double normalized_x, double normaliz
     return;
   }
 
-  const auto clamped_x = qBound(0.0, normalized_x, 1.0);
-  const auto clamped_y = qBound(0.0, normalized_y, 1.0);
   const auto brush_size = activeMaskBrushSize();
   const auto brush_flow = activeMaskBrushFlow();
   const auto retouch_mode = activeMaskRetouchMode();
@@ -7271,14 +7932,19 @@ void EditorPreviewController::addBrushPoint(double normalized_x, double normaliz
   } else if (!points.isEmpty()) {
     last_point = brush_preview_point_from_variant(
         points.constLast(),
-        clamped_x,
-        clamped_y,
+        normalized_x,
+        normalized_y,
         brush_size,
         brush_flow);
     last_point_ptr = &last_point;
   }
   const auto sampled_points =
-      sampled_brush_points_for_segment(last_point_ptr, clamped_x, clamped_y, brush_size, brush_flow);
+      sampled_brush_points_for_segment(
+          last_point_ptr,
+          normalized_x,
+          normalized_y,
+          brush_size,
+          brush_flow);
   if (sampled_points.isEmpty()) {
     return;
   }
@@ -7484,6 +8150,14 @@ void EditorPreviewController::sampleWhiteBalanceAt(double normalized_x, double n
 }
 
 void EditorPreviewController::renderPreview(bool schedule_full_resolution) {
+  const auto now_msecs = QDateTime::currentMSecsSinceEpoch();
+  const auto rapid_followup = last_render_request_msecs_ > 0 &&
+                              now_msecs - last_render_request_msecs_ <=
+                                  kInteractiveDraftBurstWindowMs;
+  next_interactive_render_draft_ =
+      rapid_followup || interactive_render_timer_.isActive() ||
+      interactive_render_watcher_.isRunning() || interactive_request_pending_;
+  last_render_request_msecs_ = now_msecs;
   ++render_generation_;
   latest_render_generation_->store(render_generation_, std::memory_order_relaxed);
   ++overlay_generation_;
@@ -7499,14 +8173,16 @@ void EditorPreviewController::renderPreview(bool schedule_full_resolution) {
     image_provider_->clearImage(QString::fromLatin1(kReferencePreviewOverlayImageId));
   }
   const auto state = currentState();
-  observability::logInfo(
-      photoEditorPreviewLog(),
-      QStringLiteral("preview.render.requested"),
-      {
-          {QStringLiteral("file_path"), file_path_},
-          {QStringLiteral("has_adjustments"), has_visible_adjustments(state)},
-          {QStringLiteral("schedule_full_resolution"), schedule_full_resolution},
-      });
+  if (!next_interactive_render_draft_) {
+    observability::logInfo(
+        photoEditorPreviewLog(),
+        QStringLiteral("preview.render.requested"),
+        {
+            {QStringLiteral("file_path"), file_path_},
+            {QStringLiteral("has_adjustments"), has_visible_adjustments(state)},
+            {QStringLiteral("schedule_full_resolution"), schedule_full_resolution},
+        });
+  }
   if (!preview_supported(file_path_)) {
     preview_source_ = fallback_thumbnail_source_;
     display_preview_source_ = fallback_thumbnail_source_;
@@ -7682,6 +8358,10 @@ void EditorPreviewController::handleRenderFinished(bool full_resolution) {
         display_reference_preview_source_ = compare_mode_ ? fallback_thumbnail_source_ : QString();
         display_reference_preview_overlay_source_.clear();
         display_preview_overlay_rect_ = QRectF();
+        if (display_preview_texture_ != nullptr) {
+          display_preview_texture_->clear();
+          ++display_preview_native_revision_;
+        }
         if (image_provider_ != nullptr) {
           image_provider_->clearImage(QString::fromLatin1(kEditedPreviewOverlayImageId));
           image_provider_->clearImage(QString::fromLatin1(kReferencePreviewOverlayImageId));
@@ -7692,6 +8372,10 @@ void EditorPreviewController::handleRenderFinished(bool full_resolution) {
       ++preview_revision_;
       if (image_provider_ != nullptr && !result.preview_image.isNull()) {
         image_provider_->setImage(QString::fromLatin1(kEditedPreviewImageId), result.preview_image);
+      }
+      if (!result.preview_image.isNull() && display_preview_texture_ != nullptr &&
+          display_preview_texture_->upload(result.preview_image)) {
+        ++display_preview_native_revision_;
       }
       if (image_provider_ != nullptr) {
         if (!result.reference_preview_image.isNull()) {
@@ -7797,6 +8481,12 @@ void EditorPreviewController::updateProcessingState() {
 
 RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution) const {
   const auto state = currentState();
+  const auto draft_interactive = !full_resolution && next_interactive_render_draft_;
+  const auto max_edge =
+      full_resolution ? 0
+                      : (draft_interactive
+                             ? draft_interactive_preview_edge_for_state(state, previewTargetEdge())
+                             : interactive_preview_edge_for_state(state, previewTargetEdge()));
   return RenderRequest{
       .file_path = file_path_,
       .fallback_thumbnail_source = fallback_thumbnail_source_,
@@ -7804,8 +8494,8 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
       .compare_mode = compare_mode_,
       .bypass_crop = crop_editing_,
       .full_resolution = full_resolution,
-      .max_edge = full_resolution ? 0 : interactive_preview_edge_for_state(state, previewTargetEdge()),
-      .jpeg_quality = full_resolution ? 90 : (uses_expensive_interactive_preview(state) ? 72 : 78),
+      .max_edge = max_edge,
+      .jpeg_quality = full_resolution ? 95 : (uses_expensive_interactive_preview(state) ? 86 : 90),
       .generation = render_generation_,
       .use_in_memory_preview = !full_resolution && image_provider_ != nullptr,
       .preview_overlay_rect =
@@ -7816,6 +8506,7 @@ RenderRequest EditorPreviewController::currentRenderRequest(bool full_resolution
           !full_resolution && image_provider_ != nullptr && preview_viewport_active_ && !compare_mode_
               ? preview_viewport_patch_max_edge_
               : 0,
+      .draft_interactive = draft_interactive,
       .latest_generation = latest_render_generation_,
   };
 }
@@ -8028,6 +8719,15 @@ void EditorPreviewController::applyState(const EditState& state) {
   crop_rect_height_ = state.crop_rect_height;
   crop_zoom_ = state.crop_zoom;
   crop_preset_ = state.crop_preset;
+  input_color_profile_ = normalized_input_color_profile_name(state.input_color_profile);
+  working_color_profile_ = normalized_working_color_profile_name(state.working_color_profile);
+  preview_color_space_ = normalized_output_color_space_name(state.preview_color_space);
+  render_intent_ = normalized_render_intent_name(state.render_intent);
+  raw_input_transform_enabled_ = state.raw_input_transform_enabled;
+  highlight_reconstruction_mode_ =
+      normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode);
+  chromatic_adaptation_method_ =
+      normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method);
   output_color_space_ = normalized_output_color_space_name(state.output_color_space);
   mask_stack_ = normalize_mask_stack(state.mask_stack);
   invalidateMaskDerivedCaches();
@@ -8038,6 +8738,13 @@ void EditorPreviewController::applyState(const EditState& state) {
 
 EditState EditorPreviewController::currentState() const {
   return EditState{
+      .input_color_profile = input_color_profile_,
+      .working_color_profile = working_color_profile_,
+      .preview_color_space = preview_color_space_,
+      .render_intent = render_intent_,
+      .raw_input_transform_enabled = raw_input_transform_enabled_,
+      .highlight_reconstruction_mode = highlight_reconstruction_mode_,
+      .chromatic_adaptation_method = chromatic_adaptation_method_,
       .raw_exposure = raw_exposure_,
       .raw_boost = raw_boost_,
       .raw_shadow_boost = raw_shadow_boost_,
@@ -8448,9 +9155,9 @@ void EditorPreviewController::updateActiveBrushLivePreview(
       &active_brush_live_preview_image_,
       sampled_points,
       BrushPreviewStyle{
-          .color = brush_preview_color_for_mask(mask),
+          .color = brush_preview_color_for_mask(mask, maskPreviewMode()),
           .feather = activeMaskFeather(),
-          .opacity = brush_preview_opacity_for_mask(mask),
+          .opacity = brush_preview_opacity_for_mask(mask, maskPreviewMode()),
       });
 
   if (image_provider_ != nullptr &&
@@ -8523,12 +9230,26 @@ void EditorPreviewController::handleSmartSelectPreviewFinished() {
 
 void EditorPreviewController::updateSmartSelectPreviewState(
     const QVariantMap& preview_mask,
-    const QVector<int>& instance_ids) {
+    const QVector<int>& instance_ids,
+    const QVector<int>& candidate_instance_ids) {
+  const auto normalized_candidate_index = candidate_instance_ids.isEmpty()
+                                              ? 0
+                                              : (candidate_instance_ids ==
+                                                         smart_select_preview_candidate_instance_ids_
+                                                     ? qBound(
+                                                           0,
+                                                           smart_select_preview_candidate_index_,
+                                                           static_cast<int>(candidate_instance_ids.size()) - 1)
+                                                     : 0);
   if (smart_select_preview_instance_ids_ == instance_ids &&
+      smart_select_preview_candidate_instance_ids_ == candidate_instance_ids &&
+      smart_select_preview_candidate_index_ == normalized_candidate_index &&
       smart_select_preview_mask_ == preview_mask) {
     return;
   }
   smart_select_preview_instance_ids_ = instance_ids;
+  smart_select_preview_candidate_instance_ids_ = candidate_instance_ids;
+  smart_select_preview_candidate_index_ = normalized_candidate_index;
   smart_select_preview_mask_ = preview_mask;
   emit smartSelectPreviewChanged();
 }

@@ -73,11 +73,15 @@ function(photo_editor_install_desktop_runtime target_name)
   endforeach()
 
   if(PHOTO_EDITOR_POSTGRES_RUNTIME_DIR)
-    if(EXISTS "${PHOTO_EDITOR_POSTGRES_RUNTIME_DIR}/bin")
+    get_filename_component(
+      PHOTO_EDITOR_RESOLVED_POSTGRES_RUNTIME_DIR
+      "${PHOTO_EDITOR_POSTGRES_RUNTIME_DIR}"
+      REALPATH)
+    if(EXISTS "${PHOTO_EDITOR_RESOLVED_POSTGRES_RUNTIME_DIR}/bin")
       if(APPLE)
-        install(DIRECTORY "${PHOTO_EDITOR_POSTGRES_RUNTIME_DIR}/" DESTINATION "PhotoEditor.app/Contents/Resources/postgres")
+        install(DIRECTORY "${PHOTO_EDITOR_RESOLVED_POSTGRES_RUNTIME_DIR}/" DESTINATION "PhotoEditor.app/Contents/Resources/postgres")
       else()
-        install(DIRECTORY "${PHOTO_EDITOR_POSTGRES_RUNTIME_DIR}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/postgres")
+        install(DIRECTORY "${PHOTO_EDITOR_RESOLVED_POSTGRES_RUNTIME_DIR}/" DESTINATION "${CMAKE_INSTALL_BINDIR}/postgres")
       endif()
     else()
       message(WARNING "PHOTO_EDITOR_POSTGRES_RUNTIME_DIR does not contain a bin/ directory: ${PHOTO_EDITOR_POSTGRES_RUNTIME_DIR}")
@@ -96,7 +100,14 @@ function(photo_editor_install_desktop_runtime target_name)
     endif()
   endif()
 
-  if(QT_VERSION VERSION_GREATER_EQUAL 6.3)
+  if(COMMAND qt_generate_deploy_qml_app_script)
+    qt_generate_deploy_qml_app_script(
+      TARGET ${target_name}
+      OUTPUT_SCRIPT deploy_script
+      DEPLOY_USER_QML_MODULES_ON_UNSUPPORTED_PLATFORM
+      NO_UNSUPPORTED_PLATFORM_ERROR)
+    install(SCRIPT ${deploy_script})
+  elseif(COMMAND qt_generate_deploy_app_script)
     qt_generate_deploy_app_script(
       TARGET ${target_name}
       OUTPUT_SCRIPT deploy_script
@@ -107,16 +118,16 @@ endfunction()
 
 function(photo_editor_configure_packaging)
   if(APPLE)
-    set(CPACK_GENERATOR DragNDrop PARENT_SCOPE)
+    set(CPACK_GENERATOR DragNDrop)
   elseif(WIN32)
-    set(CPACK_GENERATOR ZIP PARENT_SCOPE)
+    set(CPACK_GENERATOR ZIP)
   else()
-    set(CPACK_GENERATOR TGZ PARENT_SCOPE)
+    set(CPACK_GENERATOR TGZ)
   endif()
 
-  set(CPACK_PACKAGE_NAME "PhotoEditor" PARENT_SCOPE)
-  set(CPACK_PACKAGE_VENDOR "PhotoEditor" PARENT_SCOPE)
-  set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}" PARENT_SCOPE)
-  set(CPACK_PACKAGE_FILE_NAME "PhotoEditor-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}" PARENT_SCOPE)
+  set(CPACK_PACKAGE_NAME "PhotoEditor")
+  set(CPACK_PACKAGE_VENDOR "PhotoEditor")
+  set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+  set(CPACK_PACKAGE_FILE_NAME "PhotoEditor-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}")
   include(CPack)
 endfunction()

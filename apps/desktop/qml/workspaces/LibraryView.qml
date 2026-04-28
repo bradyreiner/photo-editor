@@ -14,6 +14,46 @@ Rectangle {
         id: theme
     }
 
+    component InspectorRule: Rectangle {
+        Theme { id: ruleTheme }
+        Layout.fillWidth: true
+        implicitHeight: 1
+        color: ruleTheme.alpha(ruleTheme.lineSoft, 0.16)
+    }
+
+    component InspectorDetailRow: RowLayout {
+        id: detailRow
+        property string label: ""
+        property string value: ""
+        property bool showWhen: value.length > 0
+
+        Theme { id: rowTheme }
+
+        Layout.fillWidth: true
+        visible: showWhen
+        spacing: rowTheme.space10
+
+        Label {
+            Layout.preferredWidth: 74
+            text: detailRow.label
+            color: rowTheme.textFaint
+            font.family: rowTheme.fontMono
+            font.pixelSize: 10
+            font.letterSpacing: 0.4
+            elide: Text.ElideRight
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: detailRow.value
+            color: rowTheme.textMain
+            font.family: rowTheme.fontUi
+            font.pixelSize: 12
+            font.weight: Font.Medium
+            elide: Text.ElideRight
+        }
+    }
+
     signal assetActivated(string destination)
     signal projectActivated(string destination, string projectName)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
@@ -27,7 +67,17 @@ Rectangle {
     property string catalogViewMode: "grid"
     property bool selectionModeActive: false
     property bool focusCheckEnabled: false
+    readonly property var activeImportJob: {
+        if (!jobQueue)
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestJobForKind("catalog_import")
+    }
     readonly property bool hasSelection: catalogAssets.selectedAssetId.length > 0
+    readonly property bool libraryActivityVisible: catalogAssets.loading
+                                                || catalogAssets.deleting
+                                                || hasActiveImportJobs()
     readonly property var selectionMetrics: {
         catalogAssets.selectedAssetIds
         catalogAssets.assetCount
@@ -193,6 +243,29 @@ Rectangle {
         catalogAssets.clearSelection()
     }
 
+    function canSelectAll() {
+        return !root.importBrowserOpen && !catalogAssets.busy && catalogAssets.assetCount > 0
+    }
+
+    function selectAll() {
+        if (!canSelectAll())
+            return
+        root.selectionModeActive = true
+        catalogAssets.selectAll()
+        root.syncPreviewWithSelection()
+    }
+
+    function canDeselect() {
+        return root.selectionModeActive || catalogAssets.selectedAssetCount > 0
+    }
+
+    function deselectAll() {
+        if (!canDeselect())
+            return
+        root.selectionModeActive = false
+        catalogAssets.clearSelection()
+    }
+
     function chooseImportFolder() {
         const folderUrl = catalogAssets.pickFolder("Browse Media Folder");
         if (folderUrl.length === 0)
@@ -228,6 +301,44 @@ Rectangle {
         return jobQueue
                 ? jobQueue.statusForKind("catalog_import", catalogAssets.status)
                 : catalogAssets.status
+    }
+
+    function libraryActivityTitle() {
+        if (catalogAssets.deleting) {
+            const count = Math.max(1, Number(catalogAssets.deleteTargetCount || 0))
+            return "Removing " + count + (count === 1 ? " asset" : " assets")
+        }
+        if (catalogAssets.loading)
+            return "Refreshing gallery"
+        if (hasActiveImportJobs())
+            return activeImportJob.displayLabel && activeImportJob.displayLabel.length > 0
+                    ? "Importing " + activeImportJob.displayLabel
+                    : "Importing media"
+        return ""
+    }
+
+    function libraryActivityDetail() {
+        if (catalogAssets.deleting || catalogAssets.loading)
+            return catalogAssets.status
+        if (hasActiveImportJobs())
+            return importJobStatus()
+        return ""
+    }
+
+    function libraryActivityProgress() {
+        if (catalogAssets.deleting && catalogAssets.deleteTargetCount > 0)
+            return Math.max(0, Math.min(1, catalogAssets.deleteProgress / catalogAssets.deleteTargetCount))
+        if (catalogAssets.loading)
+            return -1
+        if (hasActiveImportJobs()) {
+            const status = activeImportJob.status ? String(activeImportJob.status) : ""
+            const raw = activeImportJob.progress !== undefined ? Number(activeImportJob.progress) : 0
+            if (status === "Queued")
+                return 0.08
+            if (raw > 0)
+                return Math.max(0.05, Math.min(1, raw / 100.0))
+        }
+        return -1
     }
 
     function openJobsWorkspace() {
@@ -279,38 +390,38 @@ Rectangle {
             catalogAssets.relinkOfflineAssetsToFolder(folderUrl)
     }
 
-    function queueSelectedExports(destinationFolder) {
+    function queueSelectedExports(destinationFolder, presetName) {
         if (catalogAssets.selectedAssetCount <= 0)
             return
 
         if (destinationFolder.length === 0)
             return
 
-        let queuedCount = 0
+        const preset = presetName && presetName.length > 0 ? presetName : "Full Resolution"
+        let assets = []
         for (let index = 0; index < catalogAssets.assetCount; ++index) {
             const asset = catalogAssets.assetAt(index)
             const assetId = String(asset.assetId || "")
             if (assetId.length === 0 || !catalogAssets.assetSelected(assetId))
                 continue
 
-            const mediaType = String(asset.mediaType || "photo")
             const sourcePath = String(asset.filePath || "")
             if (sourcePath.length === 0)
                 continue
 
-            const preset = mediaType === "photo" ? "Full Resolution" : "Original Copy"
-            if (exportJobs.queueExport(
-                        assetId,
-                        mediaType,
-                        root.baseNameForPath(sourcePath),
-                        sourcePath,
-                        "",
-                        String(asset.recipeJson || ""),
-                        preset,
-                        destinationFolder))
-                queuedCount += 1
+            assets.push({
+                assetId: assetId,
+                mediaType: String(asset.mediaType || "photo"),
+                filePath: sourcePath,
+                recipeJson: String(asset.recipeJson || ""),
+                displayLabel: root.baseNameForPath(sourcePath)
+            })
         }
 
+        if (assets.length === 0)
+            return
+
+        const queuedCount = exportJobs.queueBatchExport(assets, preset, destinationFolder)
         if (queuedCount > 0)
             root.openJobsWorkspace()
     }
@@ -827,32 +938,62 @@ Rectangle {
 
             Label {
                 Layout.fillWidth: true
-                text: "Choose where to send this batch. Photos export at full resolution and videos or timelines export as original copies."
+                text: "Choose a format preset and destination. Videos and timelines always export as original copies."
                 color: theme.textMuted
                 font.family: theme.fontUi
                 font.pixelSize: 12
                 wrapMode: Text.WordWrap
             }
 
-            RowLayout {
+            ColumnLayout {
                 Layout.fillWidth: true
-                spacing: theme.space8
+                spacing: theme.space4
 
-                ToneTextField {
-                    id: exportDestinationField
-                    Layout.fillWidth: true
-                    placeholderText: "Export destination"
-                    onTextChanged: root.exportDestinationPath = text
+                Label {
+                    text: "Format Preset"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
                 }
 
-                ActionButton {
-                    text: "Browse"
-                    compact: true
-                    onClicked: {
-                        const folder = exportJobs.pickDestinationFolder("Choose Export Folder")
-                        if (folder.length > 0) {
-                            root.exportDestinationPath = folder
-                            exportDestinationField.text = folder
+                ToneComboBox {
+                    id: exportDialogPresetCombo
+                    Layout.fillWidth: true
+                    model: ["Full Resolution", "Archive TIFF", "Web Proof", "Client Preview", "Quick Web", "Original Copy"]
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: theme.space4
+
+                Label {
+                    text: "Destination"
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.space8
+
+                    ToneTextField {
+                        id: exportDestinationField
+                        Layout.fillWidth: true
+                        placeholderText: "Export destination"
+                        onTextChanged: root.exportDestinationPath = text
+                    }
+
+                    ActionButton {
+                        text: "Browse"
+                        compact: true
+                        onClicked: {
+                            const folder = exportJobs.pickDestinationFolder("Choose Export Folder")
+                            if (folder.length > 0) {
+                                root.exportDestinationPath = folder
+                                exportDestinationField.text = folder
+                            }
                         }
                     }
                 }
@@ -879,7 +1020,7 @@ Rectangle {
                     tone: "primary"
                     enabled: root.exportDestinationPath.trim().length > 0
                     onClicked: {
-                        root.queueSelectedExports(root.exportDestinationPath.trim())
+                        root.queueSelectedExports(root.exportDestinationPath.trim(), exportDialogPresetCombo.currentText)
                         exportSelectionDialog.close()
                         root.setSelectionModeActive(false)
                     }
@@ -1943,32 +2084,30 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 332
             Layout.fillHeight: true
-            radius: theme.radiusSurface
-            color: theme.ink850
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.18)
+            radius: 0
+            color: theme.alpha(theme.ink900, 0.74)
+            border.width: 0
+            border.color: "transparent"
 
-            gradient: Gradient {
-                GradientStop { position: 0.0; color: theme.alpha(theme.accentWarm500, 0.035) }
-                GradientStop { position: 0.18; color: theme.alpha(theme.ink850, 0.98) }
-                GradientStop { position: 1.0; color: theme.ink900 }
-            }
-
-            ColumnLayout {
+            ScrollView {
+                id: inspectorScroll
                 anchors.fill: parent
-                anchors.margins: theme.space14
-                spacing: theme.space12
+                clip: true
+                contentWidth: availableWidth
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: theme.space8
+                ColumnLayout {
+                    width: Math.max(1, inspectorScroll.availableWidth - theme.space28)
+                    x: theme.space14
+                    y: theme.space14
+                    spacing: theme.space14
 
                     Label {
+                        Layout.fillWidth: true
                         text: "Inspector"
                         color: theme.textStrong
                         font.family: theme.fontDisplay
-                        font.pixelSize: 22
-                        font.weight: Font.DemiBold
+                        font.pixelSize: 24
+                        font.weight: Font.Bold
                     }
 
                     Label {
@@ -1980,321 +2119,220 @@ Rectangle {
                               : "Select media to inspect it, review it, and organize it."
                         color: theme.textMuted
                         font.family: theme.fontUi
-                        font.pixelSize: 11
+                        font.pixelSize: 12
+                        font.weight: Font.Medium
                         wrapMode: Text.WordWrap
+                        maximumLineCount: 2
+                        elide: Text.ElideRight
                     }
-                }
 
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: inspectorCard.implicitHeight + (theme.space12 * 2)
-                    radius: theme.radiusPanel
-                    color: theme.alpha(theme.ink950, 0.22)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.16)
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: root.hasSelection && !catalogAssets.hasMultiSelection ? 254 : 152
+                        visible: true
+                        radius: 0
+                        color: theme.alpha(theme.ink950, 0.64)
+                        border.width: 1
+                        border.color: theme.alpha(theme.lineSoft, 0.12)
+                        clip: true
 
-                    ColumnLayout {
-                        id: inspectorCard
-                        anchors.fill: parent
-                        anchors.margins: theme.space12
-                        spacing: theme.space10
+                        Image {
+                            anchors.fill: parent
+                            anchors.margins: root.hasSelection && !catalogAssets.hasMultiSelection ? 0 : theme.space16
+                            visible: root.hasSelection && !catalogAssets.hasMultiSelection
+                            source: catalogAssets.selectedThumbnailSource
+                            asynchronous: true
+                            cache: false
+                            fillMode: Image.PreserveAspectFit
+                            opacity: catalogAssets.selectedOnline ? 1.0 : 0.42
+                        }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: root.hasSelection && !catalogAssets.hasMultiSelection ? 176 : 116
-                            radius: theme.radius12
-                            color: theme.alpha(theme.ink900, 0.94)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.2)
-                            clip: true
+                        Column {
+                            anchors.centerIn: parent
+                            visible: !root.hasSelection || catalogAssets.hasMultiSelection
+                            spacing: theme.space6
 
-                            Image {
-                                anchors.fill: parent
-                                visible: root.hasSelection && !catalogAssets.hasMultiSelection
-                                source: catalogAssets.selectedThumbnailSource
-                                asynchronous: true
-                                cache: false
-                                fillMode: Image.PreserveAspectFit
-                                opacity: catalogAssets.selectedOnline ? 1.0 : 0.42
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: !root.hasSelection ? "No Selection" : (catalogAssets.selectedAssetCount + " Selected")
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 18
+                                font.weight: Font.Bold
                             }
 
-                            Column {
-                                anchors.centerIn: parent
-                                visible: !root.hasSelection || catalogAssets.hasMultiSelection
-                                spacing: theme.space6
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 248
+                                horizontalAlignment: Text.AlignHCenter
+                                text: !root.hasSelection ? "Select media from the grid to inspect it." : root.selectionSummaryText()
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.Medium
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+                    }
 
-                                Label {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    text: !root.hasSelection
-                                          ? "No Selection"
-                                          : (catalogAssets.selectedAssetCount + " Selected")
-                                    color: theme.textStrong
-                                    font.family: theme.fontDisplay
-                                    font.pixelSize: 18
-                                    font.weight: Font.DemiBold
-                                }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        visible: root.hasSelection
+                        spacing: theme.space8
 
-                                Label {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    width: 248
-                                    horizontalAlignment: Text.AlignHCenter
-                                    text: !root.hasSelection
-                                          ? "Use Select to start building a batch from the grid."
-                                          : root.selectionSummaryText()
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: !catalogAssets.hasMultiSelection
+                            spacing: theme.space8
 
-                                Label {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    visible: catalogAssets.hasMultiSelection
-                                    width: 248
-                                    horizontalAlignment: Text.AlignHCenter
-                                    text: "Primary: " + root.fileNameForPath(catalogAssets.selectedFilePath)
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                    wrapMode: Text.WordWrap
-                                }
+                            InfoPill {
+                                Layout.fillWidth: true
+                                label: "MEDIA"
+                                value: catalogAssets.selectedMediaType === "timeline" ? "Timeline" : catalogAssets.selectedMediaType
+                            }
+
+                            InfoPill {
+                                Layout.fillWidth: true
+                                label: "SOURCE"
+                                value: root.availabilityLabel(catalogAssets.selectedOnline)
+                                accent: catalogAssets.selectedOnline ? theme.success : theme.warning
                             }
                         }
 
                         Flow {
                             Layout.fillWidth: true
-                            visible: root.hasSelection
+                            visible: catalogAssets.hasMultiSelection
                             spacing: theme.space8
 
                             InfoPill {
-                                visible: !catalogAssets.hasMultiSelection
-                                label: "Media"
-                                value: catalogAssets.selectedMediaType === "timeline" ? "Timeline" : catalogAssets.selectedMediaType
-                                accent: theme.accentCool400
-                            }
-
-                            InfoPill {
-                                visible: !catalogAssets.hasMultiSelection
-                                label: "Source"
-                                value: root.availabilityLabel(catalogAssets.selectedOnline)
-                                accent: catalogAssets.selectedOnline ? theme.success : theme.warning
-                            }
-
-                            InfoPill {
-                                visible: catalogAssets.hasMultiSelection && root.selectionMetrics.photos > 0
-                                label: "Photos"
+                                visible: root.selectionMetrics.photos > 0
+                                label: "PHOTOS"
                                 value: String(root.selectionMetrics.photos)
-                                accent: theme.accentWarm400
                             }
 
                             InfoPill {
-                                visible: catalogAssets.hasMultiSelection && root.selectionMetrics.videos > 0
-                                label: "Videos"
+                                visible: root.selectionMetrics.videos > 0
+                                label: "VIDEOS"
                                 value: String(root.selectionMetrics.videos)
-                                accent: theme.accentCool400
                             }
 
                             InfoPill {
-                                visible: catalogAssets.hasMultiSelection && root.selectionMetrics.timelines > 0
-                                label: "Timelines"
+                                visible: root.selectionMetrics.timelines > 0
+                                label: "TIMELINES"
                                 value: String(root.selectionMetrics.timelines)
-                                accent: theme.success
                             }
 
                             InfoPill {
-                                visible: catalogAssets.hasMultiSelection
-                                label: "Online"
+                                label: "ONLINE"
                                 value: String(root.selectionMetrics.online)
-                                accent: root.selectionMetrics.offline > 0 ? theme.warning : theme.success
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            visible: root.hasSelection
-                            implicitHeight: metadataColumn.implicitHeight + (theme.space10 * 2)
-                            radius: theme.radius10
-                            color: theme.alpha(theme.ink900, 0.42)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.14)
-
-                            ColumnLayout {
-                                id: metadataColumn
-                                anchors.fill: parent
-                                anchors.margins: theme.space10
-                                spacing: theme.space6
-
-                                GridLayout {
-                                    Layout.fillWidth: true
-                                    visible: !catalogAssets.hasMultiSelection
-                                    columns: 2
-                                    columnSpacing: theme.space8
-                                    rowSpacing: theme.space5
-
-                                    Label {
-                                        text: "Camera"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "Unknown camera"
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        text: "Captured"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Unknown"
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedLensModel.length > 0
-                                        text: "Lens"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedLensModel.length > 0
-                                        Layout.fillWidth: true
-                                        text: catalogAssets.selectedLensModel
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedImportedAt.length > 0
-                                        text: "Imported"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedImportedAt.length > 0
-                                        Layout.fillWidth: true
-                                        text: catalogAssets.selectedImportedAt
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedProjectSummary.length > 0
-                                        text: "Projects"
-                                        color: theme.textFaint
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Label {
-                                        visible: catalogAssets.selectedProjectSummary.length > 0
-                                        Layout.fillWidth: true
-                                        text: catalogAssets.selectedProjectSummary
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                }
-
-                                Flow {
-                                    Layout.fillWidth: true
-                                    visible: !catalogAssets.hasMultiSelection
-                                    spacing: theme.space8
-
-                                    InfoPill {
-                                        visible: catalogAssets.selectedIso.length > 0
-                                        label: "ISO"
-                                        value: catalogAssets.selectedIso
-                                        accent: theme.accentWarm400
-                                    }
-
-                                    InfoPill {
-                                        visible: catalogAssets.selectedShutterSpeed.length > 0
-                                        label: "Shutter"
-                                        value: catalogAssets.selectedShutterSpeed
-                                        accent: theme.accentCool400
-                                    }
-
-                                    InfoPill {
-                                        visible: catalogAssets.selectedAperture.length > 0
-                                        label: "Aperture"
-                                        value: catalogAssets.selectedAperture
-                                        accent: theme.success
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    visible: !catalogAssets.hasMultiSelection
-                                    text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                    maximumLineCount: 2
-                                    elide: Text.ElideMiddle
-                                    wrapMode: Text.WrapAnywhere
-                                }
                             }
                         }
                     }
-                }
-
-                Rectangle {
-                    visible: root.hasSelection && !catalogAssets.hasMultiSelection
-                    Layout.fillWidth: true
-                    implicitHeight: reviewColumn.implicitHeight + (theme.space12 * 2)
-                    radius: theme.radiusPanel
-                    color: theme.alpha(theme.ink950, 0.2)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.16)
 
                     ColumnLayout {
-                        id: reviewColumn
-                        anchors.fill: parent
-                        anchors.margins: theme.space12
-                        spacing: theme.space10
+                        Layout.fillWidth: true
+                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
+                        spacing: theme.space8
+
+                        InspectorRule {}
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Details"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
+                        }
+
+                        InspectorDetailRow {
+                            label: "Camera"
+                            value: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "Unknown camera"
+                        }
+
+                        InspectorDetailRow {
+                            label: "Captured"
+                            value: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Unknown"
+                        }
+
+                        InspectorDetailRow {
+                            label: "Lens"
+                            value: catalogAssets.selectedLensModel
+                        }
+
+                        InspectorDetailRow {
+                            label: "Imported"
+                            value: catalogAssets.selectedImportedAt
+                        }
+
+                        InspectorDetailRow {
+                            label: "Projects"
+                            value: catalogAssets.selectedProjectSummary
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            InfoPill {
+                                Layout.fillWidth: true
+                                visible: catalogAssets.selectedIso.length > 0
+                                label: "ISO"
+                                value: catalogAssets.selectedIso
+                            }
+
+                            InfoPill {
+                                Layout.fillWidth: true
+                                visible: catalogAssets.selectedShutterSpeed.length > 0
+                                label: "SHUTTER"
+                                value: catalogAssets.selectedShutterSpeed
+                            }
+
+                            InfoPill {
+                                Layout.fillWidth: true
+                                visible: catalogAssets.selectedAperture.length > 0
+                                label: "APERTURE"
+                                value: catalogAssets.selectedAperture
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            maximumLineCount: 2
+                            elide: Text.ElideMiddle
+                            wrapMode: Text.WrapAnywhere
+                        }
+                    }
+
+                    ColumnLayout {
+                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
+                        Layout.fillWidth: true
+                        spacing: theme.space8
+
+                        InspectorRule {}
 
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: theme.space8
 
                             Label {
+                                Layout.fillWidth: true
                                 text: "Review"
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
-                                font.weight: Font.DemiBold
+                                font.pixelSize: 13
+                                font.weight: Font.Bold
                             }
 
                             Label {
-                                Layout.fillWidth: true
                                 text: (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
-                                horizontalAlignment: Text.AlignRight
                             }
                         }
 
@@ -2304,16 +2342,14 @@ Rectangle {
 
                             InfoPill {
                                 Layout.fillWidth: true
-                                label: "Rating"
+                                label: "RATING"
                                 value: root.ratingLabel(catalogAssets.selectedRating)
-                                accent: theme.warning
                             }
 
                             InfoPill {
                                 Layout.fillWidth: true
-                                label: "Review"
+                                label: "STATUS"
                                 value: root.cullStatusLabel(catalogAssets.selectedCullStatus)
-                                accent: catalogAssets.selectedRejected ? theme.error : (catalogAssets.selectedPicked ? theme.success : theme.accentCool400)
                             }
                         }
 
@@ -2328,6 +2364,7 @@ Rectangle {
                                 accent: theme.success
                                 active: catalogAssets.selectedPicked
                                 enabled: catalogAssets.selectedIndex >= 0
+                                shape: "clipped"
                                 onClicked: root.applyPickReview(false)
                             }
 
@@ -2376,59 +2413,55 @@ Rectangle {
                             Layout.fillWidth: true
                             compact: true
                             text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
-                            accent: theme.accentCool400
                             active: appShell.cullingAutoAdvance
+                            shape: appShell.cullingAutoAdvance ? "clipped" : "standard"
                             onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
                         }
+                    }
 
-                        Rectangle {
+                    ColumnLayout {
+                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
+                        Layout.fillWidth: true
+                        spacing: theme.space8
+
+                        InspectorRule {}
+
+                        Label {
                             Layout.fillWidth: true
-                            radius: theme.radius12
-                            color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.08) : theme.alpha(theme.warning, 0.12)
-                            border.width: 1
-                            border.color: catalogAssets.selectedOnline ? theme.alpha(theme.success, 0.18) : theme.alpha(theme.warning, 0.22)
+                            text: catalogAssets.selectedOnline
+                                  ? "Source available on disk."
+                                  : "Source offline. Recheck mounted drives or relink it."
+                            color: catalogAssets.selectedOnline ? theme.textMuted : theme.warning
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.Medium
+                            wrapMode: Text.WordWrap
+                        }
 
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: theme.space10
-                                spacing: theme.space8
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
 
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: catalogAssets.selectedOnline
-                                          ? "Source is available on disk."
-                                          : "Source is offline. Recheck mounted drives or relink it to a matching folder."
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Recheck"
+                                onClicked: catalogAssets.refreshOnlineState()
+                            }
 
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: theme.space8
-
-                                    ActionButton {
-                                        Layout.fillWidth: true
-                                        compact: true
-                                        text: "Recheck"
-                                        onClicked: catalogAssets.refreshOnlineState()
-                                    }
-
-                                    ActionButton {
-                                        Layout.fillWidth: true
-                                        compact: true
-                                        text: "Relink"
-                                        enabled: !catalogAssets.selectedOnline
-                                        onClicked: root.chooseRelinkFolder(true)
-                                    }
-                                }
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Relink"
+                                enabled: !catalogAssets.selectedOnline
+                                shape: !catalogAssets.selectedOnline ? "clipped" : "standard"
+                                onClicked: root.chooseRelinkFolder(true)
                             }
                         }
                     }
-                }
 
-                Item { Layout.fillHeight: true }
+                    Item { Layout.preferredHeight: theme.space10 }
+                }
             }
         }
     }

@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "photo-editor": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "photo-editor-mcp",
+        "--quiet"
+      ],
+      "env": {
+        "RUST_LOG": "info",
+        "OTEL_SERVICE_NAMESPACE": "photo-editor-dev",
+        "OTEL_DEPLOYMENT_ENVIRONMENT": "development"
+      }
+    }
+  }
+}

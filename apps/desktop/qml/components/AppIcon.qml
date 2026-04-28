@@ -269,9 +269,13 @@ Canvas {
             ctx.stroke()
             break
         case "library":
-            rect(ctx, w * 0.2, h * 0.24, w * 0.18, h * 0.52, false)
-            rect(ctx, w * 0.42, h * 0.18, w * 0.18, h * 0.58, false)
-            rect(ctx, w * 0.64, h * 0.28, w * 0.16, h * 0.48, false)
+            line(ctx, w * 0.16, h * 0.8, w * 0.84, h * 0.8)
+            rect(ctx, w * 0.2, h * 0.22, w * 0.14, h * 0.5, false)
+            rect(ctx, w * 0.4, h * 0.18, w * 0.16, h * 0.54, false)
+            rect(ctx, w * 0.62, h * 0.26, w * 0.16, h * 0.46, false)
+            line(ctx, w * 0.24, h * 0.34, w * 0.3, h * 0.34)
+            line(ctx, w * 0.44, h * 0.3, w * 0.52, h * 0.3)
+            line(ctx, w * 0.66, h * 0.38, w * 0.74, h * 0.38)
             break
         case "adjust":
             line(ctx, w * 0.18, h * 0.28, w * 0.82, h * 0.28)
@@ -282,30 +286,36 @@ Canvas {
             circle(ctx, w * 0.46, h * 0.72, w * 0.06, true)
             break
         case "edit":
-            line(ctx, w * 0.24, h * 0.76, w * 0.76, h * 0.24)
-            line(ctx, w * 0.58, h * 0.2, w * 0.8, h * 0.42)
-            line(ctx, w * 0.2, h * 0.58, w * 0.42, h * 0.8)
+            poly(ctx, [[w * 0.24, h * 0.72], [w * 0.34, h * 0.82], [w * 0.74, h * 0.42], [w * 0.64, h * 0.32]], false)
+            poly(ctx, [[w * 0.74, h * 0.42], [w * 0.84, h * 0.18], [w * 0.6, h * 0.28]], false)
+            line(ctx, w * 0.3, h * 0.76, w * 0.22, h * 0.9)
+            line(ctx, w * 0.4, h * 0.24, w * 0.5, h * 0.14)
             break
         case "masks":
             circle(ctx, w * 0.42, h * 0.44, w * 0.2, false)
             circle(ctx, w * 0.6, h * 0.56, w * 0.2, false)
             break
         case "carousel":
-            rect(ctx, w * 0.14, h * 0.28, w * 0.28, h * 0.44, false)
-            rect(ctx, w * 0.36, h * 0.22, w * 0.28, h * 0.52, false)
-            rect(ctx, w * 0.58, h * 0.16, w * 0.28, h * 0.6, false)
+            poly(ctx, [[w * 0.14, h * 0.34], [w * 0.34, h * 0.24], [w * 0.42, h * 0.66], [w * 0.22, h * 0.76]], false)
+            poly(ctx, [[w * 0.34, h * 0.22], [w * 0.58, h * 0.18], [w * 0.66, h * 0.7], [w * 0.42, h * 0.74]], false)
+            poly(ctx, [[w * 0.58, h * 0.24], [w * 0.82, h * 0.28], [w * 0.74, h * 0.76], [w * 0.5, h * 0.72]], false)
             break
         case "timeline":
-            line(ctx, w * 0.14, h * 0.28, w * 0.86, h * 0.28)
-            line(ctx, w * 0.2, h * 0.44, w * 0.8, h * 0.44)
-            line(ctx, w * 0.2, h * 0.62, w * 0.8, h * 0.62)
-            rect(ctx, w * 0.3, h * 0.38, w * 0.18, h * 0.12, true)
-            rect(ctx, w * 0.52, h * 0.56, w * 0.2, h * 0.12, true)
+            rect(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.14, false)
+            rect(ctx, w * 0.18, h * 0.44, w * 0.44, h * 0.14, false)
+            rect(ctx, w * 0.38, h * 0.64, w * 0.44, h * 0.14, false)
+            line(ctx, w * 0.52, h * 0.14, w * 0.52, h * 0.86)
+            circle(ctx, w * 0.52, h * 0.14, w * 0.05, true)
             break
         case "export":
-            line(ctx, midX, h * 0.16, midX, h * 0.62)
-            poly(ctx, [[w * 0.34, h * 0.5], [midX, h * 0.76], [w * 0.66, h * 0.5]], true)
-            rect(ctx, w * 0.22, h * 0.76, w * 0.56, h * 0.08, true)
+            line(ctx, midX, h * 0.18, midX, h * 0.54)
+            line(ctx, midX, h * 0.18, w * 0.66, h * 0.34)
+            line(ctx, midX, h * 0.18, w * 0.34, h * 0.34)
+            line(ctx, w * 0.24, h * 0.52, w * 0.24, h * 0.76)
+            line(ctx, w * 0.76, h * 0.52, w * 0.76, h * 0.76)
+            line(ctx, w * 0.24, h * 0.76, w * 0.76, h * 0.76)
+            line(ctx, w * 0.24, h * 0.52, w * 0.38, h * 0.52)
+            line(ctx, w * 0.62, h * 0.52, w * 0.76, h * 0.52)
             break
         case "grid":
             rect(ctx, w * 0.18, h * 0.2, w * 0.22, h * 0.22, false)

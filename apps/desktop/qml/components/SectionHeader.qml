@@ -7,7 +7,11 @@ Item {
 
     required property string title
     property string subtitle: ""
-    property color accent: theme.accentWarm500
+    property color accent: theme.accentWarm400
+    property bool showAccentMarker: true
+    property string titleFontFamily: theme.fontDisplay
+    property int titlePixelSize: 15
+    property int titleWeight: Font.DemiBold
 
     implicitHeight: columnLayout.implicitHeight
 
@@ -23,18 +27,20 @@ Item {
             spacing: theme.gapDense
 
             Rectangle {
-                Layout.preferredWidth: 16
+                visible: root.showAccentMarker
+                Layout.preferredWidth: root.showAccentMarker ? 16 : 0
                 Layout.preferredHeight: 2
-                radius: 2
+                radius: 1
                 color: root.accent
             }
 
             Label {
                 text: root.title
                 color: theme.textStrong
-                font.family: theme.fontDisplay
-                font.pixelSize: 15
-                font.weight: Font.DemiBold
+                font.family: root.titleFontFamily
+                font.pixelSize: root.titlePixelSize
+                font.weight: root.titleWeight
+                font.letterSpacing: 0.2
             }
 
             Item { Layout.fillWidth: true }

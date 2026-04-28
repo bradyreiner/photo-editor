@@ -23,7 +23,7 @@ Rectangle {
     Theme { id: theme }
 
     radius: theme.radius12
-    color: theme.ink900
+    color: theme.alpha(theme.glassBase, 0.72)
     border.width: selected ? 2 : 1
     border.color: selected
                   ? theme.accentWarm400
@@ -31,7 +31,7 @@ Rectangle {
                     ? theme.alpha(theme.error, 0.72)
                     : picked
                       ? theme.alpha(theme.success, 0.72)
-                      : theme.alpha(theme.lineSoft, 0.5)
+                       : theme.alpha(theme.glassEdge, 0.26)
     clip: true
 
     property real normalizedLoupeX: 0.5

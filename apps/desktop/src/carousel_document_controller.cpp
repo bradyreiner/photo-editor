@@ -215,6 +215,24 @@ QRect crop_rect_for_image(const QSize& size, const CarouselDocumentController::R
 photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
     const CarouselDocumentController::RecipeState& state) {
   return photo_editor::pipeline::ColorAdjustmentState{
+      .input_transform =
+          photo_editor::pipeline::InputTransformSettings{
+              .input_profile_name = normalized_input_color_profile_name(state.input_color_profile).toStdString(),
+              .exposure = state.exposure,
+              .temperature = state.temperature,
+              .tint = state.tint,
+              .raw_input_transform_enabled = state.raw_input_transform_enabled,
+              .highlight_recovery_enabled = state.raw_highlight_recovery,
+              .highlight_reconstruction_mode =
+                  normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode).toStdString(),
+              .chromatic_adaptation_method =
+                  normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method).toStdString(),
+              .gamut_mapping_enabled = state.raw_gamut_mapping,
+              .lens_correction_enabled = state.raw_lens_correction,
+              .raw_white_balance_override_enabled = state.raw_white_balance_override,
+              .raw_white_balance_temperature = state.raw_white_balance_temperature,
+              .raw_white_balance_tint = state.raw_white_balance_tint,
+          },
       .exposure = state.exposure,
       .contrast = state.contrast,
       .highlights = state.highlights,
@@ -393,8 +411,11 @@ bool save_legacy_document_payload(const QString& document_id, const QJsonObject&
 
 CarouselDocumentController::CarouselDocumentController(QObject* parent)
     : QObject(parent), session_id_(QUuid::createUuid().toString(QUuid::WithoutBraces)) {
-  slides_.push_back(Slide{});
-  refreshPreviews();
+  preview_debounce_timer_ = new QTimer(this);
+  preview_debounce_timer_->setSingleShot(true);
+  preview_debounce_timer_->setInterval(200);
+  connect(preview_debounce_timer_, &QTimer::timeout, this,
+          &CarouselDocumentController::refreshCurrentSelectionPreviews);
 }
 
 QVariantList CarouselDocumentController::slides() const {
@@ -1014,6 +1035,94 @@ void CarouselDocumentController::setSelectedItemRotation(double rotation_degrees
   emitCanvasStateChanged(false);
 }
 
+void CarouselDocumentController::moveSelectedItemByPixelsSilent(double delta_x, double delta_y) {
+  const auto indexes = selectedItemIndexes(false, false);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.locked) {
+      continue;
+    }
+    const auto previous_slide = slideIndexForItem(item);
+    item.bounds.translate(delta_x, delta_y);
+    transform_slides_changed_ =
+        transform_slides_changed_ || previous_slide != slideIndexForItem(item);
+  }
+
+  if (const auto* item = currentItem()) {
+    current_index_ = slideIndexForItem(*item);
+  }
+  transform_dirty_ = true;
+}
+
+void CarouselDocumentController::setSelectedItemCenterSilent(double center_x, double center_y) {
+  auto* item = currentItem();
+  if (item == nullptr) {
+    return;
+  }
+
+  const auto delta_x = center_x - item->bounds.center().x();
+  const auto delta_y = center_y - item->bounds.center().y();
+  moveSelectedItemByPixelsSilent(delta_x, delta_y);
+}
+
+void CarouselDocumentController::setSelectedItemSizeSilent(double width, double height) {
+  auto* item = currentItem();
+  if (item == nullptr || item->locked) {
+    return;
+  }
+
+  const auto center = item->bounds.center();
+  auto next_width = qMax(kMinItemSize, width);
+  auto next_height = qMax(kMinItemSize, height);
+
+  if (item->kind != ItemKind::Text) {
+    const auto aspect_ratio = normalizedAspectRatio(*item);
+    if (aspect_ratio > 0.0) {
+      if (next_width / next_height > aspect_ratio) {
+        next_width = next_height * aspect_ratio;
+      } else {
+        next_height = next_width / aspect_ratio;
+      }
+    }
+  } else {
+    item->bounds.setWidth(next_width);
+    item->text_point_size = qMax(kMinTextPointSize, next_height / 1.2);
+    next_height = measuredTextHeight(*item);
+  }
+
+  item->bounds = QRectF(0.0, 0.0, next_width, next_height);
+  item->bounds.moveCenter(center);
+  transform_dirty_ = true;
+}
+
+void CarouselDocumentController::setSelectedItemRotationSilent(double rotation_degrees) {
+  auto* item = currentItem();
+  if (item == nullptr || item->locked) {
+    return;
+  }
+
+  item->rotation_degrees = rotation_degrees;
+  transform_dirty_ = true;
+}
+
+void CarouselDocumentController::commitTransformState() {
+  if (!transform_dirty_) {
+    return;
+  }
+  emitCanvasStateChanged(transform_slides_changed_);
+  transform_dirty_ = false;
+  transform_slides_changed_ = false;
+}
+
+void CarouselDocumentController::commitMediaTransformState() {
+  preview_debounce_timer_->stop();
+  refreshCurrentSelectionPreviews();
+}
+
 void CarouselDocumentController::setSelectedText(const QString& text) {
   auto* item = currentItem();
   if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
@@ -1324,20 +1433,7 @@ void CarouselDocumentController::applyTemplateToCurrent(const QString& template_
   }
 
   bool forced_portrait = false;
-  if (template_kind == QStringLiteral("linked-horizontal-pair") &&
-      document_format_ != QStringLiteral("4x5")) {
-    document_format_ = QStringLiteral("4x5");
-    forced_portrait = true;
-    emit documentFormatChanged();
-  }
-
   bool forced_landscape = false;
-  if (template_kind == QStringLiteral("split-pair") &&
-      document_format_ != QStringLiteral("5x4")) {
-    document_format_ = QStringLiteral("5x4");
-    forced_landscape = true;
-    emit documentFormatChanged();
-  }
 
   if (template_kind == QStringLiteral("single")) {
     removeGroupAtIndex(current_index_, true);
@@ -1468,7 +1564,7 @@ void CarouselDocumentController::setCurrentScale(double scale) {
   }
   if (auto* media = currentEditableMedia()) {
     media->scale = clamp_zoom_scale(scale);
-    refreshCurrentSelectionPreviews();
+    preview_debounce_timer_->start();
     emitCanvasStateChanged(true);
   }
 }
@@ -1479,7 +1575,7 @@ void CarouselDocumentController::setCurrentOffsetX(double offset_x) {
   }
   if (auto* media = currentEditableMedia()) {
     media->offset_x = clamp_unit_interval(offset_x);
-    refreshCurrentSelectionPreviews();
+    preview_debounce_timer_->start();
     emitCanvasStateChanged(true);
   }
 }
@@ -1490,7 +1586,7 @@ void CarouselDocumentController::setCurrentOffsetY(double offset_y) {
   }
   if (auto* media = currentEditableMedia()) {
     media->offset_y = clamp_unit_interval(offset_y);
-    refreshCurrentSelectionPreviews();
+    preview_debounce_timer_->start();
     emitCanvasStateChanged(true);
   }
 }
@@ -1554,7 +1650,7 @@ void CarouselDocumentController::moveCurrentMediaByPixels(double delta_x, double
 
   media->offset_x = next_offset_x;
   media->offset_y = next_offset_y;
-  refreshCurrentSelectionPreviews();
+  preview_debounce_timer_->start();
   emitCanvasStateChanged(true);
 }
 
@@ -1947,12 +2043,71 @@ bool CarouselDocumentController::loadDocument(const QString& document_id) {
   if (!stored_format.isEmpty()) {
     document_format_ = stored_format == QStringLiteral("5x4") ? QStringLiteral("5x4") : QStringLiteral("4x5");
   }
+  has_active_carousel_ = true;
   refreshPreviews();
   emit documentFormatChanged();
   emit documentStateChanged();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Loaded carousel '%1'.").arg(document_name_));
   return true;
+}
+
+bool CarouselDocumentController::hasActiveCarousel() const {
+  return has_active_carousel_;
+}
+
+void CarouselDocumentController::closeCarousel() {
+  slides_.clear();
+  groups_.clear();
+  items_.clear();
+  current_index_ = 0;
+  document_format_ = QStringLiteral("4x5");
+  active_slot_ = QStringLiteral("primary");
+  selected_item_id_.clear();
+  selected_item_ids_.clear();
+  document_name_ = QStringLiteral("Untitled Carousel");
+  saved_document_id_.clear();
+  has_active_carousel_ = false;
+  session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  preview_revision_ = 0;
+  emit documentFormatChanged();
+  emit documentStateChanged();
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Carousel closed."));
+}
+
+void CarouselDocumentController::createCarouselWithSettings(const QVariantMap& settings) {
+  slides_.clear();
+  groups_.clear();
+  items_.clear();
+  current_index_ = 0;
+  selected_item_id_.clear();
+  selected_item_ids_.clear();
+  saved_document_id_.clear();
+  session_id_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  preview_revision_ = 0;
+
+  document_name_ = settings.value(QStringLiteral("carouselName")).toString().trimmed();
+  if (document_name_.isEmpty()) {
+    document_name_ = QStringLiteral("Untitled Carousel");
+  }
+
+  const auto format = settings.value(QStringLiteral("documentFormat")).toString().trimmed();
+  document_format_ = format == QStringLiteral("5x4") ? QStringLiteral("5x4") : QStringLiteral("4x5");
+
+  const int initial_slides = qBound(1, settings.value(QStringLiteral("slideCount"), 1).toInt(), kMaxSlides);
+  for (int i = 0; i < initial_slides; ++i) {
+    slides_.push_back(Slide{});
+  }
+
+  active_slot_ = QStringLiteral("primary");
+  has_active_carousel_ = true;
+
+  refreshPreviews();
+  emit documentFormatChanged();
+  emit documentStateChanged();
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("New carousel '%1' ready.").arg(document_name_));
 }
 
 CarouselDocumentController::Slide* CarouselDocumentController::slideAt(int index) {

@@ -9,6 +9,15 @@ Column {
     required property var editRoot
     Theme { id: theme }
 
+    component MaskSection: InspectorSection {
+        showAccentMarker: false
+        uppercaseTitle: false
+        titleFontFamily: theme.fontDisplay
+        titlePixelSize: 16
+        titleWeight: Font.Bold
+        titleLetterSpacing: 0
+    }
+
     readonly property var activeMaskData: editorPreview.hasActiveMask &&
                                           editorPreview.activeMaskIndex >= 0 &&
                                           editorPreview.activeMaskIndex < editorPreview.maskStack.length
@@ -26,10 +35,9 @@ Column {
 
     spacing: 10
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
-        title: "Tools"
-        subtitle: ""
+        title: "Mask"
 
         Rectangle {
             Layout.fillWidth: true
@@ -94,11 +102,7 @@ Column {
 
                 Label {
                     width: parent.width
-                    text: editRoot.maskFallbackMode === "polygon"
-                          ? "Continue the polygon on-canvas."
-                          : editRoot.maskFallbackMode === "brush"
-                            ? "Remove Brush is active."
-                              : editRoot.cloneSourcePickArmed
+                    text: editRoot.cloneSourcePickArmed
                               ? "Click a clone source."
                               : editRoot.objectPickArmed && editRoot.objectPickMode === "remove"
                                 ? "Click or drag a target."
@@ -119,346 +123,79 @@ Column {
             }
         }
 
-        Label {
-            Layout.fillWidth: true
-            text: "Preview"
-            color: "#d8d2ca"
-            font.family: theme.fontDisplay
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
-            font.letterSpacing: 0.2
-        }
-
         Flow {
             Layout.fillWidth: true
             width: parent.width
             spacing: 6
 
             ActionButton {
-                text: "Overlay"
+                text: "Color"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "overlay"
                 enabled: editorPreview.hasAsset
+                tooltipText: "Show a colored mask overlay on the image."
                 onClicked: editorPreview.maskPreviewMode = "overlay"
             }
 
             ActionButton {
-                text: "Gray"
+                text: "Matte"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "grayscale"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Show a neutral grayscale matte."
+                tooltipText: "Show a neutral matte without the tinted overlay."
                 onClicked: editorPreview.maskPreviewMode = "grayscale"
             }
 
             ActionButton {
-                text: "Black / White"
+                text: "On Light"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "black-on-white"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Show the mask as black on a white field."
+                tooltipText: "Show the mask against a light matte."
                 onClicked: editorPreview.maskPreviewMode = "black-on-white"
             }
 
             ActionButton {
-                text: "White / Black"
+                text: "On Dark"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "white-on-black"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Show the mask as white on a dark field."
+                tooltipText: "Show the mask against a dark matte."
                 onClicked: editorPreview.maskPreviewMode = "white-on-black"
             }
         }
 
-        Label {
-            Layout.fillWidth: true
-            text: "Select"
-            color: "#d8d2ca"
-            font.family: theme.fontDisplay
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
-            font.letterSpacing: 0.2
-        }
-
-        Flow {
-            Layout.fillWidth: true
-            width: parent.width
-            spacing: 6
-
-            ActionButton {
-                text: editorPreview.hasActiveMask ? "Object" : "Object"
-                iconName: "smart-select"
-                compact: true
-                accent: "#5e95d3"
-                tone: active ? "primary" : "secondary"
-                active: editRoot.objectPickArmed &&
-                        editRoot.objectPickMode === "selection" &&
-                        !editRoot.objectPickCreateNew
-                enabled: editorPreview.hasAsset
-                onClicked: editRoot.selectTool(
-                               editRoot.objectPickArmed &&
-                               editRoot.objectPickMode === "selection" &&
-                               !editRoot.objectPickCreateNew ? "" : "smart")
-            }
-
-            ActionButton {
-                text: "New"
-                iconName: "smart-select"
-                compact: true
-                accent: "#5e95d3"
-                tone: active ? "primary" : "secondary"
-                visible: editorPreview.hasActiveMask
-                active: editRoot.objectPickArmed &&
-                        editRoot.objectPickMode === "selection" &&
-                        editRoot.objectPickCreateNew
-                enabled: editorPreview.hasAsset
-                onClicked: editRoot.selectTool(
-                               editRoot.objectPickArmed &&
-                               editRoot.objectPickMode === "selection" &&
-                               editRoot.objectPickCreateNew ? "" : "smart-new")
-            }
-
-            ActionButton {
-                text: "Subtract"
-                iconName: "smart-select"
-                compact: true
-                accent: "#5e95d3"
-                tone: active ? "primary" : "secondary"
-                active: editRoot.objectPickArmed &&
-                        editRoot.objectPickMode === "selection-subtract"
-                enabled: editorPreview.hasAsset &&
-                         editorPreview.hasActiveMask
-                onClicked: editRoot.selectTool(
-                               editRoot.objectPickArmed &&
-                               editRoot.objectPickMode === "selection-subtract"
-                               ? ""
-                               : "smart-subtract")
-            }
-
-            ActionButton {
-                text: "Lasso"
-                iconName: "lasso"
-                compact: true
-                accent: "#7ec97a"
-                tone: active ? "primary" : "secondary"
-                active: editRoot.lassoDrawArmed
-                onClicked: editRoot.selectTool(editRoot.lassoDrawArmed ? "" : "lasso")
-            }
-
-            ActionButton {
-                text: "Polygon"
-                iconName: "polygon-tool"
-                compact: true
-                accent: "#7ec97a"
-                tone: active ? "primary" : "secondary"
-                active: editRoot.polygonDrawArmed
-                onClicked: {
-                    if (!editRoot.polygonDrawArmed && editorPreview.activeMaskKind !== "polygon")
-                        editorPreview.startPolygonSelection()
-                    editRoot.selectTool(editRoot.polygonDrawArmed ? "" : "polygon")
-                }
-            }
-
-            ActionButton {
-                text: "Subject"
-                iconName: "smart-select"
-                compact: true
-                accent: "#5fc9b5"
-                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.addSubjectMask()
-                }
-            }
-
-            ActionButton {
-                text: "Linear"
-                compact: true
-                accent: "#8ab8d8"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.addMask("linear")
-                }
-            }
-
-            ActionButton {
-                text: "Radial"
-                compact: true
-                accent: "#8ab8d8"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.addMask("radial")
-                }
-            }
-
-            ActionButton {
-                text: "Luma"
-                compact: true
-                accent: "#d8d27a"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.addMask("luminance")
-                }
-            }
-
-            ActionButton {
-                text: "Color"
-                compact: true
-                accent: "#c77dd8"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.addMask("color")
-                }
-            }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            text: "Brush"
-            color: "#d8d2ca"
-            font.family: theme.fontDisplay
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
-            font.letterSpacing: 0.2
-        }
-
         RowLayout {
             Layout.fillWidth: true
-            spacing: 8
-
-            ActionButton {
-                Layout.fillWidth: true
-                text: "Add"
-                iconName: "brush-tool"
-                compact: true
-                accent: root.activeMaskAccent
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.activeMaskKind === "brush" &&
-                        editorPreview.activeMaskOperation === "add" &&
-                        editorPreview.activeMaskRetouchMode.length === 0
-                enabled: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.startSelectionBrush(false)
-                }
-            }
-
-            ActionButton {
-                Layout.fillWidth: true
-                text: "Erase"
-                iconName: "brush-subtract"
-                compact: true
-                accent: "#d36a5e"
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.activeMaskKind === "brush" &&
-                        editorPreview.activeMaskOperation === "subtract" &&
-                        editorPreview.activeMaskRetouchMode.length === 0
-                enabled: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.startSelectionBrush(true)
-                }
-            }
-        }
-
-        Label {
-            Layout.fillWidth: true
-            text: "Retouch"
-            color: "#d8d2ca"
-            font.family: theme.fontDisplay
-            font.pixelSize: 9
-            font.weight: Font.DemiBold
-            font.letterSpacing: 0.2
-        }
-
-        Flow {
-            Layout.fillWidth: true
-            width: parent.width
             spacing: 6
 
             ActionButton {
-                text: "Remove"
-                iconName: "erase-tool"
+                Layout.fillWidth: true
+                text: editorPreview.hasActiveMask ? "Deselect" : "Exit Mask"
                 compact: true
-                accent: root.retouchAccent("remove")
-                tone: active ? "primary" : "secondary"
-                active: editRoot.objectPickArmed &&
-                        editRoot.objectPickMode === "remove" &&
-                        !editRoot.objectPickCreateNew
-                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
-                onClicked: editRoot.selectTool(
-                               editRoot.objectPickArmed &&
-                               editRoot.objectPickMode === "remove" &&
-                               !editRoot.objectPickCreateNew ? "" : "remove")
+                enabled: editorPreview.hasActiveMask ||
+                         editRoot.objectPickArmed ||
+                         editRoot.polygonDrawArmed ||
+                         editRoot.lassoDrawArmed ||
+                         editRoot.cloneSourcePickArmed
+                onClicked: editRoot.deselectMaskEditing()
             }
 
             ActionButton {
-                text: "New"
-                iconName: "erase-tool"
+                Layout.fillWidth: true
+                text: "Delete Active"
                 compact: true
-                accent: root.retouchAccent("remove")
-                tone: active ? "primary" : "secondary"
-                active: editRoot.objectPickArmed &&
-                        editRoot.objectPickMode === "remove" &&
-                        editRoot.objectPickCreateNew
-                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
-                onClicked: editRoot.selectTool(
-                               editRoot.objectPickArmed &&
-                               editRoot.objectPickMode === "remove" &&
-                               editRoot.objectPickCreateNew ? "" : "remove-new")
-            }
-
-            ActionButton {
-                text: "Remove Brush"
-                compact: true
-                accent: root.retouchAccent("remove")
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.activeMaskKind === "brush" &&
-                        editorPreview.activeMaskRetouchMode === "remove"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.startRemoveBrush()
-                }
-            }
-
-            ActionButton {
-                text: "Heal"
-                compact: true
-                accent: root.retouchAccent("heal")
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.activeMaskKind === "brush" &&
-                        editorPreview.activeMaskRetouchMode === "heal"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    editorPreview.startHealBrush()
-                }
-            }
-
-            ActionButton {
-                text: "Clone"
-                compact: true
-                accent: root.retouchAccent("clone")
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.activeMaskKind === "brush" &&
-                        editorPreview.activeMaskRetouchMode === "clone"
-                onClicked: {
-                    editRoot.clearTransientTools()
-                    if (editorPreview.activeMaskKind === "brush" &&
-                            editorPreview.activeMaskRetouchMode === "clone") {
-                        editRoot.selectTool("clone-source")
-                    } else {
-                        editorPreview.startCloneBrush()
-                        editRoot.selectTool("clone-source")
-                    }
-                }
+                accent: "#d36a5e"
+                enabled: editorPreview.hasActiveMask
+                onClicked: editorPreview.removeActiveMask()
             }
         }
 
@@ -472,8 +209,8 @@ Column {
             ActionButton {
                 Layout.fillWidth: true
                 text: editorPreview.activeMaskRetouchMode === "remove"
-                      ? "Remove"
-                      : (editorPreview.activeMaskRetouchMode === "heal" ? "Apply Heal" : "Apply")
+                      ? "Apply Remove"
+                      : (editorPreview.activeMaskRetouchMode === "heal" ? "Apply Heal" : "Apply Clone")
                 compact: true
                 accent: root.retouchAccent(editorPreview.activeMaskRetouchMode)
                 tone: "primary"
@@ -482,7 +219,7 @@ Column {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: "Cancel"
+                text: "Discard"
                 compact: true
                 onClicked: {
                     editRoot.clearTransientTools()
@@ -497,15 +234,28 @@ Column {
             text: "AI Subject, Object Select, and Remove Object require macOS 14 or later."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
-            font.family: "Avenir Next"
+            font.family: theme.fontUi
+            font.pixelSize: 11
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: editorPreview.aiModelStatus
+            wrapMode: Text.WordWrap
+            color: editorPreview.aiSmartSelectionAvailable || editorPreview.aiInpaintAvailable
+                   ? "#72cbb2"
+                   : "#d98962"
+            font.family: theme.fontUi
             font.pixelSize: 11
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Mask Sets"
-        subtitle: "Selection sources compose one editable mask, and adjustments live on the set."
+        subtitle: "Selection sources build one editable mask set."
+        expandable: true
+        expanded: true
 
         Column {
             width: parent.width
@@ -568,7 +318,7 @@ Column {
                                     Layout.fillWidth: true
                                     text: modelData.name
                                     color: "#f2f4f6"
-                                    font.family: "Avenir Next"
+                                    font.family: theme.fontUi
                                     font.pixelSize: 13
                                     font.weight: Font.DemiBold
                                     elide: Text.ElideRight
@@ -576,25 +326,32 @@ Column {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: modelData.sourceCount.toString() + " sources"
+                                    text: modelData.sourceCount === 1
+                                          ? "1 source"
+                                          : modelData.sourceCount.toString() + " sources"
                                     color: "#8f98a2"
-                                    font.family: "Avenir Next"
+                                    font.family: theme.fontUi
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
                                 }
                             }
 
                             ActionButton {
-                                text: modelData.enabled ? "On" : "Off"
+                                iconName: modelData.enabled ? "visible" : "hidden"
+                                showText: false
                                 compact: true
                                 active: modelData.enabled
                                 accent: setColor
+                                tooltipText: modelData.enabled ? "Disable mask set" : "Enable mask set"
                                 enabled: firstSource !== null
                                 onClicked: {
-                                    if (!firstSource)
-                                        return
-                                    editorPreview.activeMaskIndex = firstSource.flatIndex
-                                    editorPreview.activeMaskEnabled = !modelData.enabled
+                                    const newEnabled = !modelData.enabled
+                                    for (let si = 0; si < modelData.sources.length; ++si) {
+                                        editorPreview.activeMaskIndex = modelData.sources[si].flatIndex
+                                        editorPreview.activeMaskEnabled = newEnabled
+                                    }
+                                    if (firstSource)
+                                        editorPreview.activeMaskIndex = firstSource.flatIndex
                                 }
                             }
                         }
@@ -620,10 +377,7 @@ Column {
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: editorPreview.activeMaskIndex =
-                                                   (editorPreview.activeMaskIndex === modelData.flatIndex
-                                                    ? -1
-                                                    : modelData.flatIndex)
+                                    onClicked: editorPreview.activeMaskIndex = modelData.flatIndex
                                 }
 
                                 RowLayout {
@@ -646,7 +400,7 @@ Column {
                                             Layout.fillWidth: true
                                             text: modelData.name
                                             color: "#f2f4f6"
-                                            font.family: "Avenir Next"
+                                            font.family: theme.fontUi
                                             font.pixelSize: 12
                                             font.weight: Font.Medium
                                             elide: Text.ElideRight
@@ -656,7 +410,7 @@ Column {
                                             Layout.fillWidth: true
                                             text: modelData.kind + " · " + modelData.operation
                                             color: "#8f98a2"
-                                            font.family: "Avenir Next"
+                                            font.family: theme.fontUi
                                             font.pixelSize: 10
                                             elide: Text.ElideRight
                                         }
@@ -688,7 +442,7 @@ Column {
                         text: "No mask sets yet"
                         horizontalAlignment: Text.AlignHCenter
                         color: "#8f98a2"
-                        font.family: "Avenir Next"
+                        font.family: theme.fontUi
                         font.pixelSize: 12
                         font.weight: Font.Medium
                     }
@@ -699,7 +453,7 @@ Column {
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
                         color: "#6b7580"
-                        font.family: "Avenir Next"
+                        font.family: theme.fontUi
                         font.pixelSize: 11
                     }
                 }
@@ -749,10 +503,12 @@ Column {
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Retouch"
-        subtitle: "Heal, clone, and remove strokes are staged separately from selection masks."
+        subtitle: "Heal, clone, and remove strokes stay separate from selection masks."
+        expandable: true
+        expanded: editorPreview.activeMaskToolRole === "retouch"
 
         Column {
             width: parent.width
@@ -777,10 +533,7 @@ Column {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: editorPreview.activeMaskIndex =
-                                       (editorPreview.activeMaskIndex === modelData.flatIndex
-                                        ? -1
-                                        : modelData.flatIndex)
+                        onClicked: editorPreview.activeMaskIndex = modelData.flatIndex
                     }
 
                     RowLayout {
@@ -803,7 +556,7 @@ Column {
                                 Layout.fillWidth: true
                                 text: modelData.name
                                 color: "#f2f4f6"
-                                font.family: "Avenir Next"
+                                font.family: theme.fontUi
                                 font.pixelSize: 13
                                 font.weight: Font.Medium
                                 elide: Text.ElideRight
@@ -816,9 +569,19 @@ Column {
                                         (modelData.committed ? "applied" : "staged")
                                       : "retouch"
                                 color: "#8f98a2"
-                                font.family: "Avenir Next"
+                                font.family: theme.fontUi
                                 font.pixelSize: 11
                                 elide: Text.ElideRight
+                            }
+                        }
+
+                        ActionButton {
+                            text: "Delete"
+                            compact: true
+                            accent: "#d36a5e"
+                            onClicked: {
+                                editorPreview.activeMaskIndex = modelData.flatIndex
+                                editorPreview.removeActiveMask()
                             }
                         }
                     }
@@ -831,15 +594,15 @@ Column {
                 text: "No retouch strokes yet."
                 wrapMode: Text.WordWrap
                 color: "#8f98a2"
-                font.family: "Avenir Next"
+                font.family: theme.fontUi
                 font.pixelSize: 12
             }
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
-        title: editorPreview.activeMaskToolRole === "retouch" ? "Active Retouch" : "Active Source"
+        title: editorPreview.activeMaskToolRole === "retouch" ? "Retouch Properties" : "Mask Properties"
         visible: editorPreview.hasActiveMask
 
         ToneTextField {
@@ -895,14 +658,136 @@ Column {
                       : (editorPreview.activeMaskKind.length > 0 ? editorPreview.activeMaskKind + " source" : "")
                 horizontalAlignment: Text.AlignRight
                 color: "#8f98a2"
-                font.family: "Avenir Next"
+                font.family: theme.fontUi
                 font.pixelSize: 11
                 elide: Text.ElideRight
             }
         }
+
+        Label {
+            width: parent.width
+            visible: editorPreview.activeMaskToolRole !== "retouch"
+            text: "Selections inside the same mask set share the same adjustments. Pick any source in the set to grade the whole mask."
+            wrapMode: Text.WordWrap
+            color: "#8f98a2"
+            font.family: theme.fontUi
+            font.pixelSize: 11
+        }
     }
 
-    InspectorSection {
+    MaskSection {
+        width: parent.width
+        title: "Looks"
+        subtitle: "Fast local adjustments before the full control stack."
+        visible: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch"
+        expandable: true
+        expanded: false
+
+        GridLayout {
+            width: parent.width
+            columns: 2
+            columnSpacing: 8
+            rowSpacing: 8
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Warm"
+                accent: "#d98962"
+                active: editRoot.activeGradePreset === "warm"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("warm")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Cool"
+                accent: "#7cb5ff"
+                active: editRoot.activeGradePreset === "cool"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("cool")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Pop"
+                accent: "#c99a52"
+                active: editRoot.activeGradePreset === "pop"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("pop")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Desat"
+                accent: "#d8d2ca"
+                active: editRoot.activeGradePreset === "desat"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("desat")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Warm Tint"
+                accent: "#d98962"
+                active: editRoot.activeGradePreset === "tint-warm"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("tint-warm")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Cool Tint"
+                accent: "#5e95d3"
+                active: editRoot.activeGradePreset === "tint-cool"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("tint-cool")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Lift"
+                accent: "#f0c987"
+                active: editRoot.activeGradePreset === "lift"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("lift")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Burn"
+                accent: "#8f6751"
+                active: editRoot.activeGradePreset === "burn"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("burn")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Soften"
+                accent: "#bca89d"
+                active: editRoot.activeGradePreset === "soften"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("soften")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Teal Pop"
+                accent: "#4fa6aa"
+                active: editRoot.activeGradePreset === "teal-pop"
+                tone: active ? "primary" : "secondary"
+                onClicked: editRoot.applyActiveMaskGradePreset("teal-pop")
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Reset"
+                onClicked: editRoot.applyActiveMaskGradePreset("reset")
+            }
+        }
+    }
+
+    MaskSection {
         width: parent.width
         title: "Selection"
         subtitle: "Only the essentials. Use Edge below when you need more control."
@@ -926,6 +811,8 @@ Column {
                 onClicked: {
                     editorPreview.activeMaskSelectionInverted = false
                     editorPreview.activeMaskSelectionExpand = 0
+                    editorPreview.activeMaskSelectionEdgeContrast = 0
+                    editorPreview.activeMaskSelectionDecontaminate = 0
                     editorPreview.activeMaskFeather = editRoot.activeMaskResetFeather()
                 }
             }
@@ -939,15 +826,15 @@ Column {
                   : "Brush Add and Brush Erase paint the selection directly. Use Edge below only when the painted mask needs cleanup."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
-            font.family: "Avenir Next"
+            font.family: theme.fontUi
             font.pixelSize: 11
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Edge"
-        subtitle: "Trim or recover boundaries with a smaller direct paint brush."
+        subtitle: "Trim or recover boundaries, then tighten soft edges or clean color spill."
         visible: editRoot.activeMaskSupportsSelectionRefine() &&
                  editorPreview.activeMaskToolRole !== "retouch"
         expandable: true
@@ -980,10 +867,10 @@ Column {
 
         Label {
             width: parent.width
-            text: "Edge brushes are smaller than the normal brush and paint directly onto the mask."
+            text: "Edge brushes are smaller than the normal brush and paint directly onto the mask. Edge Contrast tightens soft boundaries. Decontaminate mutes colored fringing along semi-transparent edges."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
-            font.family: "Avenir Next"
+            font.family: theme.fontUi
             font.pixelSize: 11
         }
 
@@ -994,7 +881,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskSelectionExpand
-            onValueDragged: editorPreview.activeMaskSelectionExpand = value
+            onValueDragged: function(value) { editorPreview.activeMaskSelectionExpand = value }
             onResetRequested: editorPreview.activeMaskSelectionExpand = 0
         }
 
@@ -1006,14 +893,36 @@ Column {
             to: editorPreview.activeMaskKind === "polygon" ? 0.2 : 1.0
             stepSize: 0.01
             value: editorPreview.activeMaskFeather
-            onValueDragged: editorPreview.activeMaskFeather = value
+            onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
             onResetRequested: editorPreview.activeMaskFeather = editRoot.activeMaskResetFeather()
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Edge Contrast"
+            valueText: Math.round(editorPreview.activeMaskSelectionEdgeContrast).toString()
+            from: 0
+            to: 100
+            value: editorPreview.activeMaskSelectionEdgeContrast
+            onValueDragged: function(value) { editorPreview.activeMaskSelectionEdgeContrast = value }
+            onResetRequested: editorPreview.activeMaskSelectionEdgeContrast = 0
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Decontaminate"
+            valueText: Math.round(editorPreview.activeMaskSelectionDecontaminate).toString()
+            from: 0
+            to: 100
+            value: editorPreview.activeMaskSelectionDecontaminate
+            onValueDragged: function(value) { editorPreview.activeMaskSelectionDecontaminate = value }
+            onResetRequested: editorPreview.activeMaskSelectionDecontaminate = 0
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
-        title: "Adjustment"
+        title: "Adjust"
         subtitle: editorPreview.activeMaskToolRole === "retouch"
                   ? "Retouch uses its own stroke settings. Image adjustments apply only to selection mask sets."
                   : (editRoot.activeMaskHasAdjustments()
@@ -1030,7 +939,7 @@ Column {
             from: -2
             to: 2
             value: editorPreview.activeMaskExposure
-            onValueDragged: editorPreview.activeMaskExposure = value
+            onValueDragged: function(value) { editorPreview.activeMaskExposure = value }
             onResetRequested: editorPreview.activeMaskExposure = 0
         }
 
@@ -1041,7 +950,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskContrast
-            onValueDragged: editorPreview.activeMaskContrast = value
+            onValueDragged: function(value) { editorPreview.activeMaskContrast = value }
             onResetRequested: editorPreview.activeMaskContrast = 0
         }
 
@@ -1052,7 +961,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskHighlights
-            onValueDragged: editorPreview.activeMaskHighlights = value
+            onValueDragged: function(value) { editorPreview.activeMaskHighlights = value }
             onResetRequested: editorPreview.activeMaskHighlights = 0
         }
 
@@ -1063,7 +972,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskShadows
-            onValueDragged: editorPreview.activeMaskShadows = value
+            onValueDragged: function(value) { editorPreview.activeMaskShadows = value }
             onResetRequested: editorPreview.activeMaskShadows = 0
         }
 
@@ -1074,7 +983,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskWhites
-            onValueDragged: editorPreview.activeMaskWhites = value
+            onValueDragged: function(value) { editorPreview.activeMaskWhites = value }
             onResetRequested: editorPreview.activeMaskWhites = 0
         }
 
@@ -1085,7 +994,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskBlacks
-            onValueDragged: editorPreview.activeMaskBlacks = value
+            onValueDragged: function(value) { editorPreview.activeMaskBlacks = value }
             onResetRequested: editorPreview.activeMaskBlacks = 0
         }
 
@@ -1096,7 +1005,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskTemperature
-            onValueDragged: editorPreview.activeMaskTemperature = value
+            onValueDragged: function(value) { editorPreview.activeMaskTemperature = value }
             onResetRequested: editorPreview.activeMaskTemperature = 0
         }
 
@@ -1107,7 +1016,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskTint
-            onValueDragged: editorPreview.activeMaskTint = value
+            onValueDragged: function(value) { editorPreview.activeMaskTint = value }
             onResetRequested: editorPreview.activeMaskTint = 0
         }
 
@@ -1118,7 +1027,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskVibrance
-            onValueDragged: editorPreview.activeMaskVibrance = value
+            onValueDragged: function(value) { editorPreview.activeMaskVibrance = value }
             onResetRequested: editorPreview.activeMaskVibrance = 0
         }
 
@@ -1129,7 +1038,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskSaturation
-            onValueDragged: editorPreview.activeMaskSaturation = value
+            onValueDragged: function(value) { editorPreview.activeMaskSaturation = value }
             onResetRequested: editorPreview.activeMaskSaturation = 0
         }
 
@@ -1140,7 +1049,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskHueShift
-            onValueDragged: editorPreview.activeMaskHueShift = value
+            onValueDragged: function(value) { editorPreview.activeMaskHueShift = value }
             onResetRequested: editorPreview.activeMaskHueShift = 0
         }
 
@@ -1151,7 +1060,7 @@ Column {
             from: -100
             to: 100
             value: editorPreview.activeMaskSaturationShift
-            onValueDragged: editorPreview.activeMaskSaturationShift = value
+            onValueDragged: function(value) { editorPreview.activeMaskSaturationShift = value }
             onResetRequested: editorPreview.activeMaskSaturationShift = 0
         }
 
@@ -1163,7 +1072,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskColorizeHue
-            onValueDragged: editorPreview.activeMaskColorizeHue = value
+            onValueDragged: function(value) { editorPreview.activeMaskColorizeHue = value }
             onResetRequested: editorPreview.activeMaskColorizeHue = 0
         }
 
@@ -1174,17 +1083,19 @@ Column {
             from: 0
             to: 100
             value: editorPreview.activeMaskColorizeStrength
-            onValueDragged: editorPreview.activeMaskColorizeStrength = value
+            onValueDragged: function(value) { editorPreview.activeMaskColorizeStrength = value }
             onResetRequested: editorPreview.activeMaskColorizeStrength = 0
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Shape"
         visible: editorPreview.hasActiveMask &&
                  editorPreview.activeMaskToolRole !== "retouch" &&
                  (editorPreview.activeMaskKind === "linear" || editorPreview.activeMaskKind === "radial")
+        expandable: true
+        expanded: true
 
         InspectorSlider {
             width: parent.width
@@ -1195,7 +1106,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskPosition
-            onValueDragged: editorPreview.activeMaskPosition = value
+            onValueDragged: function(value) { editorPreview.activeMaskPosition = value }
             onResetRequested: editorPreview.activeMaskPosition = 0.5
         }
 
@@ -1207,7 +1118,7 @@ Column {
             to: 180
             stepSize: 1
             value: editorPreview.activeMaskRotation
-            onValueDragged: editorPreview.activeMaskRotation = value
+            onValueDragged: function(value) { editorPreview.activeMaskRotation = value }
             onResetRequested: editorPreview.activeMaskRotation = 0
         }
 
@@ -1220,7 +1131,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskCenterX
-            onValueDragged: editorPreview.activeMaskCenterX = value
+            onValueDragged: function(value) { editorPreview.activeMaskCenterX = value }
             onResetRequested: editorPreview.activeMaskCenterX = 0.5
         }
 
@@ -1233,7 +1144,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskCenterY
-            onValueDragged: editorPreview.activeMaskCenterY = value
+            onValueDragged: function(value) { editorPreview.activeMaskCenterY = value }
             onResetRequested: editorPreview.activeMaskCenterY = 0.5
         }
 
@@ -1246,7 +1157,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskRadiusX
-            onValueDragged: editorPreview.activeMaskRadiusX = value
+            onValueDragged: function(value) { editorPreview.activeMaskRadiusX = value }
             onResetRequested: editorPreview.activeMaskRadiusX = 0.25
         }
 
@@ -1259,15 +1170,17 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskRadiusY
-            onValueDragged: editorPreview.activeMaskRadiusY = value
+            onValueDragged: function(value) { editorPreview.activeMaskRadiusY = value }
             onResetRequested: editorPreview.activeMaskRadiusY = 0.25
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Brush"
         visible: editorPreview.activeMaskKind === "brush"
+        expandable: true
+        expanded: true
 
         Label {
             width: parent.width
@@ -1283,7 +1196,7 @@ Column {
                        : "Clone Stamp needs a source point before you paint.")
             wrapMode: Text.WordWrap
             color: "#8f98a2"
-            font.family: "Avenir Next"
+            font.family: theme.fontUi
             font.pixelSize: 11
         }
 
@@ -1308,7 +1221,7 @@ Column {
                       : "Source not set"
                 horizontalAlignment: Text.AlignRight
                 color: "#8f98a2"
-                font.family: "Avenir Next"
+                font.family: theme.fontUi
                 font.pixelSize: 11
             }
         }
@@ -1357,7 +1270,7 @@ Column {
             to: 0.35
             stepSize: 0.01
             value: editorPreview.activeMaskBrushSize
-            onValueDragged: editorPreview.activeMaskBrushSize = value
+            onValueDragged: function(value) { editorPreview.activeMaskBrushSize = value }
             onResetRequested: editorPreview.activeMaskBrushSize = 0.08
         }
 
@@ -1369,7 +1282,7 @@ Column {
             to: 1.0
             stepSize: 0.01
             value: editorPreview.activeMaskBrushFlow
-            onValueDragged: editorPreview.activeMaskBrushFlow = value
+            onValueDragged: function(value) { editorPreview.activeMaskBrushFlow = value }
             onResetRequested: editorPreview.activeMaskBrushFlow = 1.0
         }
 
@@ -1382,7 +1295,7 @@ Column {
             to: 4.0
             stepSize: 0.01
             value: editorPreview.activeMaskCloneScale
-            onValueDragged: editorPreview.activeMaskCloneScale = value
+            onValueDragged: function(value) { editorPreview.activeMaskCloneScale = value }
             onResetRequested: editorPreview.activeMaskCloneScale = 1.0
         }
 
@@ -1395,7 +1308,7 @@ Column {
             to: 180
             stepSize: 1
             value: editorPreview.activeMaskCloneRotation
-            onValueDragged: editorPreview.activeMaskCloneRotation = value
+            onValueDragged: function(value) { editorPreview.activeMaskCloneRotation = value }
             onResetRequested: editorPreview.activeMaskCloneRotation = 0
         }
 
@@ -1407,7 +1320,7 @@ Column {
                 Layout.fillWidth: true
                 text: editorPreview.activeMaskBrushPointCount.toString() + " brush points"
                 color: "#8f98a2"
-                font.family: "Avenir Next"
+                font.family: theme.fontUi
                 font.pixelSize: 11
             }
 
@@ -1419,10 +1332,12 @@ Column {
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Polygon"
         visible: editorPreview.activeMaskKind === "polygon"
+        expandable: true
+        expanded: true
 
         RowLayout {
             width: parent.width
@@ -1432,7 +1347,7 @@ Column {
                 Layout.fillWidth: true
                 text: editorPreview.activeMaskPolygonPointCount.toString() + " points"
                 color: "#8f98a2"
-                font.family: "Avenir Next"
+                font.family: theme.fontUi
                 font.pixelSize: 11
             }
 
@@ -1450,10 +1365,12 @@ Column {
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
-        title: "AI Mask"
+        title: "AI Refine"
         visible: editorPreview.activeMaskKind === "subject" || editorPreview.activeMaskKind === "object"
+        expandable: true
+        expanded: true
 
         InspectorSlider {
             width: parent.width
@@ -1463,7 +1380,7 @@ Column {
             to: 1.0
             stepSize: 0.01
             value: editorPreview.activeMaskFeather
-            onValueDragged: editorPreview.activeMaskFeather = value
+            onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
             onResetRequested: editorPreview.activeMaskFeather = 0.5
         }
 
@@ -1474,15 +1391,17 @@ Column {
                   : "Subject masks stay editable inside the current mask set."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
-            font.family: "Avenir Next"
+            font.family: theme.fontUi
             font.pixelSize: 11
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Luminance Range"
         visible: editorPreview.activeMaskKind === "luminance"
+        expandable: true
+        expanded: true
 
         InspectorSlider {
             width: parent.width
@@ -1492,7 +1411,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskLuminanceMin
-            onValueDragged: editorPreview.activeMaskLuminanceMin = value
+            onValueDragged: function(value) { editorPreview.activeMaskLuminanceMin = value }
             onResetRequested: editorPreview.activeMaskLuminanceMin = 0.2
         }
 
@@ -1504,7 +1423,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskLuminanceMax
-            onValueDragged: editorPreview.activeMaskLuminanceMax = value
+            onValueDragged: function(value) { editorPreview.activeMaskLuminanceMax = value }
             onResetRequested: editorPreview.activeMaskLuminanceMax = 0.8
         }
 
@@ -1516,15 +1435,17 @@ Column {
             to: 0.5
             stepSize: 0.01
             value: editorPreview.activeMaskRangeFeather
-            onValueDragged: editorPreview.activeMaskRangeFeather = value
+            onValueDragged: function(value) { editorPreview.activeMaskRangeFeather = value }
             onResetRequested: editorPreview.activeMaskRangeFeather = 0.1
         }
     }
 
-    InspectorSection {
+    MaskSection {
         width: parent.width
         title: "Color Range"
         visible: editorPreview.activeMaskKind === "color"
+        expandable: true
+        expanded: true
 
         InspectorSlider {
             width: parent.width
@@ -1534,7 +1455,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskHueCenter
-            onValueDragged: editorPreview.activeMaskHueCenter = value
+            onValueDragged: function(value) { editorPreview.activeMaskHueCenter = value }
             onResetRequested: editorPreview.activeMaskHueCenter = 0.08
         }
 
@@ -1546,7 +1467,7 @@ Column {
             to: 0.5
             stepSize: 0.01
             value: editorPreview.activeMaskHueRange
-            onValueDragged: editorPreview.activeMaskHueRange = value
+            onValueDragged: function(value) { editorPreview.activeMaskHueRange = value }
             onResetRequested: editorPreview.activeMaskHueRange = 0.12
         }
 
@@ -1558,7 +1479,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskSaturationMin
-            onValueDragged: editorPreview.activeMaskSaturationMin = value
+            onValueDragged: function(value) { editorPreview.activeMaskSaturationMin = value }
             onResetRequested: editorPreview.activeMaskSaturationMin = 0.1
         }
 
@@ -1570,7 +1491,7 @@ Column {
             to: 1
             stepSize: 0.01
             value: editorPreview.activeMaskSaturationMax
-            onValueDragged: editorPreview.activeMaskSaturationMax = value
+            onValueDragged: function(value) { editorPreview.activeMaskSaturationMax = value }
             onResetRequested: editorPreview.activeMaskSaturationMax = 1.0
         }
     }

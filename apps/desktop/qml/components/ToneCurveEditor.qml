@@ -5,14 +5,19 @@ import QtQuick.Layouts
 Item {
     id: root
 
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
     property string selectedChannel: "Master"
     property var pointsModel: []
     property var availableChannels: ["Master", "Red", "Green", "Blue"]
+    readonly property real graphInset: 16
+    readonly property real handleHitRadius: 28
+    readonly property real endpointHandleHitRadius: 36
     signal pointsEdited(var points)
     signal channelSelected(string channel)
 
-    implicitHeight: 272
+    Theme { id: theme }
+
+    implicitHeight: 292
 
     function clampUnit(value) {
         return Math.max(0, Math.min(1, value));
@@ -37,26 +42,34 @@ Item {
         points.sort(function (left, right) {
             return left.x - right.x;
         });
-        points[0] = { x: 0.0, y: 0.0 };
-        points[points.length - 1] = { x: 1.0, y: 1.0 };
+        points[0] = { x: 0.0, y: points[0].y };
+        points[points.length - 1] = { x: 1.0, y: points[points.length - 1].y };
         return points;
     }
 
     function graphPoint(index) {
         const point = currentPoints()[index];
-        return Qt.point(curveArea.x + point.x * curveArea.width, curveArea.y + (1.0 - point.y) * curveArea.height);
+        const graphWidth = Math.max(1, curveArea.width - root.graphInset * 2);
+        const graphHeight = Math.max(1, curveArea.height - root.graphInset * 2);
+        return Qt.point(
+            curveArea.x + root.graphInset + point.x * graphWidth,
+            curveArea.y + root.graphInset + (1.0 - point.y) * graphHeight
+        );
     }
 
     function closestHandle(mouseX, mouseY) {
         const points = currentPoints();
         let bestIndex = -1;
-        let bestDistance = 20;
+        let bestDistance = Number.POSITIVE_INFINITY;
         for (let index = 0; index < points.length; ++index) {
             const graph = graphPoint(index);
             const dx = graph.x - mouseX;
             const dy = graph.y - mouseY;
             const distance = Math.sqrt(dx * dx + dy * dy);
-            if (distance < bestDistance) {
+            const threshold = (index === 0 || index === points.length - 1)
+                    ? root.endpointHandleHitRadius
+                    : root.handleHitRadius;
+            if (distance <= threshold && distance < bestDistance) {
                 bestDistance = distance;
                 bestIndex = index;
             }
@@ -65,24 +78,32 @@ Item {
     }
 
     function normalizeForGraph(mouseX, mouseY) {
+        const graphWidth = Math.max(1, curveArea.width - root.graphInset * 2);
+        const graphHeight = Math.max(1, curveArea.height - root.graphInset * 2);
         return {
-            x: clampUnit((mouseX - curveArea.x) / Math.max(1, curveArea.width)),
-            y: clampUnit(1.0 - ((mouseY - curveArea.y) / Math.max(1, curveArea.height)))
+            x: clampUnit((mouseX - curveArea.x - root.graphInset) / graphWidth),
+            y: clampUnit(1.0 - ((mouseY - curveArea.y - root.graphInset) / graphHeight))
         };
     }
 
     function updatePoint(index, mouseX, mouseY) {
         const points = currentPoints();
-        if (index <= 0 || index >= points.length - 1)
+        if (index < 0 || index >= points.length)
             return;
 
         const normalized = normalizeForGraph(mouseX, mouseY);
-        const minimumX = points[index - 1].x + 0.01;
-        const maximumX = points[index + 1].x - 0.01;
-        points[index] = {
-            x: Math.max(minimumX, Math.min(maximumX, normalized.x)),
-            y: normalized.y
-        };
+        if (index === 0) {
+            points[index] = { x: 0.0, y: normalized.y };
+        } else if (index === points.length - 1) {
+            points[index] = { x: 1.0, y: normalized.y };
+        } else {
+            const minimumX = points[index - 1].x + 0.01;
+            const maximumX = points[index + 1].x - 0.01;
+            points[index] = {
+                x: Math.max(minimumX, Math.min(maximumX, normalized.x)),
+                y: normalized.y
+            };
+        }
         pointsEdited(points);
     }
 
@@ -174,14 +195,16 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: 8
-        color: "#101419"
+        radius: 0
+        color: theme.alpha(theme.glassBase, 0.18)
+        border.width: 1
+        border.color: theme.alpha(theme.glassEdge, 0.12)
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 12
-        spacing: 10
+        anchors.margins: theme.space12
+        spacing: theme.space10
 
         RowLayout {
             Layout.fillWidth: true
@@ -189,10 +212,10 @@ Item {
 
             Label {
                 text: "Point Curve"
-                color: "#e8edf2"
-                font.family: "Avenir Next"
-                font.pixelSize: 12
-                font.weight: Font.Medium
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: 13
+                font.weight: Font.Bold
             }
 
             Item {
@@ -200,19 +223,17 @@ Item {
             }
 
             Label {
-                Layout.maximumWidth: 180
-                text: "Add points, drag smoothly, double-click to remove"
-                color: "#78828c"
-                font.family: "Avenir Next"
-                font.pixelSize: 10
-                wrapMode: Text.WordWrap
-                horizontalAlignment: Text.AlignRight
+                text: "IN / OUT"
+                color: theme.textFaint
+                font.family: theme.fontMono
+                font.pixelSize: 9
+                font.letterSpacing: 1.0
             }
         }
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 6
+            spacing: 4
 
             Repeater {
                 model: root.availableChannels
@@ -220,18 +241,21 @@ Item {
                 delegate: Rectangle {
                     required property var modelData
 
-                    Layout.preferredWidth: 58
-                    Layout.preferredHeight: 26
-                    radius: 7
-                    color: root.selectedChannel === modelData ? root.accent : "#151b22"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 25
+                    radius: 0
+                    color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.ink950, 0.28)
+                    border.width: 1
+                    border.color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.56) : theme.alpha(theme.glassEdge, 0.16)
 
                     Label {
                         anchors.centerIn: parent
-                        text: modelData
-                        color: root.selectedChannel === modelData ? "#0c1014" : "#dbe2e8"
-                        font.family: "Avenir Next"
-                        font.pixelSize: 10
-                        font.weight: Font.Medium
+                        text: modelData.toUpperCase()
+                        color: root.selectedChannel === modelData ? theme.textStrong : theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 0.8
                     }
 
                     MouseArea {
@@ -249,46 +273,81 @@ Item {
             Rectangle {
                 id: curveArea
                 anchors.fill: parent
-                radius: 6
-                color: "#0d1116"
+                radius: 0
+                color: theme.alpha(theme.ink950, 0.68)
+                border.width: 1
+                border.color: theme.alpha(theme.polar, 0.10)
 
                 Canvas {
                     id: curveCanvas
                     anchors.fill: parent
+                    onWidthChanged: requestPaint()
+                    onHeightChanged: requestPaint()
 
                     onPaint: {
                         const ctx = getContext("2d");
                         ctx.reset();
+                        const graphLeft = root.graphInset;
+                        const graphTop = root.graphInset;
+                        const graphWidth = Math.max(1, width - root.graphInset * 2);
+                        const graphHeight = Math.max(1, height - root.graphInset * 2);
+                        const graphRight = graphLeft + graphWidth;
+                        const graphBottom = graphTop + graphHeight;
 
-                        ctx.strokeStyle = "#1e2730";
                         ctx.lineWidth = 1;
-                        for (let index = 1; index < 4; ++index) {
-                            const x = (width / 4) * index;
-                            const y = (height / 4) * index;
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.055);
+                        for (let index = 1; index < 8; ++index) {
+                            const x = graphLeft + (graphWidth / 8) * index;
+                            const y = graphTop + (graphHeight / 8) * index;
                             ctx.beginPath();
-                            ctx.moveTo(x, 0);
-                            ctx.lineTo(x, height);
+                            ctx.moveTo(x, graphTop);
+                            ctx.lineTo(x, graphBottom);
                             ctx.stroke();
                             ctx.beginPath();
-                            ctx.moveTo(0, y);
-                            ctx.lineTo(width, y);
+                            ctx.moveTo(graphLeft, y);
+                            ctx.lineTo(graphRight, y);
                             ctx.stroke();
                         }
 
-                        ctx.strokeStyle = "#3f4953";
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.14);
+                        for (let index = 1; index < 4; ++index) {
+                            const x = graphLeft + (graphWidth / 4) * index;
+                            const y = graphTop + (graphHeight / 4) * index;
+                            ctx.beginPath();
+                            ctx.moveTo(x, graphTop);
+                            ctx.lineTo(x, graphBottom);
+                            ctx.stroke();
+                            ctx.beginPath();
+                            ctx.moveTo(graphLeft, y);
+                            ctx.lineTo(graphRight, y);
+                            ctx.stroke();
+                        }
+
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.24);
                         ctx.beginPath();
-                        ctx.moveTo(0, height);
-                        ctx.lineTo(width, 0);
+                        ctx.moveTo(graphLeft, graphBottom);
+                        ctx.lineTo(graphRight, graphTop);
                         ctx.stroke();
+
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.28);
+                        ctx.strokeRect(graphLeft, graphTop, graphWidth, graphHeight);
 
                         const samples = root.sampledCurvePoints();
                         if (samples.length > 0) {
                             ctx.strokeStyle = root.accent;
-                            ctx.lineWidth = 2;
+                            ctx.lineWidth = 2.4;
+                            ctx.lineJoin = "round";
+                            ctx.lineCap = "round";
                             ctx.beginPath();
-                            ctx.moveTo(samples[0].x * width, (1.0 - samples[0].y) * height);
+                            ctx.moveTo(
+                                graphLeft + samples[0].x * graphWidth,
+                                graphTop + (1.0 - samples[0].y) * graphHeight
+                            );
                             for (let index = 1; index < samples.length; ++index) {
-                                ctx.lineTo(samples[index].x * width, (1.0 - samples[index].y) * height);
+                                ctx.lineTo(
+                                    graphLeft + samples[index].x * graphWidth,
+                                    graphTop + (1.0 - samples[index].y) * graphHeight
+                                );
                             }
                             ctx.stroke();
                         }
@@ -308,21 +367,45 @@ Item {
 
                         x: handlePoint.x - width / 2
                         y: handlePoint.y - height / 2
-                        width: index === interaction.selectedIndex ? 16 : 14
+                        width: index === 0 || index === root.currentPoints().length - 1
+                               ? (index === interaction.selectedIndex ? 15 : 13)
+                               : (index === interaction.selectedIndex ? 13 : 11)
                         height: width
-                        radius: width / 2
-                        color: index === 0 || index === root.currentPoints().length - 1 ? "#d7dde4" : root.accent
-                        border.width: index === interaction.selectedIndex ? 2 : 0
-                        border.color: "#f4f7f9"
+                        radius: 1
+                        color: index === 0 || index === root.currentPoints().length - 1 ? theme.alpha(theme.polar, 0.94) : root.accent
+                        border.width: 1
+                        border.color: index === interaction.selectedIndex ? theme.polar : theme.alpha(theme.ink950, 0.8)
 
                         Rectangle {
                             anchors.centerIn: parent
-                            width: 4
-                            height: 4
-                            radius: 2
-                            color: index === 0 || index === root.currentPoints().length - 1 ? "#0d1116" : "#f0f4f7"
+                            width: 3
+                            height: 3
+                            radius: 0
+                            color: index === 0 || index === root.currentPoints().length - 1 ? theme.ink950 : theme.polar
                         }
                     }
+                }
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 4
+                    anchors.bottomMargin: 3
+                    text: "0"
+                    color: theme.alpha(theme.textFaint, 0.78)
+                    font.family: theme.fontMono
+                    font.pixelSize: 8
+                }
+
+                Label {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.rightMargin: 4
+                    anchors.topMargin: 3
+                    text: "255"
+                    color: theme.alpha(theme.textFaint, 0.78)
+                    font.family: theme.fontMono
+                    font.pixelSize: 8
                 }
 
                 MouseArea {
@@ -341,8 +424,7 @@ Item {
                         if (handleIndex >= 0) {
                             draggingIndex = handleIndex;
                             selectedIndex = handleIndex;
-                            if (handleIndex > 0 && handleIndex < root.currentPoints().length - 1)
-                                root.updatePoint(handleIndex, mouse.x, mouse.y);
+                            root.updatePoint(handleIndex, mouse.x, mouse.y);
                         } else {
                             const insertedIndex = root.insertPoint(mouse.x, mouse.y);
                             draggingIndex = insertedIndex;
@@ -352,7 +434,7 @@ Item {
                     }
 
                     onPositionChanged: function (mouse) {
-                        if (draggingIndex <= 0 || draggingIndex >= root.currentPoints().length - 1)
+                        if (draggingIndex < 0 || draggingIndex >= root.currentPoints().length)
                             return;
                         root.updatePoint(draggingIndex, mouse.x, mouse.y);
                         curveCanvas.requestPaint();
@@ -376,9 +458,11 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 34
-            radius: 6
-            color: "#141a20"
+            implicitHeight: 32
+            radius: 0
+            color: theme.alpha(theme.ink950, 0.34)
+            border.width: 1
+            border.color: theme.alpha(theme.glassEdge, 0.12)
 
             RowLayout {
                 anchors.fill: parent
@@ -386,12 +470,20 @@ Item {
                 spacing: 8
 
                 Label {
-                    text: interaction.selectedIndex > 0 && interaction.selectedIndex < root.currentPoints().length - 1
-                          ? "Point " + interaction.selectedIndex
-                          : "Endpoints locked"
-                    color: "#7f8993"
-                    font.family: "Avenir Next"
+                    text: {
+                        const points = root.currentPoints();
+                        if (interaction.selectedIndex === 0)
+                            return "Black Point";
+                        if (interaction.selectedIndex === points.length - 1)
+                            return "White Point";
+                        if (interaction.selectedIndex > 0 && interaction.selectedIndex < points.length - 1)
+                            return "Point " + interaction.selectedIndex;
+                        return "Drag endpoints for black and white points";
+                    }
+                    color: theme.textFaint
+                    font.family: theme.fontMono
                     font.pixelSize: 9
+                    font.letterSpacing: 0.4
                 }
 
                 Item {
@@ -404,9 +496,10 @@ Item {
                         const index = Math.max(0, Math.min(points.length - 1, interaction.selectedIndex >= 0 ? interaction.selectedIndex : 0));
                         return "In " + Math.round(points[index].x * 255) + "  Out " + Math.round(points[index].y * 255);
                     }
-                    color: "#edf1f4"
-                    font.family: "Menlo"
+                    color: theme.textStrong
+                    font.family: theme.fontMono
                     font.pixelSize: 10
+                    font.weight: Font.DemiBold
                 }
             }
         }

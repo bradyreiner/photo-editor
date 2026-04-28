@@ -139,7 +139,7 @@ bool render_ciimage_to_linear_qimage(CIImage* input_image, QImage* image) {
   if (linear_image.isNull()) {
     return false;
   }
-  linear_image.setColorSpace(working_color_space());
+  linear_image.setColorSpace(linear_srgb_color_space());
 
   CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
   if (color_space == nullptr) {
@@ -194,6 +194,57 @@ QSize image_source_size(CGImageSourceRef source) {
     return {};
   }
   return QSize(pixel_width, pixel_height);
+}
+
+QString string_property_from_dictionary(NSDictionary* dictionary, NSString* key) {
+  if (dictionary == nil || key == nil) {
+    return {};
+  }
+  id value = dictionary[key];
+  if (![value isKindOfClass:[NSString class]]) {
+    return {};
+  }
+  const auto* string_value = static_cast<NSString*>(value);
+  return QString::fromUtf8(string_value.UTF8String).trimmed();
+}
+
+void populate_decoded_metadata_from_source(
+    CGImageSourceRef source,
+    photo_editor::pipeline::DecodedImageMetadata* metadata) {
+  if (source == nullptr || metadata == nullptr) {
+    return;
+  }
+
+  CFDictionaryRef properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr);
+  if (properties == nullptr) {
+    return;
+  }
+
+  NSDictionary* dictionary = CFBridgingRelease(properties);
+  NSDictionary* tiff = dictionary[(__bridge NSString*)kCGImagePropertyTIFFDictionary];
+  metadata->camera_make =
+      string_property_from_dictionary(tiff, (__bridge NSString*)kCGImagePropertyTIFFMake).toStdString();
+  metadata->camera_model =
+      string_property_from_dictionary(tiff, (__bridge NSString*)kCGImagePropertyTIFFModel).toStdString();
+}
+
+void populate_decoded_metadata_from_filter(
+    CIRAWFilter* filter,
+    const RawDecodeSettings& settings,
+    photo_editor::pipeline::DecodedImageMetadata* metadata) {
+  if (filter == nil || metadata == nullptr) {
+    return;
+  }
+
+  metadata->valid = true;
+  metadata->is_raw = true;
+  metadata->input_profile_name =
+      photo_editor::pipeline::normalize_input_color_profile_name(settings.input_color_profile.toStdString());
+  metadata->as_shot_temperature =
+      std::clamp(static_cast<double>(filter.neutralTemperature), 2000.0, 12000.0);
+  metadata->as_shot_tint = std::clamp(static_cast<double>(filter.neutralTint), -150.0, 150.0);
+  metadata->baseline_exposure = 0.0;
+  metadata->highlight_headroom = 1.0;
 }
 
 CGSize raw_native_size(const QString& file_path) {
@@ -260,7 +311,15 @@ bool configure_raw_filter(
 
   filter.scaleFactor = scale_factor;
   filter.draftModeEnabled = max_edge > 0 && scale_factor < 1.0f;
-  filter.exposure = static_cast<float>(settings.exposure);
+  const auto input_transform_enabled = settings.input_transform_enabled;
+  const auto highlight_mode =
+      settings.highlight_reconstruction_mode.trimmed().compare(QStringLiteral("Disabled"), Qt::CaseInsensitive) == 0
+          ? 0
+          : (settings.highlight_reconstruction_mode.trimmed().compare(
+                     QStringLiteral("Camera Default"), Qt::CaseInsensitive) == 0
+                 ? 1
+                 : 2);
+  filter.exposure = static_cast<float>(input_transform_enabled ? settings.exposure : 0.0);
   filter.boostAmount = static_cast<float>(settings.boost_amount);
   filter.boostShadowAmount = static_cast<float>(settings.boost_shadow_amount);
   filter.extendedDynamicRangeAmount = 0.0f;
@@ -276,10 +335,11 @@ bool configure_raw_filter(
   }
   if (@available(macOS 16.0, *)) {
     if (filter.isHighlightRecoverySupported) {
-      filter.highlightRecoveryEnabled = settings.highlight_recovery_enabled ? YES : NO;
+      filter.highlightRecoveryEnabled =
+          (highlight_mode == 2 || (highlight_mode == 1 && settings.highlight_recovery_enabled)) ? YES : NO;
     }
   }
-  if (settings.white_balance_override_enabled) {
+  if (input_transform_enabled && settings.white_balance_override_enabled) {
     filter.neutralTemperature = static_cast<float>(settings.white_balance_temperature);
     filter.neutralTint = static_cast<float>(settings.white_balance_tint);
   }
@@ -334,9 +394,10 @@ bool decode_raw_image(
     const QString& file_path,
     QImage* image,
     int max_edge,
-    const RawDecodeSettings& settings) {
+    const RawDecodeSettings& settings,
+    photo_editor::pipeline::DecodedImageMetadata* metadata) {
   QImage linear_image;
-  if (!decode_raw_linear_image(file_path, &linear_image, max_edge, settings)) {
+  if (!decode_raw_linear_image(file_path, &linear_image, max_edge, settings, metadata)) {
     return false;
   }
 
@@ -348,7 +409,8 @@ bool decode_raw_linear_image(
     const QString& file_path,
     QImage* image,
     int max_edge,
-    const RawDecodeSettings& settings) {
+    const RawDecodeSettings& settings,
+    photo_editor::pipeline::DecodedImageMetadata* metadata) {
   if (image == nullptr || !has_raw_extension(file_path)) {
     return false;
   }
@@ -364,9 +426,22 @@ bool decode_raw_linear_image(
       return false;
     }
 
+    CGImageSourceRef source = image_source_for_path(file_path);
     CIRAWFilter* filter = [CIRAWFilter filterWithImageURL:url];
     if (filter == nil || !configure_raw_filter(filter, max_edge, settings)) {
+      if (source != nullptr) {
+        CFRelease(source);
+      }
       return false;
+    }
+
+    if (metadata != nullptr) {
+      *metadata = {};
+      populate_decoded_metadata_from_source(source, metadata);
+      populate_decoded_metadata_from_filter(filter, settings, metadata);
+    }
+    if (source != nullptr) {
+      CFRelease(source);
     }
 
     CIImage* output_image = filter.outputImage;
@@ -375,6 +450,44 @@ bool decode_raw_linear_image(
     }
 
     return render_ciimage_to_linear_qimage(output_image, image);
+  }
+}
+
+bool read_raw_decoded_metadata(
+    const QString& file_path,
+    photo_editor::pipeline::DecodedImageMetadata* metadata,
+    const RawDecodeSettings& settings) {
+  if (metadata == nullptr || !has_raw_extension(file_path)) {
+    return false;
+  }
+
+  const QFileInfo source_info(file_path);
+  if (!source_info.exists() || !source_info.isReadable()) {
+    return false;
+  }
+
+  @autoreleasepool {
+    NSURL* url = file_url_for_path(file_path);
+    if (url == nil) {
+      return false;
+    }
+
+    CGImageSourceRef source = image_source_for_path(file_path);
+    CIRAWFilter* filter = [CIRAWFilter filterWithImageURL:url];
+    if (filter == nil) {
+      if (source != nullptr) {
+        CFRelease(source);
+      }
+      return false;
+    }
+
+    *metadata = {};
+    populate_decoded_metadata_from_source(source, metadata);
+    populate_decoded_metadata_from_filter(filter, settings, metadata);
+    if (source != nullptr) {
+      CFRelease(source);
+    }
+    return metadata->valid;
   }
 }
 

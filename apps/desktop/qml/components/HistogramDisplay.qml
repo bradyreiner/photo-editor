@@ -16,12 +16,11 @@ Item {
 
     Theme { id: theme }
 
-    Rectangle {
+    GlassSurface {
         anchors.fill: parent
-        color: theme.alpha(theme.ink950, 0.32)
         radius: theme.radiusPanel
-        border.width: 1
-        border.color: theme.alpha(theme.lineSoft, 0.12)
+        surfaceOpacity: 0.38
+        edgeOpacity: 0.14
 
         Canvas {
             id: histogramCanvas

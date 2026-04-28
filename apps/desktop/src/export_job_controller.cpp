@@ -163,6 +163,28 @@ bool ExportJobController::queueExport(
   return true;
 }
 
+int ExportJobController::queueBatchExport(
+    const QVariantList& assets,
+    const QString& preset,
+    const QString& destination_directory) {
+  int queued = 0;
+  for (const auto& value : assets) {
+    const auto asset = value.toMap();
+    const auto asset_id = asset.value(QStringLiteral("assetId")).toString();
+    const auto media_type = asset.value(QStringLiteral("mediaType")).toString().trimmed().toLower();
+    const auto file_path = asset.value(QStringLiteral("filePath")).toString();
+    const auto recipe_json = asset.value(QStringLiteral("recipeJson")).toString();
+    const auto display_label = asset.value(QStringLiteral("displayLabel")).toString();
+    const auto effective_preset =
+        is_photo_media(media_type) ? preset : QStringLiteral("Original Copy");
+    if (queueExport(asset_id, media_type, display_label, file_path,
+                    QString(), recipe_json, effective_preset, destination_directory)) {
+      ++queued;
+    }
+  }
+  return queued;
+}
+
 void ExportJobController::retryJob(const QString& job_id) {
   const auto index = jobIndexById(job_id);
   if (index < 0) {

@@ -7,7 +7,7 @@ Item {
 
     property string label: ""
     property string valueText: ""
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
     property var trackColors: []
     property alias from: control.from
     property alias to: control.to
@@ -17,6 +17,8 @@ Item {
     readonly property real normalizedValue: (control.to - control.from) !== 0 ? (control.value - control.from) / (control.to - control.from) : 0
     readonly property bool hasCenterMarker: control.from < 0 && control.to > 0
     readonly property real centerMarkerPosition: hasCenterMarker ? (0 - control.from) / (control.to - control.from) : 0
+    readonly property real fillStartPosition: hasCenterMarker ? Math.min(centerMarkerPosition, control.visualPosition) : 0
+    readonly property real fillEndPosition: hasCenterMarker ? Math.max(centerMarkerPosition, control.visualPosition) : control.visualPosition
     signal valueDragged(real value)
     signal resetRequested()
 
@@ -24,7 +26,7 @@ Item {
 
     onTrackColorsChanged: trackCanvas.requestPaint()
 
-    implicitHeight: 56
+    implicitHeight: 50
 
     TapHandler {
         acceptedButtons: Qt.LeftButton
@@ -34,28 +36,32 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme.radiusPanel
-        color: control.pressed ? theme.alpha(theme.ink750, 0.98) : theme.alpha(theme.ink900, 0.94)
+        radius: 0
+        color: control.pressed ? theme.alpha(theme.glassLift, 0.34) : theme.alpha(theme.glassBase, 0.16)
         border.width: control.activeFocus ? 2 : 1
         border.color: control.activeFocus
-                      ? theme.alpha(theme.focusRing, 0.82)
-                      : (control.pressed ? theme.alpha(root.accent, 0.32) : theme.alpha(theme.lineSoft, 0.14))
+                        ? theme.alpha(theme.focusRing, 0.82)
+                        : (control.pressed ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.glassEdge, 0.10))
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: theme.sectionPaddingCompact + 1
-        spacing: theme.gapControl
+        anchors.leftMargin: theme.space12
+        anchors.rightMargin: theme.space10
+        anchors.topMargin: theme.space6
+        anchors.bottomMargin: theme.space6
+        spacing: theme.space6
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: theme.space8
 
             Label {
                 text: root.label
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 11
-                font.weight: Font.Medium
+                font.pixelSize: 12
+                font.weight: Font.Bold
             }
 
             Item {
@@ -63,12 +69,12 @@ Item {
             }
 
             Rectangle {
-                radius: theme.radiusChip
-                color: control.pressed ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.ink850, 0.94)
+                radius: 0
+                color: control.pressed ? theme.alpha(root.accent, 0.10) : theme.alpha(theme.ink950, 0.28)
                 border.width: 1
-                border.color: control.pressed ? theme.alpha(root.accent, 0.2) : theme.alpha(theme.lineSoft, 0.14)
-                implicitWidth: Math.max(48, valueLabel.implicitWidth + theme.space12)
-                implicitHeight: 20
+                border.color: control.pressed ? theme.alpha(root.accent, 0.32) : theme.alpha(theme.polar, 0.10)
+                implicitWidth: Math.max(60, valueLabel.implicitWidth + theme.space14)
+                implicitHeight: 21
 
                 Label {
                     id: valueLabel
@@ -77,13 +83,14 @@ Item {
                     color: root.pressed ? theme.textStrong : theme.textMain
                     font.family: theme.fontMono
                     font.pixelSize: 10
+                    font.weight: Font.DemiBold
                 }
             }
         }
 
         Item {
             Layout.fillWidth: true
-            implicitHeight: 22
+            implicitHeight: 16
 
             Slider {
                 id: control
@@ -97,9 +104,9 @@ Item {
 
                 background: Item {
                     x: control.leftPadding
-                    y: control.topPadding + control.availableHeight / 2 - 2
+                    y: control.topPadding + control.availableHeight / 2 - 1
                     width: control.availableWidth
-                    height: 4
+                    height: 3
 
                     Canvas {
                         id: trackCanvas
@@ -117,20 +124,11 @@ Item {
                                 }
                                 ctx.fillStyle = gradient;
                             } else {
-                                ctx.fillStyle = theme.lineStrong;
+                                ctx.fillStyle = theme.alpha(theme.polar, 0.22);
                             }
 
-                            const radius = Math.min(2, width / 2, height / 2);
                             ctx.beginPath();
-                            ctx.moveTo(radius, 0);
-                            ctx.lineTo(width - radius, 0);
-                            ctx.quadraticCurveTo(width, 0, width, radius);
-                            ctx.lineTo(width, height - radius);
-                            ctx.quadraticCurveTo(width, height, width - radius, height);
-                            ctx.lineTo(radius, height);
-                            ctx.quadraticCurveTo(0, height, 0, height - radius);
-                            ctx.lineTo(0, radius);
-                            ctx.quadraticCurveTo(0, 0, radius, 0);
+                            ctx.rect(0, 0, width, height);
                             ctx.closePath();
                             ctx.fill();
                         }
@@ -140,46 +138,69 @@ Item {
 
                     Rectangle {
                         anchors.fill: parent
-                        radius: 2
-                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? theme.alpha(theme.ink950, 0.34) : theme.alpha(theme.lineStrong, 0.9)
+                        radius: 0
+                        color: Array.isArray(root.trackColors) && root.trackColors.length > 1 ? theme.alpha(theme.ink950, 0.28) : theme.alpha(theme.ink950, 0.72)
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.08)
                     }
 
                     Rectangle {
-                        x: root.hasCenterMarker ? Math.min(root.centerMarkerPosition * parent.width, control.visualPosition * parent.width) : 0
-                        width: root.hasCenterMarker ? Math.max(2, Math.abs(control.visualPosition - root.centerMarkerPosition) * parent.width) : Math.max(6, control.visualPosition * parent.width)
+                        x: root.fillStartPosition * parent.width
+                        width: Math.max(2, (root.fillEndPosition - root.fillStartPosition) * parent.width)
                         height: parent.height
-                        radius: 2
+                        radius: 0
                         color: root.accent
+                        opacity: 0.72
                     }
 
                     Rectangle {
                         visible: root.hasCenterMarker
                         x: Math.max(0, Math.min(parent.width - width, root.centerMarkerPosition * parent.width - width / 2))
                         width: 2
-                        height: 11
-                        radius: 1
+                        height: 13
+                        radius: 0
                         anchors.verticalCenter: parent.verticalCenter
-                        color: theme.textFaint
+                        color: theme.alpha(theme.polar, 0.54)
+                    }
+
+                    Repeater {
+                        model: 5
+
+                        Rectangle {
+                            width: 1
+                            height: index === 2 ? 11 : 7
+                            radius: 0
+                            x: Math.round(index * (parent.width - 1) / 4)
+                            anchors.verticalCenter: parent.verticalCenter
+                            color: theme.alpha(theme.polar, index === 2 ? 0.32 : 0.18)
+                        }
                     }
                 }
 
                 handle: Rectangle {
                     x: control.leftPadding + control.visualPosition * (control.availableWidth - width)
                     y: control.topPadding + control.availableHeight / 2 - height / 2
-                    width: 14
-                    height: 14
-                    radius: theme.radiusChip
-                    color: root.accent
+                    width: control.pressed ? 12 : 10
+                    height: control.pressed ? 22 : 20
+                    radius: 1
+                    color: control.pressed ? theme.polar : theme.alpha(theme.polar, 0.92)
                     border.width: 1
-                    border.color: theme.alpha(theme.textStrong, 0.16)
+                    border.color: control.pressed ? theme.alpha(root.accent, 0.92) : theme.alpha(theme.polar, 0.42)
+
+                    Behavior on width {
+                        NumberAnimation { duration: theme.durationFast }
+                    }
+
+                    Behavior on height {
+                        NumberAnimation { duration: theme.durationFast }
+                    }
 
                     Rectangle {
                         anchors.centerIn: parent
-                        width: 4
-                        height: 4
-                        radius: 2
-                        color: theme.textStrong
-                        opacity: control.pressed ? 1.0 : 0.8
+                        width: 2
+                        height: 12
+                        radius: 0
+                        color: control.pressed ? root.accent : theme.alpha(theme.ink950, 0.72)
                     }
                 }
 

@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
 
   const auto rendered_path = rendered_job.value(QStringLiteral("outputPath")).toString();
   const QFileInfo rendered_info(rendered_path);
-  if (rendered_info.suffix().toLower() != QStringLiteral("jpg")) {
-    return fail("rendered photo export should write a jpeg");
+  if (rendered_info.suffix().toLower() != QStringLiteral("png")) {
+    return fail("full-resolution photo export should write a png");
   }
 
   QImage rendered_image(rendered_path);
@@ -139,6 +139,9 @@ int main(int argc, char** argv) {
   }
   if (rendered_image.width() != 40 || rendered_image.height() != 40) {
     return fail("rendered photo export should honor the crop dimensions");
+  }
+  if (!rendered_image.colorSpace().isValid()) {
+    return fail("rendered photo export should preserve an output color profile");
   }
 
   const auto sample = rendered_image.pixelColor(rendered_image.width() / 2, rendered_image.height() / 2);

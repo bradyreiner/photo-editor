@@ -1,0 +1,16 @@
+{
+  "selection": {
+    "name": "sam2.1_hiera_tiny",
+    "format": "onnx",
+    "path": "selection/sam2.1_hiera_tiny.onnx",
+    "license": "Apache-2.0",
+    "sha256": "replace-with-release-checksum"
+  },
+  "inpaint": {
+    "name": "lama",
+    "format": "onnx",
+    "path": "inpaint/lama.onnx",
+    "license": "Apache-2.0",
+    "sha256": "replace-with-release-checksum"
+  }
+}

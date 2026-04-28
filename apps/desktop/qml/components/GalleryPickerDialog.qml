@@ -88,11 +88,10 @@ Dialog {
     padding: 0
     closePolicy: Popup.CloseOnEscape
 
-    background: Rectangle {
+    background: PopupSurface {
         radius: 22
-        color: root.theme.ink900
-        border.width: 1
-        border.color: root.theme.alpha(root.theme.lineStrong, 0.46)
+        accent: root.theme.accentWarm400
+        accentRail: false
     }
 
     contentItem: RowLayout {

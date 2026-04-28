@@ -7,7 +7,13 @@ Rectangle {
 
     required property string title
     property string subtitle: ""
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
+    property bool showAccentMarker: true
+    property bool uppercaseTitle: true
+    property string titleFontFamily: theme.fontMono
+    property int titlePixelSize: 10
+    property int titleWeight: Font.DemiBold
+    property real titleLetterSpacing: 0.9
     property bool expandable: false
     property bool expanded: true
     default property alias contentData: body.data
@@ -16,15 +22,9 @@ Rectangle {
 
     implicitHeight: sectionLayout.implicitHeight + theme.space18
     radius: theme.radiusPanel
-    color: theme.alpha(theme.ink850, 0.94)
-    border.width: 0
-    border.color: "transparent"
-
-    gradient: Gradient {
-        GradientStop { position: 0.0; color: theme.alpha(root.accent, 0.02) }
-        GradientStop { position: 0.18; color: theme.alpha(theme.ink850, 0.96) }
-        GradientStop { position: 1.0; color: theme.alpha(theme.ink900, 0.98) }
-    }
+    color: theme.alpha(theme.glassBase, 0.34)
+    border.width: 1
+    border.color: theme.alpha(theme.glassEdge, 0.14)
 
     ColumnLayout {
         id: sectionLayout
@@ -53,19 +53,20 @@ Rectangle {
                     spacing: theme.gapControl
 
                     Rectangle {
-                        Layout.preferredWidth: 18
+                        visible: root.showAccentMarker
+                        Layout.preferredWidth: root.showAccentMarker ? 18 : 0
                         Layout.preferredHeight: 2
-                        radius: 1.5
-                        color: root.accent
+                        radius: 1
+                        color: theme.polar
                     }
 
                     Label {
-                        text: root.title.toUpperCase()
+                        text: root.uppercaseTitle ? root.title.toUpperCase() : root.title
                         color: theme.textStrong
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 0.9
+                        font.family: root.titleFontFamily
+                        font.pixelSize: root.titlePixelSize
+                        font.weight: root.titleWeight
+                        font.letterSpacing: root.titleLetterSpacing
                     }
 
                     Item {

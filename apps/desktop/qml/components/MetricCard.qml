@@ -2,22 +2,19 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Rectangle {
+GlassSurface {
     id: root
 
     required property string label
     required property string value
     property string detail: ""
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
 
     Theme { id: theme }
 
     implicitWidth: 168
     implicitHeight: metricColumn.implicitHeight + (theme.panelPaddingCompact * 2)
     radius: theme.radiusSurface
-    color: theme.alpha(theme.ink950, 0.18)
-    border.color: theme.alpha(theme.lineSoft, 0.18)
-    border.width: 1
 
     ColumnLayout {
         id: metricColumn
@@ -28,7 +25,7 @@ Rectangle {
         Rectangle {
             Layout.preferredWidth: 14
             Layout.preferredHeight: 2
-            radius: 1
+            radius: 0
             color: root.accent
         }
 

@@ -221,6 +221,24 @@ bool save_legacy_records(
   return file.commit();
 }
 
+bool migrate_legacy_records_to_helper(
+    const QVector<PersistentJobRecord>& legacy_records,
+    QString* error_message = nullptr) {
+  if (legacy_records.isEmpty()) {
+    return true;
+  }
+
+  for (const auto& record : legacy_records) {
+    const auto payload = QString::fromUtf8(
+        QJsonDocument(object_from_record(record)).toJson(QJsonDocument::Compact));
+    if (!run_helper_command({QStringLiteral("upsert"), payload}, nullptr, error_message)) {
+      return false;
+    }
+  }
+
+  return save_legacy_records({}, error_message);
+}
+
 }  // namespace
 
 JobStoreNotifier::JobStoreNotifier(QObject* parent) : QObject(parent) {}
@@ -234,6 +252,13 @@ JobStoreNotifier* jobStoreNotifier() {
 }
 
 QVector<PersistentJobRecord> loadPersistedJobRecords() {
+  const auto legacy_records = load_legacy_records();
+  auto migrated_legacy_records = false;
+  QString migration_error;
+  if (!legacy_records.isEmpty()) {
+    migrated_legacy_records = migrate_legacy_records_to_helper(legacy_records, &migration_error);
+  }
+
   QString output;
   if (run_helper_command({QStringLiteral("list")}, &output, nullptr)) {
     const auto parsed = QJsonDocument::fromJson(output.toUtf8());
@@ -250,11 +275,13 @@ QVector<PersistentJobRecord> loadPersistedJobRecords() {
           records.push_back(record);
         }
       }
-      return records;
+      if (!records.isEmpty() || legacy_records.isEmpty() || migrated_legacy_records) {
+        return records;
+      }
     }
   }
 
-  return load_legacy_records();
+  return legacy_records;
 }
 
 bool upsertPersistedJobRecord(

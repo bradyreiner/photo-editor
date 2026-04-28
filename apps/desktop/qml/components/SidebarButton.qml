@@ -5,7 +5,7 @@ import QtQuick.Layouts
 Button {
     id: root
 
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
     property string kind: "library"
     property string iconName: kind
     property string title: ""
@@ -15,19 +15,21 @@ Button {
     property bool badgeEmphasis: false
     property bool compact: false
     property bool iconOnly: false
+    property string shape: "auto" // auto, standard, clipped
 
     Theme { id: theme }
 
+    readonly property bool clippedShape: root.shape === "clipped" || (root.shape === "auto" && root.iconOnly)
     readonly property color iconOnlyFill: root.down
-                                         ? theme.ink700
+                                         ? theme.alpha(theme.ink700, 0.9)
                                          : root.highlighted
-                                           ? theme.ink750
-                                           : (root.hovered ? theme.alpha(theme.ink800, 0.98) : theme.alpha(theme.ink900, 0.7))
+                                           ? theme.alpha(root.accent, 0.18)
+                                           : (root.hovered ? theme.alpha(theme.glassLift, 0.68) : theme.alpha(theme.glassBase, 0.54))
     readonly property color iconOnlyBorder: root.visualFocus
                                            ? theme.alpha(theme.focusRing, 0.9)
                                            : root.highlighted
-                                             ? theme.alpha(theme.lineStrong, 0.74)
-                                             : (root.hovered ? theme.alpha(theme.lineSoft, 0.46) : theme.alpha(theme.lineSoft, 0.22))
+                                              ? theme.alpha(root.accent, 0.68)
+                                              : (root.hovered ? theme.alpha(theme.glassEdge, 0.42) : theme.alpha(theme.glassEdge, 0.18))
 
     implicitHeight: iconOnly ? 40 : (compact ? theme.controlHeight : theme.controlHeightTall)
     implicitWidth: iconOnly ? 40 : implicitBackgroundWidth
@@ -41,48 +43,65 @@ Button {
     ToolTip.timeout: 3000
     ToolTip.text: root.tooltipText
 
-    background: Rectangle {
-        radius: root.iconOnly ? theme.radius8 : (theme.radiusControl + 1)
-        color: root.iconOnly
-               ? root.iconOnlyFill
-               : root.down
-                 ? theme.alpha(theme.ink750, 0.96)
-                 : root.highlighted
-                   ? theme.alpha(root.accent, 0.12)
-                   : (root.hovered ? theme.alpha(theme.ink700, 0.24) : "transparent")
-        border.width: root.visualFocus ? 2 : 1
-        border.color: root.iconOnly
-                      ? root.iconOnlyBorder
-                      : root.visualFocus
-                        ? theme.alpha(theme.focusRing, 0.9)
-                        : root.highlighted
-                          ? theme.alpha(root.accent, 0.34)
-                          : (root.hovered ? theme.alpha(theme.lineStrong, 0.16) : "transparent")
+    background: Item {
+        Rectangle {
+            anchors.fill: parent
+            visible: !root.clippedShape
+            radius: theme.radiusControl
+            color: root.down
+                   ? theme.alpha(theme.ink750, 0.96)
+                   : root.highlighted
+                     ? theme.alpha(root.accent, 0.12)
+                     : (root.hovered ? theme.alpha(theme.ink700, 0.24) : "transparent")
+            border.width: root.visualFocus ? 2 : 1
+            border.color: root.visualFocus
+                          ? theme.alpha(theme.focusRing, 0.9)
+                          : root.highlighted
+                            ? theme.alpha(root.accent, 0.34)
+                            : (root.hovered ? theme.alpha(theme.lineStrong, 0.16) : "transparent")
+        }
+
+        CutCornerSurface {
+            anchors.fill: parent
+            visible: root.clippedShape
+            cut: theme.cutCorner
+            cutTopLeft: true
+            cutTopRight: false
+            cutBottomRight: true
+            cutBottomLeft: false
+            fillColor: root.iconOnly
+                       ? root.iconOnlyFill
+                       : root.down
+                         ? theme.alpha(theme.ink750, 0.96)
+                         : root.highlighted
+                           ? theme.alpha(root.accent, 0.12)
+                           : (root.hovered ? theme.alpha(theme.ink700, 0.24) : "transparent")
+            borderWidth: root.visualFocus ? 2 : 1
+            borderColor: root.iconOnly
+                         ? root.iconOnlyBorder
+                         : root.visualFocus
+                           ? theme.alpha(theme.focusRing, 0.9)
+                           : root.highlighted
+                             ? theme.alpha(root.accent, 0.34)
+                             : (root.hovered ? theme.alpha(theme.lineStrong, 0.16) : "transparent")
+        }
 
         Rectangle {
             anchors.fill: parent
             anchors.margins: 1
-            radius: parent.radius - 1
+            radius: Math.max(1, theme.radiusControl - 1)
             visible: !root.iconOnly && (root.highlighted || root.hovered)
             color: root.highlighted
-                   ? theme.alpha(theme.ink950, 0.14)
-                   : theme.alpha(theme.ink950, 0.05)
+                   ? theme.alpha(root.accent, 0.08)
+                   : theme.alpha(theme.polar, 0.045)
         }
 
         Rectangle {
             anchors.fill: parent
             anchors.margins: 1
-            radius: Math.max(1, parent.radius - 1)
+            radius: 1
             visible: root.visualFocus
             color: theme.alpha(theme.focusFill, 0.18)
-        }
-
-        Behavior on color {
-            ColorAnimation { duration: theme.durationFast }
-        }
-
-        Behavior on border.color {
-            ColorAnimation { duration: theme.durationFast }
         }
     }
 
@@ -146,7 +165,7 @@ Button {
             Rectangle {
                 visible: root.badgeText.length > 0
                 Layout.alignment: Qt.AlignVCenter
-                radius: theme.radius4
+                radius: 1
                 color: root.badgeEmphasis ? theme.alpha(root.accent, 0.18) : theme.alpha(theme.ink700, 0.5)
                 border.width: 1
                 border.color: root.badgeEmphasis ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.lineSoft, 0.4)

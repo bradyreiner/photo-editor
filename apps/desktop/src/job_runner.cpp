@@ -31,6 +31,7 @@
 #include "edit_recipe_state.h"
 #include "job_store.h"
 #include "photo_render_utils.h"
+#include "working_image.h"
 
 namespace photo_editor::desktop {
 
@@ -39,6 +40,8 @@ namespace {
 struct ExportImageOptions final {
   int max_edge = 0;
   int jpeg_quality = 95;
+  QByteArray writer_format = "png";
+  QImage::Format image_format = QImage::Format_RGBA64;
 };
 
 QString iso_now() {
@@ -134,15 +137,34 @@ QString resolved_source_path(const PersistentJobRecord& job, bool* uses_preview)
 ExportImageOptions export_image_options_for_preset(const QString& preset) {
   const auto normalized = preset.trimmed();
   if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 1440, .jpeg_quality = 82};
+    return {.max_edge = 1440, .jpeg_quality = 88, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
   }
   if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2048, .jpeg_quality = 86};
+    return {.max_edge = 2048, .jpeg_quality = 92, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
   }
   if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2560, .jpeg_quality = 88};
+    return {.max_edge = 2560, .jpeg_quality = 94, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
   }
-  return {.max_edge = 0, .jpeg_quality = 95};
+  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
+    return {.max_edge = 0, .jpeg_quality = 100, .writer_format = "tif", .image_format = QImage::Format_RGBA64};
+  }
+  return {.max_edge = 0, .jpeg_quality = 100, .writer_format = "png", .image_format = QImage::Format_RGBA64};
+}
+
+QString output_suffix_for_preset(const QString& preset, bool rendered_output) {
+  if (!rendered_output) {
+    return {};
+  }
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0 ||
+      normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0 ||
+      normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("jpg");
+  }
+  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("tif");
+  }
+  return QStringLiteral("png");
 }
 
 bool render_photo_export(
@@ -152,20 +174,30 @@ bool render_photo_export(
     const QString& output_path) {
   const auto state = parse_edit_recipe_json(recipe_json);
   QImage image;
-  if (!decode_source_image(source_path, &image, 0, state)) {
+  photo_editor::pipeline::DecodedImageMetadata metadata;
+  if (!decode_source_image(source_path, &image, 0, state, &metadata)) {
     return false;
   }
 
   image = apply_crop(image, state);
-  apply_color_adjustments(&image, state);
-
   const auto options = export_image_options_for_preset(preset);
+  image = render_output_image(
+      image,
+      state,
+      preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space)),
+      options.image_format,
+      metadata.valid ? &metadata : nullptr);
+  if (image.isNull()) {
+    return false;
+  }
   if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
     image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   }
 
-  QImageWriter writer(output_path, "jpg");
-  writer.setQuality(options.jpeg_quality);
+  QImageWriter writer(output_path, options.writer_format);
+  if (options.writer_format == "jpg") {
+    writer.setQuality(options.jpeg_quality);
+  }
   return writer.write(image);
 }
 
@@ -175,7 +207,7 @@ QString output_file_path_for_job(
     bool rendered_output) {
   const QFileInfo source_info(source_path);
   const auto safe_label = sanitize_token(display_label_for_job(job), QStringLiteral("export"));
-  const auto suffix = rendered_output ? QStringLiteral("jpg") : source_info.suffix().toLower();
+  const auto suffix = rendered_output ? output_suffix_for_preset(job.preset_name, true) : source_info.suffix().toLower();
   const auto extension = suffix.isEmpty() ? QString{} : QStringLiteral(".%1").arg(suffix);
 
   auto stem = safe_label;
@@ -451,8 +483,8 @@ QStringList import_arguments(const QString& folder_path, const QString& import_m
   };
 }
 
-QString selection_manifest_path(const PersistentJobRecord& job) {
-  const auto selected_paths = job.metadata_json.value(QStringLiteral("selectedPaths")).toArray();
+QString selection_manifest_path(const QJsonObject& metadata_json) {
+  const auto selected_paths = metadata_json.value(QStringLiteral("selectedPaths")).toArray();
   if (selected_paths.isEmpty()) {
     return {};
   }
@@ -479,6 +511,63 @@ QString selection_manifest_path(const PersistentJobRecord& job) {
   }
   manifest_file.close();
   return manifest_path;
+}
+
+QVariantMap run_import_work(const QString& source_path, const QJsonObject& metadata_json) {
+  QElapsedTimer timer;
+  timer.start();
+  QVariantMap result;
+  result.insert(QStringLiteral("success"), false);
+
+  QProcessEnvironment environment;
+  QString environment_error;
+  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
+    result.insert(QStringLiteral("errorMessage"), environment_error);
+    result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
+    return result;
+  }
+
+  const auto import_mode = metadata_json.value(QStringLiteral("importMode")).toString().trimmed().isEmpty()
+                               ? QStringLiteral("referenced")
+                               : metadata_json.value(QStringLiteral("importMode")).toString().trimmed();
+  auto arguments = import_arguments(source_path, import_mode);
+  const auto manifest_path = selection_manifest_path(metadata_json);
+  if (metadata_json.value(QStringLiteral("selectionCount")).toInt() > 0 && manifest_path.isEmpty()) {
+    result.insert(QStringLiteral("errorMessage"), QStringLiteral("Unable to stage the selected photos for import."));
+    result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
+    return result;
+  }
+  if (!manifest_path.isEmpty()) {
+    arguments.push_back(manifest_path);
+  }
+
+  QProcess process;
+  process.setWorkingDirectory(QDir::currentPath());
+  process.setProcessEnvironment(environment);
+  process.setProcessChannelMode(QProcess::MergedChannels);
+  process.start(import_program(), arguments);
+
+  const auto started = process.waitForStarted(5000);
+  const auto finished = started && process.waitForFinished(120000);
+  const auto output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+  if (!manifest_path.isEmpty()) {
+    QFile::remove(manifest_path);
+  }
+
+  if (!started || !finished || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+    result.insert(
+        QStringLiteral("errorMessage"),
+        output.isEmpty() ? QStringLiteral("Import failed.") : output);
+    result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
+    return result;
+  }
+
+  result.insert(QStringLiteral("success"), true);
+  if (!output.isEmpty()) {
+    result.insert(QStringLiteral("resultMessage"), output);
+  }
+  result.insert(QStringLiteral("elapsedMs"), timer.elapsed());
+  return result;
 }
 
 }  // namespace
@@ -649,7 +738,15 @@ void JobRunner::handleAsyncJobFinished() {
     job.metadata_json.insert(QStringLiteral("canceledAt"), iso_now());
   } else if (success) {
     job.output_path = result.value(QStringLiteral("outputPath")).toString();
-    if (job.job_kind == QStringLiteral("timeline_render")) {
+    if (job.job_kind == QStringLiteral("catalog_import")) {
+      const auto result_message = result.value(QStringLiteral("resultMessage")).toString().trimmed();
+      if (!result_message.isEmpty()) {
+        job.metadata_json.insert(QStringLiteral("resultMessage"), result_message);
+      }
+      job.status = QStringLiteral("Completed");
+      job.error_message.clear();
+      job.progress = 100;
+    } else if (job.job_kind == QStringLiteral("timeline_render")) {
       const auto poster_path = result.value(QStringLiteral("posterPath")).toString().trimmed();
       QString finalize_error;
       if (!update_timeline_render_artifacts(job, poster_path, &finalize_error)) {
@@ -675,7 +772,9 @@ void JobRunner::handleAsyncJobFinished() {
     if (job.error_message.isEmpty()) {
       job.error_message = job.job_kind == QStringLiteral("timeline_render")
                               ? QStringLiteral("The timeline render job did not complete.")
-                              : QStringLiteral("The export job did not complete.");
+                              : (job.job_kind == QStringLiteral("catalog_import")
+                                     ? QStringLiteral("Import failed.")
+                                     : QStringLiteral("The export job did not complete."));
     }
     job.progress = 0;
   }
@@ -715,8 +814,6 @@ void JobRunner::handleAsyncJobFinished() {
 }
 
 void JobRunner::runImportJob(const QString& job_id) {
-  QElapsedTimer timer;
-  timer.start();
   const auto records = loadPersistedJobRecords();
   auto job_it = std::find_if(
       records.cbegin(),
@@ -754,7 +851,7 @@ void JobRunner::runImportJob(const QString& job_id) {
             {QStringLiteral("job_id"), job.job_id},
             {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
             {QStringLiteral("status"), job.status},
-            {QStringLiteral("elapsed_ms"), timer.elapsed()},
+            {QStringLiteral("elapsed_ms"), active_job_timer_.isValid() ? active_job_timer_.elapsed() : 0},
             {QStringLiteral("error"), job.error_message},
         });
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
@@ -766,116 +863,10 @@ void JobRunner::runImportJob(const QString& job_id) {
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
 
-  QProcessEnvironment environment;
-  QString environment_error;
-  if (!AppBootstrap::prepareProcessEnvironment(&environment, &environment_error)) {
-    job.status = QStringLiteral("Failed");
-    job.error_message = environment_error;
-    job.progress = 0;
-    job.updated_at = iso_now();
-    (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    observability::logWarning(
-        photoEditorJobsLog(),
-        QStringLiteral("job.failed"),
-        {
-            {QStringLiteral("job_id"), job.job_id},
-            {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
-            {QStringLiteral("status"), job.status},
-            {QStringLiteral("elapsed_ms"), timer.elapsed()},
-            {QStringLiteral("error"), job.error_message},
-        });
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
-    return;
-  }
-
-  const auto import_mode = job.metadata_json.value(QStringLiteral("importMode")).toString().trimmed().isEmpty()
-                               ? QStringLiteral("referenced")
-                               : job.metadata_json.value(QStringLiteral("importMode")).toString().trimmed();
-  auto arguments = import_arguments(source_path, import_mode);
-  const auto manifest_path = selection_manifest_path(job);
-  if (job.metadata_json.value(QStringLiteral("selectionCount")).toInt() > 0 && manifest_path.isEmpty()) {
-    job.status = QStringLiteral("Failed");
-    job.error_message = QStringLiteral("Unable to stage the selected photos for import.");
-    job.progress = 0;
-    job.updated_at = iso_now();
-    (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    observability::logWarning(
-        photoEditorJobsLog(),
-        QStringLiteral("job.failed"),
-        {
-            {QStringLiteral("job_id"), job.job_id},
-            {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
-            {QStringLiteral("status"), job.status},
-            {QStringLiteral("elapsed_ms"), timer.elapsed()},
-            {QStringLiteral("error"), job.error_message},
-        });
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
-    return;
-  }
-  if (!manifest_path.isEmpty()) {
-    arguments.push_back(manifest_path);
-  }
-
-  QProcess process;
-  process.setWorkingDirectory(QDir::currentPath());
-  process.setProcessEnvironment(environment);
-  process.setProcessChannelMode(QProcess::MergedChannels);
-  process.start(import_program(), arguments);
-
-  const auto started = process.waitForStarted(5000);
-  const auto finished = started && process.waitForFinished(120000);
-  const auto output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
-  if (!manifest_path.isEmpty()) {
-    QFile::remove(manifest_path);
-  }
-
-  if (!started || !finished || process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
-    job.status = QStringLiteral("Failed");
-    job.error_message = output.isEmpty() ? QStringLiteral("Import failed.") : output;
-    job.progress = 0;
-    job.updated_at = iso_now();
-    (void)upsertPersistedJobRecord(job, nullptr);
-    active_job_id_.clear();
-    active_job_kind_.clear();
-    observability::logWarning(
-        photoEditorJobsLog(),
-        QStringLiteral("job.failed"),
-        {
-            {QStringLiteral("job_id"), job.job_id},
-            {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
-            {QStringLiteral("status"), job.status},
-            {QStringLiteral("elapsed_ms"), timer.elapsed()},
-            {QStringLiteral("error"), job.error_message},
-        });
-    QTimer::singleShot(0, this, &JobRunner::processNextJob);
-    return;
-  }
-
-  if (!output.isEmpty()) {
-    job.metadata_json.insert(QStringLiteral("resultMessage"), output);
-  }
-  job.status = QStringLiteral("Completed");
-  job.error_message.clear();
-  job.progress = 100;
-  job.updated_at = iso_now();
-  (void)upsertPersistedJobRecord(job, nullptr);
-  active_job_id_.clear();
-  active_job_kind_.clear();
-  observability::logInfo(
-      photoEditorJobsLog(),
-      QStringLiteral("job.completed"),
-      {
-          {QStringLiteral("job_id"), job.job_id},
-          {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
-          {QStringLiteral("status"), job.status},
-          {QStringLiteral("elapsed_ms"), timer.elapsed()},
-          {QStringLiteral("result"), output},
-      });
-  QTimer::singleShot(0, this, &JobRunner::processNextJob);
+  async_job_watcher_.setFuture(QtConcurrent::run(
+      run_import_work,
+      source_path,
+      job.metadata_json));
 }
 
 void JobRunner::runTimelineRenderJob(const QString& job_id) {

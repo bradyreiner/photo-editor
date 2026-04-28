@@ -27,6 +27,10 @@ bool almost_equal(double left, double right, double tolerance = 1e-6) {
   return std::abs(left - right) <= tolerance;
 }
 
+double curve_point_coordinate(const QVariant& point, const char* key) {
+  return point.toMap().value(QString::fromLatin1(key)).toDouble();
+}
+
 int max_channel_delta(const QImage& left, const QImage& right) {
   if (left.size() != right.size()) {
     return 255;
@@ -207,6 +211,35 @@ int main(int argc, char** argv) {
   }
   if (!controller.canUndo()) {
     return fail("switching back to a previously edited asset should restore its undo history");
+  }
+
+  photo_editor::desktop::EditorPreviewController curve_controller;
+  curve_controller.loadAsset(
+      QStringLiteral("curve-asset"),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  curve_controller.setCurveChannel(QStringLiteral("Master"));
+  curve_controller.setActiveCurvePoints(QVariantList{
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.12}},
+      QVariantMap{{QStringLiteral("x"), 0.45}, {QStringLiteral("y"), 0.58}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 0.91}},
+  });
+
+  const auto curve_points = curve_controller.activeCurvePoints();
+  if (curve_points.size() != 3) {
+    return fail("custom tone curves should preserve endpoint controls");
+  }
+  if (!almost_equal(curve_point_coordinate(curve_points[0], "x"), 0.0) ||
+      !almost_equal(curve_point_coordinate(curve_points[0], "y"), 0.12) ||
+      !almost_equal(curve_point_coordinate(curve_points[1], "x"), 0.45) ||
+      !almost_equal(curve_point_coordinate(curve_points[1], "y"), 0.58) ||
+      !almost_equal(curve_point_coordinate(curve_points[2], "x"), 1.0) ||
+      !almost_equal(curve_point_coordinate(curve_points[2], "y"), 0.91)) {
+    return fail("tone curve endpoints should remain editable for black and white point adjustment");
   }
 
   controller.addMask(QStringLiteral("linear"));
@@ -1055,46 +1088,29 @@ int main(int argc, char** argv) {
     return fail("range mask previews should support the dedicated neutral preview modes");
   }
 
-  photo_editor::desktop::EditorPreviewController fallback_controller;
-  fallback_controller.loadAsset(
-      QStringLiteral("asset-fallback"),
+  photo_editor::desktop::EditorPreviewController missed_pick_controller;
+  missed_pick_controller.loadAsset(
+      QStringLiteral("asset-missed-pick"),
       smart_select_path,
       QString(),
       QString(),
       QString(),
       QString(),
       QString());
-  const auto selection_fallback =
-      fallback_controller.pickMaskAt(0.02, 0.02, QStringLiteral("selection"), false);
-  if (selection_fallback != QStringLiteral("selection-fallback-polygon") ||
-      fallback_controller.activeMaskKind() != QStringLiteral("polygon") ||
-      fallback_controller.activeMaskPolygonPointCount() != 1) {
-    return fail("selection fallback should seed a polygon mask when AI cannot isolate the click");
-  }
-  const auto fallback_polygon_points = fallback_controller.activeMaskPolygonPoints();
-  if (fallback_polygon_points.size() != 1 ||
-      !almost_equal(fallback_polygon_points.at(0).toMap().value(QStringLiteral("x")).toDouble(), 0.02) ||
-      !almost_equal(fallback_polygon_points.at(0).toMap().value(QStringLiteral("y")).toDouble(), 0.02)) {
-    return fail("selection fallback should seed the polygon at the clicked point");
+  const auto missed_selection =
+      missed_pick_controller.pickMaskAt(0.02, 0.02, QStringLiteral("selection"), false);
+  if (missed_selection != QStringLiteral("selection-missed") ||
+      missed_pick_controller.maskCount() != 0 ||
+      missed_pick_controller.hasActiveMask()) {
+    return fail("missed smart selection should not create a polygon fallback mask");
   }
 
-  fallback_controller.removeActiveMask();
-  const auto remove_fallback =
-      fallback_controller.pickMaskAt(0.02, 0.02, QStringLiteral("remove"), false);
-  if (remove_fallback != QStringLiteral("remove-fallback-brush") ||
-      fallback_controller.activeMaskKind() != QStringLiteral("brush") ||
-      fallback_controller.activeMaskRetouchMode() != QStringLiteral("remove") ||
-      fallback_controller.activeMaskCommitted() ||
-      fallback_controller.activeMaskBrushPointCount() != 1) {
-    return fail("remove fallback should start a staged remove brush when AI cannot isolate the click");
-  }
-  const auto fallback_brush_points =
-      fallback_controller.maskStack().at(fallback_controller.activeMaskIndex()).toMap().value(
-          QStringLiteral("brushPoints")).toList();
-  if (fallback_brush_points.size() != 1 ||
-      !almost_equal(fallback_brush_points.at(0).toMap().value(QStringLiteral("x")).toDouble(), 0.02) ||
-      !almost_equal(fallback_brush_points.at(0).toMap().value(QStringLiteral("y")).toDouble(), 0.02)) {
-    return fail("remove fallback should seed the first brush point at the clicked point");
+  const auto missed_remove =
+      missed_pick_controller.pickMaskAt(0.02, 0.02, QStringLiteral("remove"), false);
+  if (missed_remove != QStringLiteral("remove-missed") ||
+      missed_pick_controller.maskCount() != 0 ||
+      missed_pick_controller.hasActiveMask()) {
+    return fail("missed object remove should not create an implicit remove brush fallback");
   }
 
   photo_editor::desktop::EditorPreviewController remove_controller;
@@ -1127,11 +1143,18 @@ int main(int argc, char** argv) {
   if (remove_controller.activeMaskPreviewSource().isEmpty()) {
     return fail("remove brush should show a live highlighted matte before the retouch is applied");
   }
+  qputenv("PHOTO_EDITOR_TEST_FAKE_AI_MODELS", "1");
   remove_controller.applyActiveRetouch();
   if (!remove_controller.maskStack().at(0).toMap().value(QStringLiteral("committed")).toBool() ||
       !remove_controller.maskStack().at(1).toMap().value(QStringLiteral("committed")).toBool()) {
     return fail("applying a retouch should commit every pending retouch mask in the session");
   }
+  if (remove_controller.maskStack().at(0).toMap().value(QStringLiteral("inpaintPatchData")).toByteArray().isEmpty() ||
+      remove_controller.maskStack().at(0).toMap().value(QStringLiteral("inpaintPatchWidth")).toInt() <= 0 ||
+      remove_controller.maskStack().at(1).toMap().value(QStringLiteral("inpaintPatchData")).toByteArray().isEmpty()) {
+    return fail("applying a remove retouch with AI inpaint available should bake patch data into committed masks");
+  }
+  qunsetenv("PHOTO_EDITOR_TEST_FAKE_AI_MODELS");
   const auto committed_count = remove_controller.maskCount();
   remove_controller.objectRemoveAt(0.85, 0.5, true);
   if (remove_controller.maskCount() != committed_count + 1 ||
@@ -1214,6 +1237,9 @@ int main(int argc, char** argv) {
       !controller.activeMaskCommitted()) {
     return fail("refine subtract should create a subtractive brush mask");
   }
+  if (controller.activeMaskOutlinePoints().isEmpty()) {
+    return fail("switching to an erase brush should keep outlining the current selection set");
+  }
   const auto grouped_mask_sets_after_subtract = controller.maskSets();
   if (grouped_mask_sets_after_subtract.size() != 2 ||
       grouped_mask_sets_after_subtract.at(1).toMap().value(QStringLiteral("sources")).toList().size() != 3) {
@@ -1293,6 +1319,14 @@ int main(int argc, char** argv) {
   controller.setActiveMaskSelectionExpand(22.0);
   if (!almost_equal(controller.activeMaskSelectionExpand(), 22.0)) {
     return fail("selection refine controls should expose expand and contract on the active mask");
+  }
+  controller.setActiveMaskSelectionEdgeContrast(64.0);
+  if (!almost_equal(controller.activeMaskSelectionEdgeContrast(), 64.0)) {
+    return fail("selection refine controls should expose edge contrast on the active mask");
+  }
+  controller.setActiveMaskSelectionDecontaminate(42.0);
+  if (!almost_equal(controller.activeMaskSelectionDecontaminate(), 42.0)) {
+    return fail("selection refine controls should expose edge decontamination on the active mask");
   }
   controller.setActiveMaskSelectionInverted(true);
   if (!controller.activeMaskSelectionInverted()) {

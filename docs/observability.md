@@ -17,6 +17,7 @@ The current implementation is intentionally minimal and vendor-neutral:
 - per-run correlation via `PHOTO_EDITOR_SESSION_ID`
 - helper-process propagation via `PHOTO_EDITOR_OBSERVABILITY_RUN_DIR`
 - latency measurements around startup, preview render stages, catalog helpers, and jobs
+- optional OpenTelemetry traces for Rust helper processes and the MCP server when an OTLP endpoint is configured
 
 ## Environment
 
@@ -28,6 +29,14 @@ The current implementation is intentionally minimal and vendor-neutral:
   - Optional session correlation id. The desktop app generates one when not provided.
 - `PHOTO_EDITOR_OBSERVABILITY_RUN_DIR`
   - Optional override for the current run directory.
+- `OTEL_EXPORTER_OTLP_ENDPOINT`
+  - Optional OTLP collector endpoint for Rust helper processes and `photo-editor-mcp`.
+- `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
+  - Optional traces-only endpoint. Takes precedence over `OTEL_EXPORTER_OTLP_ENDPOINT`.
+- `OTEL_SERVICE_NAMESPACE`
+  - Optional namespace attached to emitted traces. A good default for local development is `photo-editor-dev`.
+- `OTEL_DEPLOYMENT_ENVIRONMENT`
+  - Optional environment label such as `development`, `staging`, or `ci`.
 
 ## What To Look At
 
@@ -37,6 +46,9 @@ The current implementation is intentionally minimal and vendor-neutral:
   - Qt-side lifecycle, preview, performance, and job scheduling events.
 - `catalog_local_db.jsonl`, `import_catalog.jsonl`, `catalog_migrate.jsonl`
   - Rust helper activity for catalog bootstrap, imports, and migrations.
+- OTLP traces
+  - `photo-editor-mcp` and Rust helper binaries emit spans when either OTLP endpoint variable is set.
+  - The current desktop Qt/C++ layer still emits JSONL only; OTLP there is a future step.
 
 Each JSON line contains an event name plus timing and context fields. Typical useful filters:
 
@@ -47,9 +59,9 @@ Each JSON line contains an event name plus timing and context fields. Typical us
 
 ## Current Gaps
 
-This is the baseline layer, not the full observability stack yet. The next upgrades should be:
+This is still a layered rollout rather than the full observability stack. The main remaining gaps are:
 
 - crash reporting with native minidumps
-- OpenTelemetry metrics and traces exported to a collector
+- OpenTelemetry metrics and traces from the Qt/C++ desktop shell
 - sampling/profiling for sustained render hotspots
 - dashboards and alert thresholds for render latency, job failure rate, and startup regressions

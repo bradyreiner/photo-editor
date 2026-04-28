@@ -4,6 +4,12 @@ photo_editor_apply_warnings(render_graph_smoke_test)
 
 add_test(NAME render_graph_smoke_test COMMAND render_graph_smoke_test)
 
+add_executable(color_pipeline_test color_pipeline_test.cpp)
+target_link_libraries(color_pipeline_test PRIVATE photo_engine)
+photo_editor_apply_warnings(color_pipeline_test)
+
+add_test(NAME color_pipeline_test COMMAND color_pipeline_test)
+
 add_executable(catalog_contract_smoke_test catalog_contract_smoke_test.cpp)
 target_link_libraries(catalog_contract_smoke_test PRIVATE photo_engine)
 photo_editor_apply_warnings(catalog_contract_smoke_test)
@@ -20,17 +26,24 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/observability.cpp)
   set(photo_editor_desktop_brush_preview_sources
     ../apps/desktop/src/brush_preview_compositor.h
-    ../apps/desktop/src/brush_preview_compositor.cpp)
+    ../apps/desktop/src/brush_preview_compositor.cpp
+    ../apps/desktop/src/editor_preview_texture.h
+    ../apps/desktop/src/editor_preview_texture.cpp)
+  set(photo_editor_desktop_ai_model_sources
+    ../apps/desktop/src/ai_model_runtime.h
+    ../apps/desktop/src/ai_model_runtime.cpp)
   set(photo_editor_desktop_brush_preview_frameworks)
   if(APPLE)
     if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
       list(APPEND photo_editor_desktop_brush_preview_sources
-        ../apps/desktop/src/brush_preview_compositor_metal.mm)
+        ../apps/desktop/src/brush_preview_compositor_metal.mm
+        ../apps/desktop/src/editor_preview_texture_metal.mm)
       set(photo_editor_desktop_brush_preview_frameworks
         "-framework Metal"
         "-framework Foundation")
       set_source_files_properties(
         ../apps/desktop/src/brush_preview_compositor_metal.mm
+        ../apps/desktop/src/editor_preview_texture_metal.mm
         PROPERTIES
           COMPILE_OPTIONS "-fobjc-arc")
     endif()
@@ -51,6 +64,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
         COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(
       ../apps/desktop/src/brush_live_preview_item.cpp
+      ../apps/desktop/src/editor_preview_texture_item.cpp
       PROPERTIES
         LANGUAGE OBJCXX)
   endif()
@@ -144,6 +158,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_shell_controller.cpp
     ../apps/desktop/src/brush_live_preview_item.h
     ../apps/desktop/src/brush_live_preview_item.cpp
+    ../apps/desktop/src/editor_preview_texture_item.h
+    ../apps/desktop/src/editor_preview_texture_item.cpp
     ../apps/desktop/src/carousel_document_controller.h
     ../apps/desktop/src/carousel_document_controller.cpp
     ../apps/desktop/src/catalog_asset_model.h
@@ -151,10 +167,13 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ${photo_editor_desktop_brush_preview_sources}
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/vision_segmentation.h
     ../apps/desktop/src/vision_segmentation_stub.cpp
     ../apps/desktop/src/export_job_controller.h
     ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/macos_updater.h
+    ../apps/desktop/src/macos_updater_stub.cpp
     ../apps/desktop/src/job_queue_model.h
     ../apps/desktop/src/job_queue_model.cpp
     ../apps/desktop/src/job_runner.h
@@ -163,6 +182,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
+    ../apps/desktop/src/preview_backend_controller.h
+    ../apps/desktop/src/preview_backend_controller.cpp
     ${photo_editor_desktop_image_decoder_sources}
     ../apps/desktop/src/timeline_asset_store.h
     ../apps/desktop/src/timeline_asset_store.cpp
@@ -259,6 +280,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ${photo_editor_desktop_brush_preview_sources}
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}

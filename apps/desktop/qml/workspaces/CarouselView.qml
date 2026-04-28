@@ -19,12 +19,36 @@ Rectangle {
     property string mediaPickerIntent: "slot"
     property string activeTool: "select"
     property real composerZoom: 1.0
+    readonly property var textColorPresets: [
+        "#1e1a17", "#ffffff", "#f5f0e8", "#3c3632",
+        "#8b6548", "#c49a6c", "#d45a62", "#dd8a39",
+        "#d7bd42", "#61b56f", "#4e86d9", "#8b6be3"
+    ]
+    readonly property var textSizePresets: [
+        { label: "S", value: 36 },
+        { label: "M", value: 64 },
+        { label: "L", value: 96 },
+        { label: "XL", value: 144 },
+        { label: "2XL", value: 200 }
+    ]
     property bool snappingEnabled: true
     property bool guidesEnabled: true
     property bool thirdsGuidesEnabled: false
     property bool safeGuidesEnabled: false
+    property real guideOpacity: 0.5
+    property color guideColor: "#5fc2d8"
     property real snapThresholdPixels: 12
     property var activeSnapGuides: []
+    property var customGuides: []
+    property int nextGuideId: 1
+    property real globalDragOffsetX: 0
+    property real globalDragOffsetY: 0
+    property bool anyItemDragging: false
+
+    property string setupCarouselName: ""
+    property string setupFormat: "4x5"
+    property int setupSlideCount: 1
+    property var recentCarouselRecords: []
     readonly property bool compactWorkspace: width < 1500
     readonly property bool condensedHeader: width < 1180
     readonly property real stripAvailableWidth: Math.max(240, artboardFlick.width - 44)
@@ -541,6 +565,11 @@ Rectangle {
             pushGuide(guides, "horizontal", y + height, "Layer")
         }
 
+        for (let gi = 0; gi < root.customGuides.length; ++gi) {
+            const cg = root.customGuides[gi]
+            pushGuide(guides, cg.orientation, cg.position, "Custom")
+        }
+
         return guides
     }
 
@@ -611,17 +640,75 @@ Rectangle {
         }
     }
 
+    function guidesMatch(a, b) {
+        if (a.length !== b.length) return false
+        for (let i = 0; i < a.length; ++i) {
+            if (a[i].orientation !== b[i].orientation ||
+                Math.abs(a[i].position - b[i].position) > 0.01)
+                return false
+        }
+        return true
+    }
+
     function setSnapGuides(guides) {
         const filtered = []
         for (let index = 0; index < guides.length; ++index) {
             if (guides[index])
                 filtered.push(guides[index])
         }
-        activeSnapGuides = filtered
+        if (!guidesMatch(activeSnapGuides, filtered))
+            activeSnapGuides = filtered
     }
 
     function clearSnapGuides() {
         activeSnapGuides = []
+    }
+
+    function addCustomGuide(orientation) {
+        const slide = slideGeometry(carouselDocument.currentIndex)
+        const position = orientation === "vertical"
+            ? slide.x + slide.width / 2
+            : slide.y + slide.height / 2
+        const id = nextGuideId++
+        const updated = customGuides.slice()
+        updated.push({ guideId: id, orientation: orientation, position: position })
+        customGuides = updated
+    }
+
+    function removeCustomGuide(guideId) {
+        customGuides = customGuides.filter(function(g) { return g.guideId !== guideId })
+    }
+
+    function moveCustomGuide(guideId, newPosition) {
+        const updated = customGuides.slice()
+        for (let i = 0; i < updated.length; ++i) {
+            if (updated[i].guideId === guideId) {
+                updated[i] = { guideId: guideId, orientation: updated[i].orientation, position: newPosition }
+                break
+            }
+        }
+        customGuides = updated
+    }
+
+    function clearAllCustomGuides() {
+        customGuides = []
+    }
+
+    function beginCarouselSetup() {
+        setupCarouselName = catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+            ? catalogAssets.projectFilter + " Carousel"
+            : "Untitled Carousel"
+        setupFormat = "4x5"
+        setupSlideCount = 1
+        recentCarouselRecords = carouselDocument.recentDocuments()
+    }
+
+    function createCarouselFromSetup() {
+        carouselDocument.createCarouselWithSettings({
+            "carouselName": setupCarouselName,
+            "documentFormat": setupFormat,
+            "slideCount": Math.max(1, Math.min(20, setupSlideCount))
+        })
     }
 
     function snapDragPosition(itemData, centerX, centerY) {
@@ -676,10 +763,24 @@ Rectangle {
         }
     }
 
-    Component.onCompleted: refreshMediaPickerAssets()
+    Component.onCompleted: {
+        refreshMediaPickerAssets()
+        if (!carouselDocument.hasActiveCarousel)
+            beginCarouselSetup()
+    }
+
+    Connections {
+        target: carouselDocument
+
+        function onDocumentStateChanged() {
+            if (!carouselDocument.hasActiveCarousel)
+                root.beginCarouselSetup()
+        }
+    }
 
     Shortcut {
         sequence: StandardKey.Delete
+        enabled: carouselDocument.hasActiveCarousel
         onActivated: carouselDocument.removeSelectedItem()
     }
 
@@ -793,31 +894,309 @@ Rectangle {
         onActivated: root.nudgeSelected(0, 10)
     }
 
+    Shortcut {
+        sequence: "Ctrl+Left"
+        onActivated: {
+            if (carouselDocument.currentIndex > 0)
+                carouselDocument.selectSlide(carouselDocument.currentIndex - 1)
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+Right"
+        onActivated: {
+            if (carouselDocument.currentIndex < carouselDocument.slideCount - 1)
+                carouselDocument.selectSlide(carouselDocument.currentIndex + 1)
+        }
+    }
+
+    Shortcut {
+        sequence: "Ctrl+S"
+        onActivated: carouselDocument.saveDocument()
+    }
+
+    Shortcut {
+        sequence: "Meta+S"
+        onActivated: carouselDocument.saveDocument()
+    }
+
+    Shortcut {
+        sequence: "Escape"
+        onActivated: {
+            carouselDocument.clearSelection()
+            root.clearSnapGuides()
+            root.setActiveTool("select")
+        }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        visible: !carouselDocument.hasActiveCarousel
+        spacing: 0
+
+        Item { Layout.fillHeight: true }
+
+        RowLayout {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.fillWidth: true
+            Layout.maximumWidth: 940
+            Layout.leftMargin: 32
+            Layout.rightMargin: 32
+            spacing: 16
+
+            Rectangle {
+                Layout.preferredWidth: 480
+                Layout.minimumWidth: 340
+                Layout.fillWidth: true
+                implicitHeight: newCarouselColumn.implicitHeight + 32
+                radius: 12
+                color: theme.alpha(theme.ink850, 0.92)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.42)
+
+                ColumnLayout {
+                    id: newCarouselColumn
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 12
+
+                    SectionHeader {
+                        title: "New Carousel"
+                        accent: theme.accentWarm400
+                    }
+
+                    ToneTextField {
+                        Layout.fillWidth: true
+                        placeholderText: "Carousel name"
+                        text: root.setupCarouselName
+                        onTextChanged: root.setupCarouselName = text
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Aspect"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "4:5"
+                            active: root.setupFormat === "4x5"
+                            onClicked: root.setupFormat = "4x5"
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "5:4"
+                            active: root.setupFormat === "5x4"
+                            onClicked: root.setupFormat = "5x4"
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 6
+
+                        Label {
+                            text: "Slides"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "1"
+                            active: root.setupSlideCount === 1
+                            onClicked: root.setupSlideCount = 1
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "3"
+                            active: root.setupSlideCount === 3
+                            onClicked: root.setupSlideCount = 3
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "5"
+                            active: root.setupSlideCount === 5
+                            onClicked: root.setupSlideCount = 5
+                        }
+
+                        FilterChip {
+                            Layout.fillWidth: true
+                            text: "10"
+                            active: root.setupSlideCount === 10
+                            onClicked: root.setupSlideCount = 10
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: {
+                            const w = root.setupFormat === "5x4" ? 1350 : 1080
+                            const h = root.setupFormat === "5x4" ? 1080 : 1350
+                            return root.setupSlideCount + " slide" + (root.setupSlideCount !== 1 ? "s" : "")
+                                   + "  •  " + (w * root.setupSlideCount) + " x " + h + " px"
+                        }
+                        color: theme.textFaint
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 4
+                        spacing: 8
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Use Active Project"
+                            enabled: catalogAssets.projectFilter !== "all" && catalogAssets.projectFilter !== "unassigned"
+                            onClicked: root.setupCarouselName = catalogAssets.projectFilter + " Carousel"
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "Create Carousel"
+                            tone: "primary"
+                            onClicked: root.createCarouselFromSetup()
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.preferredWidth: 340
+                Layout.minimumWidth: 260
+                Layout.fillWidth: true
+                implicitHeight: recentCarouselColumn.implicitHeight + 32
+                Layout.alignment: Qt.AlignTop
+                radius: 12
+                color: theme.alpha(theme.ink850, 0.92)
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.42)
+
+                ColumnLayout {
+                    id: recentCarouselColumn
+                    anchors.fill: parent
+                    anchors.margins: 16
+                    spacing: 10
+
+                    SectionHeader {
+                        title: "Recent Carousels"
+                        accent: theme.accentCool400
+                    }
+
+                    ListView {
+                        id: recentCarouselList
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: Math.min(420, Math.max(48, count * 56))
+                        clip: true
+                        model: root.recentCarouselRecords
+                        spacing: 4
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+
+                            width: recentCarouselList.width
+                            height: 52
+                            radius: 8
+                            color: recentCarouselHover.containsMouse
+                                   ? theme.alpha(theme.accentCool400, 0.16)
+                                   : theme.alpha(theme.ink900, 0.62)
+                            border.width: 1
+                            border.color: recentCarouselHover.containsMouse
+                                          ? theme.alpha(theme.accentCool400, 0.42)
+                                          : theme.alpha(theme.lineSoft, 0.24)
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                anchors.topMargin: 6
+                                anchors.bottomMargin: 6
+                                spacing: 2
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.name || "Untitled"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: {
+                                        const fmt = String(modelData.documentFormat || "4x5").toUpperCase()
+                                        const slides = Number(modelData.slideCount || 0)
+                                        const date = String(modelData.updatedAt || modelData.createdAt || "")
+                                        return fmt + "  •  " + slides + " slide" + (slides !== 1 ? "s" : "")
+                                               + (date.length > 0 ? "  •  " + date : "")
+                                    }
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            MouseArea {
+                                id: recentCarouselHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    carouselDocument.loadDocument(String(modelData.documentId || ""))
+                                }
+                            }
+                        }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: recentCarouselList.count === 0
+                        text: "No saved carousels yet."
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+        }
+
+        Item { Layout.fillHeight: true }
+    }
+
     RowLayout {
         anchors.fill: parent
-        spacing: theme.space12
+        visible: carouselDocument.hasActiveCarousel
+        spacing: 6
 
         Rectangle {
-            Layout.preferredWidth: 84
-            Layout.minimumWidth: 76
+            Layout.preferredWidth: 44
             Layout.fillHeight: true
-            radius: theme.radius12
-            color: theme.alpha(theme.ink900, 0.94)
+            radius: theme.radius8
+            color: theme.alpha(theme.ink900, 0.88)
             border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.58)
+            border.color: theme.alpha(theme.lineSoft, 0.36)
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 10
-                spacing: 8
-
-                Label {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: "Tools"
-                    color: theme.textMuted
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                }
+                anchors.margins: 5
+                spacing: 4
 
                 Repeater {
                     model: root.toolButtons
@@ -825,45 +1204,47 @@ Rectangle {
                     delegate: Rectangle {
                         required property var modelData
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 58
-                        radius: 12
+                        Layout.preferredHeight: 34
+                        radius: 8
                         color: root.activeTool === modelData.value
-                               ? theme.alpha(theme.accentWarm500, 0.22)
-                               : theme.alpha(theme.ink950, 0.55)
-                        border.width: 1
-                        border.color: root.activeTool === modelData.value
-                                      ? theme.accentWarm300
-                                      : theme.alpha(theme.lineSoft, 0.42)
+                               ? theme.alpha(theme.accentWarm500, 0.24)
+                               : toolHover.containsMouse
+                                 ? theme.alpha(theme.ink800, 0.8)
+                                 : "transparent"
+                        border.width: root.activeTool === modelData.value ? 1 : 0
+                        border.color: theme.alpha(theme.accentWarm400, 0.6)
 
-                        Column {
+                        AppIcon {
+                            visible: modelData.value === "select" || modelData.value === "media"
                             anchors.centerIn: parent
-                            spacing: 2
+                            width: 16
+                            height: 16
+                            name: modelData.value === "select" ? "select" : "media"
+                            color: root.activeTool === modelData.value ? theme.accentWarm300 : theme.textMain
+                        }
 
-                            Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: modelData.value === "select" ? "V"
-                                                                   : modelData.value === "hand" ? "H"
-                                                                   : modelData.value === "text" ? "T" : "M"
-                                color: theme.textStrong
-                                font.family: theme.fontMono
-                                font.pixelSize: 14
-                                font.weight: Font.Bold
-                            }
-
-                            Label {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                text: modelData.label
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                            }
+                        Label {
+                            visible: modelData.value === "hand" || modelData.value === "text"
+                            anchors.centerIn: parent
+                            text: modelData.value === "hand" ? "H" : "T"
+                            color: root.activeTool === modelData.value ? theme.accentWarm300 : theme.textMain
+                            font.family: theme.fontMono
+                            font.pixelSize: 13
+                            font.weight: Font.Bold
                         }
 
                         MouseArea {
+                            id: toolHover
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.setActiveTool(modelData.value)
+                        }
+
+                        ToolTip {
+                            visible: toolHover.containsMouse
+                            text: modelData.label + " (" + modelData.key + ")"
+                            delay: 400
                         }
                     }
                 }
@@ -871,48 +1252,79 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 1
-                    color: theme.alpha(theme.lineSoft, 0.32)
+                    Layout.topMargin: 2
+                    Layout.bottomMargin: 2
+                    color: theme.alpha(theme.lineSoft, 0.24)
                 }
 
-                ActionButton {
+                Rectangle {
                     Layout.fillWidth: true
-                    compact: true
-                    text: "Fit"
-                    onClicked: root.resetZoomToFit()
+                    Layout.preferredHeight: 28
+                    radius: 6
+                    color: root.snappingEnabled
+                           ? theme.alpha(theme.accentCool500, 0.2)
+                           : snapHover.containsMouse ? theme.alpha(theme.ink800, 0.8) : "transparent"
+                    border.width: root.snappingEnabled ? 1 : 0
+                    border.color: theme.alpha(theme.accentCool400, 0.5)
+
+                    AppIcon {
+                        anchors.centerIn: parent
+                        width: 14
+                        height: 14
+                        name: "snap"
+                        color: root.snappingEnabled ? theme.accentCool300 : theme.textMuted
+                    }
+
+                    MouseArea {
+                        id: snapHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.snappingEnabled = !root.snappingEnabled
+                    }
+
+                    ToolTip {
+                        visible: snapHover.containsMouse
+                        text: root.snappingEnabled ? "Snapping On" : "Snapping Off"
+                        delay: 400
+                    }
                 }
 
-                FilterChip {
+                Rectangle {
                     Layout.fillWidth: true
-                    text: "Snap"
-                    active: root.snappingEnabled
-                    onClicked: root.snappingEnabled = !root.snappingEnabled
-                }
+                    Layout.preferredHeight: 28
+                    radius: 6
+                    color: root.guidesEnabled
+                           ? theme.alpha(theme.accentCool500, 0.2)
+                           : guidesHover.containsMouse ? theme.alpha(theme.ink800, 0.8) : "transparent"
+                    border.width: root.guidesEnabled ? 1 : 0
+                    border.color: theme.alpha(theme.accentCool400, 0.5)
 
-                FilterChip {
-                    Layout.fillWidth: true
-                    text: "Guides"
-                    active: root.guidesEnabled
-                    onClicked: root.guidesEnabled = !root.guidesEnabled
+                    AppIcon {
+                        anchors.centerIn: parent
+                        width: 14
+                        height: 14
+                        name: "grid"
+                        color: root.guidesEnabled ? theme.accentCool300 : theme.textMuted
+                    }
+
+                    MouseArea {
+                        id: guidesHover
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: root.guidesEnabled = !root.guidesEnabled
+                    }
+
+                    ToolTip {
+                        visible: guidesHover.containsMouse
+                        text: root.guidesEnabled ? "Guides On" : "Guides Off"
+                        delay: 400
+                    }
                 }
 
                 Item {
                     Layout.fillHeight: true
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    wrapMode: Text.WordWrap
-                    text: root.activeTool === "select"
-                          ? "Move, resize, and rotate layers."
-                          : root.activeTool === "hand"
-                            ? "Pan the workspace."
-                            : root.activeTool === "text"
-                              ? "Click the canvas to add text."
-                              : "Click the canvas to place media."
-                    color: theme.textMuted
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
                 }
             }
         }
@@ -933,185 +1345,69 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: theme.space10
+                    spacing: 8
 
-                    ColumnLayout {
+                    TextField {
+                        id: documentNameField
                         Layout.fillWidth: true
-                        spacing: 2
-
-                        Label {
-                            text: "Composer"
-                            color: theme.textStrong
-                            font.family: theme.fontDisplay
-                            font.pixelSize: 22
-                            font.weight: Font.DemiBold
+                        Layout.maximumWidth: 280
+                        text: carouselDocument.documentName
+                        color: theme.textStrong
+                        font.family: theme.fontDisplay
+                        font.pixelSize: 18
+                        font.weight: Font.DemiBold
+                        selectByMouse: true
+                        background: Rectangle {
+                            radius: 4
+                            color: documentNameField.activeFocus
+                                   ? theme.alpha(theme.ink850, 0.9)
+                                   : "transparent"
+                            border.width: documentNameField.activeFocus ? 1 : 0
+                            border.color: theme.alpha(theme.accentWarm400, 0.4)
                         }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: currentCanvasLabel() + "  •  " + currentTemplateLabel() + "  •  " + documentPixelLabel()
-                            color: theme.textMuted
-                            font.family: theme.fontMono
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
+                        onEditingFinished: {
+                            if (text.trim().length > 0)
+                                carouselDocument.documentName = text.trim()
+                            else
+                                text = carouselDocument.documentName
                         }
                     }
 
-                    InfoPill {
-                        label: "Tool"
-                        value: root.activeTool === "hand" ? "Pan" : root.activeTool === "text" ? "Text" : root.activeTool === "media" ? "Media" : "Select"
-                        accent: theme.accentWarm400
+                    Label {
+                        text: carouselDocument.documentFormat.toUpperCase() + "  " + documentPixelLabel()
+                        color: theme.textFaint
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
                     }
 
-                    InfoPill {
-                        label: "Selection"
-                        value: selection.hasSelection ? selection.displayLabel : "None"
-                        accent: theme.accentCool400
+                    Item { Layout.fillWidth: true }
+
+                    Rectangle {
+                        visible: carouselDocument.exportBusy
+                        Layout.preferredWidth: 8
+                        Layout.preferredHeight: 8
+                        radius: 4
+                        color: theme.warning
+
+                        SequentialAnimation on opacity {
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 1.0; to: 0.3; duration: 600 }
+                            NumberAnimation { from: 0.3; to: 1.0; duration: 600 }
+                        }
                     }
 
-                    InfoPill {
-                        visible: !root.condensedHeader
-                        label: "Slot"
-                        value: slotLabel()
-                        accent: theme.accentCool400
+                    ActionButton {
+                        compact: true
+                        text: "Save"
+                        onClicked: carouselDocument.saveDocument()
                     }
 
                     ActionButton {
                         text: "Export"
                         tone: "primary"
+                        compact: true
                         enabled: !carouselDocument.exportBusy
                         onClicked: carouselDocument.exportCarousel()
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    radius: theme.radiusControl
-                    color: theme.alpha(theme.ink950, 0.5)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.48)
-                    implicitHeight: 116
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 10
-                        spacing: 10
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            Label {
-                                text: "Canvas"
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-
-                            FilterChip {
-                                text: "4x5"
-                                active: carouselDocument.documentFormat === "4x5"
-                                onClicked: carouselDocument.documentFormat = "4x5"
-                            }
-
-                            FilterChip {
-                                text: "5x4"
-                                active: carouselDocument.documentFormat === "5x4"
-                                onClicked: carouselDocument.documentFormat = "5x4"
-                            }
-
-                            Rectangle {
-                                Layout.preferredWidth: 1
-                                Layout.preferredHeight: 18
-                                color: theme.alpha(theme.lineSoft, 0.36)
-                            }
-
-                            Repeater {
-                                model: root.templateButtons
-
-                                delegate: FilterChip {
-                                    required property var modelData
-                                    text: modelData.label
-                                    active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
-                                    onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
-                                }
-                            }
-
-                            Item {
-                                Layout.fillWidth: true
-                            }
-
-                            ActionButton {
-                                compact: true
-                                text: "Add Text"
-                                onClicked: carouselDocument.addTextItem("New Text")
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            FilterChip {
-                                text: "Snap"
-                                active: root.snappingEnabled
-                                onClicked: root.snappingEnabled = !root.snappingEnabled
-                            }
-
-                            FilterChip {
-                                text: "Guides"
-                                active: root.guidesEnabled
-                                onClicked: root.guidesEnabled = !root.guidesEnabled
-                            }
-
-                            FilterChip {
-                                text: "Thirds"
-                                active: root.thirdsGuidesEnabled
-                                onClicked: root.thirdsGuidesEnabled = !root.thirdsGuidesEnabled
-                            }
-
-                            FilterChip {
-                                text: "Safe"
-                                active: root.safeGuidesEnabled
-                                onClicked: root.safeGuidesEnabled = !root.safeGuidesEnabled
-                            }
-
-                            Item {
-                                Layout.preferredWidth: 12
-                            }
-
-                            ActionButton {
-                                text: "-"
-                                compact: true
-                                onClicked: root.zoomOut()
-                            }
-
-                            InspectorSlider {
-                                Layout.fillWidth: true
-                                label: "Zoom"
-                                valueText: Math.round(root.composerZoom * 100) + "%"
-                                from: 0.5
-                                to: 3.0
-                                stepSize: 0.05
-                                value: root.composerZoom
-                                accent: theme.accentCool400
-                                onValueDragged: function(value) {
-                                    root.composerZoom = root.clampZoom(value)
-                                }
-                            }
-
-                            ActionButton {
-                                text: "+"
-                                compact: true
-                                onClicked: root.zoomIn()
-                            }
-
-                            ActionButton {
-                                text: "Fit"
-                                compact: true
-                                onClicked: root.resetZoomToFit()
-                            }
-                        }
                     }
                 }
 
@@ -1207,12 +1503,12 @@ Rectangle {
                                         anchors.fill: parent
                                         source: modelData.previewSource
                                         fillMode: Image.PreserveAspectCrop
-                                        cache: false
-                                        asynchronous: false
+                                        cache: true
+                                        asynchronous: true
                                         smooth: true
                                         mipmap: true
-                                        sourceSize.width: Math.max(1, Math.round(width))
-                                        sourceSize.height: Math.max(1, Math.round(height))
+                                        sourceSize.width: Math.max(1, root.slidePixelWidth())
+                                        sourceSize.height: Math.max(1, carouselDocument.documentPixelHeight)
                                     }
 
                                     Rectangle {
@@ -1350,6 +1646,7 @@ Rectangle {
 
                                                 onReleased: {
                                                     slotRegion.dragArmed = false
+                                                    carouselDocument.commitMediaTransformState()
                                                     root.clearSnapGuides()
                                                 }
 
@@ -1489,15 +1786,6 @@ Rectangle {
                                         }
                                     }
 
-                                    Label {
-                                        anchors.left: parent.left
-                                        anchors.top: parent.top
-                                        anchors.margins: 12
-                                        text: modelData.selected ? "Current • Canvas " + (index + 1) : "Canvas " + (index + 1)
-                                        color: modelData.selected ? theme.textStrong : "#7d6858"
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 10
-                                    }
                                 }
                             }
 
@@ -1541,6 +1829,90 @@ Rectangle {
                             }
 
                             Repeater {
+                                model: root.customGuides
+
+                                delegate: Item {
+                                    id: customGuideItem
+                                    required property var modelData
+                                    required property int index
+                                    property bool isDragging: false
+                                    property real dragStartPos: 0
+                                    property real dragStartMouse: 0
+
+                                    x: modelData.orientation === "vertical" ? Number(modelData.position || 0) * root.stripScale - 3 : 0
+                                    y: modelData.orientation === "horizontal" ? Number(modelData.position || 0) * root.stripScale - 3 : 0
+                                    width: modelData.orientation === "vertical" ? 7 : stripSurface.width
+                                    height: modelData.orientation === "horizontal" ? 7 : stripSurface.height
+                                    z: 5
+
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: modelData.orientation === "vertical" ? 1 : parent.width
+                                        height: modelData.orientation === "horizontal" ? 1 : parent.height
+                                        color: theme.alpha(root.guideColor, root.guideOpacity)
+                                    }
+
+                                    Rectangle {
+                                        x: modelData.orientation === "vertical" ? -4 : 8
+                                        y: modelData.orientation === "vertical" ? 8 : -4
+                                        width: guideHandleLabel.implicitWidth + 10
+                                        height: guideHandleLabel.implicitHeight + 6
+                                        radius: 6
+                                        color: theme.alpha(theme.ink950, 0.82)
+                                        border.width: 1
+                                        border.color: theme.alpha(root.guideColor, 0.72)
+                                        visible: customGuideMouse.containsMouse || customGuideItem.isDragging
+
+                                        Label {
+                                            id: guideHandleLabel
+                                            anchors.centerIn: parent
+                                            text: Math.round(Number(modelData.position || 0)) + " px"
+                                            color: theme.textStrong
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: customGuideMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        preventStealing: true
+                                        cursorShape: modelData.orientation === "vertical" ? Qt.SplitHCursor : Qt.SplitVCursor
+
+                                        onPressed: function(mouse) {
+                                            customGuideItem.isDragging = true
+                                            customGuideItem.dragStartPos = Number(modelData.position || 0)
+                                            if (modelData.orientation === "vertical") {
+                                                const p = customGuideItem.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                customGuideItem.dragStartMouse = p.x
+                                            } else {
+                                                const p = customGuideItem.mapToItem(stripSurface, mouse.x, mouse.y)
+                                                customGuideItem.dragStartMouse = p.y
+                                            }
+                                        }
+
+                                        onPositionChanged: function(mouse) {
+                                            if (!pressed || !customGuideItem.isDragging)
+                                                return
+                                            const p = customGuideItem.mapToItem(stripSurface, mouse.x, mouse.y)
+                                            const coord = modelData.orientation === "vertical" ? p.x : p.y
+                                            const delta = (coord - customGuideItem.dragStartMouse) / root.stripScale
+                                            root.moveCustomGuide(modelData.guideId, customGuideItem.dragStartPos + delta)
+                                        }
+
+                                        onReleased: {
+                                            customGuideItem.isDragging = false
+                                        }
+
+                                        onDoubleClicked: {
+                                            root.removeCustomGuide(modelData.guideId)
+                                        }
+                                    }
+                                }
+                            }
+
+                            Repeater {
                                 model: carouselDocument.canvasItems
 
                                 delegate: Item {
@@ -1560,21 +1932,44 @@ Rectangle {
                                     property real rotateCenterX: 0
                                     property real rotateCenterY: 0
                                     property bool dragArmed: false
+                                    property var cachedSnapGuides: []
                                     property bool selected: !!modelData.selected
                                     property bool primarySelected: !!modelData.primarySelected
+                                    property bool interacting: false
+                                    property real localWidth: 0
+                                    property real localHeight: 0
+                                    property real localRotation: Number(modelData.rotation || 0)
+                                    property real dragOriginCX: 0
+                                    property real dragOriginCY: 0
+                                    property real stableSourceW: Number(modelData.width || 0)
+                                    property real stableSourceH: Number(modelData.height || 0)
 
-                                    x: Number(modelData.x || 0) * root.stripScale
-                                    y: Number(modelData.y || 0) * root.stripScale
-                                    width: Math.max(10, Number(modelData.width || 0) * root.stripScale)
-                                    height: Math.max(10, Number(modelData.height || 0) * root.stripScale)
+                                    x: (Number(modelData.x || 0) * root.stripScale) +
+                                       (layerItem.selected && !Boolean(modelData.locked) && root.anyItemDragging
+                                        ? root.globalDragOffsetX : 0)
+                                    y: (Number(modelData.y || 0) * root.stripScale) +
+                                       (layerItem.selected && !Boolean(modelData.locked) && root.anyItemDragging
+                                        ? root.globalDragOffsetY : 0)
+                                    width: Math.max(10, (layerItem.localWidth > 0
+                                        ? layerItem.localWidth : Number(modelData.width || 0)) * root.stripScale)
+                                    height: Math.max(10, (layerItem.localHeight > 0
+                                        ? layerItem.localHeight : Number(modelData.height || 0)) * root.stripScale)
                                     z: layerItem.index + 10
                                     visible: !Boolean(modelData.hidden)
                                     opacity: Boolean(modelData.locked) ? 0.82 : 1.0
 
+                                    onModelDataChanged: {
+                                        if (!layerItem.interacting) {
+                                            layerItem.stableSourceW = Number(modelData.width || 0)
+                                            layerItem.stableSourceH = Number(modelData.height || 0)
+                                            layerItem.localRotation = Number(modelData.rotation || 0)
+                                        }
+                                    }
+
                                     transform: Rotation {
                                         origin.x: layerBody.width / 2
                                         origin.y: layerBody.height / 2
-                                        angle: Number(modelData.rotation || 0)
+                                        angle: layerItem.interacting ? layerItem.localRotation : Number(modelData.rotation || 0)
                                     }
 
                                     Item {
@@ -1594,12 +1989,12 @@ Rectangle {
                                                 visible: modelData.type === "image"
                                                 source: modelData.sourceUrl
                                                 fillMode: modelData.fitMode === "contain" ? Image.PreserveAspectFit : Image.PreserveAspectCrop
-                                                cache: false
-                                                asynchronous: false
+                                                cache: true
+                                                asynchronous: true
                                                 smooth: true
                                                 mipmap: true
-                                                sourceSize.width: Math.max(1, Math.round(parent.width))
-                                                sourceSize.height: Math.max(1, Math.round(parent.height))
+                                                sourceSize.width: Math.max(1, Math.round(layerItem.stableSourceW))
+                                                sourceSize.height: Math.max(1, Math.round(layerItem.stableSourceH))
                                             }
 
                                             Rectangle {
@@ -1688,9 +2083,16 @@ Rectangle {
                                                 const p = layerBody.mapToItem(stripSurface, mouse.x, mouse.y)
                                                 layerItem.dragLastX = p.x
                                                 layerItem.dragLastY = p.y
-                                                layerItem.dragCenterX = Number(modelData.centerX || 0)
-                                                layerItem.dragCenterY = Number(modelData.centerY || 0)
+                                                layerItem.dragOriginCX = Number(modelData.centerX || 0)
+                                                layerItem.dragCenterX = layerItem.dragOriginCX
+                                                layerItem.dragOriginCY = Number(modelData.centerY || 0)
+                                                layerItem.dragCenterY = layerItem.dragOriginCY
+                                                layerItem.cachedSnapGuides = root.guideCandidatesForSlide(root.slideIndexForDocumentX(layerItem.dragCenterX))
+                                                layerItem.interacting = true
                                                 layerItem.dragArmed = true
+                                                root.anyItemDragging = true
+                                                root.globalDragOffsetX = 0
+                                                root.globalDragOffsetY = 0
                                             }
 
                                             onPositionChanged: function(mouse) {
@@ -1699,20 +2101,35 @@ Rectangle {
                                                 const p = layerBody.mapToItem(stripSurface, mouse.x, mouse.y)
                                                 const deltaX = (p.x - layerItem.dragLastX) / root.stripScale
                                                 const deltaY = (p.y - layerItem.dragLastY) / root.stripScale
-                                                const snapped = root.snapDragPosition(
-                                                            modelData,
-                                                            layerItem.dragCenterX + deltaX,
-                                                            layerItem.dragCenterY + deltaY)
-                                                carouselDocument.setSelectedItemCenter(snapped.centerX, snapped.centerY)
-                                                root.setSnapGuides(snapped.guides)
-                                                layerItem.dragCenterX = snapped.centerX
-                                                layerItem.dragCenterY = snapped.centerY
+                                                const newCX = layerItem.dragCenterX + deltaX
+                                                const newCY = layerItem.dragCenterY + deltaY
+                                                let snappedCX = newCX
+                                                let snappedCY = newCY
+                                                if (root.snappingEnabled) {
+                                                    const halfW = Number(modelData.width || 0) / 2
+                                                    const halfH = Number(modelData.height || 0) / 2
+                                                    const xSnap = root.snapCenterAxis(newCX, halfW, "vertical", layerItem.cachedSnapGuides)
+                                                    const ySnap = root.snapCenterAxis(newCY, halfH, "horizontal", layerItem.cachedSnapGuides)
+                                                    root.setSnapGuides([xSnap.guide, ySnap.guide])
+                                                    snappedCX = xSnap.value
+                                                    snappedCY = ySnap.value
+                                                }
+                                                root.globalDragOffsetX = (snappedCX - layerItem.dragOriginCX) * root.stripScale
+                                                root.globalDragOffsetY = (snappedCY - layerItem.dragOriginCY) * root.stripScale
+                                                carouselDocument.setSelectedItemCenterSilent(snappedCX, snappedCY)
+                                                layerItem.dragCenterX = snappedCX
+                                                layerItem.dragCenterY = snappedCY
                                                 layerItem.dragLastX = p.x
                                                 layerItem.dragLastY = p.y
                                             }
 
                                             onReleased: {
+                                                root.anyItemDragging = false
+                                                root.globalDragOffsetX = 0
+                                                root.globalDragOffsetY = 0
+                                                layerItem.interacting = false
                                                 layerItem.dragArmed = false
+                                                carouselDocument.commitTransformState()
                                                 root.clearSnapGuides()
                                             }
                                         }
@@ -1740,6 +2157,7 @@ Rectangle {
                                                     const center = layerBody.mapToItem(stripSurface, layerBody.width / 2, layerBody.height / 2)
                                                     layerItem.rotateCenterX = center.x
                                                     layerItem.rotateCenterY = center.y
+                                                    layerItem.interacting = true
                                                 }
 
                                                 onPositionChanged: function(mouse) {
@@ -1747,10 +2165,15 @@ Rectangle {
                                                         return
                                                     const p = rotateHandle.mapToItem(stripSurface, mouse.x, mouse.y)
                                                     const angle = Math.atan2(p.y - layerItem.rotateCenterY, p.x - layerItem.rotateCenterX) * 180 / Math.PI + 90
-                                                    carouselDocument.setSelectedItemRotation(angle)
+                                                    layerItem.localRotation = angle
+                                                    carouselDocument.setSelectedItemRotationSilent(angle)
                                                 }
 
-                                                onReleased: root.clearSnapGuides()
+                                                onReleased: {
+                                                    layerItem.interacting = false
+                                                    carouselDocument.commitTransformState()
+                                                    root.clearSnapGuides()
+                                                }
                                             }
                                         }
 
@@ -1781,27 +2204,114 @@ Rectangle {
                                                     const p = resizeHandle.mapToItem(stripSurface, mouse.x, mouse.y)
                                                     layerItem.resizeStartX = p.x
                                                     layerItem.resizeStartY = p.y
+                                                    layerItem.cachedSnapGuides = root.guideCandidatesForSlide(root.slideIndexForDocumentX(layerItem.resizeCenterX))
+                                                    layerItem.interacting = true
                                                 }
 
                                                 onPositionChanged: function(mouse) {
                                                     if (!pressed)
                                                         return
                                                     const p = resizeHandle.mapToItem(stripSurface, mouse.x, mouse.y)
-                                                    const snapped = root.snapResize(
-                                                                modelData,
-                                                                layerItem.resizeCenterX,
-                                                                layerItem.resizeCenterY,
-                                                                layerItem.resizeStartWidth + ((p.x - layerItem.resizeStartX) / root.stripScale),
-                                                                layerItem.resizeStartHeight + ((p.y - layerItem.resizeStartY) / root.stripScale))
-                                                    carouselDocument.setSelectedItemSize(snapped.width, snapped.height)
-                                                    root.setSnapGuides(snapped.guides)
+                                                    const newW = layerItem.resizeStartWidth + ((p.x - layerItem.resizeStartX) / root.stripScale)
+                                                    const newH = layerItem.resizeStartHeight + ((p.y - layerItem.resizeStartY) / root.stripScale)
+                                                    let finalW = Math.max(36, newW)
+                                                    let finalH = Math.max(36, newH)
+                                                    if (root.snappingEnabled) {
+                                                        const wSnap = root.snapSymmetricAxis(layerItem.resizeCenterX, newW / 2, "vertical", layerItem.cachedSnapGuides)
+                                                        const hSnap = root.snapSymmetricAxis(layerItem.resizeCenterY, newH / 2, "horizontal", layerItem.cachedSnapGuides)
+                                                        finalW = Math.max(36, wSnap.halfSpan * 2)
+                                                        finalH = Math.max(36, hSnap.halfSpan * 2)
+                                                        root.setSnapGuides([wSnap.guide, hSnap.guide])
+                                                    }
+                                                    layerItem.localWidth = finalW
+                                                    layerItem.localHeight = finalH
+                                                    carouselDocument.setSelectedItemSizeSilent(finalW, finalH)
                                                 }
 
-                                                onReleased: root.clearSnapGuides()
+                                                onReleased: {
+                                                    layerItem.localWidth = 0
+                                                    layerItem.localHeight = 0
+                                                    layerItem.interacting = false
+                                                    carouselDocument.commitTransformState()
+                                                    root.clearSnapGuides()
+                                                }
                                             }
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        Repeater {
+                            model: carouselDocument.slideCount
+
+                            delegate: Rectangle {
+                                required property int index
+                                x: stripSurface.x + index * root.slideWidthOnStrip() + root.slideWidthOnStrip() / 2 - width / 2
+                                y: stripSurface.y - height - 4
+                                width: canvasNumLabel.implicitWidth + 12
+                                height: canvasNumLabel.implicitHeight + 4
+                                radius: 4
+                                color: index === carouselDocument.currentIndex
+                                       ? theme.alpha(theme.accentWarm500, 0.18)
+                                       : "transparent"
+
+                                Label {
+                                    id: canvasNumLabel
+                                    anchors.centerIn: parent
+                                    text: (index + 1).toString()
+                                    color: index === carouselDocument.currentIndex ? theme.textStrong : theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    font.weight: index === carouselDocument.currentIndex ? Font.DemiBold : Font.Normal
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.margins: 10
+                    width: zoomRow.implicitWidth + 16
+                    height: 28
+                    radius: 14
+                    color: theme.alpha(theme.ink950, 0.72)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.28)
+                    z: 10
+
+                    RowLayout {
+                        id: zoomRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Label {
+                            text: Math.round(root.composerZoom * 100) + "%"
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        Rectangle {
+                            Layout.preferredWidth: 1
+                            Layout.preferredHeight: 12
+                            color: theme.alpha(theme.lineSoft, 0.3)
+                        }
+
+                        Label {
+                            text: "Fit"
+                            color: zoomFitHover.containsMouse ? theme.textStrong : theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+
+                            MouseArea {
+                                id: zoomFitHover
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.resetZoomToFit()
                             }
                         }
                     }
@@ -1810,13 +2320,13 @@ Rectangle {
         }
 
         Rectangle {
-            Layout.preferredWidth: root.compactWorkspace ? 248 : 272
+            Layout.preferredWidth: root.compactWorkspace ? 248 : 268
             Layout.minimumWidth: 228
             Layout.fillHeight: true
-            radius: theme.radius12
-            color: theme.alpha(theme.ink900, 0.94)
+            radius: theme.radius8
+            color: theme.alpha(theme.ink900, 0.92)
             border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.58)
+            border.color: theme.alpha(theme.lineSoft, 0.36)
 
             ScrollView {
                 anchors.fill: parent
@@ -1827,99 +2337,123 @@ Rectangle {
                     x: theme.panelPadding
                     y: theme.panelPadding
                     width: Math.max(parent.width - theme.panelPadding * 2, 0)
-                    spacing: theme.space10
+                    spacing: 8
 
                     InspectorSection {
                         width: parent.width
                         visible: !selection.hasSelection
-                        title: "Canvas"
-                        subtitle: currentCanvasLabel() + "  •  " + carouselDocument.slideCount + " boards"
-                        accent: theme.accentWarm400
+                        title: "Boards"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Add Board"
-                                tone: "primary"
+                                compact: true
+                                text: "+"
                                 enabled: carouselDocument.canAddSlide
                                 onClicked: carouselDocument.addSlide()
                             }
 
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                iconName: "chevron-left"
+                                showText: false
+                                enabled: carouselDocument.slideCount > 1
+                                onClicked: carouselDocument.moveCurrentBackward()
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                horizontalAlignment: Text.AlignHCenter
+                                text: (carouselDocument.currentIndex + 1) + " / " + carouselDocument.slideCount
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                iconName: "chevron-right"
+                                showText: false
+                                enabled: carouselDocument.slideCount > 1
+                                onClicked: carouselDocument.moveCurrentForward()
+                            }
+
                             ConfirmActionButton {
                                 Layout.fillWidth: true
-                                text: "Remove"
+                                compact: true
+                                text: "x"
                                 enabled: carouselDocument.slideCount > 1
-                                helperText: "Remove the current board"
+                                helperText: "Remove board"
                                 onConfirmed: carouselDocument.removeCurrentSlide()
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
 
-                            ActionButton {
+                            FilterChip {
                                 Layout.fillWidth: true
-                                text: "Move Left"
-                                enabled: carouselDocument.slideCount > 1
-                                onClicked: carouselDocument.moveCurrentBackward()
+                                text: "4:5"
+                                active: carouselDocument.documentFormat === "4x5"
+                                onClicked: carouselDocument.documentFormat = "4x5"
                             }
 
-                            ActionButton {
+                            FilterChip {
                                 Layout.fillWidth: true
-                                text: "Move Right"
-                                enabled: carouselDocument.slideCount > 1
-                                onClicked: carouselDocument.moveCurrentForward()
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: theme.radiusControl
-                            color: theme.alpha(theme.ink850, 0.88)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.7)
-                            implicitHeight: mediaSummary.implicitHeight + 20
-
-                            Label {
-                                id: mediaSummary
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                text: selection.hasMedia
-                                      ? selection.slotDisplayLabel + "\n" + slotLabel() + " slot"
-                                      : "Choose media for the active slot."
-                                color: theme.textMain
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                wrapMode: Text.WordWrap
-                            }
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: "Choose Media"
-                            tone: "primary"
-                            onClicked: openMediaPicker("slot")
-                        }
-
-                        ActionButton {
-                            Layout.fillWidth: true
-                            text: selection.isLinkedGroup ? "Clear Group" : "Clear Slot"
-                            enabled: selection.isLinkedGroup || selection.hasMedia
-                            onClicked: {
-                                if (selection.isLinkedGroup)
-                                    carouselDocument.clearCurrentGroup()
-                                else
-                                    carouselDocument.clearCurrentSlot()
+                                text: "5:4"
+                                active: carouselDocument.documentFormat === "5x4"
+                                onClicked: carouselDocument.documentFormat = "5x4"
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
+
+                            Repeater {
+                                model: root.templateButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.templateKind === modelData.value || selection.groupKind === modelData.value
+                                    onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
+                                }
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: !selection.hasSelection
+                        title: "Media"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
 
                             FilterChip {
                                 Layout.fillWidth: true
@@ -1931,7 +2465,7 @@ Rectangle {
                             FilterChip {
                                 Layout.fillWidth: true
                                 visible: selection.canUseSecondary
-                                text: selection.templateKind === "split-pair" ? "Right" : "Middle"
+                                text: selection.templateKind === "split-pair" ? "Right" : "Mid"
                                 active: selection.activeSlot === "secondary"
                                 onClicked: carouselDocument.setActiveSlot("secondary")
                             }
@@ -1939,7 +2473,7 @@ Rectangle {
                             FilterChip {
                                 Layout.fillWidth: true
                                 visible: selection.canUseTertiary
-                                text: "Bottom"
+                                text: "Btm"
                                 active: selection.activeSlot === "tertiary"
                                 onClicked: carouselDocument.setActiveSlot("tertiary")
                             }
@@ -1947,7 +2481,33 @@ Rectangle {
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Choose"
+                                tone: "primary"
+                                onClicked: openMediaPicker("slot")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Clear"
+                                enabled: selection.isLinkedGroup || selection.hasMedia
+                                onClicked: {
+                                    if (selection.isLinkedGroup)
+                                        carouselDocument.clearCurrentGroup()
+                                    else
+                                        carouselDocument.clearCurrentSlot()
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
 
                             FilterChip {
                                 Layout.fillWidth: true
@@ -1964,17 +2524,6 @@ Rectangle {
                             }
                         }
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: selection.hasMedia
-                                  ? "Drag inside the active slot to reposition the image. Drag the corner handle on the canvas to scale it."
-                                  : "Click a slot on the canvas to target it, then choose media."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
-
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Scale"
@@ -1987,6 +2536,7 @@ Rectangle {
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentScale(value)
                             }
+                            onResetRequested: carouselDocument.setCurrentScale(1.0)
                         }
 
                         InspectorSlider {
@@ -2001,6 +2551,7 @@ Rectangle {
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentOffsetX(value)
                             }
+                            onResetRequested: carouselDocument.setCurrentOffsetX(0)
                         }
 
                         InspectorSlider {
@@ -2011,33 +2562,125 @@ Rectangle {
                             to: 1.0
                             stepSize: 0.01
                             value: selection.offsetY
-                            accent: theme.success
+                            accent: theme.accentCool400
                             onValueDragged: function(value) {
                                 carouselDocument.setCurrentOffsetY(value)
                             }
+                            onResetRequested: carouselDocument.setCurrentOffsetY(0)
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: !selection.hasSelection
+                        title: "Guides"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: false
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Thirds"
+                                active: root.thirdsGuidesEnabled
+                                onClicked: root.thirdsGuidesEnabled = !root.thirdsGuidesEnabled
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Safe"
+                                active: root.safeGuidesEnabled
+                                onClicked: root.safeGuidesEnabled = !root.safeGuidesEnabled
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Opacity"
+                            valueText: Math.round(root.guideOpacity * 100) + "%"
+                            from: 0.1
+                            to: 1.0
+                            stepSize: 0.05
+                            value: root.guideOpacity
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                root.guideOpacity = value
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "V Guide"
+                                onClicked: root.addCustomGuide("vertical")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "H Guide"
+                                onClicked: root.addCustomGuide("horizontal")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Clear"
+                                enabled: root.customGuides.length > 0
+                                onClicked: root.clearAllCustomGuides()
+                            }
+                        }
+
+                        Label {
+                            visible: root.customGuides.length > 0
+                            Layout.fillWidth: true
+                            text: root.customGuides.length + " custom guide" + (root.customGuides.length !== 1 ? "s" : "") + "  •  double-click to remove"
+                            color: theme.textFaint
+                            font.family: theme.fontUi
+                            font.pixelSize: 9
+                            wrapMode: Text.WordWrap
                         }
                     }
 
                     InspectorSection {
                         width: parent.width
                         title: "Layers"
-                        subtitle: currentCanvasLabel() + "  •  " + currentSlideLayers.length + " layers"
-                        accent: theme.accentCool400
+                        subtitle: currentSlideLayers.length + " on board " + (carouselDocument.currentIndex + 1)
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
 
                         Rectangle {
                             Layout.fillWidth: true
                             radius: theme.radiusControl
                             color: theme.alpha(theme.ink850, 0.88)
                             border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.7)
-                            implicitHeight: currentSlideLayers.length === 0 ? 72 : Math.min(260, Math.max(84, currentSlideLayers.length * 62 + 12))
+                            border.color: theme.alpha(theme.lineSoft, 0.5)
+                            implicitHeight: currentSlideLayers.length === 0 ? 48 : Math.min(220, Math.max(72, currentSlideLayers.length * 46 + 10))
 
                             ListView {
                                 visible: currentSlideLayers.length > 0
                                 anchors.fill: parent
-                                anchors.margins: 6
+                                anchors.margins: 5
                                 clip: true
-                                spacing: 6
+                                spacing: 3
                                 model: root.currentSlideLayers
 
                                 delegate: Rectangle {
@@ -2045,87 +2688,56 @@ Rectangle {
                                     required property var modelData
 
                                     width: parent ? parent.width : 200
-                                    height: 56
-                                    radius: 10
+                                    height: 40
+                                    radius: 6
                                     color: Boolean(modelData.selected)
-                                           ? theme.alpha(theme.accentCool400, 0.18)
-                                           : theme.alpha(theme.ink900, Boolean(modelData.hidden) ? 0.46 : 0.72)
-                                    border.width: 1
-                                    border.color: Boolean(modelData.primarySelected)
-                                                  ? theme.accentCool400
-                                                  : Boolean(modelData.selected)
-                                                    ? theme.alpha(theme.accentCool400, 0.7)
-                                                  : theme.alpha(theme.lineSoft, 0.26)
+                                           ? theme.alpha(theme.accentCool400, 0.16)
+                                           : Boolean(modelData.hidden) ? theme.alpha(theme.ink900, 0.4) : "transparent"
+                                    border.width: Boolean(modelData.primarySelected) ? 1 : 0
+                                    border.color: theme.alpha(theme.accentCool400, 0.7)
 
                                     RowLayout {
                                         anchors.fill: parent
-                                        anchors.margins: 8
-                                        spacing: 8
+                                        anchors.leftMargin: 8
+                                        anchors.rightMargin: 6
+                                        spacing: 6
+
+                                        AppIcon {
+                                            Layout.preferredWidth: 12
+                                            Layout.preferredHeight: 12
+                                            name: modelData.type === "text" ? "edit"
+                                                  : modelData.type === "video" ? "source" : "media"
+                                            color: Boolean(modelData.hidden) ? theme.textFaint : theme.textMuted
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: String(modelData.displayLabel || "Layer")
+                                            color: Boolean(modelData.hidden) ? theme.textFaint : theme.textStrong
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            elide: Text.ElideRight
+                                        }
 
                                         Rectangle {
-                                            Layout.preferredWidth: 40
-                                            Layout.preferredHeight: 40
-                                            radius: 8
-                                            color: modelData.type === "text" ? theme.alpha(theme.success, 0.2)
-                                                                             : modelData.type === "video" ? theme.alpha(theme.accentCool400, 0.2)
-                                                                                                           : theme.alpha(theme.warning, 0.18)
+                                            visible: Boolean(modelData.locked)
+                                            Layout.preferredWidth: 14
+                                            Layout.preferredHeight: 14
+                                            radius: 3
+                                            color: theme.alpha(theme.warning, 0.2)
 
-                                            Label {
+                                            AppIcon {
                                                 anchors.centerIn: parent
-                                                text: modelData.type === "text" ? "T" : modelData.type === "video" ? "V" : "P"
-                                                color: theme.textStrong
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 12
-                                                font.weight: Font.Bold
-                                            }
-                                        }
-
-                                        ColumnLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 2
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: String(modelData.displayLabel || "Layer")
-                                                color: theme.textStrong
-                                                font.family: theme.fontUi
-                                                font.pixelSize: 12
-                                                font.weight: Font.Medium
-                                                elide: Text.ElideRight
-                                            }
-
-                                            Label {
-                                                Layout.fillWidth: true
-                                                text: "x " + Math.round(Number(modelData.x || 0)) + "  y " + Math.round(Number(modelData.y || 0))
-                                                color: theme.textMuted
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 10
-                                                elide: Text.ElideRight
-                                            }
-                                        }
-
-                                        ActionButton {
-                                            compact: true
-                                            text: Boolean(modelData.hidden) ? "Show" : "Hide"
-                                            onClicked: {
-                                                root.focusLayerItem(String(modelData.itemId || ""), Boolean(modelData.selected))
-                                                carouselDocument.setSelectedItemHidden(!Boolean(modelData.hidden))
-                                            }
-                                        }
-
-                                        ActionButton {
-                                            compact: true
-                                            text: Boolean(modelData.locked) ? "Unlock" : "Lock"
-                                            onClicked: {
-                                                root.focusLayerItem(String(modelData.itemId || ""), Boolean(modelData.selected))
-                                                carouselDocument.setSelectedItemLocked(!Boolean(modelData.locked))
+                                                width: 8
+                                                height: 8
+                                                name: "link"
+                                                color: theme.warning
                                             }
                                         }
                                     }
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        z: -1
                                         onClicked: function(mouse) {
                                             if (root.hasMultiSelectModifier(mouse.modifiers))
                                                 carouselDocument.toggleItemSelection(String(modelData.itemId || ""))
@@ -2139,48 +2751,39 @@ Rectangle {
                             Label {
                                 anchors.centerIn: parent
                                 visible: currentSlideLayers.length === 0
-                                text: "No layers yet"
-                                color: theme.textMuted
+                                text: "No layers"
+                                color: theme.textFaint
                                 font.family: theme.fontUi
-                                font.pixelSize: 11
+                                font.pixelSize: 10
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Duplicate"
-                                enabled: selection.hasSelection
-                                onClicked: carouselDocument.duplicateSelectedItem()
+                                compact: true
+                                text: "Photo"
+                                tone: "primary"
+                                onClicked: root.openMediaPicker("layer")
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Replace"
-                                enabled: selection.selectedCount === 1 && !selection.isText
-                                onClicked: root.replaceSelectedLayerFromGallery()
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Back"
-                                enabled: selection.hasSelection
-                                onClicked: carouselDocument.sendSelectedBackward()
+                                compact: true
+                                text: "Text"
+                                onClicked: carouselDocument.addTextItem("New Text")
                             }
 
-                            ActionButton {
+                            ConfirmActionButton {
                                 Layout.fillWidth: true
-                                text: "Forward"
+                                compact: true
+                                text: "Del"
                                 enabled: selection.hasSelection
-                                onClicked: carouselDocument.bringSelectedForward()
+                                helperText: "Remove layer"
+                                onConfirmed: carouselDocument.removeSelectedItem()
                             }
                         }
                     }
@@ -2188,144 +2791,193 @@ Rectangle {
                     InspectorSection {
                         width: parent.width
                         visible: selection.hasSelection
-                        title: "Properties"
-                        subtitle: selection.hasMultipleSelection ? selection.selectedCount + " layers selected" : selection.displayLabel
-                        accent: theme.accentCool400
+                        title: "Transform"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
 
-                        Label {
+                        RowLayout {
                             Layout.fillWidth: true
-                            text: "Cmd/Ctrl-click adds or removes layers from the selection. Transform handles stay on the primary selected layer."
-                            color: theme.textMuted
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            wrapMode: Text.WordWrap
-                        }
+                            spacing: 4
 
-                        ConfirmActionButton {
-                            Layout.fillWidth: true
-                            text: "Remove Selected"
-                            enabled: selection.hasSelection
-                            helperText: selection.hasMultipleSelection
-                                        ? "Remove the selected layers"
-                                        : "Remove the selected layer"
-                            onConfirmed: carouselDocument.removeSelectedItem()
+                            Label {
+                                text: "X"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: Math.round(selection.x).toString()
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            Label {
+                                text: "Y"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: Math.round(selection.y).toString()
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            Label {
+                                text: "R"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            Label {
+                                text: Math.round(selection.rotation) + "\u00B0"
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
 
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: selection.hidden ? "Show Layer" : "Hide Layer"
-                                enabled: selection.hasSelection
-                                onClicked: carouselDocument.setSelectedItemHidden(!selection.hidden)
+                            Label {
+                                text: "W"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
                             }
 
-                            ActionButton {
+                            Label {
                                 Layout.fillWidth: true
-                                text: selection.locked ? "Unlock Layer" : "Lock Layer"
-                                enabled: selection.hasSelection
-                                onClicked: carouselDocument.setSelectedItemLocked(!selection.locked)
+                                text: Math.round(selection.width).toString()
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                            }
+
+                            Label {
+                                text: "H"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: Math.round(selection.height).toString()
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 3
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Left"
+                                compact: true
+                                iconName: "chevron-left"
+                                showText: false
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionLeft()
+                                ToolTip.visible: leftHover.containsMouse
+                                ToolTip.text: "Align Left"
+                                ToolTip.delay: 400
+                                MouseArea { id: leftHover; anchors.fill: parent; hoverEnabled: true; onClicked: parent.clicked() }
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Center X"
+                                compact: true
+                                iconName: "split-view"
+                                showText: false
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionHorizontalCenter()
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Right"
+                                compact: true
+                                iconName: "chevron-right"
+                                showText: false
                                 enabled: selection.hasSelection && selection.hasUnlockedSelection
                                 onClicked: carouselDocument.alignSelectionRight()
                             }
-                        }
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Top"
-                                enabled: selection.hasSelection && selection.hasUnlockedSelection
-                                onClicked: carouselDocument.alignSelectionTop()
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 18
+                                color: theme.alpha(theme.lineSoft, 0.24)
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Center Y"
-                                enabled: selection.hasSelection && selection.hasUnlockedSelection
-                                onClicked: carouselDocument.alignSelectionVerticalCenter()
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Bottom"
-                                enabled: selection.hasSelection && selection.hasUnlockedSelection
-                                onClicked: carouselDocument.alignSelectionBottom()
+                                compact: true
+                                text: "Dup"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.duplicateSelectedItem()
                             }
                         }
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 3
+                            visible: selection.hasSelection && selection.hasUnlockedSelection
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Space X"
-                                enabled: selection.editableSelectionCount > 2
-                                onClicked: carouselDocument.distributeSelectionHorizontally()
+                                compact: true
+                                iconName: "move-back"
+                                showText: false
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.sendSelectedBackward()
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Space Y"
-                                enabled: selection.editableSelectionCount > 2
-                                onClicked: carouselDocument.distributeSelectionVertically()
+                                compact: true
+                                iconName: "move-forward"
+                                showText: false
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.bringSelectedForward()
                             }
-                        }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: theme.radiusControl
-                            color: theme.alpha(theme.ink850, 0.88)
-                            border.width: 1
-                            border.color: theme.alpha(theme.lineSoft, 0.7)
-                            implicitHeight: selectionSummary.implicitHeight + 20
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 18
+                                color: theme.alpha(theme.lineSoft, 0.24)
+                            }
 
-                            Label {
-                                id: selectionSummary
-                                anchors.fill: parent
-                                anchors.margins: 10
-                                text: selection.hasSelection
-                                      ? (selection.selectedCount > 1
-                                         ? selection.selectedCount + " layers selected"
-                                           + "\nprimary x " + Math.round(selection.x) + "  y " + Math.round(selection.y)
-                                           + "\nprimary " + Math.round(selection.width) + " x " + Math.round(selection.height)
-                                         : "x " + Math.round(selection.x) + "  y " + Math.round(selection.y)
-                                           + "\n" + Math.round(selection.width) + " x " + Math.round(selection.height)
-                                           + "\nrotation " + Math.round(selection.rotation) + "°")
-                                      : "Select a layer to inspect its size and position."
-                                color: theme.textMain
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                                wrapMode: Text.WordWrap
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: selection.hidden ? "Show" : "Hide"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.setSelectedItemHidden(!selection.hidden)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: selection.locked ? "Unlock" : "Lock"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.setSelectedItemLocked(!selection.locked)
                             }
                         }
                     }
@@ -2334,12 +2986,18 @@ Rectangle {
                         width: parent.width
                         visible: selection.isImage && !selection.hasMultipleSelection
                         title: "Photo"
-                        subtitle: "How the image fits inside its frame."
-                        accent: theme.accentWarm400
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space8
+                            spacing: 4
 
                             FilterChip {
                                 Layout.fillWidth: true
@@ -2361,8 +3019,14 @@ Rectangle {
                         width: parent.width
                         visible: selection.isText && !selection.hasMultipleSelection
                         title: "Text"
-                        subtitle: "Edit content, color, and size."
-                        accent: theme.success
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
 
                         TextArea {
                             id: textEditor
@@ -2375,7 +3039,7 @@ Rectangle {
                                 radius: theme.radiusControl
                                 color: theme.alpha(theme.ink850, 0.9)
                                 border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.72)
+                                border.color: theme.alpha(theme.lineSoft, 0.5)
                             }
                             onActiveFocusChanged: {
                                 if (!activeFocus && selection.isText)
@@ -2394,23 +3058,49 @@ Rectangle {
                             when: selection.isText && !textEditor.activeFocus
                         }
 
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.textColor === modelData ? 2 : 1
+                                    border.color: selection.textColor === modelData
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedTextColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
                         TextField {
                             id: textColorField
                             Layout.fillWidth: true
+                            Layout.preferredHeight: 26
                             color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
                             placeholderText: "#1e1a17"
                             background: Rectangle {
-                                radius: theme.radiusControl
+                                radius: 4
                                 color: theme.alpha(theme.ink850, 0.9)
                                 border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.72)
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
                             }
                             onEditingFinished: {
                                 if (selection.isText)
-                                    carouselDocument.setSelectedTextColor(text)
-                            }
-                            onTextChanged: {
-                                if (activeFocus && selection.isText)
                                     carouselDocument.setSelectedTextColor(text)
                             }
                         }
@@ -2424,7 +3114,7 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
-                            label: "Text Size"
+                            label: "Size"
                             valueText: Math.round(selection.textPointSize) + " pt"
                             from: 16
                             to: 240
@@ -2433,6 +3123,24 @@ Rectangle {
                             accent: theme.success
                             onValueDragged: function(value) {
                                 carouselDocument.setSelectedTextPointSize(value)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textSizePresets
+
+                                delegate: ActionButton {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    compact: true
+                                    active: Math.abs(selection.textPointSize - modelData.value) < 2
+                                    onClicked: carouselDocument.setSelectedTextPointSize(modelData.value)
+                                }
                             }
                         }
                     }

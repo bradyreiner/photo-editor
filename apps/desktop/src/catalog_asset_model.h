@@ -75,12 +75,21 @@ struct ThumbnailTaskResult final {
   QString thumbnail_source;
 };
 
+struct DeleteAssetsTaskResult final {
+  QStringList deleted_asset_ids;
+  QString error_message;
+  int total_count = 0;
+};
+
 class CatalogAssetModel final : public QAbstractListModel {
   Q_OBJECT
   Q_PROPERTY(QString status READ status NOTIFY statusChanged)
   Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY errorMessageChanged)
   Q_PROPERTY(bool loading READ loading NOTIFY loadingChanged)
   Q_PROPERTY(bool importing READ importing NOTIFY importingChanged)
+  Q_PROPERTY(bool deleting READ deleting NOTIFY deletingChanged)
+  Q_PROPERTY(int deleteProgress READ deleteProgress NOTIFY deleteProgressChanged)
+  Q_PROPERTY(int deleteTargetCount READ deleteTargetCount NOTIFY deleteProgressChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
   Q_PROPERTY(int assetCount READ assetCount NOTIFY assetCountChanged)
   Q_PROPERTY(int totalAssetCount READ totalAssetCount NOTIFY totalAssetCountChanged)
@@ -180,6 +189,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString errorMessage() const;
   [[nodiscard]] bool loading() const;
   [[nodiscard]] bool importing() const;
+  [[nodiscard]] bool deleting() const;
+  [[nodiscard]] int deleteProgress() const;
+  [[nodiscard]] int deleteTargetCount() const;
   [[nodiscard]] bool busy() const;
   [[nodiscard]] int assetCount() const;
   [[nodiscard]] int totalAssetCount() const;
@@ -243,6 +255,7 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QString& source_root_path,
       const QStringList& file_paths,
       const QString& project_name);
+  Q_INVOKABLE void selectAll();
   Q_INVOKABLE void selectIndex(int index);
   Q_INVOKABLE void selectRelative(int offset);
   Q_INVOKABLE QString pickFolder(const QString& title = QStringLiteral("Browse Media Folder")) const;
@@ -289,6 +302,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   void errorMessageChanged();
   void loadingChanged();
   void importingChanged();
+  void deletingChanged();
+  void deleteProgressChanged();
   void busyChanged();
   void assetCountChanged();
   void totalAssetCountChanged();
@@ -307,6 +322,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void handleSnapshotFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleImportFinished(int exit_code, QProcess::ExitStatus exit_status);
   void handleThumbnailFinished();
+  void handleDeleteFinished();
   void pollActiveImportJob();
 
  private:
@@ -314,6 +330,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   void setErrorMessage(const QString& message);
   void setLoading(bool loading);
   void setImporting(bool importing);
+  void setDeleting(bool deleting);
+  void setDeleteProgress(int delete_progress);
+  void setDeleteTargetCount(int delete_target_count);
   void beginImportJob(
       const QString& folder_path,
       const QString& project_name,
@@ -322,6 +341,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void finishImportJob(bool success, const QString& message);
   void setDriveCount(int drive_count);
   void updateAssets(const QVector<CatalogAssetItem>& items);
+  void removeDeletedAssets(const QStringList& asset_ids);
   void queueThumbnailRefreshes();
   void startNextThumbnailTask();
   void applyThumbnailResult(const ThumbnailTaskResult& result);
@@ -388,10 +408,14 @@ class CatalogAssetModel final : public QAbstractListModel {
   QProcess snapshot_process_;
   QProcess import_process_;
   QFutureWatcher<ThumbnailTaskResult> thumbnail_watcher_;
+  QFutureWatcher<DeleteAssetsTaskResult> delete_watcher_;
   QString status_ = QStringLiteral("Idle");
   QString error_message_;
   bool loading_ = false;
   bool importing_ = false;
+  bool deleting_ = false;
+  int delete_progress_ = 0;
+  int delete_target_count_ = 0;
   int drive_count_ = 0;
   int selected_index_ = -1;
   QSet<QString> selected_asset_ids_;
@@ -418,6 +442,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   QStringList pending_import_file_paths_;
   QString pending_import_project_name_;
   PersistentJobRecord active_import_job_;
+  QString import_job_observation_started_at_;
+  QSet<QString> observed_finished_import_job_ids_;
 };
 
 }  // namespace photo_editor::desktop

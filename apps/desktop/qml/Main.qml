@@ -43,6 +43,102 @@ ApplicationWindow {
         "Cut video on a dedicated editing timeline.",
         "Prepare deliveries and export jobs."
     ]
+    readonly property var latestImportJob: {
+        if (!jobQueue)
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestJobForKind("catalog_import")
+    }
+    readonly property var latestTimelineRenderJob: {
+        if (!jobQueue)
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestJobForKind("timeline_render")
+    }
+    readonly property var latestAssetExportJob: {
+        if (!jobQueue)
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestJobForKind("asset_export")
+    }
+    readonly property bool anyAppActivity: catalogAssets.loading
+                                           || catalogAssets.importing
+                                           || catalogAssets.deleting
+                                           || editorPreview.processing
+                                           || (jobQueue && (jobQueue.activeJobCountForKind("catalog_import") > 0
+                                                            || jobQueue.activeJobCountForKind("timeline_render") > 0
+                                                            || jobQueue.activeJobCountForKind("asset_export") > 0))
+    readonly property color primaryActivityAccent: {
+        if (catalogAssets.deleting)
+            return theme.error
+        if (catalogAssets.loading || catalogAssets.importing)
+            return theme.accentCool400
+        if (editorPreview.processing)
+            return theme.accentWarm400
+        if (jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0)
+            return theme.warning
+        if (jobQueue && jobQueue.activeJobCountForKind("asset_export") > 0)
+            return theme.accentCool300
+        return theme.accentWarm400
+    }
+    readonly property string primaryActivityTitle: {
+        if (catalogAssets.deleting) {
+            const count = Math.max(1, Number(catalogAssets.deleteTargetCount || 0))
+            return "Removing " + count + (count === 1 ? " asset" : " assets")
+        }
+        if (catalogAssets.loading)
+            return "Refreshing library"
+        if (catalogAssets.importing)
+            return latestImportJob.displayLabel && latestImportJob.displayLabel.length > 0
+                    ? "Importing " + latestImportJob.displayLabel
+                    : "Importing media"
+        if (editorPreview.processing)
+            return "Rendering preview"
+        if (jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0)
+            return latestTimelineRenderJob.displayLabel && latestTimelineRenderJob.displayLabel.length > 0
+                    ? "Rendering " + latestTimelineRenderJob.displayLabel
+                    : "Rendering timeline"
+        if (jobQueue && jobQueue.activeJobCountForKind("asset_export") > 0)
+            return latestAssetExportJob.displayLabel && latestAssetExportJob.displayLabel.length > 0
+                    ? "Exporting " + latestAssetExportJob.displayLabel
+                    : "Exporting media"
+        return ""
+    }
+    readonly property string primaryActivityDetail: {
+        if (catalogAssets.deleting)
+            return catalogAssets.status
+        if (catalogAssets.loading)
+            return catalogAssets.status
+        if (catalogAssets.importing)
+            return latestImportJob.status && latestImportJob.status.length > 0 ? latestImportJob.status : catalogAssets.status
+        if (editorPreview.processing)
+            return editorPreview.status
+        if (jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0)
+            return latestTimelineRenderJob.status && latestTimelineRenderJob.status.length > 0
+                    ? latestTimelineRenderJob.status
+                    : timelineDocument.status
+        if (jobQueue && jobQueue.activeJobCountForKind("asset_export") > 0)
+            return latestAssetExportJob.status && latestAssetExportJob.status.length > 0
+                    ? latestAssetExportJob.status
+                    : jobQueue.statusForKind("asset_export", exportJobs.status)
+        return ""
+    }
+    readonly property real primaryActivityProgress: {
+        if (catalogAssets.deleting && catalogAssets.deleteTargetCount > 0)
+            return Math.max(0, Math.min(1, catalogAssets.deleteProgress / catalogAssets.deleteTargetCount))
+        if (catalogAssets.loading || editorPreview.processing)
+            return -1
+        if (catalogAssets.importing)
+            return normalizedJobProgress(latestImportJob)
+        if (jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0)
+            return normalizedJobProgress(latestTimelineRenderJob)
+        if (jobQueue && jobQueue.activeJobCountForKind("asset_export") > 0)
+            return normalizedJobProgress(latestAssetExportJob)
+        return -1
+    }
 
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
@@ -65,6 +161,16 @@ ApplicationWindow {
         if (kind === "export")
             return theme.accentCool300
         return theme.textMuted
+    }
+
+    function normalizedJobProgress(job) {
+        const status = job && job.status ? String(job.status) : ""
+        const raw = job && job.progress !== undefined ? Number(job.progress) : 0
+        if (status === "Queued")
+            return 0.08
+        if (raw > 0)
+            return Math.max(0.05, Math.min(1, raw / 100.0))
+        return -1
     }
 
     function workspaceBadgeCount(index) {
@@ -108,12 +214,81 @@ ApplicationWindow {
         return workspaceLoader.item ? workspaceLoader.item : null
     }
 
+    function focusItemSupports(methodName) {
+        const focusItem = activeFocusItem
+        return focusItem && typeof focusItem[methodName] === "function"
+    }
+
+    function activeLibraryWorkspace() {
+        return currentWorkspace === libraryWorkspaceIndex ? activeWorkspaceItem() : null
+    }
+
     function activeTimelineView() {
         return currentWorkspace === timelineWorkspaceIndex ? activeWorkspaceItem() : null
     }
 
     function activeCarouselView() {
         return currentWorkspace === carouselWorkspaceIndex ? activeWorkspaceItem() : null
+    }
+
+    function canSelectAllCurrentWorkspace() {
+        if (focusItemSupports("selectAll"))
+            return true
+
+        const libraryWorkspace = activeLibraryWorkspace()
+        if (libraryWorkspace && libraryWorkspace.canSelectAll)
+            return libraryWorkspace.canSelectAll()
+
+        if (currentWorkspace === timelineWorkspaceIndex)
+            return timelineDocument.clipCount > 0
+
+        return false
+    }
+
+    function selectAllCurrentWorkspace() {
+        if (focusItemSupports("selectAll")) {
+            activeFocusItem.selectAll()
+            return
+        }
+
+        const libraryWorkspace = activeLibraryWorkspace()
+        if (libraryWorkspace && libraryWorkspace.selectAll) {
+            libraryWorkspace.selectAll()
+            return
+        }
+
+        if (currentWorkspace === timelineWorkspaceIndex)
+            timelineDocument.selectAllClips()
+    }
+
+    function canDeselectCurrentWorkspace() {
+        if (focusItemSupports("deselect"))
+            return true
+
+        const libraryWorkspace = activeLibraryWorkspace()
+        if (libraryWorkspace && libraryWorkspace.canDeselect)
+            return libraryWorkspace.canDeselect()
+
+        if (currentWorkspace === timelineWorkspaceIndex)
+            return timelineDocument.selectedClipCount > 0
+
+        return false
+    }
+
+    function deselectCurrentWorkspace() {
+        if (focusItemSupports("deselect")) {
+            activeFocusItem.deselect()
+            return
+        }
+
+        const libraryWorkspace = activeLibraryWorkspace()
+        if (libraryWorkspace && libraryWorkspace.deselectAll) {
+            libraryWorkspace.deselectAll()
+            return
+        }
+
+        if (currentWorkspace === timelineWorkspaceIndex)
+            timelineDocument.deselectAllClips()
     }
 
     function fileNameFromPath(path) {
@@ -257,8 +432,18 @@ ApplicationWindow {
 
     function loadSelectedAssetIntoEditor() {
         syncEditorRecipeToCatalog(catalogAssets.selectedAssetId)
-        if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo")
+        if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo") {
+            editorPreview.loadAsset(
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                ""
+            )
             return
+        }
 
         editorPreview.loadAsset(
             catalogAssets.selectedAssetId,
@@ -330,6 +515,11 @@ ApplicationWindow {
         timelineDocument.closeTimeline()
     }
 
+    function createCarouselFromMenu() {
+        currentWorkspace = carouselWorkspaceIndex
+        carouselDocument.closeCarousel()
+    }
+
     function saveCurrentTimeline() {
         const timelineView = activeTimelineView()
         if (timelineView && timelineView.saveTimelineToLibrary)
@@ -368,6 +558,12 @@ ApplicationWindow {
         text: "New Timeline"
         shortcut: StandardKey.New
         onTriggered: window.createTimelineFromMenu()
+    }
+
+    Action {
+        id: newCarouselAction
+        text: "New Carousel"
+        onTriggered: window.createCarouselFromMenu()
     }
 
     Action {
@@ -456,6 +652,22 @@ ApplicationWindow {
             else
                 editorPreview.redo()
         }
+    }
+
+    Action {
+        id: selectAllAction
+        text: "Select All"
+        shortcut: StandardKey.SelectAll
+        enabled: window.canSelectAllCurrentWorkspace()
+        onTriggered: window.selectAllCurrentWorkspace()
+    }
+
+    Action {
+        id: deselectAction
+        text: "Deselect"
+        shortcut: StandardKey.Deselect
+        enabled: window.canDeselectCurrentWorkspace()
+        onTriggered: window.deselectCurrentWorkspace()
     }
 
     Action {
@@ -680,7 +892,6 @@ ApplicationWindow {
     Action {
         id: timelineSelectAllAction
         text: "Select All Clips"
-        shortcut: window.primaryShortcut("A")
         enabled: window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.clipCount > 0
         onTriggered: timelineDocument.selectAllClips()
     }
@@ -944,6 +1155,7 @@ ApplicationWindow {
             title: "&File"
             MenuItem { action: newImportAction }
             MenuItem { action: newTimelineAction }
+            MenuItem { action: newCarouselAction }
             MenuSeparator {}
             MenuItem { action: openSelectedInEditAction }
             MenuItem { action: openSelectedTimelineAction }
@@ -962,6 +1174,8 @@ ApplicationWindow {
             title: "&Edit"
             MenuItem { action: undoEditAction }
             MenuItem { action: redoEditAction }
+            MenuItem { action: selectAllAction }
+            MenuItem { action: deselectAction }
             MenuSeparator {}
             MenuItem { action: resetAdjustmentsAction }
             MenuItem { action: toggleCompareAction }
@@ -1016,6 +1230,8 @@ ApplicationWindow {
         Menu {
             title: "Ca&rousel"
             enabled: window.currentWorkspace === window.carouselWorkspaceIndex
+            MenuItem { action: newCarouselAction }
+            MenuSeparator {}
             MenuItem { action: carouselAddSlideAction }
             MenuItem { action: carouselRemoveSlideAction }
             MenuItem { action: carouselMoveBackwardAction }
@@ -1076,103 +1292,125 @@ ApplicationWindow {
 
         function onSelectedAssetChanged() {
             window.editorUsesLocalAsset = false
-            if (window.currentWorkspace === window.editWorkspaceIndex
-                    && catalogAssets.selectedMediaType === "photo")
+            if (window.currentWorkspace === window.editWorkspaceIndex)
                 window.loadSelectedAssetIntoEditor()
         }
     }
 
     Rectangle {
         anchors.fill: parent
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.18) }
-            GradientStop { position: 0.18; color: theme.ink900 }
-            GradientStop { position: 1.0; color: theme.ink950 }
-        }
+        color: theme.ink950
     }
 
-    RowLayout {
+    ColumnLayout {
         anchors.fill: parent
         anchors.margins: 8
         spacing: 6
 
-        Rectangle {
-            Layout.preferredWidth: 56
-            Layout.fillHeight: true
-            radius: theme.radius12
-            color: theme.ink850
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.42)
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 8
-
-                Rectangle {
-                    Layout.alignment: Qt.AlignHCenter
-                    implicitWidth: 30
-                    implicitHeight: 30
-                    radius: 10
-                    color: theme.alpha(theme.ink900, 0.78)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.22)
-
-                    AppIcon {
-                        anchors.centerIn: parent
-                        name: "media"
-                        color: theme.textStrong
-                        implicitWidth: 14
-                        implicitHeight: 14
-                    }
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 1
-                    color: theme.alpha(theme.lineSoft, 0.72)
-                }
-
-                Repeater {
-                    model: workspaceTitles
-
-                    delegate: SidebarButton {
-                        required property int index
-                        required property string modelData
-
-                        Layout.alignment: Qt.AlignHCenter
-                        Layout.preferredWidth: implicitWidth
-                        Layout.preferredHeight: implicitHeight
-                        title: modelData
-                        tooltipText: modelData + "  •  " + workspaceSubtitles[index]
-                        compact: false
-                        iconOnly: true
-                        kind: window.workspaceKinds[index]
-                        accent: window.workspaceAccent(index)
-                        badgeText: window.workspaceBadgeText(index)
-                        badgeEmphasis: window.workspaceBadgeEmphasis(index)
-                        highlighted: index === window.currentWorkspace
-                        onClicked: window.currentWorkspace = index
-                    }
-                }
-
-                Item { Layout.fillHeight: true }
-            }
-        }
-
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: theme.radius12
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.34)
+            spacing: 6
 
-            Loader {
-                id: workspaceLoader
-                anchors.fill: parent
-                anchors.margins: 3
-                sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
+            Rectangle {
+                Layout.preferredWidth: 56
+                Layout.fillHeight: true
+                radius: 0
+                color: theme.alpha(theme.glassBase, 0.72)
+                border.width: 0
+                border.color: "transparent"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 8
+
+                    Rectangle {
+                        Layout.alignment: Qt.AlignHCenter
+                        implicitWidth: 30
+                        implicitHeight: 30
+                        radius: 10
+                        color: theme.alpha(theme.ink950, 0.32)
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.12)
+
+                        AppIcon {
+                            anchors.centerIn: parent
+                            name: "media"
+                            color: theme.textStrong
+                            implicitWidth: 14
+                            implicitHeight: 14
+                        }
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 1
+                        color: theme.alpha(theme.polar, 0.12)
+                    }
+
+                    Repeater {
+                        model: workspaceTitles
+
+                        delegate: SidebarButton {
+                            required property int index
+                            required property string modelData
+
+                            Layout.alignment: Qt.AlignHCenter
+                            Layout.preferredWidth: implicitWidth
+                            Layout.preferredHeight: implicitHeight
+                            title: modelData
+                            tooltipText: modelData + "  •  " + workspaceSubtitles[index]
+                            compact: false
+                            iconOnly: true
+                            kind: window.workspaceKinds[index]
+                            accent: window.workspaceAccent(index)
+                            badgeText: window.workspaceBadgeText(index)
+                            badgeEmphasis: window.workspaceBadgeEmphasis(index)
+                            highlighted: index === window.currentWorkspace
+                            onClicked: window.currentWorkspace = index
+                        }
+                    }
+
+                    Item { Layout.fillHeight: true }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                radius: 0
+                color: theme.alpha(theme.glassBase, 0.64)
+                border.width: 0
+                border.color: "transparent"
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    spacing: 6
+
+                    Loader {
+                        id: workspaceLoader
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
+                    }
+                }
+
+                InlineActivityIndicator {
+                    id: floatingActivityIndicator
+                    visible: window.anyAppActivity
+                    width: Math.min(320, Math.max(190, parent.width * 0.26))
+                    z: 2
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.rightMargin: 12
+                    anchors.bottomMargin: 12
+                    title: window.primaryActivityTitle
+                    detail: window.primaryActivityDetail
+                    progressValue: window.primaryActivityProgress
+                    accent: window.primaryActivityAccent
+                }
             }
         }
     }
@@ -1180,6 +1418,13 @@ ApplicationWindow {
     AppPreferencesDialog {
         id: preferencesDialog
         parent: Overlay.overlay
+    }
+
+    StartupLoadingPopup {
+        id: startupLoadingPopup
+        parent: Overlay.overlay
+        catalogLoading: catalogAssets.loading
+        catalogStatus: catalogAssets.status
     }
 
     KeyboardShortcutsDialog {
@@ -1198,6 +1443,7 @@ ApplicationWindow {
             { action: switchToExportAction, category: "Navigate", shortcutHint: "" },
             { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
             { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
+            { action: newCarouselAction, category: "File", shortcutHint: "" },
             { action: openSelectedInEditAction, category: "File", shortcutHint: macStyle ? "⌘E" : "Ctrl+E" },
             { action: openSelectedTimelineAction, category: "File", shortcutHint: "" },
             { action: saveTimelineAction, category: "File", shortcutHint: macStyle ? "⌘S" : "Ctrl+S" },
@@ -1206,6 +1452,8 @@ ApplicationWindow {
             { action: queueExportAction, category: "Export", shortcutHint: macStyle ? "⇧⌘E" : "Ctrl+Shift+E" },
             { action: undoEditAction, category: "Edit", shortcutHint: macStyle ? "⌘Z" : "Ctrl+Z" },
             { action: redoEditAction, category: "Edit", shortcutHint: macStyle ? "⇧⌘Z" : "Ctrl+Shift+Z" },
+            { action: selectAllAction, category: "Selection", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
+            { action: deselectAction, category: "Selection", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
             { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
             { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
             { action: toggleCropAction, category: "Edit", shortcutHint: "" },

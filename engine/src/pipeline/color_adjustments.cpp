@@ -56,6 +56,280 @@ struct LocalAdjustmentSettings final {
   double remove_strength = 0.0;
 };
 
+struct Chromaticity final {
+  double x = 0.0;
+  double y = 0.0;
+};
+
+struct XyzColor final {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+struct Matrix3 final {
+  std::array<double, 9> values = {
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0,
+  };
+};
+
+struct PipelineColorContext final {
+  RgbColorSpace working_space = make_linear_srgb_color_space();
+  RenderIntent render_intent = RenderIntent::Perceptual;
+  std::string chromatic_adaptation_method = "Bradford";
+  Matrix3 rgb_to_xyz_native;
+  Matrix3 xyz_native_to_rgb;
+  Matrix3 rgb_to_xyz_d65;
+  Matrix3 xyz_d65_to_rgb;
+  Matrix3 rgb_to_linear_srgb;
+};
+
+struct InputStageParameters final {
+  Matrix3 white_balance{};
+  double exposure_gain = 1.0;
+  double highlight_reconstruction_strength = 0.0;
+};
+
+[[nodiscard]] Matrix3 identity_matrix3() {
+  return {};
+}
+
+[[nodiscard]] XyzColor xyz_from_chromaticity(const Chromaticity& chromaticity) {
+  const auto safe_y = std::max(1e-6, chromaticity.y);
+  return XyzColor{
+      .x = chromaticity.x / safe_y,
+      .y = 1.0,
+      .z = (1.0 - chromaticity.x - chromaticity.y) / safe_y,
+  };
+}
+
+[[nodiscard]] Matrix3 matrix3_from_rows(
+    double m00, double m01, double m02,
+    double m10, double m11, double m12,
+    double m20, double m21, double m22) {
+  return Matrix3{
+      .values = {
+          m00, m01, m02,
+          m10, m11, m12,
+          m20, m21, m22,
+      },
+  };
+}
+
+[[nodiscard]] Matrix3 multiply_matrix3(const Matrix3& left, const Matrix3& right) {
+  Matrix3 result{};
+  for (int row = 0; row < 3; ++row) {
+    for (int column = 0; column < 3; ++column) {
+      auto value = 0.0;
+      for (int k = 0; k < 3; ++k) {
+        value += left.values[static_cast<std::size_t>(row * 3 + k)] *
+                 right.values[static_cast<std::size_t>(k * 3 + column)];
+      }
+      result.values[static_cast<std::size_t>(row * 3 + column)] = value;
+    }
+  }
+  return result;
+}
+
+[[nodiscard]] std::array<double, 3> multiply_matrix3_vector(
+    const Matrix3& matrix,
+    const std::array<double, 3>& vector) {
+  return {
+      matrix.values[0] * vector[0] + matrix.values[1] * vector[1] + matrix.values[2] * vector[2],
+      matrix.values[3] * vector[0] + matrix.values[4] * vector[1] + matrix.values[5] * vector[2],
+      matrix.values[6] * vector[0] + matrix.values[7] * vector[1] + matrix.values[8] * vector[2],
+  };
+}
+
+[[nodiscard]] XyzColor multiply_matrix3_xyz(const Matrix3& matrix, const XyzColor& xyz) {
+  const auto transformed = multiply_matrix3_vector(matrix, {xyz.x, xyz.y, xyz.z});
+  return XyzColor{
+      .x = transformed[0],
+      .y = transformed[1],
+      .z = transformed[2],
+  };
+}
+
+[[nodiscard]] Matrix3 invert_matrix3(const Matrix3& matrix) {
+  const auto& m = matrix.values;
+  const auto determinant =
+      m[0] * (m[4] * m[8] - m[5] * m[7]) -
+      m[1] * (m[3] * m[8] - m[5] * m[6]) +
+      m[2] * (m[3] * m[7] - m[4] * m[6]);
+  if (std::abs(determinant) <= 1e-12) {
+    return identity_matrix3();
+  }
+
+  const auto inverse_determinant = 1.0 / determinant;
+  return matrix3_from_rows(
+      (m[4] * m[8] - m[5] * m[7]) * inverse_determinant,
+      (m[2] * m[7] - m[1] * m[8]) * inverse_determinant,
+      (m[1] * m[5] - m[2] * m[4]) * inverse_determinant,
+      (m[5] * m[6] - m[3] * m[8]) * inverse_determinant,
+      (m[0] * m[8] - m[2] * m[6]) * inverse_determinant,
+      (m[2] * m[3] - m[0] * m[5]) * inverse_determinant,
+      (m[3] * m[7] - m[4] * m[6]) * inverse_determinant,
+      (m[1] * m[6] - m[0] * m[7]) * inverse_determinant,
+      (m[0] * m[4] - m[1] * m[3]) * inverse_determinant);
+}
+
+[[nodiscard]] Chromaticity white_point_chromaticity(WhitePoint white_point) {
+  switch (white_point) {
+    case WhitePoint::D50:
+      return Chromaticity{.x = 0.34567, .y = 0.35850};
+    case WhitePoint::D65:
+    case WhitePoint::Unknown:
+    default:
+      return Chromaticity{.x = 0.31271, .y = 0.32902};
+  }
+}
+
+[[nodiscard]] std::array<Chromaticity, 3> rgb_primaries(ColorPrimaries primaries) {
+  switch (primaries) {
+    case ColorPrimaries::DisplayP3:
+      return {Chromaticity{.x = 0.680, .y = 0.320},
+              Chromaticity{.x = 0.265, .y = 0.690},
+              Chromaticity{.x = 0.150, .y = 0.060}};
+    case ColorPrimaries::AdobeRgb:
+      return {Chromaticity{.x = 0.640, .y = 0.330},
+              Chromaticity{.x = 0.210, .y = 0.710},
+              Chromaticity{.x = 0.150, .y = 0.060}};
+    case ColorPrimaries::ProPhotoRgb:
+      return {Chromaticity{.x = 0.7347, .y = 0.2653},
+              Chromaticity{.x = 0.1596, .y = 0.8404},
+              Chromaticity{.x = 0.0366, .y = 0.0001}};
+    case ColorPrimaries::Rec2020:
+      return {Chromaticity{.x = 0.708, .y = 0.292},
+              Chromaticity{.x = 0.170, .y = 0.797},
+              Chromaticity{.x = 0.131, .y = 0.046}};
+    case ColorPrimaries::Rec709:
+    case ColorPrimaries::Srgb:
+    case ColorPrimaries::Unknown:
+    default:
+      return {Chromaticity{.x = 0.640, .y = 0.330},
+              Chromaticity{.x = 0.300, .y = 0.600},
+              Chromaticity{.x = 0.150, .y = 0.060}};
+  }
+}
+
+[[nodiscard]] Matrix3 rgb_to_xyz_matrix(const RgbColorSpace& color_space) {
+  const auto primaries = rgb_primaries(color_space.primaries);
+  const auto red = xyz_from_chromaticity(primaries[0]);
+  const auto green = xyz_from_chromaticity(primaries[1]);
+  const auto blue = xyz_from_chromaticity(primaries[2]);
+  const auto white = xyz_from_chromaticity(white_point_chromaticity(color_space.white_point));
+
+  const auto base = matrix3_from_rows(
+      red.x, green.x, blue.x,
+      red.y, green.y, blue.y,
+      red.z, green.z, blue.z);
+  const auto scales = multiply_matrix3_vector(invert_matrix3(base), {white.x, white.y, white.z});
+  return matrix3_from_rows(
+      red.x * scales[0], green.x * scales[1], blue.x * scales[2],
+      red.y * scales[0], green.y * scales[1], blue.y * scales[2],
+      red.z * scales[0], green.z * scales[1], blue.z * scales[2]);
+}
+
+[[nodiscard]] Matrix3 cone_response_matrix(std::string_view method) {
+  if (method == "CAT02") {
+    return matrix3_from_rows(
+        0.7328, 0.4296, -0.1624,
+        -0.7036, 1.6975, 0.0061,
+        0.0030, 0.0136, 0.9834);
+  }
+  return matrix3_from_rows(
+      0.8951, 0.2664, -0.1614,
+      -0.7502, 1.7135, 0.0367,
+      0.0389, -0.0685, 1.0296);
+}
+
+[[nodiscard]] Matrix3 chromatic_adaptation_matrix(
+    const XyzColor& source_white,
+    const XyzColor& target_white,
+    std::string_view method) {
+  const auto cone = cone_response_matrix(method);
+  const auto cone_inverse = invert_matrix3(cone);
+  const auto source_cone =
+      multiply_matrix3_vector(cone, {source_white.x, source_white.y, source_white.z});
+  const auto target_cone =
+      multiply_matrix3_vector(cone, {target_white.x, target_white.y, target_white.z});
+  const auto diagonal = matrix3_from_rows(
+      target_cone[0] / std::max(1e-6, source_cone[0]), 0.0, 0.0,
+      0.0, target_cone[1] / std::max(1e-6, source_cone[1]), 0.0,
+      0.0, 0.0, target_cone[2] / std::max(1e-6, source_cone[2]));
+  return multiply_matrix3(cone_inverse, multiply_matrix3(diagonal, cone));
+}
+
+[[nodiscard]] PipelineColorContext make_pipeline_color_context(const ColorAdjustmentState& state) {
+  PipelineColorContext context;
+  context.working_space = state.color_pipeline.working_profile.color_space;
+  context.render_intent = state.color_pipeline.render_intent;
+  context.chromatic_adaptation_method = state.input_transform.chromatic_adaptation_method;
+  context.rgb_to_xyz_native = rgb_to_xyz_matrix(context.working_space);
+  context.xyz_native_to_rgb = invert_matrix3(context.rgb_to_xyz_native);
+  const auto source_white = xyz_from_chromaticity(white_point_chromaticity(context.working_space.white_point));
+  const auto d65_white = xyz_from_chromaticity(white_point_chromaticity(WhitePoint::D65));
+  const auto to_d65 = chromatic_adaptation_matrix(
+      source_white,
+      d65_white,
+      context.chromatic_adaptation_method);
+  const auto from_d65 = chromatic_adaptation_matrix(
+      d65_white,
+      source_white,
+      context.chromatic_adaptation_method);
+  context.rgb_to_xyz_d65 = multiply_matrix3(to_d65, context.rgb_to_xyz_native);
+  context.xyz_d65_to_rgb = multiply_matrix3(context.xyz_native_to_rgb, from_d65);
+  const auto linear_srgb = make_linear_srgb_color_space();
+  const auto xyz_d65_to_linear_srgb = invert_matrix3(rgb_to_xyz_matrix(linear_srgb));
+  context.rgb_to_linear_srgb = multiply_matrix3(xyz_d65_to_linear_srgb, context.rgb_to_xyz_d65);
+  return context;
+}
+
+[[nodiscard]] ColorPixel apply_rgb_matrix(const ColorPixel& pixel, const Matrix3& matrix) {
+  const auto transformed = multiply_matrix3_vector(
+      matrix,
+      {static_cast<double>(pixel.red), static_cast<double>(pixel.green), static_cast<double>(pixel.blue)});
+  return ColorPixel{
+      .red = static_cast<float>(transformed[0]),
+      .green = static_cast<float>(transformed[1]),
+      .blue = static_cast<float>(transformed[2]),
+      .alpha = pixel.alpha,
+  };
+}
+
+[[nodiscard]] XyzColor pixel_to_xyz_native(const ColorPixel& pixel, const PipelineColorContext& context) {
+  return multiply_matrix3_xyz(
+      context.rgb_to_xyz_native,
+      XyzColor{
+          .x = std::max(0.0, static_cast<double>(pixel.red)),
+          .y = std::max(0.0, static_cast<double>(pixel.green)),
+          .z = std::max(0.0, static_cast<double>(pixel.blue)),
+      });
+}
+
+[[nodiscard]] XyzColor pixel_to_xyz_d65(const ColorPixel& pixel, const PipelineColorContext& context) {
+  return multiply_matrix3_xyz(
+      context.rgb_to_xyz_d65,
+      XyzColor{
+          .x = std::max(0.0, static_cast<double>(pixel.red)),
+          .y = std::max(0.0, static_cast<double>(pixel.green)),
+          .z = std::max(0.0, static_cast<double>(pixel.blue)),
+      });
+}
+
+[[nodiscard]] ColorPixel pixel_to_linear_srgb_reference(
+    const ColorPixel& pixel,
+    const PipelineColorContext& context) {
+  return apply_rgb_matrix(pixel, context.rgb_to_linear_srgb);
+}
+
+[[nodiscard]] bool metal_color_pipeline_supported(const ColorAdjustmentState& state) {
+  return state.color_pipeline.working_profile.kind == WorkingTransformKind::LinearSrgb &&
+         state.color_pipeline.render_intent == RenderIntent::Perceptual;
+}
+
 [[nodiscard]] double smoothstep(double edge0, double edge1, double x) {
   if (std::abs(edge1 - edge0) <= 1e-9) {
     return x < edge0 ? 0.0 : 1.0;
@@ -122,8 +396,10 @@ struct LocalAdjustmentSettings final {
   return delta;
 }
 
-[[nodiscard]] double luminance_for_pixel(const ColorPixel& pixel) {
-  return (pixel.red * 0.2126) + (pixel.green * 0.7152) + (pixel.blue * 0.0722);
+[[nodiscard]] double luminance_for_pixel(
+    const ColorPixel& pixel,
+    const PipelineColorContext& context) {
+  return pixel_to_xyz_native(pixel, context).y;
 }
 
 [[nodiscard]] bool has_per_channel_color_mixer_adjustments(const ColorAdjustmentState& state) {
@@ -164,9 +440,12 @@ struct LocalAdjustmentSettings final {
          has_color_grading_adjustments(state);
 }
 
-[[nodiscard]] ColorPixel scale_pixel_to_luminance(const ColorPixel& pixel, double target_luminance) {
+[[nodiscard]] ColorPixel scale_pixel_to_luminance(
+    const ColorPixel& pixel,
+    double target_luminance,
+    const PipelineColorContext& context) {
   const auto clamped_target = std::max(0.0, target_luminance);
-  const auto current_luminance = luminance_for_pixel(pixel);
+  const auto current_luminance = luminance_for_pixel(pixel, context);
   const auto max_input_channel = std::max({pixel.red, pixel.green, pixel.blue});
   if (max_input_channel <= 1e-9) {
     return ColorPixel{
@@ -246,12 +525,14 @@ struct LocalAdjustmentSettings final {
     return {};
   }
 
-  normalized_points.front() = CurvePoint{.x = 0.0, .y = 0.0};
-  normalized_points.back() = CurvePoint{.x = 1.0, .y = 1.0};
+  normalized_points.front().x = 0.0;
+  normalized_points.back().x = 1.0;
   data.points = std::move(normalized_points);
 
   if (data.points.size() == 2) {
-    data.tangents = {1.0, 1.0};
+    const auto span = std::max(1e-6, data.points.back().x - data.points.front().x);
+    const auto slope = (data.points.back().y - data.points.front().y) / span;
+    data.tangents = {slope, slope};
     return data;
   }
 
@@ -377,7 +658,10 @@ struct LocalAdjustmentSettings final {
          pixel.green < -kTolerance || pixel.blue < -kTolerance;
 }
 
-[[nodiscard]] std::array<double, 3> white_balance_multipliers(double temperature, double tint) {
+[[nodiscard]] Matrix3 white_balance_matrix(
+    double temperature,
+    double tint,
+    const PipelineColorContext& context) {
   const auto temperature_to_kelvin = [](double slider_value) {
     const auto clamped = clamp_signed_percent(slider_value);
     if (clamped >= 0.0) {
@@ -414,32 +698,180 @@ struct LocalAdjustmentSettings final {
     return std::array<double, 2>{x, y};
   };
 
-  const auto white_rgb_from_kelvin = [&](double kelvin) {
-    const auto chromaticity = chromaticity_from_kelvin(kelvin);
-    const auto x = chromaticity[0];
-    const auto y = std::max(1e-6, chromaticity[1]);
-    const auto X = x / y;
-    const auto Y = 1.0;
-    const auto Z = (1.0 - x - y) / y;
-    return std::array<double, 3>{
-        std::max(1e-6, 3.2406 * X - 1.5372 * Y - 0.4986 * Z),
-        std::max(1e-6, -0.9689 * X + 1.8758 * Y + 0.0415 * Z),
-        std::max(1e-6, 0.0557 * X - 0.2040 * Y + 1.0570 * Z),
-    };
+  const auto white_xyz_from_kelvin = [&](double kelvin, double tint_value) {
+    auto chromaticity = chromaticity_from_kelvin(kelvin);
+    auto xyz = xyz_from_chromaticity(Chromaticity{.x = chromaticity[0], .y = chromaticity[1]});
+    const auto tint_strength = clamp_signed_percent(tint_value) / 100.0;
+    if (std::abs(tint_strength) <= 1e-9) {
+      return xyz;
+    }
+    const auto cone = cone_response_matrix(context.chromatic_adaptation_method);
+    const auto cone_inverse = invert_matrix3(cone);
+    auto response = multiply_matrix3_vector(cone, {xyz.x, xyz.y, xyz.z});
+    response[0] *= std::pow(2.0, tint_strength * 0.08);
+    response[1] *= std::pow(2.0, -tint_strength * 0.24);
+    response[2] *= std::pow(2.0, tint_strength * 0.08);
+    xyz = multiply_matrix3_xyz(
+        cone_inverse,
+        XyzColor{.x = response[0], .y = response[1], .z = response[2]});
+    const auto normalization = std::max(1e-6, xyz.y);
+    xyz.x /= normalization;
+    xyz.y /= normalization;
+    xyz.z /= normalization;
+    return xyz;
   };
 
-  const auto reference_white = white_rgb_from_kelvin(5500.0);
-  const auto target_white = white_rgb_from_kelvin(temperature_to_kelvin(temperature));
-  const auto normalized_tint = clamp_signed_percent(tint) / 100.0;
-  auto red = (target_white[0] / reference_white[0]) * std::pow(2.0, normalized_tint * 0.08);
-  auto green = (target_white[1] / reference_white[1]) * std::pow(2.0, -normalized_tint * 0.24);
-  auto blue = (target_white[2] / reference_white[2]) * std::pow(2.0, normalized_tint * 0.08);
-  const auto normalization = (red * 0.2126) + (green * 0.7152) + (blue * 0.0722);
-  if (normalization <= 1e-6) {
-    return {1.0, 1.0, 1.0};
+  if (std::abs(temperature) <= 1e-9 && std::abs(tint) <= 1e-9) {
+    return identity_matrix3();
   }
 
-  return {red / normalization, green / normalization, blue / normalization};
+  const auto reference_white = white_xyz_from_kelvin(5500.0, 0.0);
+  const auto target_white = white_xyz_from_kelvin(temperature_to_kelvin(temperature), tint);
+  auto matrix = multiply_matrix3(
+      context.xyz_native_to_rgb,
+      multiply_matrix3(
+          chromatic_adaptation_matrix(
+              reference_white,
+              target_white,
+              context.chromatic_adaptation_method),
+          context.rgb_to_xyz_native));
+  const auto transformed_neutral = apply_rgb_matrix(
+      ColorPixel{.red = 1.0F, .green = 1.0F, .blue = 1.0F, .alpha = 1.0F},
+      matrix);
+  const auto normalization = luminance_for_pixel(transformed_neutral, context);
+  if (normalization <= 1e-6) {
+    return identity_matrix3();
+  }
+  const auto inverse_normalization = 1.0 / normalization;
+  for (auto& value : matrix.values) {
+    value *= inverse_normalization;
+  }
+  return matrix;
+}
+
+[[nodiscard]] Matrix3 white_balance_matrix_for_kelvin(
+    double kelvin,
+    double tint,
+    const PipelineColorContext& context) {
+  const auto clamped_kelvin = std::clamp(kelvin, 2000.0, 12000.0);
+  const auto slider = clamped_kelvin >= 5500.0
+                          ? -((clamped_kelvin - 5500.0) / 6500.0) * 100.0
+                          : ((5500.0 - clamped_kelvin) / 3500.0) * 100.0;
+  return white_balance_matrix(slider, tint, context);
+}
+
+[[nodiscard]] Matrix3 white_balance_matrix_between_whites(
+    double source_kelvin,
+    double source_tint,
+    double target_kelvin,
+    double target_tint,
+    const PipelineColorContext& context) {
+  const auto source = white_balance_matrix_for_kelvin(source_kelvin, source_tint, context);
+  const auto target = white_balance_matrix_for_kelvin(target_kelvin, target_tint, context);
+  return multiply_matrix3(target, invert_matrix3(source));
+}
+
+[[nodiscard]] double highlight_reconstruction_strength(const ColorAdjustmentState& state) {
+  if (!state.input_transform.raw_input_transform_enabled ||
+      !state.input_transform.highlight_recovery_enabled) {
+    return 0.0;
+  }
+
+  const auto mode = state.input_transform.highlight_reconstruction_mode;
+  if (mode == "Disabled") {
+    return 0.0;
+  }
+  if (mode == "Camera Default") {
+    return 0.35;
+  }
+  return 0.70;
+}
+
+[[nodiscard]] ColorPixel apply_highlight_reconstruction(
+    const ColorPixel& input,
+    double strength,
+    const PipelineColorContext& context) {
+  if (strength <= 1e-6) {
+    return input;
+  }
+
+  const auto peak = std::max({static_cast<double>(input.red),
+                              static_cast<double>(input.green),
+                              static_cast<double>(input.blue)});
+  if (peak <= 1.0 + 1e-6) {
+    return input;
+  }
+
+  const auto original_luminance = luminance_for_pixel(input, context);
+  const auto blend = clamp_unit(smoothstep(1.0, 4.0, peak) * strength);
+  auto reconstructed = input;
+  auto reconstruct_channel = [&](float channel) {
+    const auto current = static_cast<double>(channel);
+    const auto deficit = std::max(0.0, peak - current);
+    const auto lift = blend * smoothstep(peak * 0.05, peak * 0.85, deficit);
+    return static_cast<float>(current + deficit * lift);
+  };
+  reconstructed.red = reconstruct_channel(reconstructed.red);
+  reconstructed.green = reconstruct_channel(reconstructed.green);
+  reconstructed.blue = reconstruct_channel(reconstructed.blue);
+  return scale_pixel_to_luminance(reconstructed, original_luminance, context);
+}
+
+[[nodiscard]] InputStageParameters make_input_stage_parameters(
+    const ColorAdjustmentState& state,
+    const PipelineColorContext& context) {
+  InputStageParameters parameters;
+  const auto& recipe = state.color_pipeline.input_transform_recipe;
+  const auto source_temperature =
+      recipe.has_source_white_balance ? recipe.source_temperature : 5500.0;
+  const auto source_tint =
+      recipe.has_source_white_balance ? recipe.source_tint : 0.0;
+  parameters.exposure_gain = std::pow(
+      2.0,
+      recipe.baseline_exposure + effective_input_exposure(state));
+  parameters.highlight_reconstruction_strength =
+      highlight_reconstruction_strength(state) *
+      std::clamp(1.15 - recipe.highlight_headroom, 0.35, 1.0);
+
+  if (state.input_transform.raw_input_transform_enabled &&
+      state.input_transform.raw_white_balance_override_enabled) {
+    parameters.white_balance = white_balance_matrix_between_whites(
+        source_temperature,
+        source_tint,
+        state.input_transform.raw_white_balance_temperature,
+        state.input_transform.raw_white_balance_tint,
+        context);
+  } else {
+    parameters.white_balance = multiply_matrix3(
+        white_balance_matrix(
+            effective_input_temperature(state),
+            effective_input_tint(state),
+            context),
+        recipe.has_source_white_balance
+            ? white_balance_matrix_between_whites(
+                  source_temperature,
+                  source_tint,
+                  5500.0,
+                  0.0,
+                  context)
+            : identity_matrix3());
+  }
+  return parameters;
+}
+
+[[nodiscard]] ColorPixel apply_input_stage(
+    const ColorPixel& input,
+    const InputStageParameters& parameters,
+    const PipelineColorContext& context) {
+  auto pixel = apply_rgb_matrix(input, parameters.white_balance);
+  pixel = apply_highlight_reconstruction(
+      pixel,
+      parameters.highlight_reconstruction_strength,
+      context);
+  pixel.red = static_cast<float>(std::max(0.0, static_cast<double>(pixel.red) * parameters.exposure_gain));
+  pixel.green = static_cast<float>(std::max(0.0, static_cast<double>(pixel.green) * parameters.exposure_gain));
+  pixel.blue = static_cast<float>(std::max(0.0, static_cast<double>(pixel.blue) * parameters.exposure_gain));
+  return pixel;
 }
 
 [[nodiscard]] std::vector<float> box_blur(const std::vector<float>& input, int width, int height, int radius) {
@@ -679,14 +1111,14 @@ void apply_optical_corrections(
   *pixels = std::move(corrected);
 }
 
-[[nodiscard]] OklabColor linear_rgb_to_oklab(const ColorPixel& pixel) {
-  const auto red = std::max(0.0, static_cast<double>(pixel.red));
-  const auto green = std::max(0.0, static_cast<double>(pixel.green));
-  const auto blue = std::max(0.0, static_cast<double>(pixel.blue));
+[[nodiscard]] OklabColor linear_rgb_to_oklab(
+    const ColorPixel& pixel,
+    const PipelineColorContext& context) {
+  const auto xyz = pixel_to_xyz_d65(pixel, context);
 
-  const auto l = 0.4122214708 * red + 0.5363325363 * green + 0.0514459929 * blue;
-  const auto m = 0.2119034982 * red + 0.6806995451 * green + 0.1073969566 * blue;
-  const auto s = 0.0883024619 * red + 0.2817188376 * green + 0.6299787005 * blue;
+  const auto l = 0.8189330101 * xyz.x + 0.3618667424 * xyz.y - 0.1288597137 * xyz.z;
+  const auto m = 0.0329845436 * xyz.x + 0.9293118715 * xyz.y + 0.0361456387 * xyz.z;
+  const auto s = 0.0482003018 * xyz.x + 0.2643662691 * xyz.y + 0.6338517070 * xyz.z;
 
   const auto l_root = std::cbrt(std::max(0.0, l));
   const auto m_root = std::cbrt(std::max(0.0, m));
@@ -699,7 +1131,10 @@ void apply_optical_corrections(
   };
 }
 
-[[nodiscard]] ColorPixel oklab_to_linear_rgb(const OklabColor& color, double alpha) {
+[[nodiscard]] ColorPixel oklab_to_linear_rgb(
+    const OklabColor& color,
+    double alpha,
+    const PipelineColorContext& context) {
   const auto l_root = color.lightness + 0.3963377774 * color.a + 0.2158037573 * color.b;
   const auto m_root = color.lightness - 0.1055613458 * color.a - 0.0638541728 * color.b;
   const auto s_root = color.lightness - 0.0894841775 * color.a - 1.2914855480 * color.b;
@@ -708,12 +1143,14 @@ void apply_optical_corrections(
   const auto m = m_root * m_root * m_root;
   const auto s = s_root * s_root * s_root;
 
-  return ColorPixel{
-      .red = static_cast<float>(+4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
-      .green = static_cast<float>(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
-      .blue = static_cast<float>(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s),
-      .alpha = static_cast<float>(alpha),
-  };
+  return apply_rgb_matrix(
+      ColorPixel{
+          .red = static_cast<float>(+1.2270138511 * l - 0.5577999807 * m + 0.2812561490 * s),
+          .green = static_cast<float>(-0.0405801784 * l + 1.1122568696 * m - 0.0716766787 * s),
+          .blue = static_cast<float>(-0.0763812845 * l - 0.4214819784 * m + 1.5861632204 * s),
+          .alpha = static_cast<float>(alpha),
+      },
+      context.xyz_d65_to_rgb);
 }
 
 [[nodiscard]] bool in_gamut(const ColorPixel& pixel) {
@@ -730,11 +1167,20 @@ void apply_optical_corrections(
   };
 }
 
-[[nodiscard]] std::array<double, 3> white_balance_multipliers(double temperature, double tint);
-[[nodiscard]] ColorPixel gamut_fit_oklch(double lightness, double chroma, double hue, double alpha);
+[[nodiscard]] Matrix3 white_balance_matrix(
+    double temperature,
+    double tint,
+    const PipelineColorContext& context);
+[[nodiscard]] ColorPixel gamut_fit_oklch(
+    double lightness,
+    double chroma,
+    double hue,
+    double alpha,
+    const PipelineColorContext& context);
 
 void apply_local_adjustment_mask(
     ColorPixel* pixel,
+    const PipelineColorContext& context,
     double weight,
     double exposure,
     double contrast,
@@ -754,11 +1200,12 @@ void apply_local_adjustment_mask(
     return;
   }
 
-  const auto local_white_balance = white_balance_multipliers(temperature * weight, tint * weight);
+  const auto local_white_balance = white_balance_matrix(temperature * weight, tint * weight, context);
   const auto local_exposure_gain = std::pow(2.0, exposure * weight);
-  pixel->red = static_cast<float>(static_cast<double>(pixel->red) * (1.0 + (local_white_balance[0] - 1.0) * weight));
-  pixel->green = static_cast<float>(static_cast<double>(pixel->green) * (1.0 + (local_white_balance[1] - 1.0) * weight));
-  pixel->blue = static_cast<float>(static_cast<double>(pixel->blue) * (1.0 + (local_white_balance[2] - 1.0) * weight));
+  const auto balanced = apply_rgb_matrix(*pixel, local_white_balance);
+  pixel->red = static_cast<float>(std::lerp(static_cast<double>(pixel->red), static_cast<double>(balanced.red), clamp_unit(weight)));
+  pixel->green = static_cast<float>(std::lerp(static_cast<double>(pixel->green), static_cast<double>(balanced.green), clamp_unit(weight)));
+  pixel->blue = static_cast<float>(std::lerp(static_cast<double>(pixel->blue), static_cast<double>(balanced.blue), clamp_unit(weight)));
   pixel->red = static_cast<float>(static_cast<double>(pixel->red) * local_exposure_gain);
   pixel->green = static_cast<float>(static_cast<double>(pixel->green) * local_exposure_gain);
   pixel->blue = static_cast<float>(static_cast<double>(pixel->blue) * local_exposure_gain);
@@ -779,7 +1226,10 @@ void apply_local_adjustment_mask(
     local_tone_state.shadows = weighted_shadows;
     local_tone_state.whites = weighted_whites;
     local_tone_state.blacks = weighted_blacks;
-    *pixel = scale_pixel_to_luminance(*pixel, apply_global_tone(luminance_for_pixel(*pixel), local_tone_state));
+    *pixel = scale_pixel_to_luminance(
+        *pixel,
+        apply_global_tone(luminance_for_pixel(*pixel, context), local_tone_state),
+        context);
   }
 
   const auto weighted_vibrance = vibrance * weight;
@@ -792,7 +1242,7 @@ void apply_local_adjustment_mask(
     return;
   }
 
-  auto oklab = linear_rgb_to_oklab(*pixel);
+  auto oklab = linear_rgb_to_oklab(*pixel, context);
   auto lightness = clamp_unit(oklab.lightness);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
@@ -826,7 +1276,33 @@ void apply_local_adjustment_mask(
     chroma = std::lerp(chroma, std::max(chroma, 0.18), colorize_amount);
   }
 
-  *pixel = gamut_fit_oklch(lightness, chroma, hue, pixel->alpha);
+  *pixel = gamut_fit_oklch(lightness, chroma, hue, pixel->alpha, context);
+}
+
+void apply_mask_edge_cleanup(
+    ColorPixel* pixel,
+    const PipelineColorContext& context,
+    double mask_weight,
+    double decontaminate) {
+  if (pixel == nullptr) {
+    return;
+  }
+
+  const auto cleanup_strength =
+      clamp_unit(decontaminate / 100.0) *
+      smoothstep(0.02, 0.24, clamp_unit(mask_weight) * (1.0 - clamp_unit(mask_weight)) * 4.0);
+  if (cleanup_strength <= 1e-6) {
+    return;
+  }
+
+  auto oklab = linear_rgb_to_oklab(*pixel, context);
+  auto lightness = clamp_unit(oklab.lightness);
+  auto chroma = std::hypot(oklab.a, oklab.b);
+  const auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
+
+  chroma *= std::max(0.0, 1.0 - cleanup_strength * 0.75);
+  lightness = clamp_unit(lightness + cleanup_strength * 0.015);
+  *pixel = gamut_fit_oklch(lightness, chroma, hue, pixel->alpha, context);
 }
 
 [[nodiscard]] double radial_mask_weight(
@@ -883,8 +1359,19 @@ void apply_local_adjustment_mask(
   return smoothstep(threshold - ramp, threshold + ramp, clamp_unit(base_weight));
 }
 
+[[nodiscard]] double apply_selection_edge_contrast(double base_weight, const LocalMask& mask) {
+  const auto contrast = clamp_unit(mask.selection_edge_contrast / 100.0);
+  if (contrast <= 1e-6) {
+    return clamp_unit(base_weight);
+  }
+
+  const auto ramp = std::lerp(0.24, 0.035, contrast);
+  return smoothstep(0.5 - ramp, 0.5 + ramp, clamp_unit(base_weight));
+}
+
 [[nodiscard]] double apply_selection_refine(double base_weight, const LocalMask& mask) {
   auto refined = apply_selection_expand(base_weight, mask);
+  refined = apply_selection_edge_contrast(refined, mask);
   if (mask.selection_invert) {
     refined = 1.0 - refined;
   }
@@ -1049,11 +1536,13 @@ void apply_local_adjustment_mask(
 
 void hue_saturation_value_for_pixel(
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     double* hue,
     double* saturation,
     double* value) {
-  const auto max_channel = std::max({pixel.red, pixel.green, pixel.blue});
-  const auto min_channel = std::min({pixel.red, pixel.green, pixel.blue});
+  const auto reference_pixel = pixel_to_linear_srgb_reference(pixel, context);
+  const auto max_channel = std::max({reference_pixel.red, reference_pixel.green, reference_pixel.blue});
+  const auto min_channel = std::min({reference_pixel.red, reference_pixel.green, reference_pixel.blue});
   const auto delta = max_channel - min_channel;
 
   if (value != nullptr) {
@@ -1072,12 +1561,12 @@ void hue_saturation_value_for_pixel(
   }
 
   auto result = 0.0;
-  if (max_channel == pixel.red) {
-    result = std::fmod((pixel.green - pixel.blue) / delta, 6.0);
-  } else if (max_channel == pixel.green) {
-    result = ((pixel.blue - pixel.red) / delta) + 2.0;
+  if (max_channel == reference_pixel.red) {
+    result = std::fmod((reference_pixel.green - reference_pixel.blue) / delta, 6.0);
+  } else if (max_channel == reference_pixel.green) {
+    result = ((reference_pixel.blue - reference_pixel.red) / delta) + 2.0;
   } else {
-    result = ((pixel.red - pixel.green) / delta) + 4.0;
+    result = ((reference_pixel.red - reference_pixel.green) / delta) + 4.0;
   }
 
   result /= 6.0;
@@ -1089,6 +1578,7 @@ void hue_saturation_value_for_pixel(
 
 [[nodiscard]] double luminance_range_mask_weight(
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const LocalMask& mask) {
   auto min_value = std::clamp(mask.luminance_min, 0.0, 1.0);
   auto max_value = std::clamp(mask.luminance_max, 0.0, 1.0);
@@ -1096,7 +1586,7 @@ void hue_saturation_value_for_pixel(
     std::swap(min_value, max_value);
   }
   const auto feather = std::clamp(mask.range_feather, 0.0, 0.5);
-  const auto value = clamp_unit(luminance_for_pixel(pixel));
+  const auto value = clamp_unit(luminance_for_pixel(pixel, context));
   const auto lower_weight = smoothstep(std::max(0.0, min_value - feather), min_value, value);
   const auto upper_weight =
       1.0 - smoothstep(max_value, std::min(1.0, max_value + feather), value);
@@ -1105,10 +1595,11 @@ void hue_saturation_value_for_pixel(
 
 [[nodiscard]] double color_range_mask_weight(
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const LocalMask& mask) {
   double hue = 0.0;
   double saturation = 0.0;
-  hue_saturation_value_for_pixel(pixel, &hue, &saturation, nullptr);
+  hue_saturation_value_for_pixel(pixel, context, &hue, &saturation, nullptr);
   auto saturation_min = std::clamp(mask.saturation_min, 0.0, 1.0);
   auto saturation_max = std::clamp(mask.saturation_max, 0.0, 1.0);
   if (saturation_min > saturation_max) {
@@ -1174,6 +1665,7 @@ void hue_saturation_value_for_pixel(
     double normalized_x,
     double normalized_y,
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const LocalMask& mask) {
   if (!mask.enabled) {
     return 0.0;
@@ -1196,11 +1688,11 @@ void hue_saturation_value_for_pixel(
   }
 
   if (mask.kind == "luminance") {
-    return apply_selection_refine(luminance_range_mask_weight(pixel, mask), mask);
+    return apply_selection_refine(luminance_range_mask_weight(pixel, context, mask), mask);
   }
 
   if (mask.kind == "color") {
-    return apply_selection_refine(color_range_mask_weight(pixel, mask), mask);
+    return apply_selection_refine(color_range_mask_weight(pixel, context, mask), mask);
   }
 
   return apply_selection_refine(
@@ -1235,6 +1727,7 @@ void accumulate_composite_weight(
     double normalized_x,
     double normalized_y,
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const LocalMaskSet& mask_set) {
   if (!mask_set.enabled) {
     return 0.0;
@@ -1247,7 +1740,7 @@ void accumulate_composite_weight(
       continue;
     }
 
-    const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, source);
+    const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, context, source);
     accumulate_composite_weight(raw_weight, source.operation, &composite_weight, &initialized);
   }
 
@@ -1274,6 +1767,28 @@ void accumulate_composite_weight(
          std::abs(mask.colorize_hue) <= 1e-6 &&
          std::abs(mask.colorize_strength) <= 1e-6 &&
          std::abs(mask.remove_strength) <= 1e-6;
+}
+
+[[nodiscard]] double maximum_selection_decontaminate(const std::vector<LocalMask>& masks) {
+  auto maximum = 0.0;
+  for (const auto& mask : masks) {
+    if (!mask.enabled) {
+      continue;
+    }
+    maximum = std::max(maximum, std::clamp(mask.selection_decontaminate, 0.0, 100.0));
+  }
+  return maximum;
+}
+
+[[nodiscard]] double maximum_selection_decontaminate(const LocalMaskSet& mask_set) {
+  auto maximum = 0.0;
+  for (const auto& source : mask_set.sources) {
+    if (!source.enabled) {
+      continue;
+    }
+    maximum = std::max(maximum, std::clamp(source.selection_decontaminate, 0.0, 100.0));
+  }
+  return maximum;
 }
 
 void accumulate_composite_weight(
@@ -1441,7 +1956,8 @@ void accumulate_composite_weight(
 
 [[nodiscard]] bool has_local_mask_removal(const std::vector<LocalMask>& masks) {
   for (const auto& mask : masks) {
-    if (!mask.enabled || mask.remove_strength <= 1e-6) {
+    if (!mask.enabled || mask.remove_strength <= 1e-6 ||
+        !mask.inpaint_patch_pixels.empty()) {
       continue;
     }
     if (mask.retouch_mode == "heal" || mask.retouch_mode == "clone") {
@@ -1456,7 +1972,8 @@ void accumulate_composite_weight(
 
 [[nodiscard]] bool has_local_mask_heal(const std::vector<LocalMask>& masks) {
   for (const auto& mask : masks) {
-    if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "heal") {
+    if (mask.enabled && mask.remove_strength > 1e-6 && mask.retouch_mode == "heal" &&
+        mask.inpaint_patch_pixels.empty()) {
       return true;
     }
   }
@@ -1481,6 +1998,7 @@ void accumulate_composite_weight(
     double normalized_x,
     double normalized_y,
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const std::vector<LocalMask>& masks,
     std::string_view retouch_mode) {
   auto composite_weight = 0.0;
@@ -1488,6 +2006,10 @@ void accumulate_composite_weight(
 
   for (const auto& mask : masks) {
     if (!mask.enabled) {
+      continue;
+    }
+
+    if (!mask.inpaint_patch_pixels.empty()) {
       continue;
     }
 
@@ -1506,7 +2028,7 @@ void accumulate_composite_weight(
       continue;
     }
 
-    const auto weighted = local_mask_weight(normalized_x, normalized_y, pixel, mask) * strength;
+    const auto weighted = local_mask_weight(normalized_x, normalized_y, pixel, context, mask) * strength;
     accumulate_composite_weight(weighted, mask.operation, &composite_weight, &initialized);
   }
 
@@ -1526,6 +2048,44 @@ struct RemovalCandidate final {
   double score = 0.0;
   bool valid = false;
 };
+
+[[nodiscard]] std::vector<double> grow_mask_weights(
+    const std::vector<double>& mask,
+    int width,
+    int height,
+    int radius) {
+  if (radius <= 0 || width <= 0 || height <= 0 ||
+      mask.size() != static_cast<std::size_t>(width * height)) {
+    return mask;
+  }
+
+  auto grown = mask;
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      auto maximum = clamp_unit(mask[static_cast<std::size_t>(y * width + x)]);
+      for (int offset_y = -radius; offset_y <= radius; ++offset_y) {
+        const auto sample_y = y + offset_y;
+        if (sample_y < 0 || sample_y >= height) {
+          continue;
+        }
+        for (int offset_x = -radius; offset_x <= radius; ++offset_x) {
+          const auto sample_x = x + offset_x;
+          if (sample_x < 0 || sample_x >= width) {
+            continue;
+          }
+          if (offset_x * offset_x + offset_y * offset_y > radius * radius) {
+            continue;
+          }
+          maximum = std::max(
+              maximum,
+              clamp_unit(mask[static_cast<std::size_t>(sample_y * width + sample_x)]));
+        }
+      }
+      grown[static_cast<std::size_t>(y * width + x)] = maximum;
+    }
+  }
+  return grown;
+}
 
 [[nodiscard]] double removal_color_distance(const ColorPixel& left, const ColorPixel& right) {
   const auto dr = static_cast<double>(left.red) - static_cast<double>(right.red);
@@ -1762,14 +2322,22 @@ void apply_local_removal(
   }
 
   const auto pixel_count = pixels->size();
+  const auto source_exclusion_radius =
+      removal_quality == RemovalQuality::Final
+          ? (detail_preservation >= 0.45 ? 1 : 2)
+          : 0;
+  const auto working_mask =
+      source_exclusion_radius > 0
+          ? grow_mask_weights(removal_mask, width, height, source_exclusion_radius)
+          : removal_mask;
   auto filled_pixels = *pixels;
   std::vector<float> confidence(pixel_count, 1.0F);
   std::vector<uint8_t> unresolved(pixel_count, 0);
   auto has_masked_pixels = false;
   for (std::size_t index = 0; index < pixel_count; ++index) {
-    confidence[index] = static_cast<float>(1.0 - clamp_unit(removal_mask[index]));
-    has_masked_pixels = has_masked_pixels || removal_mask[index] > 1e-4;
-    unresolved[index] = removal_mask[index] > 1e-4 ? 1U : 0U;
+    confidence[index] = static_cast<float>(1.0 - clamp_unit(working_mask[index]));
+    has_masked_pixels = has_masked_pixels || working_mask[index] > 1e-4;
+    unresolved[index] = working_mask[index] > 1e-4 ? 1U : 0U;
   }
   if (!has_masked_pixels) {
     return;
@@ -1807,7 +2375,7 @@ void apply_local_removal(
           continue;
         }
 
-        const auto mask_weight = clamp_unit(removal_mask[index]);
+        const auto mask_weight = clamp_unit(working_mask[index]);
         const auto blend =
             std::clamp(mask_weight * (0.78 + candidate.confidence * 0.22), 0.0, 1.0);
         next_pixels[index].red = static_cast<float>(
@@ -1899,7 +2467,7 @@ void apply_local_removal(
     const auto blurred_green = box_blur(filled_green, width, height, 2);
     const auto blurred_blue = box_blur(filled_blue, width, height, 2);
     for (std::size_t index = 0; index < pixel_count; ++index) {
-      const auto mask_weight = clamp_unit(removal_mask[index]);
+      const auto mask_weight = clamp_unit(working_mask[index]);
       if (mask_weight <= 1e-4) {
         continue;
       }
@@ -1928,7 +2496,7 @@ void apply_local_removal(
     for (int y = 0; y < height; ++y) {
       for (int x = 0; x < width; ++x) {
         const auto index = static_cast<std::size_t>(y * width + x);
-        if (clamp_unit(removal_mask[index]) <= 1e-4) {
+        if (clamp_unit(working_mask[index]) <= 1e-4) {
           continue;
         }
         min_mask_x = std::min(min_mask_x, x);
@@ -1953,7 +2521,7 @@ void apply_local_removal(
       for (int y = min_search_y; y <= max_search_y; ++y) {
         for (int x = min_search_x; x <= max_search_x; ++x) {
           const auto index = static_cast<std::size_t>(y * width + x);
-          if (clamp_unit(removal_mask[index]) > 1e-4) {
+          if (clamp_unit(working_mask[index]) > 1e-4) {
             continue;
           }
           candidate_indices.push_back(index);
@@ -1968,7 +2536,7 @@ void apply_local_removal(
         for (int y = min_mask_y; y <= max_mask_y; ++y) {
           for (int x = min_mask_x; x <= max_mask_x; ++x) {
             const auto index = static_cast<std::size_t>(y * width + x);
-            const auto mask_weight = clamp_unit(removal_mask[index]);
+            const auto mask_weight = clamp_unit(working_mask[index]);
             if (mask_weight <= 1e-4) {
               continue;
             }
@@ -2003,14 +2571,14 @@ void apply_local_removal(
                       static_cast<std::size_t>(target_y * width + target_x);
                   const auto sample_index =
                       static_cast<std::size_t>(sample_y * width + sample_x);
-                  if (clamp_unit(removal_mask[sample_index]) > 1e-4) {
+                  if (clamp_unit(working_mask[sample_index]) > 1e-4) {
                     continue;
                   }
 
                   const auto context_weight =
                       1.0 / std::max(1.0, static_cast<double>(offset_x * offset_x + offset_y * offset_y));
                   const auto target_context =
-                      clamp_unit(removal_mask[target_index]) <= 0.35 ? (*pixels)[target_index]
+                      clamp_unit(working_mask[target_index]) <= 0.35 ? (*pixels)[target_index]
                                                                      : filled_pixels[target_index];
                   score += removal_color_distance(target_context, filled_pixels[sample_index]) *
                            context_weight;
@@ -2066,6 +2634,7 @@ void apply_local_clone(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
+    const PipelineColorContext& context,
     const std::vector<LocalMask>& masks) {
   if (pixels == nullptr || width <= 0 || height <= 0) {
     return;
@@ -2096,7 +2665,7 @@ void apply_local_clone(
             width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
         const auto normalized_y =
             height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
-        const auto weight = local_mask_weight(normalized_x, normalized_y, source_pixels[index], mask);
+        const auto weight = local_mask_weight(normalized_x, normalized_y, source_pixels[index], context, mask);
         if (weight <= 1e-4) {
           continue;
         }
@@ -2123,10 +2692,80 @@ void apply_local_clone(
   }
 }
 
+[[nodiscard]] bool inpaint_patch_available(const LocalMask& mask) {
+  return mask.enabled && mask.remove_strength > 1e-6 &&
+         mask.inpaint_patch_width > 0 && mask.inpaint_patch_height > 0 &&
+         mask.inpaint_patch_pixels.size() ==
+             static_cast<std::size_t>(mask.inpaint_patch_width * mask.inpaint_patch_height);
+}
+
+[[nodiscard]] bool has_local_inpaint_patch(const std::vector<LocalMask>& masks) {
+  for (const auto& mask : masks) {
+    if (inpaint_patch_available(mask)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void apply_local_inpaint_patches(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const PipelineColorContext& context,
+    const std::vector<LocalMask>& masks) {
+  if (pixels == nullptr || width <= 0 || height <= 0) {
+    return;
+  }
+
+  for (const auto& mask : masks) {
+    if (!inpaint_patch_available(mask)) {
+      continue;
+    }
+
+    for (int patch_y = 0; patch_y < mask.inpaint_patch_height; ++patch_y) {
+      const auto target_y = mask.inpaint_patch_y + patch_y;
+      if (target_y < 0 || target_y >= height) {
+        continue;
+      }
+      for (int patch_x = 0; patch_x < mask.inpaint_patch_width; ++patch_x) {
+        const auto target_x = mask.inpaint_patch_x + patch_x;
+        if (target_x < 0 || target_x >= width) {
+          continue;
+        }
+
+        const auto target_index = static_cast<std::size_t>(target_y * width + target_x);
+        const auto patch_index =
+            static_cast<std::size_t>(patch_y * mask.inpaint_patch_width + patch_x);
+        const auto normalized_x =
+            width > 1 ? static_cast<double>(target_x) / static_cast<double>(width - 1) : 0.5;
+        const auto normalized_y =
+            height > 1 ? static_cast<double>(target_y) / static_cast<double>(height - 1) : 0.5;
+        const auto weight =
+            local_mask_weight(normalized_x, normalized_y, (*pixels)[target_index], context, mask) *
+            clamp_unit(mask.remove_strength / 100.0);
+        if (weight <= 1e-4) {
+          continue;
+        }
+
+        const auto& patch_pixel = mask.inpaint_patch_pixels[patch_index];
+        auto& target_pixel = (*pixels)[target_index];
+        target_pixel.red = static_cast<float>(
+            std::lerp(static_cast<double>(target_pixel.red), static_cast<double>(patch_pixel.red), weight));
+        target_pixel.green = static_cast<float>(
+            std::lerp(static_cast<double>(target_pixel.green), static_cast<double>(patch_pixel.green), weight));
+        target_pixel.blue = static_cast<float>(
+            std::lerp(static_cast<double>(target_pixel.blue), static_cast<double>(patch_pixel.blue), weight));
+      }
+    }
+  }
+}
+
 [[nodiscard]] double composite_local_mask_weight(
     double normalized_x,
     double normalized_y,
     const ColorPixel& pixel,
+    const PipelineColorContext& context,
     const std::vector<LocalMask>& masks) {
   auto composite_weight = 0.0;
   auto initialized = false;
@@ -2136,7 +2775,7 @@ void apply_local_clone(
       continue;
     }
 
-    const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, mask);
+    const auto raw_weight = local_mask_weight(normalized_x, normalized_y, pixel, context, mask);
     accumulate_composite_weight(raw_weight, mask.operation, &composite_weight, &initialized);
   }
 
@@ -2147,8 +2786,8 @@ void apply_local_clone(
     const std::vector<ColorPixel>& pixels,
     int width,
     int height,
-    double exposure_gain,
-    const std::array<double, 3>& white_balance,
+    const InputStageParameters& input_stage,
+    const PipelineColorContext& context,
     const std::vector<LocalMask>& masks) {
   const auto pixel_count = static_cast<std::size_t>(width * height);
   std::vector<float> weights(pixel_count, 0.0F);
@@ -2159,18 +2798,12 @@ void apply_local_clone(
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
       const auto index = static_cast<std::size_t>(y * width + x);
-      auto pixel = pixels[index];
-      pixel.red = static_cast<float>(
-          std::max(0.0, static_cast<double>(pixel.red) * exposure_gain * white_balance[0]));
-      pixel.green = static_cast<float>(
-          std::max(0.0, static_cast<double>(pixel.green) * exposure_gain * white_balance[1]));
-      pixel.blue = static_cast<float>(
-          std::max(0.0, static_cast<double>(pixel.blue) * exposure_gain * white_balance[2]));
+      const auto pixel = apply_input_stage(pixels[index], input_stage, context);
 
       const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
       const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
       weights[index] = static_cast<float>(
-          composite_local_mask_weight(normalized_x, normalized_y, pixel, masks));
+          composite_local_mask_weight(normalized_x, normalized_y, pixel, context, masks));
     }
   }
 
@@ -2192,7 +2825,12 @@ void apply_local_clone(
          std::abs(adjustments.colorize_strength) <= 1e-6;
 }
 
-[[nodiscard]] ColorPixel gamut_fit_oklch(double lightness, double chroma, double hue, double alpha) {
+[[nodiscard]] ColorPixel gamut_fit_oklch(
+    double lightness,
+    double chroma,
+    double hue,
+    double alpha,
+    const PipelineColorContext& context) {
   struct GamutFitResult final {
     double lightness = 0.0;
     double chroma = 0.0;
@@ -2209,7 +2847,14 @@ void apply_local_clone(
         .a = candidate_chroma * std::cos(hue),
         .b = candidate_chroma * std::sin(hue),
     };
-    auto candidate = oklab_to_linear_rgb(candidate_lab, alpha);
+    auto candidate = oklab_to_linear_rgb(candidate_lab, alpha, context);
+    if (context.render_intent == RenderIntent::RelativeColorimetric) {
+      return GamutFitResult{
+          .lightness = candidate_lightness,
+          .chroma = candidate_chroma,
+          .pixel = clamp_rgb(candidate),
+      };
+    }
     if (in_gamut(candidate)) {
       return GamutFitResult{
           .lightness = candidate_lightness,
@@ -2227,7 +2872,7 @@ void apply_local_clone(
           .a = mid * std::cos(hue),
           .b = mid * std::sin(hue),
       };
-      candidate = oklab_to_linear_rgb(candidate_lab, alpha);
+      candidate = oklab_to_linear_rgb(candidate_lab, alpha, context);
       if (in_gamut(candidate)) {
         low = mid;
       } else {
@@ -2243,7 +2888,7 @@ void apply_local_clone(
     return GamutFitResult{
         .lightness = candidate_lightness,
         .chroma = low,
-        .pixel = clamp_rgb(oklab_to_linear_rgb(candidate_lab, alpha)),
+        .pixel = clamp_rgb(oklab_to_linear_rgb(candidate_lab, alpha, context)),
     };
   };
 
@@ -2370,8 +3015,8 @@ namespace {
 
 ColorPixel apply_global_color_pipeline(
     const ColorPixel& input,
-    double exposure_gain,
-    const std::array<double, 3>& white_balance,
+    const PipelineColorContext& context,
+    const InputStageParameters& input_stage,
     const ColorAdjustmentState& state,
     const CurveEvaluationData& parametric_curve,
     const CurveEvaluationData& master_curve,
@@ -2382,19 +3027,16 @@ ColorPixel apply_global_color_pipeline(
     double vibrance_strength,
     double dehaze_strength_for_saturation,
     double shoulder_threshold) {
-  auto pixel = input;
-  pixel.red = static_cast<float>(std::max(0.0, static_cast<double>(pixel.red) * exposure_gain * white_balance[0]));
-  pixel.green = static_cast<float>(std::max(0.0, static_cast<double>(pixel.green) * exposure_gain * white_balance[1]));
-  pixel.blue = static_cast<float>(std::max(0.0, static_cast<double>(pixel.blue) * exposure_gain * white_balance[2]));
+  auto pixel = apply_input_stage(input, input_stage, context);
 
-  auto target_luminance = apply_global_tone(luminance_for_pixel(pixel), state);
+  auto target_luminance = apply_global_tone(luminance_for_pixel(pixel, context), state);
   if (shoulder_threshold < 1.0) {
     target_luminance = apply_highlight_shoulder(target_luminance, shoulder_threshold);
   }
   const auto curve_target = has_point_curve(state.master_curve_points)
                                 ? clamp_unit(target_luminance)
                                 : evaluate_curve_data(clamp_unit(target_luminance), parametric_curve);
-  pixel = scale_pixel_to_luminance(pixel, curve_target);
+  pixel = scale_pixel_to_luminance(pixel, curve_target, context);
 
   if (master_curve.points.size() >= 2) {
     pixel.red = static_cast<float>(apply_perceptual_point_curve(pixel.red, master_curve));
@@ -2415,7 +3057,7 @@ ColorPixel apply_global_color_pipeline(
     return pixel;
   }
 
-  auto oklab = linear_rgb_to_oklab(pixel);
+  auto oklab = linear_rgb_to_oklab(pixel, context);
   auto lightness = clamp_unit(oklab.lightness);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
@@ -2492,7 +3134,7 @@ ColorPixel apply_global_color_pipeline(
     hue = wrap_radians(std::atan2(grade_b, grade_a));
   }
 
-  return gamut_fit_oklch(lightness, chroma, hue, pixel.alpha);
+  return gamut_fit_oklch(lightness, chroma, hue, pixel.alpha, context);
 }
 
 }  // namespace
@@ -2511,7 +3153,31 @@ ColorLut3D build_color_lut(const ColorAdjustmentState& state) {
   };
   const auto lut_inputs_equal = [&](const ColorAdjustmentState& left, const ColorAdjustmentState& right) {
     const auto equal = [](double a, double b) { return std::abs(a - b) <= 1e-9; };
-    if (!equal(left.exposure, right.exposure) ||
+    if (left.input_transform.input_profile_name != right.input_transform.input_profile_name ||
+        !equal(left.input_transform.exposure, right.input_transform.exposure) ||
+        !equal(left.input_transform.temperature, right.input_transform.temperature) ||
+        !equal(left.input_transform.tint, right.input_transform.tint) ||
+        left.input_transform.raw_input_transform_enabled != right.input_transform.raw_input_transform_enabled ||
+        left.input_transform.highlight_recovery_enabled != right.input_transform.highlight_recovery_enabled ||
+        left.input_transform.highlight_reconstruction_mode !=
+            right.input_transform.highlight_reconstruction_mode ||
+        left.input_transform.chromatic_adaptation_method !=
+            right.input_transform.chromatic_adaptation_method ||
+        left.input_transform.gamut_mapping_enabled != right.input_transform.gamut_mapping_enabled ||
+        left.input_transform.lens_correction_enabled != right.input_transform.lens_correction_enabled ||
+        left.input_transform.raw_white_balance_override_enabled !=
+            right.input_transform.raw_white_balance_override_enabled ||
+        !equal(left.input_transform.raw_white_balance_temperature,
+               right.input_transform.raw_white_balance_temperature) ||
+        !equal(left.input_transform.raw_white_balance_tint, right.input_transform.raw_white_balance_tint) ||
+        left.color_pipeline.input_profile.profile_name != right.color_pipeline.input_profile.profile_name ||
+        left.color_pipeline.working_profile.profile_name != right.color_pipeline.working_profile.profile_name ||
+        left.color_pipeline.preview_output_profile.profile_name !=
+            right.color_pipeline.preview_output_profile.profile_name ||
+        left.color_pipeline.export_output_profile.profile_name !=
+            right.color_pipeline.export_output_profile.profile_name ||
+        left.color_pipeline.render_intent != right.color_pipeline.render_intent ||
+        !equal(left.exposure, right.exposure) ||
         !equal(left.contrast, right.contrast) ||
         !equal(left.highlights, right.highlights) ||
         !equal(left.shadows, right.shadows) ||
@@ -2573,8 +3239,8 @@ ColorLut3D build_color_lut(const ColorAdjustmentState& state) {
   const auto total = static_cast<std::size_t>(kLutSize * kLutSize * kLutSize);
   lut.table.resize(total);
 
-  const auto exposure_gain = std::pow(2.0, state.exposure);
-  const auto white_balance = white_balance_multipliers(state.temperature, state.tint);
+  const auto color_context = make_pipeline_color_context(state);
+  const auto input_stage = make_input_stage_parameters(state, color_context);
   const auto parametric_curve = build_parametric_curve_data(state);
   const auto master_curve = build_curve_data(state.master_curve_points);
   const auto red_curve = build_curve_data(state.red_curve_points);
@@ -2593,10 +3259,16 @@ ColorLut3D build_color_lut(const ColorAdjustmentState& state) {
         const auto r = static_cast<double>(ri) / static_cast<double>(kLutSize - 1);
         const auto g = static_cast<double>(gi) / static_cast<double>(kLutSize - 1);
         const auto b = static_cast<double>(bi) / static_cast<double>(kLutSize - 1);
-        const auto exposed_r = std::max(0.0, r * exposure_gain * white_balance[0]);
-        const auto exposed_g = std::max(0.0, g * exposure_gain * white_balance[1]);
-        const auto exposed_b = std::max(0.0, b * exposure_gain * white_balance[2]);
-        const auto lum = exposed_r * 0.2126 + exposed_g * 0.7152 + exposed_b * 0.0722;
+        auto sample = apply_input_stage(
+            ColorPixel{
+                .red = static_cast<float>(r),
+                .green = static_cast<float>(g),
+                .blue = static_cast<float>(b),
+                .alpha = 1.0F,
+            },
+            input_stage,
+            color_context);
+        const auto lum = luminance_for_pixel(sample, color_context);
         const auto target = apply_global_tone(lum, state);
         max_target_luminance = std::max(max_target_luminance, target);
       }
@@ -2619,7 +3291,8 @@ ColorLut3D build_color_lut(const ColorAdjustmentState& state) {
                 .blue = static_cast<float>(b),
                 .alpha = 1.0F,
             },
-            exposure_gain, white_balance, state,
+            color_context,
+            input_stage, state,
             parametric_curve,
             master_curve, red_curve, green_curve, blue_curve,
             saturation_strength, vibrance_strength, dehaze_strength,
@@ -2706,13 +3379,31 @@ void apply_color_adjustments(
     int width,
     int height,
     const ColorAdjustmentState& state,
-    RemovalQuality removal_quality) {
+    RemovalQuality removal_quality,
+    CancellationToken cancellation) {
   if (pixels == nullptr || width <= 0 || height <= 0 ||
       pixels->size() != static_cast<std::size_t>(width * height)) {
     return;
   }
+  if (cancellation.cancelled()) {
+    return;
+  }
+
+  const auto color_context = make_pipeline_color_context(state);
+  const auto& effective_retouch_masks =
+      state.retouch_masks.empty() ? state.local_masks : state.retouch_masks;
+  const auto has_local_patch = has_local_inpaint_patch(effective_retouch_masks);
+  if (has_local_patch) {
+    apply_local_inpaint_patches(pixels, width, height, color_context, effective_retouch_masks);
+    if (cancellation.cancelled()) {
+      return;
+    }
+  }
 
   apply_optical_corrections(pixels, width, height, state);
+  if (cancellation.cancelled()) {
+    return;
+  }
 
   const auto texture_strength = clamp_signed_percent(state.texture) / 100.0;
   const auto clarity_strength = clamp_signed_percent(state.clarity) / 100.0;
@@ -2722,8 +3413,6 @@ void apply_color_adjustments(
   const auto luma_nr_strength = clamp_signed_percent(state.luminance_nr) / 100.0;
   const auto color_nr_strength = clamp_signed_percent(state.color_nr) / 100.0;
   const auto uses_native_local_mask_sets = !state.local_mask_sets.empty();
-  const auto& effective_retouch_masks =
-      state.retouch_masks.empty() ? state.local_masks : state.retouch_masks;
   const auto has_spatial_tone_color =
       state.linear_mask_enabled || state.radial_mask_enabled ||
       uses_native_local_mask_sets || !state.local_masks.empty() ||
@@ -2739,12 +3428,14 @@ void apply_color_adjustments(
   // Fast path: no masks or spatial tone/color effects — use precomputed 3D LUT
   if (!has_spatial_tone_color) {
     const auto lut = build_color_lut(state);
+    if (cancellation.cancelled()) {
+      return;
+    }
 
     // Precompute pipeline parameters for exact neutral-pixel computation.
     // Trilinear LUT interpolation uses off-diagonal grid corners that introduce
     // small errors for achromatic inputs; computing directly avoids this.
-    const auto fast_exposure_gain = std::pow(2.0, state.exposure);
-    const auto fast_white_balance = white_balance_multipliers(state.temperature, state.tint);
+    const auto fast_input_stage = make_input_stage_parameters(state, color_context);
     const auto fast_parametric_curve = build_parametric_curve_data(state);
     const auto fast_master_curve = build_curve_data(state.master_curve_points);
     const auto fast_red_curve = build_curve_data(state.red_curve_points);
@@ -2756,13 +3447,17 @@ void apply_color_adjustments(
     // Use the same global shoulder threshold that the LUT was built with.
     const auto fast_shoulder = lut.shoulder_threshold;
 
-    for (auto& pixel : *pixels) {
+    for (std::size_t index = 0; index < pixels->size(); ++index) {
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
+      auto& pixel = (*pixels)[index];
       const auto max_diff = std::max({std::abs(pixel.red - pixel.green),
                                        std::abs(pixel.green - pixel.blue),
                                        std::abs(pixel.red - pixel.blue)});
       if (max_diff < 1e-9 || has_extended_range_rgb(pixel)) {
         pixel = apply_global_color_pipeline(
-            pixel, fast_exposure_gain, fast_white_balance, state,
+            pixel, color_context, fast_input_stage, state,
             fast_parametric_curve,
             fast_master_curve, fast_red_curve, fast_green_curve, fast_blue_curve,
             fast_sat, fast_vib, fast_dehaze, fast_shoulder);
@@ -2771,10 +3466,12 @@ void apply_color_adjustments(
       }
     }
   } else {
+  if (cancellation.cancelled()) {
+    return;
+  }
 
   // Slow path: masks and/or texture/clarity/dehaze require per-pixel spatial processing
-  const auto exposure_gain = std::pow(2.0, state.exposure);
-  const auto white_balance = white_balance_multipliers(state.temperature, state.tint);
+  const auto input_stage = make_input_stage_parameters(state, color_context);
   const auto parametric_curve = build_parametric_curve_data(state);
   const auto master_curve = build_curve_data(state.master_curve_points);
   const auto red_curve = build_curve_data(state.red_curve_points);
@@ -2784,6 +3481,8 @@ void apply_color_adjustments(
   const auto vibrance_strength = clamp_signed_percent(state.vibrance) / 100.0;
   const auto uses_legacy_local_mask_stack = !state.local_masks.empty();
   const auto stack_is_additive = local_masks_all_additive(state.local_masks);
+  const auto stack_selection_decontaminate =
+      uses_legacy_local_mask_stack ? maximum_selection_decontaminate(state.local_masks) : 0.0;
   LocalAdjustmentSettings shared_stack_adjustments;
   const auto stack_shares_adjustments =
       uses_legacy_local_mask_stack &&
@@ -2803,8 +3502,8 @@ void apply_color_adjustments(
         *pixels,
         width,
         height,
-        exposure_gain,
-        white_balance,
+        input_stage,
+        color_context,
         state.local_masks);
   }
   auto ran_pre_tone_on_gpu = false;
@@ -2815,10 +3514,12 @@ void apply_color_adjustments(
         !uses_native_local_mask_sets &&
         uses_composite_local_mask_path &&
         composite_local_mask_weights.size() == pixels->size() &&
+        stack_selection_decontaminate <= 1e-6 &&
         local_adjustments_supported_by_metal_pre_tone(shared_stack_adjustments);
     const auto can_run_pre_tone_on_gpu =
         !uses_native_local_mask_sets &&
-        (!uses_legacy_local_mask_stack || can_run_local_mask_stack_on_gpu);
+        (!uses_legacy_local_mask_stack || can_run_local_mask_stack_on_gpu) &&
+        metal_color_pipeline_supported(state);
     ran_pre_tone_on_gpu = can_run_pre_tone_on_gpu &&
                           metal.available() &&
                           metal.apply_pre_tone_effects(
@@ -2837,45 +3538,58 @@ void apply_color_adjustments(
     auto max_target_luminance = 0.0;
 
     for (int y = 0; y < height; ++y) {
+      if ((y & 0x7) == 0 && cancellation.cancelled()) {
+        return;
+      }
       for (int x = 0; x < width; ++x) {
         const auto index = static_cast<std::size_t>(y * width + x);
         auto& pixel = (*pixels)[index];
-        pixel.red = static_cast<float>(std::max(0.0, static_cast<double>(pixel.red) * exposure_gain * white_balance[0]));
-        pixel.green = static_cast<float>(std::max(0.0, static_cast<double>(pixel.green) * exposure_gain * white_balance[1]));
-        pixel.blue = static_cast<float>(std::max(0.0, static_cast<double>(pixel.blue) * exposure_gain * white_balance[2]));
+        pixel = apply_input_stage(pixel, input_stage, color_context);
 
         const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
         const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         if (uses_native_local_mask_sets) {
           for (const auto& mask_set : state.local_mask_sets) {
-            if (!local_mask_set_has_adjustments(mask_set)) {
+            const auto mask_weight =
+                local_mask_set_weight(normalized_x, normalized_y, pixel, color_context, mask_set);
+            const auto selection_decontaminate =
+                maximum_selection_decontaminate(mask_set);
+            if (!local_mask_set_has_adjustments(mask_set) &&
+                selection_decontaminate <= 1e-6) {
               continue;
             }
-            apply_local_adjustment_mask(
-                &pixel,
-                local_mask_set_weight(normalized_x, normalized_y, pixel, mask_set),
-                mask_set.exposure,
-                mask_set.contrast,
-                mask_set.highlights,
-                mask_set.shadows,
-                mask_set.whites,
-                mask_set.blacks,
-                mask_set.temperature,
-                mask_set.tint,
-                mask_set.vibrance,
-                mask_set.saturation,
-                mask_set.hue_shift,
-                mask_set.saturation_shift,
-                mask_set.colorize_hue,
-                mask_set.colorize_strength);
+            if (local_mask_set_has_adjustments(mask_set)) {
+              apply_local_adjustment_mask(
+                  &pixel,
+                  color_context,
+                  mask_weight,
+                  mask_set.exposure,
+                  mask_set.contrast,
+                  mask_set.highlights,
+                  mask_set.shadows,
+                  mask_set.whites,
+                  mask_set.blacks,
+                  mask_set.temperature,
+                  mask_set.tint,
+                  mask_set.vibrance,
+                  mask_set.saturation,
+                  mask_set.hue_shift,
+                  mask_set.saturation_shift,
+                  mask_set.colorize_hue,
+                  mask_set.colorize_strength);
+            }
+            apply_mask_edge_cleanup(&pixel, color_context, mask_weight, selection_decontaminate);
           }
         } else if (uses_legacy_local_mask_stack) {
           if (uses_composite_local_mask_path) {
+            const auto composite_weight =
+                composite_local_mask_weights.empty()
+                    ? composite_local_mask_weight(normalized_x, normalized_y, pixel, color_context, state.local_masks)
+                    : static_cast<double>(composite_local_mask_weights[index]);
             apply_local_adjustment_mask(
                 &pixel,
-                composite_local_mask_weights.empty()
-                    ? composite_local_mask_weight(normalized_x, normalized_y, pixel, state.local_masks)
-                    : static_cast<double>(composite_local_mask_weights[index]),
+                color_context,
+                composite_weight,
                 shared_stack_adjustments.exposure,
                 shared_stack_adjustments.contrast,
                 shared_stack_adjustments.highlights,
@@ -2890,11 +3604,13 @@ void apply_color_adjustments(
                 shared_stack_adjustments.saturation_shift,
                 shared_stack_adjustments.colorize_hue,
                 shared_stack_adjustments.colorize_strength);
+            apply_mask_edge_cleanup(&pixel, color_context, composite_weight, stack_selection_decontaminate);
           } else {
             for (const auto& mask : state.local_masks) {
               apply_local_adjustment_mask(
                   &pixel,
-                  local_mask_weight(normalized_x, normalized_y, pixel, mask),
+                  color_context,
+                  local_mask_weight(normalized_x, normalized_y, pixel, color_context, mask),
                   mask.exposure,
                   mask.contrast,
                   mask.highlights,
@@ -2910,6 +3626,11 @@ void apply_color_adjustments(
                   mask.colorize_hue,
                   mask.colorize_strength);
             }
+            apply_mask_edge_cleanup(
+                &pixel,
+                color_context,
+                composite_local_mask_weight(normalized_x, normalized_y, pixel, color_context, state.local_masks),
+                stack_selection_decontaminate);
           }
         } else {
           if (state.linear_mask_enabled) {
@@ -2919,6 +3640,7 @@ void apply_color_adjustments(
                 clamp_unit(((state.linear_mask_position - axis_coordinate) / gradient_feather) + 0.5);
             apply_local_adjustment_mask(
                 &pixel,
+                color_context,
                 mask_weight,
                 state.linear_mask_exposure,
                 0.0,
@@ -2937,6 +3659,7 @@ void apply_color_adjustments(
           }
           apply_local_adjustment_mask(
               &pixel,
+              color_context,
               radial_mask_weight(normalized_x, normalized_y, state),
               state.radial_mask_exposure,
               0.0,
@@ -2954,13 +3677,16 @@ void apply_color_adjustments(
               0.0);
         }
 
-        target_luminances[index] = apply_global_tone(luminance_for_pixel(pixel), state);
+        target_luminances[index] = apply_global_tone(luminance_for_pixel(pixel, color_context), state);
         max_target_luminance = std::max(max_target_luminance, target_luminances[index]);
       }
     }
 
     const auto shoulder_threshold = shoulder_threshold_for_max_luminance(max_target_luminance);
     for (std::size_t index = 0; index < pixels->size(); ++index) {
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
       auto target_luminance = target_luminances[index];
       if (shoulder_threshold < 1.0) {
         target_luminance = apply_highlight_shoulder(target_luminance, shoulder_threshold);
@@ -2968,15 +3694,19 @@ void apply_color_adjustments(
       const auto curve_target = has_point_curve(state.master_curve_points)
                                     ? clamp_unit(target_luminance)
                                     : evaluate_curve_data(clamp_unit(target_luminance), parametric_curve);
-      (*pixels)[index] = scale_pixel_to_luminance((*pixels)[index], curve_target);
+      (*pixels)[index] = scale_pixel_to_luminance((*pixels)[index], curve_target, color_context);
     }
   }
 
   if (std::abs(texture_strength) > 1e-6 || std::abs(clarity_strength) > 1e-6 ||
       std::abs(dehaze_strength) > 1e-6) {
+    if (cancellation.cancelled()) {
+      return;
+    }
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
     auto& metal = metal_backend();
     if (!metal.available() ||
+        !metal_color_pipeline_supported(state) ||
         !metal.apply_spatial_tone_effects(
             pixels,
             width,
@@ -2987,14 +3717,29 @@ void apply_color_adjustments(
 #endif
     std::vector<float> luminance_buffer(static_cast<std::size_t>(width * height), 0.0F);
     for (std::size_t index = 0; index < pixels->size(); ++index) {
-      luminance_buffer[index] = static_cast<float>(luminance_for_pixel((*pixels)[index]));
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
+      luminance_buffer[index] = static_cast<float>(luminance_for_pixel((*pixels)[index], color_context));
     }
 
     const auto texture_blur = gaussian_approximate_blur(luminance_buffer, width, height, 2);
+    if (cancellation.cancelled()) {
+      return;
+    }
     const auto clarity_blur = gaussian_approximate_blur(luminance_buffer, width, height, 8);
+    if (cancellation.cancelled()) {
+      return;
+    }
     const auto haze_blur = gaussian_approximate_blur(luminance_buffer, width, height, 20);
+    if (cancellation.cancelled()) {
+      return;
+    }
 
     for (std::size_t index = 0; index < pixels->size(); ++index) {
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
       const auto luminance = static_cast<double>(luminance_buffer[index]);
       const auto midtone_weight = bell_weight(luminance, 0.5, 0.42);
       const auto highlight_headroom = 1.0 - smoothstep(0.74, 0.98, luminance);
@@ -3013,7 +3758,7 @@ void apply_color_adjustments(
       target_luminance += texture_strength * texture_signal * (0.30 + midtone_weight * 0.55) * texture_gain;
       target_luminance += clarity_strength * clarity_signal * midtone_weight * highlight_headroom * clarity_gain;
       target_luminance += dehaze_strength * haze_signal * (0.22 + midtone_weight * 0.48) * highlight_headroom * dehaze_gain;
-      (*pixels)[index] = scale_pixel_to_luminance((*pixels)[index], target_luminance);
+      (*pixels)[index] = scale_pixel_to_luminance((*pixels)[index], target_luminance, color_context);
     }
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
     }
@@ -3024,12 +3769,18 @@ void apply_color_adjustments(
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   {
     auto& metal = metal_backend();
-    ran_post_color_on_gpu = metal.available() && metal.apply_post_color_effects(pixels, width, height, state);
+    ran_post_color_on_gpu =
+        metal.available() && metal_color_pipeline_supported(state) &&
+        metal.apply_post_color_effects(pixels, width, height, state);
   }
 #endif
 
   if (!ran_post_color_on_gpu) {
-  for (auto& pixel : *pixels) {
+  for (std::size_t index = 0; index < pixels->size(); ++index) {
+    if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+      return;
+    }
+    auto& pixel = (*pixels)[index];
     if (master_curve.points.size() >= 2) {
       pixel.red = static_cast<float>(apply_perceptual_point_curve(pixel.red, master_curve));
       pixel.green = static_cast<float>(apply_perceptual_point_curve(pixel.green, master_curve));
@@ -3049,7 +3800,7 @@ void apply_color_adjustments(
       continue;
     }
 
-    auto oklab = linear_rgb_to_oklab(pixel);
+    auto oklab = linear_rgb_to_oklab(pixel, color_context);
     auto lightness = clamp_unit(oklab.lightness);
     auto chroma = std::hypot(oklab.a, oklab.b);
     auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
@@ -3123,19 +3874,28 @@ void apply_color_adjustments(
       hue = wrap_radians(std::atan2(grade_b, grade_a));
     }
 
-    pixel = gamut_fit_oklch(lightness, chroma, hue, pixel.alpha);
+    pixel = gamut_fit_oklch(lightness, chroma, hue, pixel.alpha, color_context);
   }
   }
   }  // end slow path (else)
 
   if (has_local_clone) {
-    apply_local_clone(pixels, width, height, effective_retouch_masks);
+    if (cancellation.cancelled()) {
+      return;
+    }
+    apply_local_clone(pixels, width, height, color_context, effective_retouch_masks);
+    if (cancellation.cancelled()) {
+      return;
+    }
   }
 
   if (has_local_heal) {
     std::vector<double> heal_mask(static_cast<std::size_t>(width * height), 0.0);
     auto has_nonzero_heal = false;
     for (int y = 0; y < height; ++y) {
+      if ((y & 0x7) == 0 && cancellation.cancelled()) {
+        return;
+      }
       for (int x = 0; x < width; ++x) {
         const auto index = static_cast<std::size_t>(y * width + x);
         const auto normalized_x =
@@ -3143,12 +3903,15 @@ void apply_color_adjustments(
         const auto normalized_y =
             height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         heal_mask[index] = composite_local_removal_weight(
-            normalized_x, normalized_y, (*pixels)[index], effective_retouch_masks, "heal");
+            normalized_x, normalized_y, (*pixels)[index], color_context, effective_retouch_masks, "heal");
         has_nonzero_heal = has_nonzero_heal || heal_mask[index] > 1e-4;
       }
     }
     if (has_nonzero_heal) {
       apply_local_removal(pixels, width, height, heal_mask, 0.55, removal_quality);
+      if (cancellation.cancelled()) {
+        return;
+      }
     }
   }
 
@@ -3156,6 +3919,9 @@ void apply_color_adjustments(
     std::vector<double> removal_mask(static_cast<std::size_t>(width * height), 0.0);
     auto has_nonzero_removal = false;
     for (int y = 0; y < height; ++y) {
+      if ((y & 0x7) == 0 && cancellation.cancelled()) {
+        return;
+      }
       for (int x = 0; x < width; ++x) {
         const auto index = static_cast<std::size_t>(y * width + x);
         const auto normalized_x =
@@ -3163,21 +3929,28 @@ void apply_color_adjustments(
         const auto normalized_y =
             height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
         removal_mask[index] = composite_local_removal_weight(
-            normalized_x, normalized_y, (*pixels)[index], effective_retouch_masks, "");
+            normalized_x, normalized_y, (*pixels)[index], color_context, effective_retouch_masks, "");
         has_nonzero_removal = has_nonzero_removal || removal_mask[index] > 1e-4;
       }
     }
     if (has_nonzero_removal) {
       apply_local_removal(pixels, width, height, removal_mask, 0.0, removal_quality);
+      if (cancellation.cancelled()) {
+        return;
+      }
     }
   }
 
   // ── Detail pass: sharpening and noise reduction in OKLab space ──
   // Runs after both the fast (LUT) and slow (per-pixel) tone/color paths.
   if (has_detail_effects) {
+    if (cancellation.cancelled()) {
+      return;
+    }
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
     auto& metal = metal_backend();
     if (metal.available() &&
+        metal_color_pipeline_supported(state) &&
         metal.apply_detail_effects(
             pixels,
             width,
@@ -3197,7 +3970,10 @@ void apply_color_adjustments(
     std::vector<float> chroma_b_buf(pixel_count);
 
     for (std::size_t i = 0; i < pixel_count; ++i) {
-      const auto ok = linear_rgb_to_oklab((*pixels)[i]);
+      if ((i & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
+      const auto ok = linear_rgb_to_oklab((*pixels)[i], color_context);
       lightness_buf[i] = static_cast<float>(ok.lightness);
       chroma_a_buf[i] = static_cast<float>(ok.a);
       chroma_b_buf[i] = static_cast<float>(ok.b);
@@ -3208,10 +3984,19 @@ void apply_color_adjustments(
     // parameter protects low-contrast (smooth) areas from being sharpened.
     if (std::abs(sharpen_strength) > 1e-6) {
       const auto sharp_blur = gaussian_approximate_blur(lightness_buf, width, height, 1);
+      if (cancellation.cancelled()) {
+        return;
+      }
       // Build an edge map from a wider blur for masking
       const auto edge_blur = gaussian_approximate_blur(lightness_buf, width, height, 3);
+      if (cancellation.cancelled()) {
+        return;
+      }
 
       for (std::size_t i = 0; i < pixel_count; ++i) {
+        if ((i & 0xFFFU) == 0U && cancellation.cancelled()) {
+          return;
+        }
         const auto detail_signal = lightness_buf[i] - sharp_blur[i];
         // Edge strength: absolute local contrast used for masking
         const auto edge_strength = std::abs(lightness_buf[i] - edge_blur[i]);
@@ -3231,9 +4016,18 @@ void apply_color_adjustments(
     // is high.
     if (std::abs(luma_nr_strength) > 1e-6) {
       const auto nr_blur = gaussian_approximate_blur(lightness_buf, width, height, 2);
+      if (cancellation.cancelled()) {
+        return;
+      }
       const auto nr_edge_blur = gaussian_approximate_blur(lightness_buf, width, height, 5);
+      if (cancellation.cancelled()) {
+        return;
+      }
 
       for (std::size_t i = 0; i < pixel_count; ++i) {
+        if ((i & 0xFFFU) == 0U && cancellation.cancelled()) {
+          return;
+        }
         const auto edge = std::abs(lightness_buf[i] - nr_edge_blur[i]);
         const auto edge_preserve = 1.0 - smoothstep(0.005, 0.04, static_cast<double>(edge));
         const auto blend = luma_nr_strength * 0.85 * edge_preserve;
@@ -3248,9 +4042,18 @@ void apply_color_adjustments(
     // a wider radius and stronger blend are used.
     if (std::abs(color_nr_strength) > 1e-6) {
       const auto a_blur = gaussian_approximate_blur(chroma_a_buf, width, height, 3);
+      if (cancellation.cancelled()) {
+        return;
+      }
       const auto b_blur = gaussian_approximate_blur(chroma_b_buf, width, height, 3);
+      if (cancellation.cancelled()) {
+        return;
+      }
 
       for (std::size_t i = 0; i < pixel_count; ++i) {
+        if ((i & 0xFFFU) == 0U && cancellation.cancelled()) {
+          return;
+        }
         const auto blend = color_nr_strength * 0.90;
         chroma_a_buf[i] = static_cast<float>(
             static_cast<double>(chroma_a_buf[i]) * (1.0 - blend) +
@@ -3263,12 +4066,15 @@ void apply_color_adjustments(
 
     // Convert back from OKLab to linear RGB
     for (std::size_t i = 0; i < pixel_count; ++i) {
+      if ((i & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return;
+      }
       const auto L = clamp_unit(static_cast<double>(lightness_buf[i]));
       const auto a = static_cast<double>(chroma_a_buf[i]);
       const auto b = static_cast<double>(chroma_b_buf[i]);
       const auto c = std::hypot(a, b);
       const auto h = wrap_radians(std::atan2(b, a));
-      (*pixels)[i] = gamut_fit_oklch(L, c, h, (*pixels)[i].alpha);
+      (*pixels)[i] = gamut_fit_oklch(L, c, h, (*pixels)[i].alpha, color_context);
     }
   }
 }

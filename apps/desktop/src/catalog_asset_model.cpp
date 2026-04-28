@@ -25,6 +25,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QPointer>
 #include <QProcessEnvironment>
 #include <QSaveFile>
 #include <QStorageInfo>
@@ -263,6 +264,37 @@ QString format_datetime(const QDateTime& datetime, const QString& fallback) {
   }
 
   return QLocale().toString(datetime, QStringLiteral("MMM d, yyyy  h:mm AP"));
+}
+
+QDateTime parse_job_timestamp_utc(const QString& timestamp) {
+  const auto trimmed = timestamp.trimmed();
+  if (trimmed.isEmpty()) {
+    return {};
+  }
+
+  auto parsed = QDateTime::fromString(trimmed, Qt::ISODateWithMs);
+  if (!parsed.isValid()) {
+    parsed = QDateTime::fromString(trimmed, Qt::ISODate);
+  }
+  if (!parsed.isValid()) {
+    return {};
+  }
+
+  return parsed.toUTC();
+}
+
+bool is_import_job_active(const PersistentJobRecord& record) {
+  return record.job_kind == QStringLiteral("catalog_import") &&
+         (record.status == QStringLiteral("Queued") ||
+          record.status == QStringLiteral("Running") ||
+          record.status == QStringLiteral("Canceling"));
+}
+
+bool is_import_job_finished(const PersistentJobRecord& record) {
+  return record.job_kind == QStringLiteral("catalog_import") &&
+         (record.status == QStringLiteral("Completed") ||
+          record.status == QStringLiteral("Failed") ||
+          record.status == QStringLiteral("Canceled"));
 }
 
 QDate parse_capture_date(const QJsonObject& asset) {
@@ -1013,7 +1045,9 @@ QVector<CatalogAssetItem> parse_assets(const QJsonArray& asset_array) {
 
 }  // namespace
 
-CatalogAssetModel::CatalogAssetModel(QObject* parent) : QAbstractListModel(parent) {
+CatalogAssetModel::CatalogAssetModel(QObject* parent)
+    : QAbstractListModel(parent),
+      import_job_observation_started_at_(QDateTime::currentDateTimeUtc().toString(Qt::ISODate)) {
   loadProjects();
   rebuildImportSources();
 
@@ -1034,6 +1068,7 @@ CatalogAssetModel::CatalogAssetModel(QObject* parent) : QAbstractListModel(paren
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &CatalogAssetModel::pollActiveImportJob);
 
   connect(&thumbnail_watcher_, &QFutureWatcher<ThumbnailTaskResult>::finished, this, &CatalogAssetModel::handleThumbnailFinished);
+  connect(&delete_watcher_, &QFutureWatcher<DeleteAssetsTaskResult>::finished, this, &CatalogAssetModel::handleDeleteFinished);
 }
 
 int CatalogAssetModel::rowCount(const QModelIndex& parent) const {
@@ -1160,7 +1195,13 @@ bool CatalogAssetModel::loading() const { return loading_; }
 
 bool CatalogAssetModel::importing() const { return importing_; }
 
-bool CatalogAssetModel::busy() const { return loading_ || importing_; }
+bool CatalogAssetModel::deleting() const { return deleting_; }
+
+int CatalogAssetModel::deleteProgress() const { return delete_progress_; }
+
+int CatalogAssetModel::deleteTargetCount() const { return delete_target_count_; }
+
+bool CatalogAssetModel::busy() const { return loading_ || importing_ || deleting_; }
 
 int CatalogAssetModel::assetCount() const { return static_cast<int>(assets_.size()); }
 
@@ -1693,6 +1734,28 @@ void CatalogAssetModel::selectIndex(int index) {
   setSelectedIndexInternal(index);
 }
 
+void CatalogAssetModel::selectAll() {
+  if (assets_.isEmpty()) {
+    return;
+  }
+
+  QSet<QString> next_selected_asset_ids;
+  next_selected_asset_ids.reserve(assets_.size());
+  for (const auto& item : assets_) {
+    next_selected_asset_ids.insert(item.asset_id);
+  }
+
+  const auto selection_set_changed = selected_asset_ids_ != next_selected_asset_ids;
+  selected_asset_ids_ = next_selected_asset_ids;
+  if (selected_index_ < 0 || selected_index_ >= assets_.size()) {
+    setSelectedIndexInternal(0);
+  }
+
+  if (selection_set_changed) {
+    emit selectionChanged();
+  }
+}
+
 void CatalogAssetModel::selectRelative(int offset) {
   if (offset == 0 || assets_.isEmpty()) {
     return;
@@ -2039,74 +2102,60 @@ void CatalogAssetModel::clearSecondarySelection() {
 }
 
 void CatalogAssetModel::deleteSelectedAssets() {
+  if (deleting_) {
+    return;
+  }
+
   const auto selected_ids = selectedAssetIds();
   if (selected_ids.isEmpty()) {
     return;
   }
 
-  QString error_message;
-  for (const auto& asset_id : selected_ids) {
-    if (asset_id.isEmpty()) {
-      continue;
+  setDeleting(true);
+  setDeleteTargetCount(static_cast<int>(selected_ids.size()));
+  setDeleteProgress(0);
+  setErrorMessage({});
+  setStatus(QStringLiteral("Removing %1 selected %2 from the gallery...")
+                .arg(selected_ids.size())
+                .arg(selected_ids.size() == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
+
+  const auto target_ids = selected_ids;
+  QPointer<CatalogAssetModel> that(this);
+  delete_watcher_.setFuture(QtConcurrent::run([that, target_ids]() {
+    DeleteAssetsTaskResult result;
+    result.total_count = static_cast<int>(target_ids.size());
+
+    auto completed_count = 0;
+    for (const auto& asset_id : target_ids) {
+      if (asset_id.isEmpty()) {
+        continue;
+      }
+
+      QString error_message;
+      if (that == nullptr ||
+          !that->runCatalogStateCommand({QStringLiteral("delete-asset"), asset_id}, &error_message)) {
+        result.error_message = error_message.isEmpty()
+                                   ? QStringLiteral("Unable to remove the selection from the gallery.")
+                                   : error_message;
+        break;
+      }
+
+      result.deleted_asset_ids.push_back(asset_id);
+      ++completed_count;
+      if (that != nullptr) {
+        QMetaObject::invokeMethod(
+            that,
+            [that, completed_count]() {
+              if (that != nullptr) {
+                that->setDeleteProgress(completed_count);
+              }
+            },
+            Qt::QueuedConnection);
+      }
     }
-    if (!runCatalogStateCommand({QStringLiteral("delete-asset"), asset_id}, &error_message)) {
-      setStatus(error_message.isEmpty() ? QStringLiteral("Unable to remove the selection from the gallery.")
-                                        : error_message);
-      return;
-    }
-  }
 
-  QSet<QString> deleted_asset_ids;
-  deleted_asset_ids.reserve(selected_ids.size());
-  for (const auto& asset_id : selected_ids) {
-    if (!asset_id.isEmpty()) {
-      deleted_asset_ids.insert(asset_id);
-    }
-  }
-
-  if (deleted_asset_ids.isEmpty()) {
-    return;
-  }
-
-  const auto previous_total_count = all_assets_.size();
-  all_assets_.erase(
-      std::remove_if(
-          all_assets_.begin(),
-          all_assets_.end(),
-          [&deleted_asset_ids](const CatalogAssetItem& item) {
-            return deleted_asset_ids.contains(item.asset_id);
-          }),
-      all_assets_.end());
-
-  for (auto& project : projects_) {
-    for (const auto& asset_id : deleted_asset_ids) {
-      project.asset_ids.remove(asset_id);
-    }
-  }
-
-  for (const auto& asset_id : deleted_asset_ids) {
-    culling_states_.remove(asset_id);
-    recipe_overrides_.remove(asset_id);
-    relinked_file_paths_.remove(asset_id);
-    queued_thumbnail_asset_ids_.remove(asset_id);
-    pending_thumbnail_asset_ids_.removeAll(asset_id);
-  }
-
-  rebuildProjectMetadata();
-  rebuildCaptureYears();
-  rebuildBurstMetadata();
-  rebuildIntelligenceMetadata();
-  bumpProjectStatsRevision();
-  saveProjects();
-  applyFilters();
-
-  if (previous_total_count != all_assets_.size()) {
-    emit totalAssetCountChanged();
-  }
-
-  setStatus(QStringLiteral("Removed %1 %2 from the gallery.")
-                .arg(deleted_asset_ids.size())
-                .arg(deleted_asset_ids.size() == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
+    return result;
+  }));
 }
 
 int CatalogAssetModel::applyRecipeJsonToAssetIds(
@@ -2393,6 +2442,51 @@ void CatalogAssetModel::handleImportFinished(int exit_code, QProcess::ExitStatus
 
 void CatalogAssetModel::pollActiveImportJob() {
   if (active_import_job_.job_id.isEmpty()) {
+    const auto records = loadPersistedJobRecords();
+    PersistentJobRecord latest_active_import_job;
+    auto latest_active_updated_at = QDateTime{};
+    auto has_active_import_job = false;
+    auto observed_finished_import_job = false;
+    const auto observation_started_at = parse_job_timestamp_utc(import_job_observation_started_at_);
+
+    for (const auto& record : records) {
+      if (is_import_job_active(record)) {
+        const auto updated_at = parse_job_timestamp_utc(record.updated_at);
+        if (!has_active_import_job || !latest_active_updated_at.isValid() ||
+            (updated_at.isValid() && updated_at > latest_active_updated_at)) {
+          latest_active_import_job = record;
+          latest_active_updated_at = updated_at;
+        }
+        has_active_import_job = true;
+        continue;
+      }
+
+      if (!is_import_job_finished(record) || observed_finished_import_job_ids_.contains(record.job_id)) {
+        continue;
+      }
+
+      const auto updated_at = parse_job_timestamp_utc(record.updated_at);
+      if (observation_started_at.isValid() && updated_at.isValid() && updated_at < observation_started_at) {
+        continue;
+      }
+
+      observed_finished_import_job = true;
+      observed_finished_import_job_ids_.insert(record.job_id);
+    }
+
+    if (has_active_import_job) {
+      setImporting(true);
+      setStatus(
+          latest_active_import_job.status == QStringLiteral("Queued")
+              ? QStringLiteral("Queued source import...")
+              : QStringLiteral("Importing source into catalog..."));
+      return;
+    }
+
+    setImporting(false);
+    if (observed_finished_import_job) {
+      refresh();
+    }
     return;
   }
 
@@ -2445,6 +2539,33 @@ void CatalogAssetModel::pollActiveImportJob() {
   refresh();
 }
 
+void CatalogAssetModel::handleDeleteFinished() {
+  const auto result = delete_watcher_.result();
+  setDeleting(false);
+  setDeleteTargetCount(0);
+  setDeleteProgress(0);
+
+  if (!result.deleted_asset_ids.isEmpty()) {
+    removeDeletedAssets(result.deleted_asset_ids);
+  }
+
+  if (!result.error_message.isEmpty()) {
+    setErrorMessage(result.error_message);
+    if (!result.deleted_asset_ids.isEmpty()) {
+      setStatus(QStringLiteral("Removed %1 %2 before the delete stopped.")
+                    .arg(result.deleted_asset_ids.size())
+                    .arg(result.deleted_asset_ids.size() == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
+    } else {
+      setStatus(result.error_message);
+    }
+    return;
+  }
+
+  setStatus(QStringLiteral("Removed %1 %2 from the gallery.")
+                .arg(result.deleted_asset_ids.size())
+                .arg(result.deleted_asset_ids.size() == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
+}
+
 void CatalogAssetModel::setStatus(const QString& status) {
   if (status_ == status) {
     return;
@@ -2481,6 +2602,84 @@ void CatalogAssetModel::setImporting(bool importing) {
   importing_ = importing;
   emit importingChanged();
   emit busyChanged();
+}
+
+void CatalogAssetModel::setDeleting(bool deleting) {
+  if (deleting_ == deleting) {
+    return;
+  }
+
+  deleting_ = deleting;
+  emit deletingChanged();
+  emit busyChanged();
+}
+
+void CatalogAssetModel::setDeleteProgress(int delete_progress) {
+  if (delete_progress_ == delete_progress) {
+    return;
+  }
+
+  delete_progress_ = delete_progress;
+  emit deleteProgressChanged();
+}
+
+void CatalogAssetModel::setDeleteTargetCount(int delete_target_count) {
+  if (delete_target_count_ == delete_target_count) {
+    return;
+  }
+
+  delete_target_count_ = delete_target_count;
+  emit deleteProgressChanged();
+}
+
+void CatalogAssetModel::removeDeletedAssets(const QStringList& asset_ids) {
+  QSet<QString> deleted_asset_ids;
+  deleted_asset_ids.reserve(asset_ids.size());
+  for (const auto& asset_id : asset_ids) {
+    if (!asset_id.isEmpty()) {
+      deleted_asset_ids.insert(asset_id);
+    }
+  }
+
+  if (deleted_asset_ids.isEmpty()) {
+    return;
+  }
+
+  const auto previous_total_count = all_assets_.size();
+  all_assets_.erase(
+      std::remove_if(
+          all_assets_.begin(),
+          all_assets_.end(),
+          [&deleted_asset_ids](const CatalogAssetItem& item) {
+            return deleted_asset_ids.contains(item.asset_id);
+          }),
+      all_assets_.end());
+
+  for (auto& project : projects_) {
+    for (const auto& asset_id : deleted_asset_ids) {
+      project.asset_ids.remove(asset_id);
+    }
+  }
+
+  for (const auto& asset_id : deleted_asset_ids) {
+    culling_states_.remove(asset_id);
+    recipe_overrides_.remove(asset_id);
+    relinked_file_paths_.remove(asset_id);
+    queued_thumbnail_asset_ids_.remove(asset_id);
+    pending_thumbnail_asset_ids_.removeAll(asset_id);
+  }
+
+  rebuildProjectMetadata();
+  rebuildCaptureYears();
+  rebuildBurstMetadata();
+  rebuildIntelligenceMetadata();
+  bumpProjectStatsRevision();
+  saveProjects();
+  applyFilters();
+
+  if (previous_total_count != all_assets_.size()) {
+    emit totalAssetCountChanged();
+  }
 }
 
 void CatalogAssetModel::beginImportJob(

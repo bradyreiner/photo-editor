@@ -23,6 +23,8 @@ Dialog {
             items: [
                 { "keys": primary("O"), "description": "Import a folder into the library." },
                 { "keys": primary("N"), "description": "Create a new timeline." },
+                { "keys": primary("A"), "description": "Select all visible items in Library, Import, or Timeline." },
+                { "keys": primary("Shift+A"), "description": "Clear the active library, import, or timeline selection." },
                 { "keys": primary("Shift+E"), "description": "Queue the current selection for export." },
                 { "keys": primary(","), "description": "Open preferences." }
             ]
@@ -37,6 +39,20 @@ Dialog {
                 { "keys": "Esc", "description": "Exit the current mask tool or deselect the active mask." },
                 { "keys": "Left", "description": "Move to the previous photo in the filmstrip." },
                 { "keys": "Right", "description": "Move to the next photo in the filmstrip." }
+            ]
+        },
+        {
+            title: "Masks",
+            accent: theme.accentWarm300,
+            items: [
+                { "keys": "B", "description": "Start the brush-add tool on the active mask." },
+                { "keys": "E", "description": "Start the brush-erase tool on the active mask." },
+                { "keys": "[ / ]", "description": "Decrease / increase brush size." },
+                { "keys": "I", "description": "Toggle invert on the active mask." },
+                { "keys": "V", "description": "Cycle mask preview mode (Color → Matte → B/W → W/B)." },
+                { "keys": "H", "description": "Start the heal brush." },
+                { "keys": "Delete", "description": "Remove the active mask." },
+                { "keys": "Tab / Shift+Tab", "description": "Cycle object candidates during smart select." }
             ]
         },
         {
@@ -87,17 +103,9 @@ Dialog {
         color: theme.alpha(theme.ink950, 0.78)
     }
 
-    background: Rectangle {
-        radius: theme.radiusPanel + 6
-        color: theme.ink900
-        border.width: 1
-        border.color: theme.alpha(theme.lineSoft, 0.78)
-
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.12) }
-            GradientStop { position: 0.08; color: theme.alpha(theme.ink850, 0.98) }
-            GradientStop { position: 1.0; color: theme.ink950 }
-        }
+    background: PopupSurface {
+        accent: theme.accentWarm400
+        accentRail: false
     }
 
     contentItem: ColumnLayout {
@@ -154,21 +162,15 @@ Dialog {
                 Repeater {
                     model: root.shortcutSections
 
-                    delegate: Rectangle {
+                    delegate: GlassSurface {
                         required property var modelData
 
                         Layout.fillWidth: true
                         radius: theme.radiusPanel
-                        color: theme.alpha(theme.ink850, 0.96)
-                        border.width: 1
-                        border.color: theme.alpha(modelData.accent, 0.38)
+                        accent: modelData.accent
+                        accentRail: false
+                        elevated: true
                         implicitHeight: body.implicitHeight + theme.panelPadding * 2
-
-                        gradient: Gradient {
-                            GradientStop { position: 0.0; color: theme.alpha(modelData.accent, 0.08) }
-                            GradientStop { position: 0.18; color: theme.alpha(theme.ink850, 0.98) }
-                            GradientStop { position: 1.0; color: theme.ink900 }
-                        }
 
                         ColumnLayout {
                             id: body
@@ -188,14 +190,13 @@ Dialog {
                             Repeater {
                                 model: modelData.items
 
-                                delegate: Rectangle {
+                                delegate: GlassSurface {
                                     required property var modelData
 
                                     Layout.fillWidth: true
                                     radius: theme.radiusControl
-                                    color: theme.alpha(theme.ink900, 0.82)
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.74)
+                                    surfaceOpacity: 0.46
+                                    edgeOpacity: 0.22
                                     implicitHeight: shortcutRow.implicitHeight + theme.space12 * 2
 
                                     RowLayout {
@@ -207,9 +208,9 @@ Dialog {
                                         Rectangle {
                                             Layout.alignment: Qt.AlignTop
                                             radius: 7
-                                            color: theme.alpha(theme.ink750, 0.92)
+                                            color: theme.alpha(theme.ink950, 0.34)
                                             border.width: 1
-                                            border.color: theme.alpha(theme.lineSoft, 0.82)
+                                            border.color: theme.alpha(theme.polar, 0.16)
                                             implicitWidth: keyLabel.implicitWidth + 18
                                             implicitHeight: keyLabel.implicitHeight + 12
 

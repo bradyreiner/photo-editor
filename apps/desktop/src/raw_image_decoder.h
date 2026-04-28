@@ -1,5 +1,7 @@
 #pragma once
 
+#include "photo_editor/pipeline/color_pipeline.h"
+
 #include <QImage>
 #include <QSize>
 #include <QString>
@@ -7,6 +9,10 @@
 namespace photo_editor::desktop {
 
 struct RawDecodeSettings final {
+  bool input_transform_enabled = true;
+  QString input_color_profile = QStringLiteral("Embedded");
+  QString highlight_reconstruction_mode = QStringLiteral("Enabled");
+  QString chromatic_adaptation_method = QStringLiteral("Bradford");
   double exposure = 0.0;
   double boost_amount = 0.0;
   double boost_shadow_amount = 1.0;
@@ -25,11 +31,17 @@ struct RawDecodeSettings final {
     const QString& file_path,
     QImage* image,
     int max_edge = 0,
-    const RawDecodeSettings& settings = {});
+    const RawDecodeSettings& settings = {},
+    photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr);
 [[nodiscard]] bool decode_raw_linear_image(
     const QString& file_path,
     QImage* image,
     int max_edge = 0,
+    const RawDecodeSettings& settings = {},
+    photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr);
+[[nodiscard]] bool read_raw_decoded_metadata(
+    const QString& file_path,
+    photo_editor::pipeline::DecodedImageMetadata* metadata,
     const RawDecodeSettings& settings = {});
 [[nodiscard]] bool native_image_supported(const QString& file_path);
 [[nodiscard]] QSize native_image_size(const QString& file_path);

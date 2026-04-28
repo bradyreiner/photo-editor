@@ -68,6 +68,8 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
     let mut assets = Vec::new();
     let mut skipped_unsupported = 0_usize;
 
+    let mount_path_str = path_to_utf8(&request.mount_path)?;
+
     for path in candidate_file_paths(request)? {
         if !is_supported_photo_path(&path) {
             skipped_unsupported += 1;
@@ -76,8 +78,8 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
 
         let metadata = extract_metadata(&path).unwrap_or_else(|_| fallback_metadata(&path));
         let relative_path = match path.strip_prefix(&request.mount_path) {
-            Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
-            Err(_) => path.to_string_lossy().into_owned(),
+            Ok(relative) => path_to_utf8(relative)?.replace('\\', "/"),
+            Err(_) => path_to_utf8(&path)?,
         };
 
         assets.push(CatalogAssetRecord {
@@ -94,7 +96,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             import_mode: request.import_mode.clone(),
             location: AssetLocation {
                 drive_id: request.drive_id.clone(),
-                root_path: request.mount_path.to_string_lossy().into_owned(),
+                root_path: mount_path_str.clone(),
                 relative_path,
                 online: true,
             },
@@ -104,7 +106,7 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
     let drive = DriveRecord {
         drive_id: request.drive_id.clone(),
         display_name: request.drive_name.clone(),
-        mount_path: request.mount_path.to_string_lossy().into_owned(),
+        mount_path: mount_path_str,
         online: true,
     };
 
@@ -289,6 +291,15 @@ fn parse_exif_date(value: &str) -> Option<(u16, u8, u8)> {
     let day = date_parts.next()?.parse::<u8>().ok()?;
 
     Some((year, month, day))
+}
+
+fn path_to_utf8(path: &Path) -> std::io::Result<String> {
+    path.to_str()
+        .map(|s| s.to_owned())
+        .ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("path is not valid UTF-8: {}", path.display()),
+        ))
 }
 
 fn stable_asset_id(drive_id: &str, relative_path: &str) -> String {

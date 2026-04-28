@@ -82,12 +82,9 @@ Popup {
         }
     }
 
-    background: Rectangle {
-        radius: theme.radius16
-        color: theme.ink900
-        border.width: 1
-        border.color: theme.alpha(theme.lineSoft, 0.85)
-
+    background: PopupSurface {
+        accent: theme.accentWarm400
+        accentRail: false
         layer.enabled: true
         layer.effect: Item {}
     }
@@ -161,6 +158,7 @@ Popup {
                 width: parent.width
                 height: 1
                 color: theme.alpha(theme.lineSoft, 0.5)
+                opacity: 0.55
             }
         }
 
@@ -177,7 +175,7 @@ Popup {
                 id: commandDelegate
                 width: commandList.width
                 height: 36
-                color: ListView.isCurrentItem ? theme.alpha(theme.accentCool400, 0.15) : mouseArea.containsMouse ? theme.alpha(theme.textFaint, 0.08) : "transparent"
+                color: ListView.isCurrentItem ? theme.alpha(theme.accentWarm400, 0.14) : mouseArea.containsMouse ? theme.alpha(theme.polar, 0.06) : "transparent"
 
                 required property int index
                 required property string label
@@ -244,6 +242,7 @@ Popup {
                 width: parent.width
                 height: 1
                 color: theme.alpha(theme.lineSoft, 0.5)
+                opacity: 0.55
             }
 
             RowLayout {

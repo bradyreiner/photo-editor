@@ -7,53 +7,43 @@ Rectangle {
 
     required property string label
     required property string value
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
 
     Theme { id: theme }
 
-    implicitHeight: 34
-    implicitWidth: Math.max(96, textColumn.implicitWidth + 18)
-    radius: theme.radiusChip
-    color: theme.alpha(theme.ink950, 0.18)
+    implicitHeight: 32
+    implicitWidth: Math.max(88, textColumn.implicitWidth + 20)
+    radius: 0
+    color: theme.alpha(theme.glassBase, 0.24)
     border.width: 1
-    border.color: theme.alpha(theme.lineSoft, 0.18)
+    border.color: theme.alpha(theme.glassEdge, 0.14)
 
     RowLayout {
         anchors.fill: parent
-        anchors.margins: 9
-        spacing: 8
-
-        Rectangle {
-            Layout.preferredWidth: 5
-            Layout.preferredHeight: 5
-            radius: 2
-            color: root.accent
-        }
-
-        Rectangle {
-            Layout.preferredWidth: 1
-            Layout.preferredHeight: 16
-            color: theme.alpha(theme.lineSoft, 0.12)
-        }
+        anchors.leftMargin: 10
+        anchors.rightMargin: 10
+        anchors.topMargin: 6
+        anchors.bottomMargin: 6
 
         ColumnLayout {
             id: textColumn
-            spacing: 1
+            spacing: 0
 
             Label {
                 text: root.label
                 color: theme.textMuted
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: 9
-                font.letterSpacing: 0.7
+                font.weight: Font.DemiBold
+                font.letterSpacing: 1.2
             }
 
             Label {
                 text: root.value
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 12
-                font.weight: Font.Medium
+                font.pixelSize: 13
+                font.weight: Font.DemiBold
             }
         }
     }

@@ -84,6 +84,17 @@ int main() {
     return fail("master point curve should brighten a lifted midpoint");
   }
 
+  ColorAdjustmentState endpoint_curve_state;
+  endpoint_curve_state.master_curve_points = {
+      {.x = 0.0, .y = 0.12},
+      {.x = 1.0, .y = 0.88},
+  };
+  const auto endpoint_curve_low = photo_editor::pipeline::evaluate_tone_curve(0.05, endpoint_curve_state);
+  const auto endpoint_curve_high = photo_editor::pipeline::evaluate_tone_curve(0.95, endpoint_curve_state);
+  if (!(endpoint_curve_low > 0.05 && endpoint_curve_high < 0.95)) {
+    return fail("master point curve endpoints should adjust black and white points");
+  }
+
   const auto perceptual_gray_input = linear_pixel_from_srgb(QColor::fromRgbF(0.5F, 0.5F, 0.5F, 1.0F));
   const auto perceptual_curve_output = srgb_from_linear_pixel(apply_single_pixel(perceptual_gray_input, point_curve_state));
   if (!(perceptual_curve_output.redF() > 0.70F &&
@@ -91,6 +102,15 @@ int main() {
         almost_equal(perceptual_curve_output.redF(), perceptual_curve_output.greenF(), 1e-5) &&
         almost_equal(perceptual_curve_output.greenF(), perceptual_curve_output.blueF(), 1e-5))) {
     return fail("master point curves should map visual mid-gray in perceptual space");
+  }
+
+  const auto low_gray_input = linear_pixel_from_srgb(QColor::fromRgbF(0.20F, 0.20F, 0.20F, 1.0F));
+  const auto low_gray_neutral = srgb_from_linear_pixel(apply_single_pixel(low_gray_input, ColorAdjustmentState{}));
+  const auto endpoint_curve_output = srgb_from_linear_pixel(apply_single_pixel(low_gray_input, endpoint_curve_state));
+  if (!(endpoint_curve_output.redF() > low_gray_neutral.redF() + 0.05F &&
+        almost_equal(endpoint_curve_output.redF(), endpoint_curve_output.greenF(), 1e-5) &&
+        almost_equal(endpoint_curve_output.greenF(), endpoint_curve_output.blueF(), 1e-5))) {
+    return fail("endpoint-only master point curves should affect rendered output");
   }
 
   const auto neutral_shadow = photo_editor::pipeline::evaluate_tone_curve(0.20, neutral_state);
@@ -865,6 +885,59 @@ int main() {
     return fail("final removal quality should resolve repeated structure toward a neutral source patch instead of leaving removed-color contamination");
   }
 
+  std::vector<ColorPixel> contrast_soft_pixels(
+      5,
+      linear_pixel_from_srgb(QColor::fromRgbF(0.30F, 0.30F, 0.30F, 1.0F)));
+  ColorAdjustmentState contrast_soft_state;
+  contrast_soft_state.local_masks = {
+      LocalMask{
+          .kind = "linear",
+          .operation = "add",
+          .enabled = true,
+          .exposure = 1.0,
+          .feather = 1.0,
+          .position = 0.5,
+      },
+  };
+  auto contrast_hard_state = contrast_soft_state;
+  contrast_hard_state.local_masks.front().selection_edge_contrast = 100.0;
+  photo_editor::pipeline::apply_color_adjustments(&contrast_soft_pixels, 5, 1, contrast_soft_state);
+  std::vector<ColorPixel> contrast_hard_pixels(
+      5,
+      linear_pixel_from_srgb(QColor::fromRgbF(0.30F, 0.30F, 0.30F, 1.0F)));
+  photo_editor::pipeline::apply_color_adjustments(&contrast_hard_pixels, 5, 1, contrast_hard_state);
+  if (!(luminance(contrast_hard_pixels[3]) + 1e-6 < luminance(contrast_soft_pixels[3]) &&
+        luminance(contrast_hard_pixels[1]) > luminance(contrast_soft_pixels[1]))) {
+    return fail("edge contrast should tighten soft selection falloff around the mask boundary");
+  }
+
+  std::vector<ColorPixel> decontaminate_pixels(
+      5,
+      linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
+  decontaminate_pixels[3] = linear_pixel_from_srgb(QColor::fromRgbF(0.12F, 0.80F, 0.24F, 1.0F));
+  const auto baseline_decontaminate_pixels = decontaminate_pixels;
+  ColorAdjustmentState decontaminate_state;
+  decontaminate_state.local_masks = {
+      LocalMask{
+          .kind = "linear",
+          .operation = "add",
+          .enabled = true,
+          .feather = 1.0,
+          .position = 0.5,
+          .selection_decontaminate = 100.0,
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(&decontaminate_pixels, 5, 1, decontaminate_state);
+  const auto baseline_green_gap =
+      std::abs(static_cast<double>(baseline_decontaminate_pixels[3].green) -
+               static_cast<double>(baseline_decontaminate_pixels[3].red));
+  const auto cleaned_green_gap =
+      std::abs(static_cast<double>(decontaminate_pixels[3].green) -
+               static_cast<double>(decontaminate_pixels[3].red));
+  if (!(cleaned_green_gap + 1e-6 < baseline_green_gap)) {
+    return fail("selection decontamination should reduce colored fringe intensity on partial mask edges");
+  }
+
   std::vector<ColorPixel> clone_pixels(5, linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));
   clone_pixels[0] = linear_pixel_from_srgb(QColor::fromRgbF(0.12F, 0.24F, 0.92F, 1.0F));
   ColorAdjustmentState clone_state;
@@ -886,6 +959,41 @@ int main() {
   if (!(clone_pixels[4].blue > clone_pixels[4].red &&
         clone_pixels[4].blue > clone_pixels[4].green)) {
     return fail("clone stamp should copy source color into the painted destination region");
+  }
+
+  std::vector<ColorPixel> inpaint_patch_pixels(
+      5,
+      linear_pixel_from_srgb(QColor::fromRgbF(0.18F, 0.18F, 0.18F, 1.0F)));
+  ColorAdjustmentState inpaint_patch_state;
+  inpaint_patch_state.local_masks = {
+      LocalMask{
+          .kind = "brush",
+          .operation = "add",
+          .retouch_mode = "remove",
+          .enabled = true,
+          .remove_strength = 100.0,
+          .brush_size = 0.34,
+          .brush_flow = 1.0,
+          .brush_points = {{.x = 0.5, .y = 0.5, .size = 0.34, .flow = 1.0}},
+          .inpaint_patch_pixels = {
+              linear_pixel_from_srgb(QColor::fromRgbF(0.18F, 0.18F, 0.18F, 1.0F)),
+              linear_pixel_from_srgb(QColor::fromRgbF(0.18F, 0.18F, 0.18F, 1.0F)),
+              linear_pixel_from_srgb(QColor::fromRgbF(0.10F, 0.82F, 0.10F, 1.0F)),
+              linear_pixel_from_srgb(QColor::fromRgbF(0.18F, 0.18F, 0.18F, 1.0F)),
+              linear_pixel_from_srgb(QColor::fromRgbF(0.18F, 0.18F, 0.18F, 1.0F)),
+          },
+          .inpaint_patch_x = 0,
+          .inpaint_patch_y = 0,
+          .inpaint_patch_width = 5,
+          .inpaint_patch_height = 1,
+          .inpaint_model_name = "test-fake-lama",
+      },
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &inpaint_patch_pixels, 5, 1, inpaint_patch_state);
+  if (!(inpaint_patch_pixels[2].green > inpaint_patch_pixels[2].red &&
+        inpaint_patch_pixels[2].green > inpaint_patch_pixels[2].blue)) {
+    return fail("baked inpaint patch should drive remove retouch rendering when present");
   }
 
   std::vector<ColorPixel> rotation_base_pixels(5, linear_pixel_from_srgb(QColor::fromRgbF(0.35F, 0.35F, 0.35F, 1.0F)));

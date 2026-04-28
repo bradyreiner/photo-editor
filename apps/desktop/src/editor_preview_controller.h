@@ -20,6 +20,7 @@
 
 #include "brush_preview_compositor.h"
 #include "edit_recipe_state.h"
+#include "editor_preview_texture.h"
 #include "vision_segmentation.h"
 
 namespace photo_editor::desktop {
@@ -42,6 +43,7 @@ struct RenderRequest final {
   bool overlay_only = false;
   QRectF preview_overlay_rect;
   int preview_overlay_max_edge = 0;
+  bool draft_interactive = false;
   std::shared_ptr<std::atomic<int>> latest_generation;
 };
 
@@ -95,6 +97,10 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QString previewSource READ previewSource NOTIFY previewChanged)
   Q_PROPERTY(QString displayPreviewSource READ displayPreviewSource NOTIFY previewChanged)
   Q_PROPERTY(QString displayPreviewOverlaySource READ displayPreviewOverlaySource NOTIFY previewChanged)
+  Q_PROPERTY(bool displayPreviewNativeAvailable READ displayPreviewNativeAvailable NOTIFY previewChanged)
+  Q_PROPERTY(quint64 displayPreviewNativeHandle READ displayPreviewNativeHandle NOTIFY previewChanged)
+  Q_PROPERTY(QSize displayPreviewNativeSize READ displayPreviewNativeSize NOTIFY previewChanged)
+  Q_PROPERTY(int displayPreviewNativeRevision READ displayPreviewNativeRevision NOTIFY previewChanged)
   Q_PROPERTY(QVariantList histogramRed READ histogramRed NOTIFY histogramChanged)
   Q_PROPERTY(QVariantList histogramGreen READ histogramGreen NOTIFY histogramChanged)
   Q_PROPERTY(QVariantList histogramBlue READ histogramBlue NOTIFY histogramChanged)
@@ -115,6 +121,9 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QString lensModel READ lensModel NOTIFY assetChanged)
   Q_PROPERTY(bool hasAsset READ hasAsset NOTIFY assetChanged)
   Q_PROPERTY(bool subjectMaskAvailable READ subjectMaskAvailable CONSTANT)
+  Q_PROPERTY(QString aiModelStatus READ aiModelStatus CONSTANT)
+  Q_PROPERTY(bool aiSmartSelectionAvailable READ aiSmartSelectionAvailable CONSTANT)
+  Q_PROPERTY(bool aiInpaintAvailable READ aiInpaintAvailable CONSTANT)
   Q_PROPERTY(bool processing READ processing NOTIFY processingChanged)
   Q_PROPERTY(bool canUndo READ canUndo NOTIFY historyChanged)
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY historyChanged)
@@ -212,6 +221,8 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(double activeMaskRemoveStrength READ activeMaskRemoveStrength WRITE setActiveMaskRemoveStrength NOTIFY controlsChanged)
   Q_PROPERTY(bool activeMaskSelectionInverted READ activeMaskSelectionInverted WRITE setActiveMaskSelectionInverted NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskSelectionExpand READ activeMaskSelectionExpand WRITE setActiveMaskSelectionExpand NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskSelectionEdgeContrast READ activeMaskSelectionEdgeContrast WRITE setActiveMaskSelectionEdgeContrast NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskSelectionDecontaminate READ activeMaskSelectionDecontaminate WRITE setActiveMaskSelectionDecontaminate NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskFeather READ activeMaskFeather WRITE setActiveMaskFeather NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskPosition READ activeMaskPosition WRITE setActiveMaskPosition NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskRotation READ activeMaskRotation WRITE setActiveMaskRotation NOTIFY controlsChanged)
@@ -234,11 +245,15 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QVariantList activeMaskPolygonPoints READ activeMaskPolygonPoints NOTIFY controlsChanged)
   Q_PROPERTY(int activeMaskPolygonPointCount READ activeMaskPolygonPointCount NOTIFY controlsChanged)
   Q_PROPERTY(QVariantList activeMaskOutlinePoints READ activeMaskOutlinePoints NOTIFY controlsChanged)
+  Q_PROPERTY(QVariantList activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskPreviewSource READ activeMaskPreviewSource NOTIFY controlsChanged)
   Q_PROPERTY(QString maskPreviewMode READ maskPreviewMode WRITE setMaskPreviewMode NOTIFY controlsChanged)
   Q_PROPERTY(bool smartSelectPreviewActive READ smartSelectPreviewActive NOTIFY smartSelectPreviewChanged)
   Q_PROPERTY(QString smartSelectPreviewSource READ smartSelectPreviewSource NOTIFY smartSelectPreviewChanged)
   Q_PROPERTY(QVariantList smartSelectPreviewOutlinePoints READ smartSelectPreviewOutlinePoints NOTIFY smartSelectPreviewChanged)
+  Q_PROPERTY(int smartSelectCandidateCount READ smartSelectCandidateCount NOTIFY smartSelectPreviewChanged)
+  Q_PROPERTY(int smartSelectCandidateIndex READ smartSelectCandidateIndex NOTIFY smartSelectPreviewChanged)
+  Q_PROPERTY(bool smartSelectCanCycleCandidates READ smartSelectCanCycleCandidates NOTIFY smartSelectPreviewChanged)
   Q_PROPERTY(double activeMaskLuminanceMin READ activeMaskLuminanceMin WRITE setActiveMaskLuminanceMin NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskLuminanceMax READ activeMaskLuminanceMax WRITE setActiveMaskLuminanceMax NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskHueCenter READ activeMaskHueCenter WRITE setActiveMaskHueCenter NOTIFY controlsChanged)
@@ -269,6 +284,10 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QString previewSource() const;
   [[nodiscard]] QString displayPreviewSource() const;
   [[nodiscard]] QString displayPreviewOverlaySource() const;
+  [[nodiscard]] bool displayPreviewNativeAvailable() const;
+  [[nodiscard]] quint64 displayPreviewNativeHandle() const;
+  [[nodiscard]] QSize displayPreviewNativeSize() const;
+  [[nodiscard]] int displayPreviewNativeRevision() const;
   [[nodiscard]] QString referencePreviewSource() const;
   [[nodiscard]] QString displayReferencePreviewSource() const;
   [[nodiscard]] QString displayReferencePreviewOverlaySource() const;
@@ -289,6 +308,9 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QString lensModel() const;
   [[nodiscard]] bool hasAsset() const;
   [[nodiscard]] bool subjectMaskAvailable() const;
+  [[nodiscard]] QString aiModelStatus() const;
+  [[nodiscard]] bool aiSmartSelectionAvailable() const;
+  [[nodiscard]] bool aiInpaintAvailable() const;
   [[nodiscard]] bool processing() const;
   [[nodiscard]] bool canUndo() const;
   [[nodiscard]] bool canRedo() const;
@@ -386,6 +408,8 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] double activeMaskRemoveStrength() const;
   [[nodiscard]] bool activeMaskSelectionInverted() const;
   [[nodiscard]] double activeMaskSelectionExpand() const;
+  [[nodiscard]] double activeMaskSelectionEdgeContrast() const;
+  [[nodiscard]] double activeMaskSelectionDecontaminate() const;
   [[nodiscard]] double activeMaskFeather() const;
   [[nodiscard]] double activeMaskPosition() const;
   [[nodiscard]] double activeMaskRotation() const;
@@ -411,11 +435,15 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QVariantList activeMaskPolygonPoints() const;
   [[nodiscard]] int activeMaskPolygonPointCount() const;
   [[nodiscard]] QVariantList activeMaskOutlinePoints() const;
+  [[nodiscard]] QVariantList activeMaskOutlinePaths() const;
   [[nodiscard]] QString activeMaskPreviewSource() const;
   [[nodiscard]] QString maskPreviewMode() const;
   [[nodiscard]] bool smartSelectPreviewActive() const;
   [[nodiscard]] QString smartSelectPreviewSource() const;
   [[nodiscard]] QVariantList smartSelectPreviewOutlinePoints() const;
+  [[nodiscard]] int smartSelectCandidateCount() const;
+  [[nodiscard]] int smartSelectCandidateIndex() const;
+  [[nodiscard]] bool smartSelectCanCycleCandidates() const;
   [[nodiscard]] double activeMaskLuminanceMin() const;
   [[nodiscard]] double activeMaskLuminanceMax() const;
   [[nodiscard]] double activeMaskHueCenter() const;
@@ -526,6 +554,8 @@ class EditorPreviewController final : public QObject {
   void setActiveMaskRemoveStrength(double remove_strength);
   void setActiveMaskSelectionInverted(bool selection_inverted);
   void setActiveMaskSelectionExpand(double selection_expand);
+  void setActiveMaskSelectionEdgeContrast(double edge_contrast);
+  void setActiveMaskSelectionDecontaminate(double decontaminate);
   void setActiveMaskFeather(double local_feather);
   void setActiveMaskPosition(double local_position);
   void setActiveMaskRotation(double local_rotation);
@@ -596,10 +626,11 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE void scheduleSmartSelectPreview(double normalized_x, double normalized_y);
   Q_INVOKABLE void scheduleSmartSelectPreviewPath(const QVariantList& points);
   Q_INVOKABLE void clearSmartSelectPreview();
+  Q_INVOKABLE void cycleSmartSelectCandidate(int delta = 1);
   Q_INVOKABLE void deselectActiveMask();
   Q_INVOKABLE void smartSelectObjectAt(double normalized_x, double normalized_y, bool create_new = false);
   Q_INVOKABLE void objectRemoveAt(double normalized_x, double normalized_y, bool create_new = false);
-  Q_INVOKABLE void startPolygonSelection();
+  Q_INVOKABLE void startPolygonSelection(bool subtract = false);
   Q_INVOKABLE void appendActivePolygonPoint(double normalized_x, double normalized_y);
   Q_INVOKABLE void removeLastActivePolygonPoint();
   Q_INVOKABLE void clearActivePolygonPoints();
@@ -690,7 +721,8 @@ signals:
   void handleSmartSelectPreviewFinished();
   void updateSmartSelectPreviewState(
       const QVariantMap& preview_mask,
-      const QVector<int>& instance_ids = {});
+      const QVector<int>& instance_ids = {},
+      const QVector<int>& candidate_instance_ids = {});
   void updateSmartSelectPreviewResult(
       const SegmentationResult& result,
       const QVector<int>& instance_ids = {});
@@ -713,8 +745,6 @@ signals:
       const QString& operation,
       bool create_new);
   QString pickObjectRemoveMask(const SegmentationResult& mask_result, bool create_new);
-  QString startManualSelectionFallbackAt(double normalized_x, double normalized_y);
-  QString startManualRemoveFallbackAt(double normalized_x, double normalized_y);
   [[nodiscard]] int findPendingRetouchMaskIndex(
       const QString& retouch_mode,
       const QString& kind = QString()) const;
@@ -766,12 +796,21 @@ signals:
   QString capture_date_;
   QString lens_model_;
   int preview_target_edge_ = 0;
+  qint64 last_render_request_msecs_ = 0;
+  bool next_interactive_render_draft_ = false;
   QRectF preview_viewport_rect_;
   int preview_viewport_patch_max_edge_ = 0;
   bool preview_viewport_active_ = false;
   bool processing_ = false;
   bool compare_mode_ = false;
   bool crop_editing_ = false;
+  QString input_color_profile_ = QStringLiteral("Embedded");
+  QString working_color_profile_ = QStringLiteral("Linear ProPhoto RGB");
+  QString preview_color_space_ = QStringLiteral("sRGB");
+  QString render_intent_ = QStringLiteral("Perceptual");
+  bool raw_input_transform_enabled_ = true;
+  QString highlight_reconstruction_mode_ = QStringLiteral("Enabled");
+  QString chromatic_adaptation_method_ = QStringLiteral("Bradford");
   QString output_color_space_ = QStringLiteral("sRGB");
   double raw_exposure_ = 0.0;
   double raw_boost_ = 0.0;
@@ -858,6 +897,8 @@ signals:
   int smart_select_instance_map_width_ = 0;
   int smart_select_instance_map_height_ = 0;
   QVector<int> smart_select_preview_instance_ids_;
+  QVector<int> smart_select_preview_candidate_instance_ids_;
+  int smart_select_preview_candidate_index_ = 0;
   QVariantMap smart_select_preview_mask_;
   QTimer smart_select_preview_timer_;
   QFutureWatcher<SmartSelectPreviewResult> smart_select_preview_watcher_;
@@ -915,6 +956,8 @@ signals:
   int last_full_preview_generation_ = 0;
   EditorPreviewImageSink* image_provider_ = nullptr;
   std::unique_ptr<BrushPreviewCompositor> brush_preview_compositor_;
+  std::unique_ptr<EditorPreviewTexture> display_preview_texture_;
+  int display_preview_native_revision_ = 0;
 
  public:
   void setImageProvider(EditorPreviewImageSink* image_provider);

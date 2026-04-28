@@ -4,7 +4,7 @@ import QtQuick.Controls
 TextField {
     id: root
 
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
 
     Theme { id: theme }
 
@@ -21,9 +21,9 @@ TextField {
 
     background: Rectangle {
         radius: theme.radiusControl
-        color: root.enabled ? theme.alpha(theme.ink900, 0.88) : theme.alpha(theme.ink900, 0.58)
+        color: root.enabled ? theme.alpha(theme.glassBase, 0.38) : theme.alpha(theme.glassBase, 0.26)
         border.width: root.activeFocus ? 2 : 1
-        border.color: root.activeFocus ? theme.alpha(theme.focusRing, 0.9) : theme.alpha(theme.lineSoft, 0.16)
+        border.color: root.activeFocus ? theme.alpha(theme.focusRing, 0.9) : theme.alpha(theme.glassEdge, 0.2)
 
         Rectangle {
             anchors.fill: parent
@@ -31,10 +31,6 @@ TextField {
             radius: Math.max(1, parent.radius - 1)
             visible: root.activeFocus
             color: theme.alpha(theme.focusFill, 0.2)
-        }
-
-        Behavior on border.color {
-            ColorAnimation { duration: theme.durationFast }
         }
     }
 }

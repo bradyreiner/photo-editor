@@ -3,6 +3,8 @@ members = [
   "crates/catalog",
   "crates/ffi",
   "crates/jobs",
+  "crates/mcp",
   "crates/metadata",
+  "crates/telemetry",
 ]
 resolver = "2"

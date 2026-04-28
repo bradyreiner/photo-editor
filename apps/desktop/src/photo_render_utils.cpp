@@ -2,6 +2,7 @@
 
 #include "app_bootstrap.h"
 #include "photo_editor/pipeline/color_adjustments.h"
+#include "photo_editor/pipeline/color_pipeline.h"
 #include "raw_image_decoder.h"
 #include "working_image.h"
 
@@ -40,11 +41,7 @@ QColorSpace preview_target_color_space() {
 }
 
 QColorSpace output_color_space_for_name(const QString& name) {
-  const auto normalized = normalized_output_color_space_name(name);
-  if (normalized == QStringLiteral("Display P3")) {
-    return QColorSpace(QColorSpace::DisplayP3);
-  }
-  return preview_target_color_space();
+  return preview_color_space_for_name(normalized_output_color_space_name(name));
 }
 
 bool has_extended_range_pixels(const std::vector<photo_editor::pipeline::ColorPixel>& pixels) {
@@ -95,6 +92,10 @@ QString decoded_image_cache_key(const QFileInfo& file_info, int max_edge) {
 
 RawDecodeSettings raw_decode_settings_for_state(const RenderEditState& state) {
   return RawDecodeSettings{
+      .input_transform_enabled = state.raw_input_transform_enabled,
+      .input_color_profile = state.input_color_profile,
+      .highlight_reconstruction_mode = state.highlight_reconstruction_mode,
+      .chromatic_adaptation_method = state.chromatic_adaptation_method,
       .exposure = state.raw_exposure,
       .boost_amount = state.raw_boost,
       .boost_shadow_amount = state.raw_shadow_boost,
@@ -109,7 +110,11 @@ RawDecodeSettings raw_decode_settings_for_state(const RenderEditState& state) {
 }
 
 QString raw_decode_settings_key(const RenderEditState& state) {
-  return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10")
+  return QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9|%10|%11|%12|%13|%14")
+      .arg(state.raw_input_transform_enabled ? 1 : 0)
+      .arg(normalized_input_color_profile_name(state.input_color_profile))
+      .arg(normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode))
+      .arg(normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method))
       .arg(state.raw_exposure, 0, 'f', 6)
       .arg(state.raw_boost, 0, 'f', 6)
       .arg(state.raw_shadow_boost, 0, 'f', 6)
@@ -206,6 +211,45 @@ std::vector<photo_editor::pipeline::CurvePoint> pipeline_curve_points(const QVar
   return curve_points;
 }
 
+void populate_inpaint_patch(
+    photo_editor::pipeline::LocalMask* local_mask,
+    const QVariantMap& mask) {
+  if (local_mask == nullptr) {
+    return;
+  }
+
+  const auto patch_data = mask.value(QStringLiteral("inpaintPatchData")).toByteArray();
+  const auto patch_x = mask.value(QStringLiteral("inpaintPatchX")).toInt();
+  const auto patch_y = mask.value(QStringLiteral("inpaintPatchY")).toInt();
+  const auto patch_width = mask.value(QStringLiteral("inpaintPatchWidth")).toInt();
+  const auto patch_height = mask.value(QStringLiteral("inpaintPatchHeight")).toInt();
+  if (patch_data.isEmpty() || patch_width <= 0 || patch_height <= 0) {
+    return;
+  }
+
+  auto patch_image = QImage::fromData(patch_data, "PNG");
+  if (patch_image.isNull() || patch_image.width() != patch_width ||
+      patch_image.height() != patch_height) {
+    return;
+  }
+  if (!patch_image.colorSpace().isValid()) {
+    patch_image.setColorSpace(preview_target_color_space());
+  }
+
+  const auto working_patch = working_image_from_qimage(patch_image);
+  if (working_patch.isNull()) {
+    return;
+  }
+
+  local_mask->inpaint_patch_pixels = working_patch.pixels;
+  local_mask->inpaint_patch_x = patch_x;
+  local_mask->inpaint_patch_y = patch_y;
+  local_mask->inpaint_patch_width = working_patch.width;
+  local_mask->inpaint_patch_height = working_patch.height;
+  local_mask->inpaint_model_name =
+      mask.value(QStringLiteral("inpaintModelName")).toString().toStdString();
+}
+
 photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   photo_editor::pipeline::LocalMask local_mask;
   local_mask.id = mask.value(QStringLiteral("id")).toString().toStdString();
@@ -234,6 +278,10 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   local_mask.remove_strength = map_double_value(mask, QStringLiteral("removeStrength"), 0.0);
   local_mask.selection_invert = map_bool_value(mask, QStringLiteral("selectionInvert"), false);
   local_mask.selection_expand = map_double_value(mask, QStringLiteral("selectionExpand"), 0.0);
+  local_mask.selection_edge_contrast =
+      map_double_value(mask, QStringLiteral("selectionEdgeContrast"), 0.0);
+  local_mask.selection_decontaminate =
+      map_double_value(mask, QStringLiteral("selectionDecontaminate"), 0.0);
   local_mask.feather = map_double_value(
       mask, QStringLiteral("feather"), local_mask.kind == "radial" ? 0.25 : 0.22);
   local_mask.rotation = map_double_value(mask, QStringLiteral("rotation"), 0.0);
@@ -313,6 +361,7 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
     }
   }
 
+  populate_inpaint_patch(&local_mask, mask);
   return local_mask;
 }
 
@@ -394,8 +443,62 @@ std::vector<photo_editor::pipeline::LocalMask> pipeline_retouch_masks(const QVar
   return retouch_masks;
 }
 
-photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(const RenderEditState& state) {
+photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(const RenderEditState& state) {
+  const auto preview_output_name =
+      state.preview_color_space.trimmed().isEmpty() ? state.output_color_space : state.preview_color_space;
+  return photo_editor::pipeline::ColorPipelineConfig{
+      .input_profile =
+          photo_editor::pipeline::input_color_profile_from_name(state.input_color_profile.toStdString()),
+      .working_profile =
+          photo_editor::pipeline::working_color_profile_from_name(state.working_color_profile.toStdString()),
+      .preview_output_profile =
+          photo_editor::pipeline::output_color_profile_from_name(preview_output_name.toStdString()),
+      .export_output_profile =
+          photo_editor::pipeline::output_color_profile_from_name(state.output_color_space.toStdString()),
+      .camera_profile = {},
+      .input_transform_recipe = {},
+      .render_intent =
+          photo_editor::pipeline::render_intent_from_name(state.render_intent.toStdString()),
+  };
+}
+
+photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(
+    const RenderEditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata) {
+  auto config = color_pipeline_config_for_state(state);
+  if (metadata != nullptr && metadata->valid) {
+    config.camera_profile = photo_editor::pipeline::resolve_camera_profile(*metadata);
+    config.input_transform_recipe = photo_editor::pipeline::resolve_input_transform_recipe(
+        config.input_profile,
+        config.camera_profile,
+        *metadata);
+  }
+  return config;
+}
+
+photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
+    const RenderEditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr) {
   return photo_editor::pipeline::ColorAdjustmentState{
+      .input_transform =
+          photo_editor::pipeline::InputTransformSettings{
+              .input_profile_name = normalized_input_color_profile_name(state.input_color_profile).toStdString(),
+              .exposure = state.exposure,
+              .temperature = state.temperature,
+              .tint = state.tint,
+              .raw_input_transform_enabled = state.raw_input_transform_enabled,
+              .highlight_recovery_enabled = state.raw_highlight_recovery,
+              .highlight_reconstruction_mode =
+                  normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode).toStdString(),
+              .chromatic_adaptation_method =
+                  normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method).toStdString(),
+              .gamut_mapping_enabled = state.raw_gamut_mapping,
+              .lens_correction_enabled = state.raw_lens_correction,
+              .raw_white_balance_override_enabled = state.raw_white_balance_override,
+              .raw_white_balance_temperature = state.raw_white_balance_temperature,
+              .raw_white_balance_tint = state.raw_white_balance_tint,
+          },
+      .color_pipeline = color_pipeline_config_for_state(state, metadata),
       .exposure = state.exposure,
       .contrast = state.contrast,
       .highlights = state.highlights,
@@ -478,9 +581,13 @@ bool decode_source_image(
     const QString& file_path,
     QImage* image,
     int max_edge,
-    const RenderEditState& state) {
+    const RenderEditState& state,
+    photo_editor::pipeline::DecodedImageMetadata* metadata) {
   if (image == nullptr || !preview_supported(file_path)) {
     return false;
+  }
+  if (metadata != nullptr) {
+    *metadata = {};
   }
 
   const QFileInfo source_info(file_path);
@@ -504,6 +611,9 @@ bool decode_source_image(
     if (cached != cache.images.cend()) {
       *image = cached.value();
       touch_cache_key(&cache, cache_key);
+      if (metadata != nullptr && !qt_supported) {
+        (void)read_raw_decoded_metadata(file_path, metadata, raw_decode_settings_for_state(state));
+      }
       return !image->isNull();
     }
   }
@@ -525,7 +635,12 @@ bool decode_source_image(
 
   if (!qt_supported) {
     auto decoded = QImage{};
-    if (!decode_raw_linear_image(file_path, &decoded, max_edge, raw_decode_settings_for_state(state))) {
+    if (!decode_raw_linear_image(
+            file_path,
+            &decoded,
+            max_edge,
+            raw_decode_settings_for_state(state),
+            metadata)) {
       return false;
     }
 
@@ -660,20 +775,32 @@ QImage apply_crop(const QImage& image, const RenderEditState& state) {
 }
 
 void apply_color_adjustments(QImage* image, const RenderEditState& state) {
-  if (image == nullptr || image->isNull()) {
+  if (image == nullptr) {
     return;
   }
+  *image = render_output_image(*image, state, output_color_space_for_name(state.output_color_space));
+}
 
-  auto working = working_image_from_qimage(*image);
+QImage render_output_image(
+    const QImage& image,
+    const RenderEditState& state,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata) {
+  if (image.isNull()) {
+    return {};
+  }
+
+  auto working = working_image_from_qimage(image, state.working_color_profile);
   if (working.isNull()) {
-    return;
+    return {};
   }
 
   auto& pixels = working.pixels;
   const auto width = working.width;
   const auto height = working.height;
 
-  const auto pipeline_state = to_pipeline_state(state);
+  const auto pipeline_state = to_pipeline_state(state, metadata);
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   auto& metal = metal_backend();
   const auto requires_cpu_pipeline =
@@ -700,8 +827,19 @@ void apply_color_adjustments(QImage* image, const RenderEditState& state) {
       &pixels, width, height, pipeline_state, photo_editor::pipeline::RemovalQuality::Final);
 #endif
 
-  *image = qimage_from_working_image(working, preview_target_color_space());
-  apply_output_color_space_transform(image, state.output_color_space);
+  auto output_image = qimage_from_working_image(
+      working,
+      target_color_space.isValid() ? target_color_space : preview_target_color_space(),
+      output_format,
+      state.working_color_profile);
+  if (output_image.isNull()) {
+    return {};
+  }
+  if (target_color_space.isValid()) {
+    return output_image;
+  }
+  apply_output_color_space_transform(&output_image, state.output_color_space);
+  return output_image;
 }
 
 }  // namespace photo_editor::desktop

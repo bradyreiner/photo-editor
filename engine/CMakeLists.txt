@@ -1,6 +1,7 @@
 set(photo_engine_sources
   src/catalog/asset_location.cpp
   src/pipeline/color_adjustments.cpp
+  src/pipeline/color_pipeline.cpp
   src/pipeline/edit_recipe.cpp
   src/pipeline/render_graph.cpp
 )

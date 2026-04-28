@@ -14,12 +14,12 @@ Rectangle {
 
     implicitWidth: Math.max(72, labelText.implicitWidth + 28)
     implicitHeight: theme.controlHeight
-    radius: theme.radiusChip
-    color: root.selected ? theme.alpha(root.swatch, 0.18) : theme.alpha(theme.ink900, 0.92)
+    radius: theme.radiusControl
+    color: root.selected ? theme.alpha(root.swatch, 0.16) : theme.alpha(theme.glassBase, 0.38)
     border.width: root.activeFocus ? 2 : 1
     border.color: root.activeFocus
                   ? theme.alpha(theme.focusRing, 0.92)
-                  : (root.selected ? theme.alpha(root.swatch, 0.3) : theme.alpha(theme.lineSoft, 0.42))
+                  : (root.selected ? theme.alpha(root.swatch, 0.46) : theme.alpha(theme.glassEdge, 0.22))
 
     Keys.onReturnPressed: root.clicked()
     Keys.onEnterPressed: root.clicked()

@@ -4,6 +4,7 @@ qt_standard_project_setup(REQUIRES 6.5)
 qt_policy(SET QTP0004 NEW)
 
 set(photo_editor_desktop_sources
+  src/ai_model_runtime.cpp
   src/app_shell_controller.cpp
   src/macos_updater.h
   src/brush_live_preview_item.cpp
@@ -12,6 +13,8 @@ set(photo_editor_desktop_sources
   src/catalog_asset_model.cpp
   src/editor_preview_controller.cpp
   src/editor_preview_image_provider.cpp
+  src/editor_preview_texture.cpp
+  src/editor_preview_texture_item.cpp
   src/export_job_controller.cpp
   src/job_queue_model.cpp
   src/job_runner.cpp
@@ -31,7 +34,10 @@ set(photo_editor_desktop_sources
 
 if(APPLE)
   if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
-    list(APPEND photo_editor_desktop_sources src/brush_preview_compositor_metal.mm)
+    list(APPEND photo_editor_desktop_sources
+      src/brush_preview_compositor_metal.mm
+      src/editor_preview_texture_metal.mm)
+    set_source_files_properties(src/editor_preview_texture_item.cpp PROPERTIES LANGUAGE OBJCXX)
   endif()
   list(REMOVE_ITEM photo_editor_desktop_sources src/raw_image_decoder_stub.cpp)
   list(APPEND photo_editor_desktop_sources src/raw_image_decoder.mm)
@@ -80,6 +86,13 @@ if(APPLE)
     @ONLY)
 endif()
 
+set(PHOTO_EDITOR_BUNDLED_AI_MODELS_DIR "" CACHE PATH
+  "Optional directory containing bundled AI model manifest.json plus selection/ and inpaint/ model artifacts.")
+option(PHOTO_EDITOR_ENABLE_AI_INFERENCE "Enable ONNX Runtime-backed AI inference." OFF)
+set(PHOTO_EDITOR_ONNXRUNTIME_ROOT "" CACHE PATH
+  "Path to an ONNX Runtime SDK root containing include/ and lib/.")
+option(PHOTO_EDITOR_ONNXRUNTIME_ENABLE_COREML "Enable ONNX Runtime CoreML execution provider registration." OFF)
+
 qt_add_executable(photo_editor_app
   ${photo_editor_desktop_sources}
 )
@@ -108,6 +121,7 @@ qt_add_qml_module(photo_editor_app
   QML_FILES
     qml/Main.qml
     qml/components/ActionButton.qml
+    qml/components/ActivityBanner.qml
     qml/components/AppIcon.qml
     qml/components/AppPreferencesDialog.qml
     qml/components/BrandPanel.qml
@@ -115,17 +129,23 @@ qt_add_qml_module(photo_editor_app
     qml/components/CommandPaletteDialog.qml
     qml/components/ConfirmActionButton.qml
     qml/components/CropOverlay.qml
+    qml/components/CutCornerSurface.qml
     qml/components/FilterChip.qml
     qml/components/GalleryPickerDialog.qml
+    qml/components/GlassSurface.qml
     qml/components/HistogramDisplay.qml
     qml/components/InfoPill.qml
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
+    qml/components/InlineActivityIndicator.qml
     qml/components/KeyboardShortcutsDialog.qml
     qml/components/MetricCard.qml
+    qml/components/ProgressStrip.qml
+    qml/components/PopupSurface.qml
     qml/components/ReviewPreview.qml
     qml/components/SectionHeader.qml
     qml/components/SidebarButton.qml
+    qml/components/StartupLoadingPopup.qml
     qml/components/Theme.qml
     qml/components/TimelineEffectsPanel.qml
     qml/components/TimelineSourcePanel.qml
@@ -170,6 +190,51 @@ target_compile_definitions(photo_editor_app
     PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND}>
     PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND=$<BOOL:${PHOTO_EDITOR_ENABLE_CUDA_PREVIEW_BACKEND}>)
 
+if(PHOTO_EDITOR_ENABLE_AI_INFERENCE)
+  if(NOT PHOTO_EDITOR_ONNXRUNTIME_ROOT)
+    message(FATAL_ERROR "PHOTO_EDITOR_ENABLE_AI_INFERENCE=ON requires PHOTO_EDITOR_ONNXRUNTIME_ROOT.")
+  endif()
+  if(NOT EXISTS "${PHOTO_EDITOR_ONNXRUNTIME_ROOT}/include/onnxruntime_cxx_api.h")
+    message(FATAL_ERROR "PHOTO_EDITOR_ONNXRUNTIME_ROOT must contain include/onnxruntime_cxx_api.h.")
+  endif()
+
+  find_library(
+    PHOTO_EDITOR_ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime libonnxruntime
+    PATHS "${PHOTO_EDITOR_ONNXRUNTIME_ROOT}/lib"
+    NO_DEFAULT_PATH)
+  if(NOT PHOTO_EDITOR_ONNXRUNTIME_LIBRARY)
+    message(FATAL_ERROR "Unable to find libonnxruntime in ${PHOTO_EDITOR_ONNXRUNTIME_ROOT}/lib.")
+  endif()
+
+  target_include_directories(photo_editor_app PRIVATE "${PHOTO_EDITOR_ONNXRUNTIME_ROOT}/include")
+  target_link_libraries(photo_editor_app PRIVATE "${PHOTO_EDITOR_ONNXRUNTIME_LIBRARY}")
+  target_compile_definitions(
+    photo_editor_app
+    PRIVATE
+      PHOTO_EDITOR_HAS_ONNXRUNTIME=1
+      PHOTO_EDITOR_ONNXRUNTIME_ENABLE_COREML=$<BOOL:${PHOTO_EDITOR_ONNXRUNTIME_ENABLE_COREML}>)
+
+  if(APPLE)
+    target_link_options(photo_editor_app PRIVATE "-Wl,-rpath,@executable_path/../Frameworks")
+    add_custom_command(
+      TARGET photo_editor_app
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory
+              "$<TARGET_BUNDLE_CONTENT_DIR:photo_editor_app>/Frameworks"
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${PHOTO_EDITOR_ONNXRUNTIME_LIBRARY}"
+              "$<TARGET_BUNDLE_CONTENT_DIR:photo_editor_app>/Frameworks")
+  else()
+    add_custom_command(
+      TARGET photo_editor_app
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${PHOTO_EDITOR_ONNXRUNTIME_LIBRARY}"
+              "$<TARGET_FILE_DIR:photo_editor_app>")
+  endif()
+endif()
+
 if(APPLE)
   find_library(COREGRAPHICS_FRAMEWORK CoreGraphics)
   find_library(VISION_FRAMEWORK Vision)
@@ -201,6 +266,21 @@ if(APPLE)
   if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
     set_source_files_properties(src/brush_preview_compositor_metal.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
   endif()
+  if(PHOTO_EDITOR_BUNDLED_AI_MODELS_DIR)
+    add_custom_command(
+      TARGET photo_editor_app
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_directory
+              "${PHOTO_EDITOR_BUNDLED_AI_MODELS_DIR}"
+              "$<TARGET_BUNDLE_CONTENT_DIR:photo_editor_app>/Resources/models")
+  endif()
+elseif(PHOTO_EDITOR_BUNDLED_AI_MODELS_DIR)
+  add_custom_command(
+    TARGET photo_editor_app
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${PHOTO_EDITOR_BUNDLED_AI_MODELS_DIR}"
+            "$<TARGET_FILE_DIR:photo_editor_app>/models")
 endif()
 
 if(APPLE AND PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)

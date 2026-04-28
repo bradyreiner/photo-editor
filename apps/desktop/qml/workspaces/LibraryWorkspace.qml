@@ -15,6 +15,32 @@ Rectangle {
 
     Theme { id: theme }
 
+    function activeModeItem() {
+        return modeLoader.item ? modeLoader.item : null
+    }
+
+    function canSelectAll() {
+        const item = activeModeItem()
+        return item && item.canSelectAll ? item.canSelectAll() : false
+    }
+
+    function selectAll() {
+        const item = activeModeItem()
+        if (item && item.selectAll)
+            item.selectAll()
+    }
+
+    function canDeselect() {
+        const item = activeModeItem()
+        return item && item.canDeselect ? item.canDeselect() : false
+    }
+
+    function deselectAll() {
+        const item = activeModeItem()
+        if (item && item.deselectAll)
+            item.deselectAll()
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: theme.space8
@@ -63,6 +89,7 @@ Rectangle {
         }
 
         Loader {
+            id: modeLoader
             Layout.fillWidth: true
             Layout.fillHeight: true
             sourceComponent: root.mode === "import" ? importMode : catalogMode

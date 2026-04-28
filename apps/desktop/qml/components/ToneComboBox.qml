@@ -5,7 +5,7 @@ import QtQuick.Controls
 ComboBox {
     id: root
 
-    property color accent: "#c99a52"
+    property color accent: theme.accentWarm400
 
     Theme { id: theme }
 
@@ -34,7 +34,7 @@ ComboBox {
         }
 
         background: Rectangle {
-            color: optionDelegate.highlighted ? theme.alpha(theme.ink750, 0.96) : theme.alpha(theme.ink900, 0.94)
+            color: optionDelegate.highlighted ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.glassBase, 0.9)
         }
     }
 
@@ -62,11 +62,11 @@ ComboBox {
 
     background: Rectangle {
         radius: theme.radiusControl
-        color: root.enabled ? theme.alpha(theme.ink900, 0.88) : theme.alpha(theme.ink900, 0.58)
+        color: root.enabled ? theme.alpha(theme.glassBase, 0.38) : theme.alpha(theme.glassBase, 0.26)
         border.width: root.visualFocus ? 2 : 1
         border.color: root.visualFocus
                       ? theme.alpha(theme.focusRing, 0.9)
-                      : (root.hovered ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.lineSoft, 0.16))
+                      : (root.hovered ? theme.alpha(root.accent, 0.34) : theme.alpha(theme.glassEdge, 0.2))
 
         Rectangle {
             anchors.fill: parent
@@ -74,10 +74,6 @@ ComboBox {
             radius: Math.max(1, parent.radius - 1)
             visible: root.visualFocus
             color: theme.alpha(theme.focusFill, 0.2)
-        }
-
-        Behavior on border.color {
-            ColorAnimation { duration: theme.durationFast }
         }
     }
 
@@ -95,9 +91,9 @@ ComboBox {
 
         background: Rectangle {
             radius: theme.radiusPanel
-            color: theme.alpha(theme.ink900, 0.96)
+            color: theme.alpha(theme.glassBase, 0.96)
             border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.2)
+            border.color: theme.alpha(theme.glassEdge, 0.28)
         }
     }
 }

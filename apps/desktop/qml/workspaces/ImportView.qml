@@ -21,6 +21,13 @@ Rectangle {
     property string mediaQuickFilter: "all"
     property var selectedPathsByFile: ({})
     property int selectionRevision: 0
+    readonly property var activeImportJob: {
+        if (!jobQueue)
+            return ({})
+        jobQueue.jobCount
+        jobQueue.status
+        return jobQueue.latestJobForKind("catalog_import")
+    }
 
     readonly property bool hasSource: sourceRootPath.length > 0
     readonly property bool canGoUp: currentFolderPath.length > 0 && currentFolderPath !== sourceRootPath
@@ -145,6 +152,26 @@ Rectangle {
         selectionRevision += 1
     }
 
+    function canSelectAll() {
+        return filteredFileCount > 0
+    }
+
+    function selectAll() {
+        if (!canSelectAll())
+            return
+        selectAllVisible()
+    }
+
+    function canDeselect() {
+        return selectedFileCount > 0 || importProjectChooserOpen
+    }
+
+    function deselectAll() {
+        if (!canDeselect())
+            return
+        clearSelection()
+    }
+
     function mediaFilterLabel() {
         if (mediaQuickFilter === "photos")
             return "Photos"
@@ -254,6 +281,26 @@ Rectangle {
             appWindow.currentWorkspace = appWindow.exportWorkspaceIndex
     }
 
+    function importActivityTitle() {
+        if (!hasActiveImportJobs())
+            return ""
+        return activeImportJob.displayLabel && activeImportJob.displayLabel.length > 0
+                ? "Importing " + activeImportJob.displayLabel
+                : "Importing media"
+    }
+
+    function importActivityProgress() {
+        if (!hasActiveImportJobs())
+            return -1
+        const status = activeImportJob.status ? String(activeImportJob.status) : ""
+        const raw = activeImportJob.progress !== undefined ? Number(activeImportJob.progress) : 0
+        if (status === "Queued")
+            return 0.08
+        if (raw > 0)
+            return Math.max(0.05, Math.min(1, raw / 100.0))
+        return -1
+    }
+
     Component.onCompleted: {
         catalogAssets.refreshImportSources()
         syncProjectTarget()
@@ -319,16 +366,21 @@ Rectangle {
         nameFilters: catalogAssets.importFileNameFilters
     }
 
-    RowLayout {
+    ColumnLayout {
         anchors.fill: parent
         spacing: theme.space8
 
-        BrandPanel {
-            Layout.preferredWidth: 216
+        RowLayout {
+            Layout.fillWidth: true
             Layout.fillHeight: true
-            title: "Sources"
-            subtitle: ""
-            accent: theme.accentCool400
+            spacing: theme.space8
+
+            BrandPanel {
+                Layout.preferredWidth: 216
+                Layout.fillHeight: true
+                title: "Sources"
+                subtitle: ""
+                accent: theme.accentCool400
 
             ListView {
                 id: sourceListView
@@ -1412,6 +1464,7 @@ Rectangle {
 
             Item {
                 Layout.fillHeight: true
+            }
             }
         }
     }

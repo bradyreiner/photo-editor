@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <meta
+    name="description"
+    content="Download PhotoEditor for macOS or Windows.">
+  <title>Download PhotoEditor</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./download-config.js"></script>
+  <script defer src="./download-page.js"></script>
+</head>
+<body>
+  <main class="page-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Alpha desktop release</p>
+        <h1 id="page-title">PhotoEditor</h1>
+        <p class="lede">
+          A native photo workflow app for importing, culling, editing, and
+          exporting image libraries on macOS and Windows.
+        </p>
+        <div class="download-actions" aria-label="Download installers">
+          <a id="mac-download" class="download-button primary disabled" href="#" aria-disabled="true">
+            <span class="platform">macOS</span>
+            <span class="file-type" id="mac-label">DMG coming soon</span>
+          </a>
+          <a id="windows-download" class="download-button disabled" href="#" aria-disabled="true">
+            <span class="platform">Windows</span>
+            <span class="file-type" id="windows-label">MSIX coming soon</span>
+          </a>
+        </div>
+        <p id="release-status" class="release-status" role="status">
+          Checking the latest release...
+        </p>
+      </div>
+
+      <div class="product-panel" aria-label="PhotoEditor interface preview">
+        <div class="window-chrome">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="workspace-preview">
+          <aside class="preview-sidebar">
+            <div class="sidebar-pill active"></div>
+            <div class="sidebar-pill"></div>
+            <div class="sidebar-pill"></div>
+          </aside>
+          <section class="preview-stage">
+            <div class="image-preview">
+              <div class="horizon"></div>
+              <div class="subject"></div>
+            </div>
+            <div class="filmstrip" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+          </section>
+          <aside class="preview-controls">
+            <div class="meter"></div>
+            <div class="control-line long"></div>
+            <div class="control-line"></div>
+            <div class="slider"></div>
+            <div class="control-line long"></div>
+            <div class="slider warm"></div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="details" aria-label="Release details">
+      <article>
+        <h2>Current Build</h2>
+        <p id="version-value">Version 0.1.0</p>
+      </article>
+      <article>
+        <h2>Before Installing</h2>
+        <p>
+          Early MVP builds may still show macOS Gatekeeper or Windows SmartScreen
+          warnings until signing and notarization are finalized.
+        </p>
+      </article>
+      <article>
+        <h2>Release Notes</h2>
+        <p>
+          <a id="release-notes" href="#" aria-disabled="true">Release notes will appear here</a>
+        </p>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

@@ -7,6 +7,7 @@ Item {
     id: root
 
     required property var editRoot
+    Theme { id: theme }
     property real imageX: 0
     property real imageY: 0
     property real imageWidth: 0
@@ -14,6 +15,11 @@ Item {
     property real hoverX: 0
     property real hoverY: 0
     property bool hoverActive: false
+    property bool brushResizeActive: false
+    property real brushResizeStartX: 0
+    property real brushResizeStartY: 0
+    property real brushResizeStartSize: 0.08
+    property real brushResizeStartFlow: 1.0
     property var smartSelectStrokePoints: []
     property bool smartSelectStrokeActive: false
 
@@ -27,11 +33,58 @@ Item {
         return normalizedY * previewItem.height
     }
 
+    function pointXValue(point, fallback) {
+        const resolvedFallback = fallback === undefined ? 0.5 : fallback
+        return point && point.x !== undefined ? point.x : resolvedFallback
+    }
+
+    function pointYValue(point, fallback) {
+        const resolvedFallback = fallback === undefined ? 0.5 : fallback
+        return point && point.y !== undefined ? point.y : resolvedFallback
+    }
+
     function normalizedStrokePoint(mouseX, mouseY) {
         return {
             x: Math.max(0, Math.min(1, previewItem.width > 0 ? mouseX / previewItem.width : 0.5)),
             y: Math.max(0, Math.min(1, previewItem.height > 0 ? mouseY / previewItem.height : 0.5))
         }
+    }
+
+    function brushResizeGestureArmed() {
+        return editRoot.controlModifierActive &&
+               editRoot.optionModifierActive &&
+               editorPreview.hasActiveMask &&
+               editorPreview.activeMaskKind === "brush" &&
+               !editRoot.objectPickArmed &&
+               !editRoot.polygonDrawArmed &&
+               !editRoot.lassoDrawArmed
+    }
+
+    function beginBrushResize(mouseX, mouseY) {
+        brushResizeActive = true
+        brushResizeStartX = mouseX
+        brushResizeStartY = mouseY
+        brushResizeStartSize = editorPreview.activeMaskBrushSize
+        brushResizeStartFlow = editorPreview.activeMaskBrushFlow
+        hoverX = mouseX
+        hoverY = mouseY
+        hoverActive = true
+    }
+
+    function updateBrushResize(mouseX, mouseY, width, height) {
+        if (!brushResizeActive)
+            return
+        hoverX = mouseX
+        hoverY = mouseY
+        const referenceSpan = Math.max(140, Math.min(420, Math.max(width, height) * 0.36))
+        const sizeDelta = (mouseX - brushResizeStartX) / referenceSpan * 0.18
+        const flowDelta = -(mouseY - brushResizeStartY) / 220
+        editorPreview.activeMaskBrushSize = editRoot.clamp(brushResizeStartSize + sizeDelta, 0.01, 0.35)
+        editorPreview.activeMaskBrushFlow = editRoot.clamp(brushResizeStartFlow + flowDelta, 0.05, 1.0)
+    }
+
+    function endBrushResize() {
+        brushResizeActive = false
     }
 
     function resetSmartSelectStroke() {
@@ -108,25 +161,69 @@ Item {
 
     function objectPickInstructionText() {
         const previewReady = editorPreview.smartSelectPreviewActive
+        const cycleHint = editorPreview.smartSelectCanCycleCandidates
+                ? " Use Tab to cycle candidates."
+                : ""
         if (editRoot.objectPickMode === "remove") {
             return previewReady
-                    ? "Release to stage the highlighted object for removal."
+                    ? "Release to stage the highlighted object for removal." + cycleHint
                     : (editRoot.objectPickCreateNew
                        ? "Hover an object, then click or drag to start a new removal target."
                        : "Hover an object, then click or drag to add it to the staged removal.")
         }
         if (editRoot.objectPickMode === "selection-subtract") {
             return previewReady
-                    ? "Release to subtract the highlighted object from the selection."
+                    ? "Release to subtract the highlighted object from the selection." + cycleHint
                     : "Hover an object, then click or drag to subtract it from the selection."
         }
         return previewReady
                 ? (editRoot.objectPickCreateNew
-                   ? "Release to create a new selection from the highlighted object."
-                   : "Release to add the highlighted object to the current selection.")
+                   ? "Release to create a new selection from the highlighted object." + cycleHint
+                   : "Release to add the highlighted object to the current selection." + cycleHint)
                 : (editRoot.objectPickCreateNew
                    ? "Hover an object, then click or drag to create a separate selection."
                    : "Hover an object, then click or drag to add it to the current selection.")
+    }
+
+    function isOutlinePoint(value) {
+        return value && value.x !== undefined && value.y !== undefined
+    }
+
+    function normalizedOutlinePath(value) {
+        if (!value)
+            return []
+
+        if (isOutlinePoint(value))
+            return [value]
+
+        const normalized = []
+        const items = Array.isArray(value) ? value : []
+        for (let i = 0; i < items.length; ++i) {
+            const item = items[i]
+            if (isOutlinePoint(item))
+                normalized.push(item)
+        }
+        return normalized
+    }
+
+    function normalizedOutlinePaths(value) {
+        if (!value)
+            return []
+
+        if (isOutlinePoint(value))
+            return [[value]]
+
+        const items = Array.isArray(value) ? value : []
+        if (items.length > 0 && isOutlinePoint(items[0]))
+            return [normalizedOutlinePath(items)]
+
+        const normalized = []
+        for (let i = 0; i < items.length; ++i) {
+            const path = normalizedOutlinePath(items[i])
+            if (path.length > 0)
+                normalized.push(path)
+        }
+        return normalized
     }
 
     function overlayOpacity(mask, active, sameSet) {
@@ -135,18 +232,128 @@ Item {
         if (!editorPreview.hasActiveMask)
             return 0.58
         if (sameSet)
-            return 0.0
+            return 0.38
         if (mask && mask.toolRole === "retouch")
             return 0.0
-        return 0.0
+        return 0.22
     }
 
     function overlayVisible(mask, active, sameSet) {
         if (!mask || !mask.enabled)
             return false
-        if (!editorPreview.hasActiveMask)
+        return active && mask.kind === "brush"
+    }
+
+    function previewMatteOpacity(isCandidate) {
+        if (editorPreview.maskPreviewMode === "overlay")
+            return 1.0
+        if (editorPreview.maskPreviewMode === "grayscale")
+            return isCandidate ? 0.58 : 0.70
+        return isCandidate ? 0.86 : 0.92
+    }
+
+    function liveBrushOverlayColor(mask) {
+        return "#cf3b32"
+    }
+
+    function liveBrushOverlayOpacity(mask) {
+        return 0.30
+    }
+
+    function outlineBaseColor() {
+        return "#f6f3ed"
+    }
+
+    function outlineHaloColor() {
+        return theme.alpha(theme.ink950, 0.58)
+    }
+
+    function outlineAccentColor(accentColor, isCandidate) {
+        return theme.alpha(accentColor, isCandidate ? 0.84 : 0.76)
+    }
+
+    function buildOutlinePath(ctx, points) {
+        const count = points.length
+        if (count < 2)
             return false
-        return active
+        ctx.beginPath()
+        ctx.moveTo(root.previewPointX(root.pointXValue(points[0])), root.previewPointY(root.pointYValue(points[0])))
+        for (let i = 1; i < count; ++i)
+            ctx.lineTo(root.previewPointX(root.pointXValue(points[i])), root.previewPointY(root.pointYValue(points[i])))
+        if (count >= 3)
+            ctx.closePath()
+        return true
+    }
+
+    function strokeOutlinePaths(ctx, outlinePaths, accentColor, isCandidate) {
+        if (!outlinePaths || outlinePaths.length === 0)
+            return
+
+        ctx.lineJoin = "round"
+        ctx.lineCap = "round"
+
+        for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
+            const haloPoints = root.normalizedOutlinePath(outlinePaths[pathIndex])
+            if (!root.buildOutlinePath(ctx, haloPoints))
+                continue
+            if (ctx.setLineDash)
+                ctx.setLineDash([])
+            ctx.lineWidth = isCandidate ? 7 : 6
+            ctx.strokeStyle = root.outlineHaloColor()
+            ctx.stroke()
+        }
+
+        for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
+            const basePoints = root.normalizedOutlinePath(outlinePaths[pathIndex])
+            if (!root.buildOutlinePath(ctx, basePoints))
+                continue
+            if (ctx.setLineDash)
+                ctx.setLineDash([])
+            ctx.lineWidth = isCandidate ? 3.4 : 3
+            ctx.strokeStyle = root.outlineBaseColor()
+            ctx.stroke()
+        }
+
+        for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
+            const accentPoints = root.normalizedOutlinePath(outlinePaths[pathIndex])
+            if (!root.buildOutlinePath(ctx, accentPoints))
+                continue
+            if (ctx.setLineDash)
+                ctx.setLineDash([])
+            ctx.lineWidth = isCandidate ? 1.8 : 1.5
+            ctx.strokeStyle = root.outlineAccentColor(accentColor, isCandidate)
+            ctx.stroke()
+        }
+    }
+
+    function previewInstructionTitle() {
+        if (brushResizeActive)
+            return "Resize Brush"
+        if (editRoot.cloneSourcePickArmed)
+            return "Pick Clone Source"
+        if (editRoot.objectPickArmed)
+            return root.objectPickActionLabel()
+        if (editRoot.lassoDrawArmed)
+            return "Lasso Selection"
+        if (editRoot.polygonDrawArmed)
+            return "Polygon Selection"
+        return editRoot.activeToolLabel()
+    }
+
+    function previewInstructionBody() {
+        if (brushResizeActive)
+            return "Drag left/right for size and up/down for flow."
+        if (editRoot.cloneSourcePickArmed)
+            return "Click a clean source area. Release Option to paint."
+        if (editRoot.lassoDrawArmed)
+            return editRoot.manualSelectionSubtractActive()
+                    ? "Drag on the image to subtract. Release Option to add instead."
+                    : "Drag on the image. Hold Option to subtract."
+        if (editRoot.polygonDrawArmed)
+            return editRoot.manualSelectionSubtractActive()
+                    ? "Click points to subtract. Double-click to finish. Backspace removes the last point."
+                    : "Click points. Hold Option to subtract. Double-click to finish. Backspace removes the last point."
+        return root.objectPickInstructionText()
     }
 
     Item {
@@ -156,6 +363,18 @@ Item {
         width: root.imageWidth
         height: root.imageHeight
         visible: root.visible
+
+        MouseArea {
+            anchors.fill: parent
+            enabled: editorPreview.hasActiveMask &&
+                     !editorPreview.brushStrokeActive &&
+                     !editRoot.objectPickArmed &&
+                     !editRoot.polygonDrawArmed &&
+                     !editRoot.lassoDrawArmed &&
+                     !editRoot.cloneSourcePickArmed
+            acceptedButtons: Qt.LeftButton
+            onClicked: editRoot.deselectMaskEditing()
+        }
 
         Repeater {
             model: editorPreview.maskStack
@@ -183,8 +402,8 @@ Item {
                     readonly property real featherValue: mask && mask.feather !== undefined ? mask.feather : 0.22
                     readonly property real rotationValue: mask && mask.rotation !== undefined ? mask.rotation : 0
                     anchors.centerIn: parent
-                    width: parent.width * 1.35
-                    height: parent.height * 1.35
+                    width: parent.width
+                    height: parent.height
                     rotation: rotationValue
                     opacity: emphasis
 
@@ -230,15 +449,16 @@ Item {
                         visible: active
                         x: linearOverlay.width / 2 - width / 2
                         y: linearOverlay.height * linearOverlay.positionValue - height / 2
-                        width: 16
-                        height: 16
-                        radius: 8
+                        width: 20
+                        height: 20
+                        radius: 10
                         color: "#f4f7fa"
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.SizeVerCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
@@ -255,15 +475,16 @@ Item {
                         visible: active
                         x: linearOverlay.width / 2 - width / 2
                         y: -28
-                        width: 14
-                        height: 14
-                        radius: 7
+                        width: 18
+                        height: 18
+                        radius: 9
                         color: accent
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.CrossCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
@@ -336,15 +557,16 @@ Item {
                         visible: active
                         x: radialOverlay.width / 2 - width / 2
                         y: radialOverlay.height / 2 - height / 2
-                        width: 16
-                        height: 16
-                        radius: 8
+                        width: 20
+                        height: 20
+                        radius: 10
                         color: "#f4f7fa"
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.SizeAllCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
@@ -359,20 +581,21 @@ Item {
                         visible: active
                         x: radialOverlay.width - width / 2
                         y: radialOverlay.height / 2 - height / 2
-                        width: 14
-                        height: 14
-                        radius: 7
+                        width: 18
+                        height: 18
+                        radius: 9
                         color: accent
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.SizeHorCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
-                                editorPreview.activeMaskRadiusX = editRoot.clamp((parent.x + mouse.x) / previewItem.width / 2, 0.05, 1.0)
+                                editorPreview.activeMaskRadiusX = editRoot.clamp((radialOverlay.x + parent.x + mouse.x) / previewItem.width / 2, 0.05, 1.0)
                             }
                         }
                     }
@@ -381,20 +604,21 @@ Item {
                         visible: active
                         x: radialOverlay.width / 2 - width / 2
                         y: radialOverlay.height - height / 2
-                        width: 14
-                        height: 14
-                        radius: 7
+                        width: 18
+                        height: 18
+                        radius: 9
                         color: accent
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.SizeVerCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
                                     return
-                                editorPreview.activeMaskRadiusY = editRoot.clamp((parent.y + mouse.y) / previewItem.height / 2, 0.05, 1.0)
+                                editorPreview.activeMaskRadiusY = editRoot.clamp((radialOverlay.y + parent.y + mouse.y) / previewItem.height / 2, 0.05, 1.0)
                             }
                         }
                     }
@@ -403,15 +627,16 @@ Item {
                         visible: active
                         x: radialOverlay.width / 2 - width / 2
                         y: -30
-                        width: 14
-                        height: 14
-                        radius: 7
+                        width: 18
+                        height: 18
+                        radius: 9
                         color: "#f0c46e"
                         border.width: 1
                         border.color: "#101419"
 
                         MouseArea {
                             anchors.fill: parent
+                            anchors.margins: -4
                             cursorShape: Qt.CrossCursor
                             onPositionChanged: function(mouse) {
                                 if (!pressed)
@@ -427,11 +652,10 @@ Item {
                 Item {
                     id: brushOverlay
                     visible: mask.kind === "brush"
-                    readonly property bool showStrokePoints: (active && editorPreview.brushStrokeActive) ||
-                                                             mask.retouchMode === "clone" ||
-                                                             editorPreview.activeMaskPreviewSource.length === 0
+                    readonly property bool showStrokePoints: active && editorPreview.brushStrokeActive
+                    readonly property bool isStaged: mask.toolRole === "retouch" && !(mask.committed || false)
                     anchors.fill: parent
-                    opacity: emphasis
+                    opacity: isStaged ? Math.max(emphasis * 0.7, 0.2) : emphasis
                     z: active && editorPreview.brushStrokeActive ? 98 : 0
 
                     Canvas {
@@ -442,11 +666,11 @@ Item {
                                    editorPreview.activeMaskLiveBrushPreviewSource.length > 0)
 
                         function pointX(point) {
-                            return (point.x || 0.5) * brushOverlay.width
+                            return root.pointXValue(point) * brushOverlay.width
                         }
 
                         function pointY(point) {
-                            return (point.y || 0.5) * brushOverlay.height
+                            return root.pointYValue(point) * brushOverlay.height
                         }
 
                         function pointDiameter(point) {
@@ -454,21 +678,29 @@ Item {
                         }
 
                         function pointAlpha(point) {
-                            return Math.max(0.14, (point.flow || mask.brushFlow || 1.0) * 0.34)
+                            return Math.max(0.08, (point.flow || mask.brushFlow || 1.0) * 0.22)
                         }
 
                         onPaint: {
                             const ctx = getContext("2d")
                             ctx.reset()
 
-                            const points = active && editorPreview.brushStrokeActive
+                            const liveStroke = active && editorPreview.brushStrokeActive
+                            const points = liveStroke
                                            ? (editorPreview.activeMaskLiveBrushPoints || [])
                                            : (brushOverlay.showStrokePoints ? (mask.brushPoints || []) : [])
                             if (points.length === 0)
                                 return
 
+                            const overlayColor = liveStroke
+                                                 ? root.liveBrushOverlayColor(mask)
+                                                 : accent
+                            const overlayOpacity = liveStroke
+                                                   ? root.liveBrushOverlayOpacity(mask)
+                                                   : 0.34
+
                             const first = points[0]
-                            ctx.fillStyle = Qt.alpha(accent, pointAlpha(first))
+                            ctx.fillStyle = Qt.alpha(overlayColor, liveStroke ? overlayOpacity : pointAlpha(first))
                             ctx.beginPath()
                             ctx.arc(pointX(first), pointY(first), pointDiameter(first) / 2, 0, Math.PI * 2)
                             ctx.fill()
@@ -478,7 +710,11 @@ Item {
                                 const current = points[i]
                                 const strokeDiameter = (pointDiameter(previous) + pointDiameter(current)) / 2
 
-                                ctx.strokeStyle = Qt.alpha(accent, Math.max(pointAlpha(previous), pointAlpha(current)))
+                                ctx.strokeStyle = Qt.alpha(
+                                                    overlayColor,
+                                                    liveStroke
+                                                    ? overlayOpacity
+                                                    : Math.max(pointAlpha(previous), pointAlpha(current)))
                                 ctx.lineCap = "round"
                                 ctx.lineJoin = "round"
                                 ctx.lineWidth = strokeDiameter
@@ -487,7 +723,7 @@ Item {
                                 ctx.lineTo(pointX(current), pointY(current))
                                 ctx.stroke()
 
-                                ctx.fillStyle = Qt.alpha(accent, pointAlpha(current))
+                                ctx.fillStyle = Qt.alpha(overlayColor, liveStroke ? overlayOpacity : pointAlpha(current))
                                 ctx.beginPath()
                                 ctx.arc(pointX(current), pointY(current), pointDiameter(current) / 2, 0, Math.PI * 2)
                                 ctx.fill()
@@ -535,7 +771,7 @@ Item {
                     }
 
                     Item {
-                        visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
+                        visible: mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
                         x: (mask.cloneSourceX || 0.5) * brushOverlay.width - width / 2
                         y: (mask.cloneSourceY || 0.5) * brushOverlay.height - height / 2
                         width: 22
@@ -571,25 +807,34 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
-                        enabled: active
+                        enabled: active && !editRoot.spacePanActive
                         hoverEnabled: true
                         preventStealing: true
-                        cursorShape: Qt.CrossCursor
+                        cursorShape: root.brushResizeGestureArmed() || root.brushResizeActive
+                                     ? Qt.SizeAllCursor
+                                     : Qt.CrossCursor
                         onEntered: root.hoverActive = true
                         onExited: root.hoverActive = false
                         onPositionChanged: function(mouse) {
                             root.hoverX = mouse.x
                             root.hoverY = mouse.y
                             root.hoverActive = true
+                            if (root.brushResizeActive) {
+                                root.updateBrushResize(mouse.x, mouse.y, brushOverlay.width, brushOverlay.height)
+                                return
+                            }
                             if (!pressed || editRoot.cloneSourcePickArmed ||
                                     (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                 return
                             editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
                         }
                         onPressed: function(mouse) {
-                            if (editRoot.maskFallbackMode === "brush")
-                                editRoot.maskFallbackMode = ""
+                            editRoot.forceActiveFocus()
                             editorPreview.activeMaskIndex = index
+                            if (root.brushResizeGestureArmed()) {
+                                root.beginBrushResize(mouse.x, mouse.y)
+                                return
+                            }
                             editorPreview.beginActiveBrushStroke()
                             root.hoverX = mouse.x
                             root.hoverY = mouse.y
@@ -604,8 +849,20 @@ Item {
                             }
                             editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
                         }
-                        onReleased: editorPreview.endActiveBrushStroke()
-                        onCanceled: editorPreview.endActiveBrushStroke()
+                        onReleased: {
+                            if (root.brushResizeActive) {
+                                root.endBrushResize()
+                                return
+                            }
+                            editorPreview.endActiveBrushStroke()
+                        }
+                        onCanceled: {
+                            if (root.brushResizeActive) {
+                                root.endBrushResize()
+                                return
+                            }
+                            editorPreview.endActiveBrushStroke()
+                        }
                     }
                 }
 
@@ -636,23 +893,21 @@ Item {
                                 return
 
                             ctx.beginPath()
-                            ctx.moveTo(root.previewPointX(points[0].x || 0.5), root.previewPointY(points[0].y || 0.5))
+                            ctx.moveTo(root.previewPointX(root.pointXValue(points[0])), root.previewPointY(root.pointYValue(points[0])))
                             for (let i = 1; i < count; ++i)
-                                ctx.lineTo(root.previewPointX(points[i].x || 0.5), root.previewPointY(points[i].y || 0.5))
+                                ctx.lineTo(root.previewPointX(root.pointXValue(points[i])), root.previewPointY(root.pointYValue(points[i])))
                             if (count >= 3)
                                 ctx.closePath()
 
                             if (count >= 3) {
-                                ctx.fillStyle = Qt.alpha(accent, active ? 0.18 : 0.09)
-                                ctx.fill()
+                                root.strokeOutlinePaths(ctx, [points], accent, false)
+                            } else {
+                                ctx.strokeStyle = Qt.alpha("#f4f7fa", active ? 0.88 : 0.55)
+                                ctx.lineWidth = active ? 1.8 : 1.1
+                                if (ctx.setLineDash)
+                                    ctx.setLineDash([])
+                                ctx.stroke()
                             }
-
-                            ctx.strokeStyle = Qt.alpha("#f4f7fa", active ? 0.88 : 0.55)
-                            ctx.lineWidth = active ? 1.8 : 1.1
-                            if (ctx.setLineDash)
-                                ctx.setLineDash([8, 6])
-                            ctx.lineDashOffset = -editRoot.selectionOutlinePhase
-                            ctx.stroke()
                         }
                     }
 
@@ -665,8 +920,8 @@ Item {
                             width: 10
                             height: 10
                             radius: 5
-                            x: root.previewPointX(modelData.x || 0.5) - width / 2
-                            y: root.previewPointY(modelData.y || 0.5) - height / 2
+                            x: root.previewPointX(root.pointXValue(modelData)) - width / 2
+                            y: root.previewPointY(root.pointYValue(modelData)) - height / 2
                             color: active ? "#f4f7fa" : accent
                             border.width: 1
                             border.color: "#101419"
@@ -679,26 +934,39 @@ Item {
                     visible: active &&
                              (mask.kind === "luminance" ||
                               mask.kind === "color")
-                    anchors.centerIn: parent
-                    radius: 10
-                    color: Qt.alpha(accent, 0.18)
+                    anchors.fill: parent
+                    color: Qt.alpha(accent, 0.08)
                     border.width: 1
-                    border.color: Qt.alpha("#f4f7fa", 0.35)
-                    implicitWidth: rangeLabel.implicitWidth + 24
-                    implicitHeight: rangeLabel.implicitHeight + 14
+                    border.color: Qt.alpha(accent, 0.28)
+                    radius: 4
+                    opacity: emphasis
 
-                    Label {
-                        id: rangeLabel
+                    Rectangle {
                         anchors.centerIn: parent
-                        text: mask.kind === "luminance"
-                              ? "Luminance range active"
-                              : mask.kind === "color"
-                                ? "Color range active"
-                                : ""
-                        color: "#f2f4f6"
-                        font.family: "Avenir Next"
-                        font.pixelSize: 12
-                        font.weight: Font.Medium
+                        radius: 10
+                        color: Qt.alpha("#101419", 0.72)
+                        border.width: 1
+                        border.color: Qt.alpha(accent, 0.55)
+                        implicitWidth: rangeLabel.implicitWidth + 24
+                        implicitHeight: rangeLabel.implicitHeight + 14
+
+                        Label {
+                            id: rangeLabel
+                            anchors.centerIn: parent
+                            text: mask.kind === "luminance"
+                                  ? "Luminance range · " +
+                                    Math.round((mask.luminanceMin || 0.2) * 100) + "–" +
+                                    Math.round((mask.luminanceMax || 0.8) * 100) + "%"
+                                  : mask.kind === "color"
+                                    ? "Color range · " +
+                                      Math.round((mask.hueCenter || 0.08) * 360) + "° ±" +
+                                      Math.round((mask.hueRange || 0.12) * 360) + "°"
+                                    : ""
+                            color: "#f2f4f6"
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.Medium
+                        }
                     }
                 }
             }
@@ -744,10 +1012,12 @@ Item {
             color: Qt.alpha(
                        editRoot.objectPickArmed
                        ? root.objectPickAccentColor()
-                       : "#f4f7fa",
-                       editRoot.objectPickArmed ? 0.08 : 0.04)
+                       : theme.accentWarm300,
+                       editRoot.objectPickArmed ? 0.10 : (root.brushResizeActive ? 0.0 : 0.02))
             border.width: 1
-            border.color: editRoot.objectPickArmed
+            border.color: root.brushResizeActive
+                          ? theme.alpha("#f6f3ed", 0.98)
+                          : editRoot.objectPickArmed
                           ? root.objectPickAccentColor()
                           : (editorPreview.activeMaskRetouchMode === "remove"
                              ? "#d98962"
@@ -755,32 +1025,27 @@ Item {
                                ? "#7cb5ff"
                                : editorPreview.activeMaskRetouchMode === "heal"
                                  ? "#72cbb2"
-                                 : (editorPreview.activeMaskOperation === "subtract" ? "#d36a5e" : "#f4f7fa"))
+                                 : "#cf3b32")
         }
 
         Image {
             id: activeSelectionMatte
             anchors.fill: parent
             visible: editorPreview.hasActiveMask &&
-                     editorPreview.activeMaskPreviewSource.length > 0 &&
-                     !(editorPreview.brushStrokeActive && editorPreview.activeMaskKind === "brush")
+                     editorPreview.activeMaskPreviewSource.length > 0
             source: editorPreview.activeMaskPreviewSource
             fillMode: Image.Stretch
             smooth: true
             mipmap: false
             cache: false
+            opacity: root.previewMatteOpacity(false)
             z: 95
         }
 
         Canvas {
             id: activeSelectionOutline
             anchors.fill: parent
-            visible: editorPreview.hasActiveMask &&
-                     editorPreview.activeMaskOutlinePoints.length >= 2 &&
-                     (editorPreview.activeMaskKind === "subject" ||
-                      editorPreview.activeMaskKind === "object" ||
-                      editorPreview.activeMaskKind === "brush" ||
-                      editorPreview.activeMaskKind === "polygon")
+            visible: false
             z: 96
 
             Connections {
@@ -800,40 +1065,17 @@ Item {
             }
 
             onPaint: {
-                const points = editorPreview.activeMaskOutlinePoints
-                const count = points.length
+                const outlinePaths = root.normalizedOutlinePaths(editorPreview.activeMaskOutlinePaths)
                 const ctx = getContext("2d")
                 ctx.reset()
-                if (count < 2)
+                if (!outlinePaths || outlinePaths.length === 0)
                     return
 
                 const activeMask = editorPreview.activeMaskIndex >= 0
                                    ? editorPreview.maskStack[editorPreview.activeMaskIndex]
                                    : null
                 const accent = editRoot.maskAccent(activeMask)
-                ctx.beginPath()
-                ctx.moveTo(root.previewPointX(points[0].x || 0.5), root.previewPointY(points[0].y || 0.5))
-                for (let i = 1; i < count; ++i)
-                    ctx.lineTo(root.previewPointX(points[i].x || 0.5), root.previewPointY(points[i].y || 0.5))
-                if (count >= 3)
-                    ctx.closePath()
-
-                if (count >= 3 && editorPreview.maskPreviewMode === "overlay") {
-                    ctx.fillStyle = Qt.alpha(accent, 0.12)
-                    ctx.fill()
-                }
-
-                ctx.lineWidth = 2
-                if (ctx.setLineDash)
-                    ctx.setLineDash([8, 6])
-                ctx.lineDashOffset = -editRoot.selectionOutlinePhase
-                ctx.strokeStyle = "#f4f7fa"
-                ctx.stroke()
-                if (ctx.setLineDash)
-                    ctx.setLineDash([8, 6])
-                ctx.lineDashOffset = 12 - editRoot.selectionOutlinePhase
-                ctx.strokeStyle = Qt.alpha("#101419", 0.78)
-                ctx.stroke()
+                root.strokeOutlinePaths(ctx, outlinePaths, accent, false)
             }
         }
 
@@ -848,15 +1090,14 @@ Item {
             smooth: true
             mipmap: false
             cache: false
+            opacity: root.previewMatteOpacity(true)
             z: 96
         }
 
         Canvas {
             id: smartPreviewOutline
             anchors.fill: parent
-            visible: editRoot.objectPickArmed &&
-                     editorPreview.smartSelectPreviewActive &&
-                     editorPreview.smartSelectPreviewOutlinePoints.length >= 2
+            visible: false
             z: 97
 
             Connections {
@@ -876,40 +1117,14 @@ Item {
             }
 
             onPaint: {
-                const points = editorPreview.smartSelectPreviewOutlinePoints
+                const points = root.normalizedOutlinePath(editorPreview.smartSelectPreviewOutlinePoints)
                 const count = points.length
                 const ctx = getContext("2d")
                 ctx.reset()
                 if (count < 2)
                     return
 
-                ctx.beginPath()
-                ctx.moveTo(root.previewPointX(points[0].x || 0.5), root.previewPointY(points[0].y || 0.5))
-                for (let i = 1; i < count; ++i)
-                    ctx.lineTo(root.previewPointX(points[i].x || 0.5), root.previewPointY(points[i].y || 0.5))
-                if (count >= 3)
-                    ctx.closePath()
-
-                if (count >= 3 && editorPreview.maskPreviewMode === "overlay") {
-                    ctx.fillStyle = Qt.alpha(
-                                root.objectPickAccentColor(),
-                                0.18)
-                    ctx.fill()
-                }
-
-                ctx.lineWidth = 2
-                if (ctx.setLineDash)
-                    ctx.setLineDash([10, 6])
-                ctx.lineDashOffset = -editRoot.selectionOutlinePhase
-                ctx.strokeStyle = "#f4f7fa"
-                ctx.stroke()
-                if (ctx.setLineDash)
-                    ctx.setLineDash([10, 6])
-                ctx.lineDashOffset = 14 - editRoot.selectionOutlinePhase
-                ctx.strokeStyle = Qt.alpha(
-                            root.objectPickAccentColor(),
-                            0.88)
-                ctx.stroke()
+                root.strokeOutlinePaths(ctx, [points], root.objectPickAccentColor(), true)
             }
         }
 
@@ -918,7 +1133,8 @@ Item {
             y: 0
             width: previewItem.width
             height: previewItem.height
-            enabled: editRoot.objectPickArmed || editRoot.polygonDrawArmed || editRoot.lassoDrawArmed
+            enabled: !editRoot.spacePanActive &&
+                     (editRoot.objectPickArmed || editRoot.polygonDrawArmed || editRoot.lassoDrawArmed)
             acceptedButtons: Qt.LeftButton
             hoverEnabled: true
             cursorShape: (editRoot.polygonDrawArmed || editRoot.lassoDrawArmed || editRoot.objectPickArmed)
@@ -937,13 +1153,14 @@ Item {
             }
 
             onPressed: function(mouse) {
+                editRoot.forceActiveFocus()
                 if (editRoot.objectPickArmed) {
                     root.beginSmartSelectStroke(mouse.x, mouse.y)
                     return
                 }
                 if (!editRoot.lassoDrawArmed)
                     return
-                editorPreview.startPolygonSelection()
+                editorPreview.startPolygonSelection(editRoot.manualSelectionSubtractActive())
                 editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
             }
 
@@ -953,9 +1170,8 @@ Item {
                 if (editRoot.lassoDrawArmed)
                     return
                 if (editRoot.polygonDrawArmed) {
-                    if (editRoot.maskFallbackMode === "polygon" &&
-                            editorPreview.activeMaskPolygonPointCount >= 1)
-                        editRoot.maskFallbackMode = ""
+                    if (editorPreview.activeMaskKind === "polygon")
+                        editorPreview.activeMaskOperation = editRoot.manualSelectionSubtractActive() ? "subtract" : "add"
                     editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
                 }
             }
@@ -970,14 +1186,14 @@ Item {
 
                 if (!editRoot.lassoDrawArmed || !pressed)
                     return
+                if (editorPreview.activeMaskKind === "polygon")
+                    editorPreview.activeMaskOperation = editRoot.manualSelectionSubtractActive() ? "subtract" : "add"
                 editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
             }
 
             onDoubleClicked: function(mouse) {
                 if (!editRoot.polygonDrawArmed)
                     return
-                editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
-                editRoot.maskFallbackMode = ""
                 editRoot.clearTransientTools()
             }
 
@@ -990,6 +1206,10 @@ Item {
                 }
                 if (!editRoot.lassoDrawArmed)
                     return
+                if (editorPreview.activeMaskPolygonPointCount < 3) {
+                    editorPreview.clearActivePolygonPoints()
+                    editorPreview.removeActiveMask()
+                }
                 editRoot.clearTransientTools()
             }
         }
@@ -998,68 +1218,143 @@ Item {
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: 12
-            visible: editorPreview.hasActiveMask || editRoot.objectPickArmed || editRoot.polygonDrawArmed ||
-                     editRoot.lassoDrawArmed || editRoot.cloneSourcePickArmed
+            visible: false
             z: 99
             radius: 10
-            color: Qt.alpha("#101419", 0.76)
+            color: theme.alpha(theme.ink950, 0.82)
             border.width: 1
             border.color: editRoot.cloneSourcePickArmed ? "#7cb5ff"
-                         : root.objectPickAccentColor()
+                         : (editorPreview.hasActiveMask ? theme.alpha(editRoot.maskWorkspaceAccentColor(), 0.52)
+                            : theme.alpha(root.objectPickAccentColor(), 0.52))
             implicitWidth: overlayInfo.implicitWidth + 20
             implicitHeight: overlayInfo.implicitHeight + 14
 
             Label {
                 id: overlayInfo
                 anchors.centerIn: parent
-                text: editRoot.cloneSourcePickArmed
-                      ? "Clone source"
-                      : editRoot.objectPickArmed
-                        ? root.objectPickActionLabel()
-                        : editRoot.polygonDrawArmed
-                          ? "Polygon selection"
-                          : editRoot.lassoDrawArmed
-                            ? "Lasso selection"
-                            : editRoot.activeToolLabel()
-                color: "#f2f4f6"
-                font.family: "Avenir Next"
-                font.pixelSize: 12
+                text: root.previewInstructionTitle()
+                color: theme.textStrong
+                font.family: theme.fontDisplay
+                font.pixelSize: 11
                 font.weight: Font.DemiBold
             }
         }
 
         Rectangle {
-            anchors.fill: parent
-            visible: editRoot.objectPickArmed || editRoot.polygonDrawArmed || editRoot.lassoDrawArmed ||
-                     editRoot.cloneSourcePickArmed || editRoot.maskFallbackMode.length > 0
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: 12
+            visible: editRoot.objectPickArmed &&
+                     editorPreview.smartSelectCanCycleCandidates
             z: 99
-            color: Qt.alpha("#0b0e11", 0.16)
+            radius: 10
+            color: Qt.alpha("#101419", 0.82)
+            border.width: 1
+            border.color: Qt.alpha(root.objectPickAccentColor(), 0.58)
+            implicitWidth: candidateControls.implicitWidth + 18
+            implicitHeight: candidateControls.implicitHeight + 14
+
+            Row {
+                id: candidateControls
+                anchors.centerIn: parent
+                spacing: 6
+
+                ActionButton {
+                    text: "Prev"
+                    compact: true
+                    accent: root.objectPickAccentColor()
+                    tone: "secondary"
+                    onClicked: editorPreview.cycleSmartSelectCandidate(-1)
+                }
+
+                Label {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: (editorPreview.smartSelectCandidateIndex + 1).toString() +
+                          " / " + editorPreview.smartSelectCandidateCount.toString()
+                    color: "#f2f4f6"
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                }
+
+                ActionButton {
+                    text: "Next"
+                    compact: true
+                    accent: root.objectPickAccentColor()
+                    tone: "secondary"
+                    onClicked: editorPreview.cycleSmartSelectCandidate(1)
+                }
+            }
+        }
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 14
+            visible: false
+            z: 99
+            color: theme.alpha(theme.ink950, 0.86)
             border.width: 1
             border.color: editRoot.cloneSourcePickArmed ? "#7cb5ff"
-                         : editRoot.maskFallbackMode === "brush" ? "#d98962"
-                         : editRoot.maskFallbackMode === "polygon" ? "#7ec97a"
                          : editRoot.lassoDrawArmed ? "#7ec97a"
                          : editRoot.polygonDrawArmed ? "#7ec97a"
                          : root.objectPickAccentColor()
             radius: 12
+            width: Math.min(previewItem.width - 24, 280)
+            height: 56
+
+            Column {
+                id: instructionColumn
+                anchors.fill: parent
+                anchors.margins: 8
+                spacing: 2
+
+                Label {
+                    width: parent.width
+                    text: root.previewInstructionTitle()
+                    color: theme.textStrong
+                    font.family: theme.fontDisplay
+                    font.pixelSize: 10
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
+
+                Label {
+                    width: parent.width
+                    text: root.previewInstructionBody()
+                    color: theme.textMain
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
+                }
+            }
+        }
+
+        Rectangle {
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 14
+            anchors.bottomMargin: 14
+            visible: root.brushResizeActive
+            z: 100
+            radius: 12
+            color: theme.alpha(theme.ink950, 0.88)
+            border.width: 1
+            border.color: theme.alpha(theme.accentWarm300, 0.38)
+            implicitWidth: brushResizeReadout.implicitWidth + 20
+            implicitHeight: brushResizeReadout.implicitHeight + 14
 
             Label {
+                id: brushResizeReadout
                 anchors.centerIn: parent
-                text: editRoot.cloneSourcePickArmed
-                      ? "Click a clean source area for the Clone Stamp."
-                      : editRoot.maskFallbackMode === "brush"
-                        ? "AI could not isolate that target. Remove Brush is active so you can keep painting."
-                      : editRoot.maskFallbackMode === "polygon"
-                          ? "AI could not isolate that target. Continue the polygon manually and double-click to finish."
-                          : editRoot.lassoDrawArmed
-                            ? "Drag to draw a freehand selection."
-                              : editRoot.polygonDrawArmed
-                                ? "Click to place polygon points. Double-click to finish."
-                              : root.objectPickInstructionText()
-                color: "#f2f4f6"
-                font.family: "Avenir Next"
-                font.pixelSize: 13
-                font.weight: Font.Medium
+                text: "Size " + Math.round(editorPreview.activeMaskBrushSize * 1000).toString() +
+                      "  Flow " + Math.round(editorPreview.activeMaskBrushFlow * 100).toString() + "%"
+                color: theme.textStrong
+                font.family: theme.fontMono
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
             }
         }
     }

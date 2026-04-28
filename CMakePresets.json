@@ -76,6 +76,16 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "PHOTO_EDITOR_BUILD_DESKTOP": "OFF"
       }
+    },
+    {
+      "name": "ci-headless-tsan",
+      "inherits": "ci-headless",
+      "displayName": "CI Headless (ThreadSanitizer)",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=thread",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
     }
   ],
   "buildPresets": [
@@ -98,12 +108,23 @@
     {
       "name": "build-ci-headless",
       "configurePreset": "ci-headless"
+    },
+    {
+      "name": "build-ci-headless-tsan",
+      "configurePreset": "ci-headless-tsan"
     }
   ],
   "testPresets": [
     {
       "name": "test-ci-headless",
       "configurePreset": "ci-headless",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-ci-headless-tsan",
+      "configurePreset": "ci-headless-tsan",
       "output": {
         "outputOnFailure": true
       }

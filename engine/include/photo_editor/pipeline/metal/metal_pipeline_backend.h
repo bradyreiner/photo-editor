@@ -29,6 +29,13 @@ class MetalPipelineBackend final {
       int height,
       const ColorAdjustmentState& state);
 
+  void apply_masks_and_color_lut(
+      std::vector<ColorPixel>* pixels,
+      int width,
+      int height,
+      const ColorAdjustmentState& state,
+      const ColorLut3D& lut);
+
   [[nodiscard]] std::vector<float> gaussian_approximate_blur(
       const std::vector<float>& input,
       int width,

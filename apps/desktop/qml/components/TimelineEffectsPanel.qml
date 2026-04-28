@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-Rectangle {
+GlassSurface {
     id: root
 
     required property var theme
@@ -25,9 +25,9 @@ Rectangle {
     readonly property bool hasSelection: selectedClipIndex >= 0
 
     radius: 12
-    color: theme.alpha(theme.ink900, 0.82)
-    border.width: 1
-    border.color: theme.alpha(theme.lineSoft, 0.55)
+    accent: theme.accentWarm400
+    accentRail: false
+    elevated: true
 
     readonly property bool hasClip: clipState.displayLabel !== undefined
 

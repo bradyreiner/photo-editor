@@ -67,16 +67,10 @@ Dialog {
 
         Layout.fillWidth: true
         radius: sectionTheme.radiusPanel
-        color: sectionTheme.alpha(sectionTheme.ink850, 0.96)
+        color: sectionTheme.alpha(sectionTheme.glassBase, 0.42)
         border.width: 1
-        border.color: sectionTheme.alpha(sectionTheme.lineSoft, 0.46)
+        border.color: sectionTheme.alpha(sectionTheme.glassEdge, 0.2)
         implicitHeight: body.implicitHeight + sectionTheme.panelPadding * 2
-
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: sectionTheme.alpha(sectionTheme.ink700, 0.08) }
-            GradientStop { position: 0.18; color: sectionTheme.alpha(sectionTheme.ink850, 0.98) }
-            GradientStop { position: 1.0; color: sectionTheme.ink900 }
-        }
 
         ColumnLayout {
             id: body
@@ -122,9 +116,9 @@ Dialog {
 
         Layout.fillWidth: true
         radius: rowTheme.radiusControl
-        color: rowTheme.alpha(rowTheme.ink900, 0.82)
+        color: rowTheme.alpha(rowTheme.glassBase, 0.36)
         border.width: 1
-        border.color: rowTheme.alpha(rowTheme.lineSoft, 0.8)
+        border.color: rowTheme.alpha(rowTheme.glassEdge, 0.2)
         implicitHeight: 70
 
         RowLayout {
@@ -174,9 +168,9 @@ Dialog {
 
         Layout.fillWidth: true
         radius: cardTheme.radiusPanel
-        color: cardTheme.alpha(cardTheme.ink850, 0.96)
+        color: cardTheme.alpha(cardTheme.glassBase, 0.42)
         border.width: 1
-        border.color: cardTheme.alpha(cardTheme.lineSoft, 0.42)
+        border.color: cardTheme.alpha(cardTheme.glassEdge, 0.2)
         implicitHeight: body.implicitHeight + cardTheme.panelPadding * 2
 
         ColumnLayout {
@@ -267,17 +261,9 @@ Dialog {
         color: theme.alpha(theme.ink950, 0.78)
     }
 
-    background: Rectangle {
-        radius: theme.radiusPanel + 6
-        color: theme.ink900
-        border.width: 1
-        border.color: theme.alpha(theme.lineSoft, 0.78)
-
-        gradient: Gradient {
-            GradientStop { position: 0.0; color: theme.alpha(theme.ink700, 0.12) }
-            GradientStop { position: 0.08; color: theme.alpha(theme.ink850, 0.98) }
-            GradientStop { position: 1.0; color: theme.ink950 }
-        }
+    background: PopupSurface {
+        accent: theme.accentWarm400
+        accentRail: false
     }
 
     contentItem: RowLayout {
@@ -285,13 +271,12 @@ Dialog {
         anchors.margins: theme.space18
         spacing: theme.space18
 
-        Rectangle {
+        GlassSurface {
             Layout.preferredWidth: 232
             Layout.fillHeight: true
-            radius: theme.radiusSurface
-            color: theme.alpha(theme.ink850, 0.98)
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.54)
+            accent: theme.accentWarm400
+            accentRail: false
+            elevated: true
 
             ColumnLayout {
                 anchors.fill: parent
@@ -340,10 +325,10 @@ Dialog {
                             border.width: 1
                             border.color: root.currentPage === pageButton.index
                                           ? theme.alpha(root.pageAccent(pageButton.index), 0.58)
-                                          : theme.alpha(theme.lineSoft, pageButton.hovered ? 0.78 : 0.48)
+                                          : theme.alpha(theme.glassEdge, pageButton.hovered ? 0.42 : 0.22)
                             color: root.currentPage === pageButton.index
                                    ? theme.alpha(root.pageAccent(pageButton.index), 0.14)
-                                   : (pageButton.hovered ? theme.alpha(theme.ink800, 0.96) : theme.alpha(theme.ink900, 0.72))
+                                   : (pageButton.hovered ? theme.alpha(theme.glassLift, 0.64) : theme.alpha(theme.glassBase, 0.38))
 
                             Behavior on color {
                                 ColorAnimation { duration: theme.durationFast }
@@ -359,9 +344,9 @@ Dialog {
 
                             Rectangle {
                                 Layout.alignment: Qt.AlignTop
-                                implicitWidth: 4
-                                implicitHeight: 40
-                                radius: 2
+                                implicitWidth: 6
+                                implicitHeight: 6
+                                radius: 1
                                 color: root.pageAccent(pageButton.index)
                                 opacity: root.currentPage === pageButton.index ? 1.0 : 0.34
                             }
@@ -396,12 +381,11 @@ Dialog {
 
                 Item { Layout.fillHeight: true }
 
-                Rectangle {
+                GlassSurface {
                     Layout.fillWidth: true
                     radius: theme.radiusPanel
-                    color: theme.alpha(theme.ink900, 0.78)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.56)
+                    surfaceOpacity: 0.42
+                    edgeOpacity: 0.2
                     implicitHeight: shellNote.implicitHeight + theme.space16 * 2
 
                     Label {
@@ -418,13 +402,11 @@ Dialog {
             }
         }
 
-        Rectangle {
+        GlassSurface {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: theme.radiusSurface
-            color: theme.alpha(theme.ink900, 0.98)
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.54)
+            accent: root.pageAccent(root.currentPage)
+            elevated: true
 
             ColumnLayout {
                 anchors.fill: parent

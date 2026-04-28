@@ -140,6 +140,36 @@ For database compatibility:
 
 ## How to build a release locally
 
+### Repeatable local macOS release script
+
+For the normal local macOS release build, use:
+
+```sh
+./scripts/build-release.sh 0.1.0
+```
+
+For the next release, pass the next version:
+
+```sh
+./scripts/build-release.sh 0.1.1
+```
+
+The script updates `VERSION`, runs the Rust and native test gates, builds release Rust helpers, configures the release CMake preset, packages with CPack, and writes `SHA256SUMS.txt` beside the package artifacts.
+
+By default, the script requires a clean worktree. For a local candidate build from uncommitted changes, use:
+
+```sh
+./scripts/build-release.sh 0.1.0 --allow-dirty
+```
+
+For an official tagged release, commit the `VERSION` bump first, then run:
+
+```sh
+./scripts/build-release.sh 0.1.0 --create-tag
+```
+
+Before sending artifacts to users, sign and notarize the macOS output, test it on a clean machine, and publish the artifact with release notes and checksums.
+
 ### macOS
 
 Prerequisites:

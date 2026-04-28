@@ -19,6 +19,7 @@ The release workflow now validates that the Git tag matches `VERSION`.
 
 ## Production Build
 
+- Local macOS release script: `./scripts/build-release.sh X.Y.Z`
 - macOS: `cmake --preset release-macos -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD/rust/target/release"`
 - macOS package: `cpack --config build/release-macos/CPackConfig.cmake -B build/release-macos/package`
 - Windows: `cmake --preset release-windows -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD\\rust\\target\\release"`

@@ -37,6 +37,10 @@ class ExportJobController final : public QObject {
       const QString& recipe_json,
       const QString& preset,
       const QString& destination_directory);
+  Q_INVOKABLE int queueBatchExport(
+      const QVariantList& assets,
+      const QString& preset,
+      const QString& destination_directory);
   Q_INVOKABLE void retryJob(const QString& job_id);
   Q_INVOKABLE void removeJob(const QString& job_id);
   Q_INVOKABLE void clearFinishedJobs();

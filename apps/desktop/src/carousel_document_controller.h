@@ -13,6 +13,7 @@
 #include <QStringList>
 #include <QJsonObject>
 #include <QVariantList>
+#include <QTimer>
 #include <QVariantMap>
 #include <QVector>
 
@@ -36,6 +37,7 @@ class CarouselDocumentController final : public QObject {
   Q_PROPERTY(QString selectedItemId READ selectedItemId NOTIFY selectionChanged)
   Q_PROPERTY(QString documentName READ documentName WRITE setDocumentName NOTIFY documentStateChanged)
   Q_PROPERTY(QString savedDocumentId READ savedDocumentId NOTIFY documentStateChanged)
+  Q_PROPERTY(bool hasActiveCarousel READ hasActiveCarousel NOTIFY documentStateChanged)
   Q_PROPERTY(QStringList templateOptions READ templateOptions CONSTANT)
   Q_PROPERTY(QStringList fitModeOptions READ fitModeOptions CONSTANT)
   Q_PROPERTY(QStringList slotOptions READ slotOptions CONSTANT)
@@ -95,6 +97,7 @@ class CarouselDocumentController final : public QObject {
   [[nodiscard]] QString selectedItemId() const;
   [[nodiscard]] QString documentName() const;
   [[nodiscard]] QString savedDocumentId() const;
+  [[nodiscard]] bool hasActiveCarousel() const;
   [[nodiscard]] QStringList templateOptions() const;
   [[nodiscard]] QStringList fitModeOptions() const;
   [[nodiscard]] QStringList slotOptions() const;
@@ -130,6 +133,11 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedItemCenter(double center_x, double center_y);
   Q_INVOKABLE void setSelectedItemSize(double width, double height);
   Q_INVOKABLE void setSelectedItemRotation(double rotation_degrees);
+  Q_INVOKABLE void moveSelectedItemByPixelsSilent(double delta_x, double delta_y);
+  Q_INVOKABLE void setSelectedItemCenterSilent(double center_x, double center_y);
+  Q_INVOKABLE void setSelectedItemSizeSilent(double width, double height);
+  Q_INVOKABLE void setSelectedItemRotationSilent(double rotation_degrees);
+  Q_INVOKABLE void commitTransformState();
   Q_INVOKABLE void setSelectedText(const QString& text);
   Q_INVOKABLE void setSelectedTextColor(const QString& color_value);
   Q_INVOKABLE void setSelectedTextPointSize(double point_size);
@@ -183,6 +191,9 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE QVariantList recentDocuments() const;
   Q_INVOKABLE bool saveDocument(const QString& document_name = QString());
   Q_INVOKABLE bool loadDocument(const QString& document_id);
+  Q_INVOKABLE void closeCarousel();
+  Q_INVOKABLE void createCarouselWithSettings(const QVariantMap& settings);
+  Q_INVOKABLE void commitMediaTransformState();
 
  signals:
   void slidesChanged();
@@ -358,6 +369,10 @@ class CarouselDocumentController final : public QObject {
   QStringList selected_item_ids_;
   QString document_name_ = QStringLiteral("Untitled Carousel");
   QString saved_document_id_;
+  bool has_active_carousel_ = false;
+  QTimer* preview_debounce_timer_ = nullptr;
+  bool transform_dirty_ = false;
+  bool transform_slides_changed_ = false;
 };
 
 }  // namespace photo_editor::desktop

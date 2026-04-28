@@ -1442,7 +1442,7 @@ Rectangle {
                             from: -100
                             to: 100
                             value: editorPreview.activeMaskSelectionExpand
-                            onValueDragged: editorPreview.activeMaskSelectionExpand = value
+                            onValueDragged: function(value) { editorPreview.activeMaskSelectionExpand = value }
                             onResetRequested: editorPreview.activeMaskSelectionExpand = 0
                         }
 
@@ -1454,7 +1454,7 @@ Rectangle {
                             to: editorPreview.activeMaskKind === "polygon" ? 0.2 : 1.0
                             stepSize: 0.01
                             value: editorPreview.activeMaskFeather
-                            onValueDragged: editorPreview.activeMaskFeather = value
+                            onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
                             onResetRequested: editorPreview.activeMaskFeather = root.activeMaskResetFeather()
                         }
                     }
@@ -1476,7 +1476,7 @@ Rectangle {
                             from: -2
                             to: 2
                             value: editorPreview.activeMaskExposure
-                            onValueDragged: editorPreview.activeMaskExposure = value
+                            onValueDragged: function(value) { editorPreview.activeMaskExposure = value }
                             onResetRequested: editorPreview.activeMaskExposure = 0
                         }
 
@@ -1487,7 +1487,7 @@ Rectangle {
                             from: -100
                             to: 100
                             value: editorPreview.activeMaskTemperature
-                            onValueDragged: editorPreview.activeMaskTemperature = value
+                            onValueDragged: function(value) { editorPreview.activeMaskTemperature = value }
                             onResetRequested: editorPreview.activeMaskTemperature = 0
                         }
 
@@ -1498,7 +1498,7 @@ Rectangle {
                             from: -100
                             to: 100
                             value: editorPreview.activeMaskHueShift
-                            onValueDragged: editorPreview.activeMaskHueShift = value
+                            onValueDragged: function(value) { editorPreview.activeMaskHueShift = value }
                             onResetRequested: editorPreview.activeMaskHueShift = 0
                         }
 
@@ -1509,7 +1509,7 @@ Rectangle {
                             from: -100
                             to: 100
                             value: editorPreview.activeMaskSaturationShift
-                            onValueDragged: editorPreview.activeMaskSaturationShift = value
+                            onValueDragged: function(value) { editorPreview.activeMaskSaturationShift = value }
                             onResetRequested: editorPreview.activeMaskSaturationShift = 0
                         }
 
@@ -1521,7 +1521,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskColorizeHue
-                            onValueDragged: editorPreview.activeMaskColorizeHue = value
+                            onValueDragged: function(value) { editorPreview.activeMaskColorizeHue = value }
                             onResetRequested: editorPreview.activeMaskColorizeHue = 0
                         }
 
@@ -1532,7 +1532,7 @@ Rectangle {
                             from: 0
                             to: 100
                             value: editorPreview.activeMaskColorizeStrength
-                            onValueDragged: editorPreview.activeMaskColorizeStrength = value
+                            onValueDragged: function(value) { editorPreview.activeMaskColorizeStrength = value }
                             onResetRequested: editorPreview.activeMaskColorizeStrength = 0
                         }
 
@@ -1543,7 +1543,7 @@ Rectangle {
                             from: 0
                             to: 100
                             value: editorPreview.activeMaskRemoveStrength
-                            onValueDragged: editorPreview.activeMaskRemoveStrength = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRemoveStrength = value }
                             onResetRequested: editorPreview.activeMaskRemoveStrength = 0
                         }
                     }
@@ -1563,7 +1563,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskPosition
-                            onValueDragged: editorPreview.activeMaskPosition = value
+                            onValueDragged: function(value) { editorPreview.activeMaskPosition = value }
                             onResetRequested: editorPreview.activeMaskPosition = 0.5
                         }
 
@@ -1575,7 +1575,7 @@ Rectangle {
                             to: 180
                             stepSize: 1
                             value: editorPreview.activeMaskRotation
-                            onValueDragged: editorPreview.activeMaskRotation = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRotation = value }
                             onResetRequested: editorPreview.activeMaskRotation = 0
                         }
 
@@ -1588,7 +1588,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskCenterX
-                            onValueDragged: editorPreview.activeMaskCenterX = value
+                            onValueDragged: function(value) { editorPreview.activeMaskCenterX = value }
                             onResetRequested: editorPreview.activeMaskCenterX = 0.5
                         }
 
@@ -1601,7 +1601,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskCenterY
-                            onValueDragged: editorPreview.activeMaskCenterY = value
+                            onValueDragged: function(value) { editorPreview.activeMaskCenterY = value }
                             onResetRequested: editorPreview.activeMaskCenterY = 0.5
                         }
 
@@ -1614,7 +1614,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskRadiusX
-                            onValueDragged: editorPreview.activeMaskRadiusX = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRadiusX = value }
                             onResetRequested: editorPreview.activeMaskRadiusX = 0.25
                         }
 
@@ -1627,7 +1627,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskRadiusY
-                            onValueDragged: editorPreview.activeMaskRadiusY = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRadiusY = value }
                             onResetRequested: editorPreview.activeMaskRadiusY = 0.25
                         }
                     }
@@ -1725,7 +1725,7 @@ Rectangle {
                             to: 0.35
                             stepSize: 0.01
                             value: editorPreview.activeMaskBrushSize
-                            onValueDragged: editorPreview.activeMaskBrushSize = value
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushSize = value }
                             onResetRequested: editorPreview.activeMaskBrushSize = 0.08
                         }
 
@@ -1737,7 +1737,7 @@ Rectangle {
                             to: 1.0
                             stepSize: 0.01
                             value: editorPreview.activeMaskBrushFlow
-                            onValueDragged: editorPreview.activeMaskBrushFlow = value
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushFlow = value }
                             onResetRequested: editorPreview.activeMaskBrushFlow = 1.0
                         }
 
@@ -1750,7 +1750,7 @@ Rectangle {
                             to: 4.0
                             stepSize: 0.01
                             value: editorPreview.activeMaskCloneScale
-                            onValueDragged: editorPreview.activeMaskCloneScale = value
+                            onValueDragged: function(value) { editorPreview.activeMaskCloneScale = value }
                             onResetRequested: editorPreview.activeMaskCloneScale = 1.0
                         }
 
@@ -1763,7 +1763,7 @@ Rectangle {
                             to: 180
                             stepSize: 1
                             value: editorPreview.activeMaskCloneRotation
-                            onValueDragged: editorPreview.activeMaskCloneRotation = value
+                            onValueDragged: function(value) { editorPreview.activeMaskCloneRotation = value }
                             onResetRequested: editorPreview.activeMaskCloneRotation = 0
                         }
 
@@ -1839,7 +1839,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskLuminanceMin
-                            onValueDragged: editorPreview.activeMaskLuminanceMin = value
+                            onValueDragged: function(value) { editorPreview.activeMaskLuminanceMin = value }
                             onResetRequested: editorPreview.activeMaskLuminanceMin = 0.2
                         }
 
@@ -1851,7 +1851,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskLuminanceMax
-                            onValueDragged: editorPreview.activeMaskLuminanceMax = value
+                            onValueDragged: function(value) { editorPreview.activeMaskLuminanceMax = value }
                             onResetRequested: editorPreview.activeMaskLuminanceMax = 0.8
                         }
 
@@ -1863,7 +1863,7 @@ Rectangle {
                             to: 0.5
                             stepSize: 0.01
                             value: editorPreview.activeMaskRangeFeather
-                            onValueDragged: editorPreview.activeMaskRangeFeather = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRangeFeather = value }
                             onResetRequested: editorPreview.activeMaskRangeFeather = 0.1
                         }
                     }
@@ -1881,7 +1881,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskHueCenter
-                            onValueDragged: editorPreview.activeMaskHueCenter = value
+                            onValueDragged: function(value) { editorPreview.activeMaskHueCenter = value }
                             onResetRequested: editorPreview.activeMaskHueCenter = 0.08
                         }
 
@@ -1893,7 +1893,7 @@ Rectangle {
                             to: 0.5
                             stepSize: 0.01
                             value: editorPreview.activeMaskHueRange
-                            onValueDragged: editorPreview.activeMaskHueRange = value
+                            onValueDragged: function(value) { editorPreview.activeMaskHueRange = value }
                             onResetRequested: editorPreview.activeMaskHueRange = 0.12
                         }
 
@@ -1905,7 +1905,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskSaturationMin
-                            onValueDragged: editorPreview.activeMaskSaturationMin = value
+                            onValueDragged: function(value) { editorPreview.activeMaskSaturationMin = value }
                             onResetRequested: editorPreview.activeMaskSaturationMin = 0.1
                         }
 
@@ -1917,7 +1917,7 @@ Rectangle {
                             to: 1
                             stepSize: 0.01
                             value: editorPreview.activeMaskSaturationMax
-                            onValueDragged: editorPreview.activeMaskSaturationMax = value
+                            onValueDragged: function(value) { editorPreview.activeMaskSaturationMax = value }
                             onResetRequested: editorPreview.activeMaskSaturationMax = 1.0
                         }
 
@@ -1929,7 +1929,7 @@ Rectangle {
                             to: 0.5
                             stepSize: 0.01
                             value: editorPreview.activeMaskRangeFeather
-                            onValueDragged: editorPreview.activeMaskRangeFeather = value
+                            onValueDragged: function(value) { editorPreview.activeMaskRangeFeather = value }
                             onResetRequested: editorPreview.activeMaskRangeFeather = 0.08
                         }
                     }
@@ -1947,7 +1947,7 @@ Rectangle {
                             to: 1.0
                             stepSize: 0.01
                             value: editorPreview.activeMaskFeather
-                            onValueDragged: editorPreview.activeMaskFeather = value
+                            onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
                             onResetRequested: editorPreview.activeMaskFeather = 0.5
                         }
 

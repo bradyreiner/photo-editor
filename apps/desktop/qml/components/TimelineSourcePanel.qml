@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import QtMultimedia
 
-Rectangle {
+GlassSurface {
     id: root
 
     required property var theme
@@ -46,9 +46,9 @@ Rectangle {
     }
 
     radius: 12
-    color: theme.alpha(theme.ink900, 0.82)
-    border.width: 1
-    border.color: theme.alpha(theme.lineSoft, 0.55)
+    accent: theme.accentWarm400
+    accentRail: false
+    elevated: true
 
     function formatSeconds(seconds) {
         const safe = Math.max(0, Number(seconds || 0))

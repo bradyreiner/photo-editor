@@ -1,6 +1,10 @@
 #pragma once
 
+#include "photo_editor/pipeline/color_pipeline.h"
+
+#include <atomic>
 #include <array>
+#include <cmath>
 #include <span>
 #include <string>
 #include <string_view>
@@ -51,6 +55,8 @@ struct LocalMask final {
   double remove_strength = 0.0;
   bool selection_invert = false;
   double selection_expand = 0.0;
+  double selection_edge_contrast = 0.0;
+  double selection_decontaminate = 0.0;
   double feather = 0.22;
   double position = 0.5;
   double rotation = 0.0;
@@ -79,6 +85,12 @@ struct LocalMask final {
   std::vector<uint8_t> segmentation_mask;
   int segmentation_width = 0;
   int segmentation_height = 0;
+  std::vector<ColorPixel> inpaint_patch_pixels;
+  int inpaint_patch_x = 0;
+  int inpaint_patch_y = 0;
+  int inpaint_patch_width = 0;
+  int inpaint_patch_height = 0;
+  std::string inpaint_model_name;
 };
 
 struct LocalMaskSet final {
@@ -108,12 +120,30 @@ struct ColorMixerChannelAdjustment final {
   double luminance = 0.0;
 };
 
+struct InputTransformSettings final {
+  std::string input_profile_name = "Embedded";
+  double exposure = 0.0;
+  double temperature = 0.0;
+  double tint = 0.0;
+  bool raw_input_transform_enabled = true;
+  bool highlight_recovery_enabled = true;
+  std::string highlight_reconstruction_mode = "Enabled";
+  std::string chromatic_adaptation_method = "Bradford";
+  bool gamut_mapping_enabled = true;
+  bool lens_correction_enabled = true;
+  bool raw_white_balance_override_enabled = false;
+  double raw_white_balance_temperature = 5200.0;
+  double raw_white_balance_tint = 0.0;
+};
+
 constexpr int kColorMixerChannelCount = 8;
 constexpr std::array<const char*, kColorMixerChannelCount> kColorMixerChannelNames = {
     "Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas",
 };
 
 struct ColorAdjustmentState final {
+  InputTransformSettings input_transform{};
+  ColorPipelineConfig color_pipeline = default_color_pipeline_config();
   double exposure = 0.0;
   double contrast = 0.0;
   double highlights = 0.0;
@@ -176,6 +206,18 @@ struct ColorAdjustmentState final {
   std::vector<LocalMask> local_masks;
 };
 
+[[nodiscard]] inline double effective_input_exposure(const ColorAdjustmentState& state) {
+  return std::abs(state.input_transform.exposure) > 1e-9 ? state.input_transform.exposure : state.exposure;
+}
+
+[[nodiscard]] inline double effective_input_temperature(const ColorAdjustmentState& state) {
+  return std::abs(state.input_transform.temperature) > 1e-9 ? state.input_transform.temperature : state.temperature;
+}
+
+[[nodiscard]] inline double effective_input_tint(const ColorAdjustmentState& state) {
+  return std::abs(state.input_transform.tint) > 1e-9 ? state.input_transform.tint : state.tint;
+}
+
 constexpr int kLutSize = 33;  // 33x33x33 3D LUT
 
 struct ColorLut3D final {
@@ -187,6 +229,16 @@ struct ColorLut3D final {
 enum class RemovalQuality {
   Interactive,
   Final,
+};
+
+struct CancellationToken final {
+  const std::atomic<int>* latest_generation = nullptr;
+  int generation = 0;
+
+  [[nodiscard]] bool cancelled() const noexcept {
+    return latest_generation != nullptr &&
+           generation < latest_generation->load(std::memory_order_relaxed);
+  }
 };
 
 [[nodiscard]] double clamp_signed_percent(double value);
@@ -203,6 +255,7 @@ void apply_color_adjustments(
     int width,
     int height,
     const ColorAdjustmentState& state,
-    RemovalQuality removal_quality = RemovalQuality::Interactive);
+    RemovalQuality removal_quality = RemovalQuality::Interactive,
+    CancellationToken cancellation = {});
 
 }  // namespace photo_editor::pipeline

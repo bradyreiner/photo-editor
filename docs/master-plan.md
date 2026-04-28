@@ -34,6 +34,7 @@ That means:
 - harden catalog recovery and export reliability as product features
 
 For the prioritized breakdown, see [docs/next-level-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/next-level-roadmap.md).
+For the concrete color-management and render-pipeline plan, see [docs/color-science-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/color-science-roadmap.md).
 
 ### Core workflow
 

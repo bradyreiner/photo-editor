@@ -1,0 +1,40 @@
+{
+  "name": "photo-editor-codex",
+  "version": "0.1.0",
+  "description": "Repo-local Codex hooks and MCP wiring for the Photo Editor project.",
+  "author": {
+    "name": "Photo Editor",
+    "email": "[TODO: author@example.com]",
+    "url": "[TODO: https://example.com/photo-editor]"
+  },
+  "homepage": "[TODO: https://example.com/photo-editor/docs]",
+  "repository": "[TODO: https://example.com/photo-editor/repository]",
+  "license": "[TODO: MIT]",
+  "keywords": [
+    "photo-editor",
+    "codex",
+    "mcp"
+  ],
+  "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Photo Editor Codex",
+    "shortDescription": "Project hooks, guardrails, and MCP access for the Photo Editor repo",
+    "longDescription": "Adds repo-safe Codex hooks plus a repository MCP server with focused search, build, test, observability, and release-readiness tools.",
+    "developerName": "Photo Editor",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "[TODO: https://example.com/photo-editor]",
+    "privacyPolicyURL": "[TODO: https://example.com/privacy]",
+    "termsOfServiceURL": "[TODO: https://example.com/terms]",
+    "defaultPrompt": [
+      "Use the photo-editor MCP server and the repo hooks to make a safe change in this project.",
+      "Inspect the desktop app, Rust services, or packaging flow using the repository MCP tools first.",
+      "Plan the smallest verification loop that matches the files you touch."
+    ],
+    "brandColor": "#1F6F5C"
+  }
+}

@@ -35,6 +35,8 @@ impl Logger {
             });
         }
 
+        photo_telemetry::init(component, env!("CARGO_PKG_VERSION"));
+
         let runtime_paths = AppRuntimePaths::from_env();
         runtime_paths.ensure_directories()?;
 
@@ -93,6 +95,7 @@ impl Logger {
     }
 
     fn write_record(&self, severity: &str, event: &str, fields: Value) -> std::io::Result<()> {
+        let fields_json = serde_json::to_string(&fields).unwrap_or_else(|_| "null".to_string());
         let mut record = Map::new();
         record.insert(
             "timestamp".to_string(),
@@ -127,6 +130,20 @@ impl Logger {
             serde_json::to_writer(&mut *file, &Value::Object(record))?;
             file.write_all(b"\n")?;
             file.flush()?;
+        }
+
+        let span = tracing::info_span!(
+            "catalog.observability",
+            component = %self.component,
+            session_id = %self.session_id,
+            event = %event,
+            severity = %severity
+        );
+        let _guard = span.enter();
+        match severity {
+            "warning" => tracing::warn!(fields = %fields_json, "catalog observability event"),
+            "error" => tracing::error!(fields = %fields_json, "catalog observability event"),
+            _ => tracing::info!(fields = %fields_json, "catalog observability event"),
         }
         Ok(())
     }
