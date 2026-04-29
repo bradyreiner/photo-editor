@@ -1397,6 +1397,31 @@ ApplicationWindow {
                     }
                 }
 
+                Rectangle {
+                    id: releaseVersionBadge
+                    z: 3
+                    anchors.top: parent.top
+                    anchors.right: parent.right
+                    anchors.topMargin: 11
+                    anchors.rightMargin: 12
+                    implicitWidth: releaseVersionLabel.implicitWidth + 18
+                    implicitHeight: 24
+                    radius: theme.radiusControl
+                    color: theme.alpha(theme.ink950, 0.52)
+                    border.width: 1
+                    border.color: theme.alpha(theme.polar, 0.12)
+
+                    Label {
+                        id: releaseVersionLabel
+                        anchors.centerIn: parent
+                        text: "v" + appShell.appVersion
+                        color: theme.textMuted
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                    }
+                }
+
                 InlineActivityIndicator {
                     id: floatingActivityIndicator
                     visible: window.anyAppActivity

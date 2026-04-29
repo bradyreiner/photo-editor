@@ -8814,7 +8814,6 @@ EditState EditorPreviewController::currentState() const {
       .crop_zoom = crop_zoom_,
       .crop_preset = crop_preset_,
       .output_color_space = output_color_space_,
-      .mask_stack = mask_stack_,
       .linear_mask_enabled = linear_mask_enabled_,
       .linear_mask_exposure = linear_mask_exposure_,
       .linear_mask_temperature = linear_mask_temperature_,
@@ -8830,6 +8829,7 @@ EditState EditorPreviewController::currentState() const {
       .radial_mask_radius_x = radial_mask_radius_x_,
       .radial_mask_radius_y = radial_mask_radius_y_,
       .radial_mask_rotation = radial_mask_rotation_,
+      .mask_stack = mask_stack_,
   };
 }
 
