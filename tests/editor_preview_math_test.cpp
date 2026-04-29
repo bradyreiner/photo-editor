@@ -601,11 +601,11 @@ int main() {
           .enabled = true,
           .exposure = 1.0,
           .temperature = 0.0,
+          .range_feather = 0.06,
           .hue_center = 0.0,
           .hue_range = 0.12,
           .saturation_min = 0.15,
           .saturation_max = 1.0,
-          .range_feather = 0.06,
       },
   };
   const auto red_mask_adjusted =
@@ -922,9 +922,9 @@ int main() {
           .kind = "linear",
           .operation = "add",
           .enabled = true,
+          .selection_decontaminate = 100.0,
           .feather = 1.0,
           .position = 0.5,
-          .selection_decontaminate = 100.0,
       },
   };
   photo_editor::pipeline::apply_color_adjustments(&decontaminate_pixels, 5, 1, decontaminate_state);
