@@ -20,8 +20,8 @@ window.PhotoEditorDownloads = {
 
   // Option B: direct URLs for private MVP testing.
   directDownloads: {
-    mac: "",
-    windows: ""
+    mac: "https://github.com/bradyreiner/photo-editor/releases/download/v0.1.0/photo-editor-macOS.zip",
+    windows: "https://github.com/bradyreiner/photo-editor/releases/download/v0.1.0/photo-editor-Windows.zip"
   },
 
   labels: {
