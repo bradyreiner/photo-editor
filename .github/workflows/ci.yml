@@ -6,39 +6,71 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  headless-linux:
+  repo-hygiene:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install native dependencies
+      - name: Reject local-only or generated files
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+          disallowed="$(git ls-files \
+            '.DS_Store' \
+            '**/.DS_Store' \
+            '**/__pycache__/**' \
+            '*.pyc' \
+            '.agents/**' \
+            '.claude/**' \
+            '.mcp.json' \
+            'AGENTS.md' \
+            'CLAUDE.md' \
+            'docs/ai-agent-operations.md' \
+            'plugins/photo-editor-codex/**' \
+            'scripts/ai/**' \
+            'rust/crates/mcp/**' || true)"
+          if [ -n "${disallowed}" ]; then
+            printf 'These local-only/generated files must not be tracked:\n%s\n' "${disallowed}" >&2
+            exit 1
+          fi
+
+      - name: Validate release helper syntax
+        run: bash -n scripts/*.sh
+
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
 
       - name: Cargo fmt
         working-directory: rust
         run: cargo fmt --all --check
 
+      - name: Cargo clippy
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
       - name: Cargo test
         working-directory: rust
         run: cargo test --workspace --locked
 
-      - name: Configure CMake
-        run: cmake --preset ci-headless
-
-      - name: Build headless targets
-        run: cmake --build --preset build-ci-headless
-
-      - name: Run CTest
-        run: ctest --preset test-ci-headless --output-on-failure
-
-  headless-linux-tsan:
+  headless-linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -47,8 +79,51 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Configure CMake
+        run: cmake --preset ci-headless
+
+      - name: Build headless targets
+        run: cmake --build --preset build-ci-headless --parallel
+
+      - name: Run CTest
+        run: ctest --preset test-ci-headless --output-on-failure
+
+  headless-linux-asan-ubsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
+
+      - name: Configure CMake (ASAN/UBSAN)
+        run: cmake --preset ci-headless-asan-ubsan
+        env:
+          CC: clang
+          CXX: clang++
+
+      - name: Build headless targets (ASAN/UBSAN)
+        run: cmake --build --preset build-ci-headless-asan-ubsan --parallel
+
+      - name: Run CTest (ASAN/UBSAN)
+        run: ctest --preset test-ci-headless-asan-ubsan --output-on-failure
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+
+  headless-linux-tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libsqlite3-dev
 
       - name: Configure CMake (ThreadSanitizer)
         run: cmake --preset ci-headless-tsan
@@ -57,15 +132,37 @@ jobs:
           CXX: clang++
 
       - name: Build headless targets (ThreadSanitizer)
-        run: cmake --build --preset build-ci-headless-tsan
+        run: cmake --build --preset build-ci-headless-tsan --parallel
 
       - name: Run CTest (ThreadSanitizer)
         run: ctest --preset test-ci-headless-tsan --output-on-failure
         env:
           TSAN_OPTIONS: halt_on_error=1
 
+  headless-windows:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure CMake
+        run: cmake --preset ci-headless
+
+      - name: Build headless targets
+        run: cmake --build --preset build-ci-headless --parallel
+
+      - name: Run CTest
+        run: ctest --preset test-ci-headless --output-on-failure
+
   desktop-macos:
     runs-on: macos-14
+    timeout-minutes: 30
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -78,14 +175,50 @@ jobs:
         uses: jurplel/install-qt-action@v4
         with:
           version: "6.7.3"
-          modules: "qtdeclarative qtmultimedia qtshadertools qt5compat qtimageformats"
+          modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
           cache: true
 
       - name: Configure desktop build
         run: cmake --preset dev-macos-debug
 
-      - name: Build focused desktop smoke targets
-        run: cmake --build --preset build-dev-macos-debug --target app_bootstrap_test app_shell_controller_test desktop_shell_smoke_test
+      - name: Build desktop targets
+        run: cmake --build --preset build-dev-macos-debug --parallel
 
       - name: Run focused desktop smoke tests
         run: ctest --test-dir build/dev-macos-debug -R "desktop_shell_smoke_test|app_shell_controller_test|app_bootstrap_test" --output-on-failure
+
+  release-macos-build:
+    runs-on: macos-14
+    timeout-minutes: 35
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.3"
+          modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
+          cache: true
+
+      - name: Install macOS native dependencies
+        run: brew install cmake ninja postgresql@16
+
+      - name: Build Rust helper binaries
+        run: cargo build --manifest-path rust/Cargo.toml -p photo-catalog --bins --release
+
+      - name: Configure release build
+        shell: bash
+        run: |
+          cmake \
+            --preset release-macos \
+            "-DPHOTO_EDITOR_RUST_BINARY_DIR=${GITHUB_WORKSPACE}/rust/target/release" \
+            "-DPHOTO_EDITOR_STRICT_PACKAGING=ON" \
+            "-DPHOTO_EDITOR_POSTGRES_RUNTIME_DIR=$(brew --prefix postgresql@16)"
+
+      - name: Build release targets
+        run: cmake --build --preset build-release-macos --parallel

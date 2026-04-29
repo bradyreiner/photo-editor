@@ -337,15 +337,12 @@ impl LocalCatalogDatabaseManager {
             return Ok(());
         }
 
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "{} failed with code {:?}: {}",
-                name,
-                output.status.code(),
-                String::from_utf8_lossy(&output.stderr).trim()
-            ),
-        )
+        Err(io::Error::other(format!(
+            "{} failed with code {:?}: {}",
+            name,
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
         .into())
     }
 }

@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    let result = match command {
+    match command {
         "ensure-running" => {
             let database_url = manager.ensure_ready_database_url().await?;
             println!(
@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             println!("Catalog database stopped.");
         }
         _ => print_usage(&arguments[0]),
-    };
+    }
 
     logger.info(
         "catalog_local_db.completed",
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }),
     );
 
-    Ok(result)
+    Ok(())
 }
 
 fn print_usage(program_name: &str) {

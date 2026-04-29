@@ -153,8 +153,7 @@ fn default_run_directory(log_dir: &Path, session_id: &str) -> PathBuf {
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
-        .replace(':', "")
-        .replace('.', "");
+        .replace([':', '.'], "");
     log_dir
         .join("runs")
         .join(format!("{timestamp}-{session_id}"))

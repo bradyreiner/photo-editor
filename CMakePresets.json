@@ -86,6 +86,16 @@
         "CMAKE_CXX_FLAGS": "-fsanitize=thread",
         "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
       }
+    },
+    {
+      "name": "ci-headless-asan-ubsan",
+      "inherits": "ci-headless",
+      "displayName": "CI Headless (Address/UndefinedBehavior Sanitizers)",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=address,undefined"
+      }
     }
   ],
   "buildPresets": [
@@ -112,6 +122,10 @@
     {
       "name": "build-ci-headless-tsan",
       "configurePreset": "ci-headless-tsan"
+    },
+    {
+      "name": "build-ci-headless-asan-ubsan",
+      "configurePreset": "ci-headless-asan-ubsan"
     }
   ],
   "testPresets": [
@@ -125,6 +139,13 @@
     {
       "name": "test-ci-headless-tsan",
       "configurePreset": "ci-headless-tsan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "test-ci-headless-asan-ubsan",
+      "configurePreset": "ci-headless-asan-ubsan",
       "output": {
         "outputOnFailure": true
       }

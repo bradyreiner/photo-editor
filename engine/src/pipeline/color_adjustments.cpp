@@ -6,10 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <dispatch/dispatch.h>
 #include <mutex>
 #include <numbers>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -891,23 +891,26 @@ struct InputStageParameters final {
       return;
     }
 
-    using WorkType = std::decay_t<decltype(work)>;
-    struct Context final {
-      WorkType* work = nullptr;
-    };
+    const auto item_count = static_cast<std::size_t>(count);
+    const auto worker_count = std::min<std::size_t>(
+        item_count,
+        std::max<std::size_t>(1, std::thread::hardware_concurrency()));
 
-    auto* work_ptr = &work;
-    auto callback = [](void* raw_context, size_t index) {
-      auto* context = static_cast<Context*>(raw_context);
-      (*context->work)(static_cast<int>(index));
-    };
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+      const auto begin = item_count * worker_index / worker_count;
+      const auto end = item_count * (worker_index + 1) / worker_count;
+      workers.emplace_back([begin, end, &work]() {
+        for (std::size_t index = begin; index < end; ++index) {
+          work(static_cast<int>(index));
+        }
+      });
+    }
 
-    Context context{.work = work_ptr};
-    dispatch_apply_f(
-        static_cast<size_t>(count),
-        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
-        &context,
-        callback);
+    for (auto& worker : workers) {
+      worker.join();
+    }
   };
 
   const auto kernel_width = radius * 2 + 1;

@@ -35,7 +35,7 @@ pub struct ImportSummary {
     pub skipped_unsupported: usize,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ExtractedMetadata {
     pub capture_year: u16,
     pub capture_month: u8,
@@ -46,22 +46,6 @@ pub struct ExtractedMetadata {
     pub iso: Option<i32>,
     pub shutter_speed: String,
     pub aperture: Option<f64>,
-}
-
-impl Default for ExtractedMetadata {
-    fn default() -> Self {
-        Self {
-            capture_year: 0,
-            capture_month: 0,
-            capture_day: 0,
-            camera_make: String::new(),
-            camera_model: String::new(),
-            lens_model: String::new(),
-            iso: None,
-            shutter_speed: String::new(),
-            aperture: None,
-        }
-    }
 }
 
 pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
