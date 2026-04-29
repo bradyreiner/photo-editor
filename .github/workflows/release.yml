@@ -196,7 +196,7 @@ jobs:
             -PackageBaseUri $env:PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI
 
       - name: Upload packaged artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: photo-editor-${{ runner.os }}
           path: |
