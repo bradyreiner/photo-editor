@@ -325,7 +325,7 @@ struct InputStageParameters final {
   return apply_rgb_matrix(pixel, context.rgb_to_linear_srgb);
 }
 
-[[nodiscard]] bool metal_color_pipeline_supported(const ColorAdjustmentState& state) {
+[[nodiscard, maybe_unused]] bool metal_color_pipeline_supported(const ColorAdjustmentState& state) {
   return state.color_pipeline.working_profile.kind == WorkingTransformKind::LinearSrgb &&
          state.color_pipeline.render_intent == RenderIntent::Perceptual;
 }
@@ -2813,7 +2813,7 @@ void apply_local_inpaint_patches(
   return weights;
 }
 
-[[nodiscard]] bool local_adjustments_supported_by_metal_pre_tone(
+[[nodiscard, maybe_unused]] bool local_adjustments_supported_by_metal_pre_tone(
     const LocalAdjustmentSettings& adjustments) {
   return std::abs(adjustments.contrast) <= 1e-6 &&
          std::abs(adjustments.highlights) <= 1e-6 &&

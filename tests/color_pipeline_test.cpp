@@ -1,6 +1,8 @@
-#include <cstdlib>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
+#include <initializer_list>
 #include <iostream>
 #include <vector>
 

@@ -1,7 +1,9 @@
 find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Quick Qml QuickControls2 Widgets)
 
 qt_standard_project_setup(REQUIRES 6.5)
-qt_policy(SET QTP0004 NEW)
+if(Qt6_VERSION VERSION_GREATER_EQUAL 6.8)
+  qt_policy(SET QTP0004 NEW)
+endif()
 
 set(photo_editor_desktop_sources
   src/ai_model_runtime.cpp
