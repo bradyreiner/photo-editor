@@ -334,9 +334,20 @@ bool configure_raw_filter(
     filter.detailAmount = static_cast<float>(settings.detail_amount);
   }
   if (@available(macOS 16.0, *)) {
-    if (filter.isHighlightRecoverySupported) {
-      filter.highlightRecoveryEnabled =
-          (highlight_mode == 2 || (highlight_mode == 1 && settings.highlight_recovery_enabled)) ? YES : NO;
+    const auto supported_selector = NSSelectorFromString(@"isHighlightRecoverySupported");
+    const auto set_enabled_selector = NSSelectorFromString(@"setHighlightRecoveryEnabled:");
+    if ([filter respondsToSelector:supported_selector] &&
+        [filter respondsToSelector:set_enabled_selector]) {
+      auto* supported_method = reinterpret_cast<BOOL (*)(id, SEL)>(
+          [filter methodForSelector:supported_selector]);
+      auto* set_enabled_method = reinterpret_cast<void (*)(id, SEL, BOOL)>(
+          [filter methodForSelector:set_enabled_selector]);
+      if (supported_method(filter, supported_selector)) {
+        set_enabled_method(
+            filter,
+            set_enabled_selector,
+            (highlight_mode == 2 || (highlight_mode == 1 && settings.highlight_recovery_enabled)) ? YES : NO);
+      }
     }
   }
   if (input_transform_enabled && settings.white_balance_override_enabled) {

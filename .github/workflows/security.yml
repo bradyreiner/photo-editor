@@ -17,7 +17,9 @@ jobs:
       - uses: taiki-e/install-action@cargo-audit
       - name: Audit Rust dependencies
         working-directory: rust
-        run: cargo audit
+        # sqlx-mysql is not enabled by this workspace; cargo-audit reports it
+        # from sqlx's optional dependency metadata, and the advisory has no fix.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   secret-scan:
     runs-on: ubuntu-24.04
