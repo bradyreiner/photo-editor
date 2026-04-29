@@ -3,6 +3,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QString>
+#include <QStringList>
 
 namespace photo_editor::desktop {
 
@@ -17,6 +18,8 @@ struct AppBootstrap final {
   static bool ensureRuntimeDirectories();
   static bool ensureCatalogService(QString* error_message = nullptr);
   static bool prepareProcessEnvironment(QProcessEnvironment* environment, QString* error_message = nullptr);
+  static QString helperProgram(const QString& binary_name);
+  static QStringList helperArguments(const QString& binary_name, const QStringList& arguments);
 };
 
 }  // namespace photo_editor::desktop

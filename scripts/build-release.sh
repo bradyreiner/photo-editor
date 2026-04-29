@@ -274,9 +274,7 @@ cpack --config "${build_dir}/CPackConfig.cmake" -B "${package_dir}"
 if [ -n "${PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR:-}" ] &&
    [ -n "${PHOTO_EDITOR_MACOS_APPCAST_URL:-}" ] &&
    [ -n "${PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY:-}" ]; then
-  log "Generating Sparkle appcast"
-  PHOTO_EDITOR_MACOS_PACKAGE_DIR="${package_dir}" \
-  "${SCRIPT_DIR}/generate-macos-appcast.sh"
+  log "Deferring Sparkle appcast generation until after signing/notarization"
 fi
 
 checksum_file="${package_dir}/SHA256SUMS.txt"

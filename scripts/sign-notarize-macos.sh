@@ -33,6 +33,9 @@ Options:
 Environment:
   PHOTO_EDITOR_MACOS_CODESIGN_IDENTITY
   PHOTO_EDITOR_NOTARY_PROFILE
+  PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR   Optional Sparkle distribution root for appcast generation.
+  PHOTO_EDITOR_MACOS_APPCAST_URL          Optional appcast feed URL.
+  PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY   Optional public EdDSA key.
 EOF
 }
 
@@ -171,6 +174,14 @@ checksum_file="${work_root}/SHA256SUMS.txt"
   cd "${work_root}"
   shasum -a 256 "$(basename "${signed_dmg}")"
 ) > "${checksum_file}"
+
+if [ -n "${PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR:-}" ] &&
+   [ -n "${PHOTO_EDITOR_MACOS_APPCAST_URL:-}" ] &&
+   [ -n "${PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY:-}" ]; then
+  log "Generating Sparkle appcast for signed artifacts"
+  PHOTO_EDITOR_MACOS_PACKAGE_DIR="${work_root}" \
+  "${SCRIPT_DIR}/generate-macos-appcast.sh"
+fi
 
 cat <<EOF
 

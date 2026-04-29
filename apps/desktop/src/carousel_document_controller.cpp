@@ -2246,40 +2246,11 @@ QString CarouselDocumentController::versionedLocalFile(const QString& file_path,
 }
 
 QString CarouselDocumentController::helperProgram() const {
-  if (useBuiltHelperBinary()) {
-    return builtBinaryPath(QStringLiteral("catalog_carousel_documents"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("catalog_carousel_documents"));
 }
 
 QStringList CarouselDocumentController::helperArguments(const QStringList& command_arguments) const {
-  if (useBuiltHelperBinary()) {
-    return command_arguments;
-  }
-
-  QStringList arguments = {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("catalog_carousel_documents"),
-      QStringLiteral("--"),
-  };
-  arguments.append(command_arguments);
-  return arguments;
-}
-
-bool CarouselDocumentController::useBuiltHelperBinary() const {
-  const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_carousel_documents")));
-  return binary.exists() && binary.isExecutable();
-}
-
-QString CarouselDocumentController::builtBinaryPath(const QString& binary_name) const {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
+  return AppBootstrap::helperArguments(QStringLiteral("catalog_carousel_documents"), command_arguments);
 }
 
 bool CarouselDocumentController::runHelperCommand(

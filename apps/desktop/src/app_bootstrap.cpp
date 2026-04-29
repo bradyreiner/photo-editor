@@ -69,35 +69,47 @@ QString app_data_root() {
   return fallbackRuntimeRoot();
 }
 
-QString built_binary_path(const QString& binary_name) {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
+QString executable_name(const QString& binary_name) {
+#if defined(Q_OS_WIN)
+  return binary_name.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive) ? binary_name : binary_name + QStringLiteral(".exe");
+#else
+  return binary_name;
+#endif
+}
+
+QString debug_binary_path(const QString& binary_name) {
+  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(executable_name(binary_name)));
+}
+
+QString release_binary_path(const QString& binary_name) {
+  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/release/%1").arg(executable_name(binary_name)));
 }
 
 QString installed_binary_path(const QString& binary_name) {
-  return QDir(QCoreApplication::applicationDirPath()).filePath(binary_name);
+  return QDir(QCoreApplication::applicationDirPath()).filePath(executable_name(binary_name));
 }
 
-bool use_built_binary(const QString& binary_name) {
-  const QFileInfo installed_binary(installed_binary_path(binary_name));
-  if (installed_binary.exists() && installed_binary.isExecutable()) {
-    return true;
-  }
-
-  const QFileInfo binary(built_binary_path(binary_name));
-  return binary.exists() && binary.isExecutable();
-}
-
-QString helper_program(const QString& binary_name) {
+QString direct_helper_path(const QString& binary_name) {
   const QFileInfo installed_binary(installed_binary_path(binary_name));
   if (installed_binary.exists() && installed_binary.isExecutable()) {
     return installed_binary.absoluteFilePath();
   }
 
-  return use_built_binary(binary_name) ? built_binary_path(binary_name) : QStringLiteral("cargo");
+  const QFileInfo debug_binary(debug_binary_path(binary_name));
+  if (debug_binary.exists() && debug_binary.isExecutable()) {
+    return debug_binary.absoluteFilePath();
+  }
+
+  const QFileInfo release_binary(release_binary_path(binary_name));
+  if (release_binary.exists() && release_binary.isExecutable()) {
+    return release_binary.absoluteFilePath();
+  }
+
+  return {};
 }
 
 QStringList helper_arguments(const QString& binary_name, const QStringList& arguments) {
-  if (use_built_binary(binary_name)) {
+  if (!direct_helper_path(binary_name).isEmpty()) {
     return arguments;
   }
 
@@ -171,7 +183,7 @@ bool run_helper(
   process.setWorkingDirectory(QDir::currentPath());
   process.setProcessEnvironment(base_environment());
   process.setProcessChannelMode(QProcess::MergedChannels);
-  process.start(helper_program(binary_name), helper_arguments(binary_name, arguments));
+  process.start(AppBootstrap::helperProgram(binary_name), AppBootstrap::helperArguments(binary_name, arguments));
 
   if (!process.waitForStarted(5000)) {
     if (error_message != nullptr) {
@@ -333,6 +345,15 @@ bool AppBootstrap::prepareProcessEnvironment(
   }
 
   return true;
+}
+
+QString AppBootstrap::helperProgram(const QString& binary_name) {
+  const auto helper_path = direct_helper_path(binary_name);
+  return helper_path.isEmpty() ? QStringLiteral("cargo") : helper_path;
+}
+
+QStringList AppBootstrap::helperArguments(const QString& binary_name, const QStringList& arguments) {
+  return helper_arguments(binary_name, arguments);
 }
 
 }  // namespace photo_editor::desktop

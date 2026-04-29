@@ -62,6 +62,17 @@ int main(int argc, char** argv) {
     return fail("prepared process environment should include runtime and database settings");
   }
 
+  const auto missing_helper_name = QStringLiteral("definitely_missing_photo_editor_helper");
+  const auto missing_helper_arguments =
+      photo_editor::desktop::AppBootstrap::helperArguments(missing_helper_name, {QStringLiteral("arg")});
+  if (photo_editor::desktop::AppBootstrap::helperProgram(missing_helper_name) != QStringLiteral("cargo") ||
+      missing_helper_arguments.size() < 10 ||
+      missing_helper_arguments.at(0) != QStringLiteral("run") ||
+      missing_helper_arguments.at(7) != missing_helper_name ||
+      missing_helper_arguments.last() != QStringLiteral("arg")) {
+    return fail("missing helpers should fall back to cargo with the requested binary and arguments");
+  }
+
   qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   qunsetenv("PHOTO_EDITOR_CACHE_DIR");
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");

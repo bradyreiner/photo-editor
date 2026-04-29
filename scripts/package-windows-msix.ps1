@@ -57,14 +57,31 @@ function Get-SdkToolPath {
 function Convert-ToQuadVersion {
     param([string]$InputVersion)
 
+    if ($null -eq $InputVersion) {
+        return "0.1.0.0"
+    }
+
     $clean = $InputVersion.Trim()
     if ($clean.StartsWith("v")) {
         $clean = $clean.Substring(1)
     }
 
-    $parts = $clean.Split(".", [System.StringSplitOptions]::RemoveEmptyEntries)
-    if ($parts.Count -eq 0) {
+    if ([string]::IsNullOrWhiteSpace($clean)) {
         return "0.1.0.0"
+    }
+
+    if ($clean -notmatch "^[0-9]+(\.[0-9]+){0,3}$") {
+        throw "MSIX package version must contain one to four numeric dot-separated parts, got: $InputVersion"
+    }
+
+    $parts = $clean.Split(".")
+
+    foreach ($part in $parts) {
+        $value = 0
+        [void][int]::TryParse($part, [ref]$value)
+        if ($value -lt 0 -or $value -gt 65535) {
+            throw "MSIX package version parts must be between 0 and 65535, got: $InputVersion"
+        }
     }
 
     while ($parts.Count -lt 4) {

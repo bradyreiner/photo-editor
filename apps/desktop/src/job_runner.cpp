@@ -442,45 +442,17 @@ QString derive_drive_name(const QString& folder_path) {
   return folder_path;
 }
 
-QString built_binary_path(const QString& binary_name) {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
-}
-
-bool use_built_import_binary() {
-  const QFileInfo binary(built_binary_path(QStringLiteral("import_catalog")));
-  return binary.exists() && binary.isExecutable();
-}
-
 QString import_program() {
-  if (use_built_import_binary()) {
-    return built_binary_path(QStringLiteral("import_catalog"));
-  }
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("import_catalog"));
 }
 
 QStringList import_arguments(const QString& folder_path, const QString& import_mode) {
   const auto drive_id = derive_drive_id(folder_path);
   const auto drive_name = derive_drive_name(folder_path);
 
-  if (use_built_import_binary()) {
-    return {folder_path, drive_id, drive_name, import_mode};
-  }
-
-  return {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
+  return AppBootstrap::helperArguments(
       QStringLiteral("import_catalog"),
-      QStringLiteral("--"),
-      folder_path,
-      drive_id,
-      drive_name,
-      import_mode,
-  };
+      {folder_path, drive_id, drive_name, import_mode});
 }
 
 QString selection_manifest_path(const QJsonObject& metadata_json) {

@@ -9420,40 +9420,11 @@ bool EditorPreviewController::channelMatchesSelection(const QColor& color) const
 }
 
 QString EditorPreviewController::saveRecipeProgram() const {
-  if (useBuiltSaveRecipeBinary()) {
-    return builtBinaryPath(QStringLiteral("save_edit_recipe"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("save_edit_recipe"));
 }
 
 QStringList EditorPreviewController::saveRecipeArguments(const QString& asset_id, const QString& recipe_json) const {
-  if (useBuiltSaveRecipeBinary()) {
-    return {asset_id, recipe_json};
-  }
-
-  return {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("save_edit_recipe"),
-      QStringLiteral("--"),
-      asset_id,
-      recipe_json,
-  };
-}
-
-bool EditorPreviewController::useBuiltSaveRecipeBinary() const {
-  const QFileInfo binary(builtBinaryPath(QStringLiteral("save_edit_recipe")));
-  return binary.exists() && binary.isExecutable();
-}
-
-QString EditorPreviewController::builtBinaryPath(const QString& binary_name) const {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
+  return AppBootstrap::helperArguments(QStringLiteral("save_edit_recipe"), {asset_id, recipe_json});
 }
 
 void EditorPreviewController::computeHistogram(const QImage& image) {

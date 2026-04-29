@@ -3917,38 +3917,15 @@ const CatalogAssetItem* CatalogAssetModel::selectedItem() const {
 }
 
 QString CatalogAssetModel::snapshotProgram() const {
-  if (useBuiltSnapshotBinary()) {
-    return builtBinaryPath(QStringLiteral("catalog_snapshot"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("catalog_snapshot"));
 }
 
 QStringList CatalogAssetModel::snapshotArguments() const {
-  if (useBuiltSnapshotBinary()) {
-    return {QStringLiteral("0")};
-  }
-
-  return {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("catalog_snapshot"),
-      QStringLiteral("--"),
-      QStringLiteral("0"),
-  };
+  return AppBootstrap::helperArguments(QStringLiteral("catalog_snapshot"), {QStringLiteral("0")});
 }
 
 QString CatalogAssetModel::importProgram() const {
-  if (useBuiltImportBinary()) {
-    return builtBinaryPath(QStringLiteral("import_catalog"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("import_catalog"));
 }
 
 QStringList CatalogAssetModel::importArguments(const QString& folder_path) const {
@@ -3956,26 +3933,9 @@ QStringList CatalogAssetModel::importArguments(const QString& folder_path) const
   const auto drive_name = derive_drive_name(folder_path);
   const auto import_mode = QStringLiteral("referenced");
 
-  QStringList arguments;
-  if (useBuiltImportBinary()) {
-    arguments = {folder_path, drive_id, drive_name, import_mode};
-  } else {
-    arguments = {
-        QStringLiteral("run"),
-        QStringLiteral("--quiet"),
-        QStringLiteral("--manifest-path"),
-        QStringLiteral("rust/Cargo.toml"),
-        QStringLiteral("-p"),
-        QStringLiteral("photo-catalog"),
-        QStringLiteral("--bin"),
-        QStringLiteral("import_catalog"),
-        QStringLiteral("--"),
-        folder_path,
-        drive_id,
-        drive_name,
-        import_mode,
-    };
-  }
+  QStringList arguments = AppBootstrap::helperArguments(
+      QStringLiteral("import_catalog"),
+      {folder_path, drive_id, drive_name, import_mode});
 
   if (!import_selection_manifest_path_.isEmpty()) {
     arguments.push_back(import_selection_manifest_path_);
@@ -3985,50 +3945,11 @@ QStringList CatalogAssetModel::importArguments(const QString& folder_path) const
 }
 
 QString CatalogAssetModel::stateProgram() const {
-  if (useBuiltStateBinary()) {
-    return builtBinaryPath(QStringLiteral("catalog_state"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("catalog_state"));
 }
 
 QStringList CatalogAssetModel::stateArguments(const QStringList& command_arguments) const {
-  if (useBuiltStateBinary()) {
-    return command_arguments;
-  }
-
-  QStringList arguments = {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("catalog_state"),
-      QStringLiteral("--"),
-  };
-  arguments.append(command_arguments);
-  return arguments;
-}
-
-bool CatalogAssetModel::useBuiltSnapshotBinary() const {
-  const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_snapshot")));
-  return binary.exists() && binary.isExecutable();
-}
-
-bool CatalogAssetModel::useBuiltImportBinary() const {
-  const QFileInfo binary(builtBinaryPath(QStringLiteral("import_catalog")));
-  return binary.exists() && binary.isExecutable();
-}
-
-bool CatalogAssetModel::useBuiltStateBinary() const {
-  const QFileInfo binary(builtBinaryPath(QStringLiteral("catalog_state")));
-  return binary.exists() && binary.isExecutable();
-}
-
-QString CatalogAssetModel::builtBinaryPath(const QString& binary_name) const {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
+  return AppBootstrap::helperArguments(QStringLiteral("catalog_state"), command_arguments);
 }
 
 }  // namespace photo_editor::desktop

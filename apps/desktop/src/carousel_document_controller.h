@@ -271,8 +271,6 @@ class CarouselDocumentController final : public QObject {
       const QSize& target_size) const;
   [[nodiscard]] QString helperProgram() const;
   [[nodiscard]] QStringList helperArguments(const QStringList& command_arguments) const;
-  [[nodiscard]] bool useBuiltHelperBinary() const;
-  [[nodiscard]] QString builtBinaryPath(const QString& binary_name) const;
   [[nodiscard]] bool runHelperCommand(
       const QStringList& command_arguments,
       QString* output = nullptr,

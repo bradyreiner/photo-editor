@@ -94,7 +94,17 @@ hdiutil attach -readonly -nobrowse -mountpoint "${mount_point}" "${dmg_path}" >/
 app_path="${mount_point}/PhotoEditor.app"
 [ -d "${app_path}" ] || fail "PhotoEditor.app not found inside DMG"
 
-for helper in PhotoEditor catalog_local_db catalog_migrate catalog_snapshot import_catalog save_edit_recipe; do
+for helper in \
+  PhotoEditor \
+  catalog_carousel_documents \
+  catalog_export_jobs \
+  catalog_local_db \
+  catalog_migrate \
+  catalog_snapshot \
+  catalog_state \
+  catalog_timeline_documents \
+  import_catalog \
+  save_edit_recipe; do
   [ -x "${app_path}/Contents/MacOS/${helper}" ] || fail "missing executable helper: ${helper}"
 done
 
@@ -104,12 +114,16 @@ done
 
 [ -d "${app_path}/Contents/Frameworks" ] || fail "Qt frameworks were not bundled under Contents/Frameworks"
 
-log "Checking app binary dynamic library paths"
-bad_paths="$(otool -L "${app_path}/Contents/MacOS/PhotoEditor" | grep -E '/opt/homebrew|/usr/local/opt' || true)"
-if [ -n "${bad_paths}" ]; then
-  printf '%s\n' "${bad_paths}" >&2
-  fail "app binary still links to local package-manager paths"
-fi
+log "Checking Mach-O dynamic library paths"
+while IFS= read -r -d '' candidate; do
+  if file -b "${candidate}" | grep -q 'Mach-O'; then
+    bad_paths="$(otool -L "${candidate}" | grep -E '/opt/homebrew|/usr/local/opt' || true)"
+    if [ -n "${bad_paths}" ]; then
+      printf '%s\n' "${bad_paths}" >&2
+      fail "${candidate#${app_path}/} still links to local package-manager paths"
+    fi
+  fi
+done < <(find "${app_path}" -type f -print0)
 
 if [ "${require_signature}" -eq 1 ]; then
   log "Verifying Developer ID signature"

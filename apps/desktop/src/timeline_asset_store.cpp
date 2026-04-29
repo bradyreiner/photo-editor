@@ -116,41 +116,12 @@ QJsonObject legacy_document_backup_object(
   return object;
 }
 
-QString built_binary_path(const QString& binary_name) {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
-}
-
-bool use_built_helper_binary() {
-  const QFileInfo binary(built_binary_path(QStringLiteral("catalog_timeline_documents")));
-  return binary.exists() && binary.isExecutable();
-}
-
 QString helper_program() {
-  if (use_built_helper_binary()) {
-    return built_binary_path(QStringLiteral("catalog_timeline_documents"));
-  }
-
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("catalog_timeline_documents"));
 }
 
 QStringList helper_arguments(const QStringList& command_arguments) {
-  if (use_built_helper_binary()) {
-    return command_arguments;
-  }
-
-  QStringList arguments = {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("catalog_timeline_documents"),
-      QStringLiteral("--"),
-  };
-  arguments.append(command_arguments);
-  return arguments;
+  return AppBootstrap::helperArguments(QStringLiteral("catalog_timeline_documents"), command_arguments);
 }
 
 bool run_helper_command(

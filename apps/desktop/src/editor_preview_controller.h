@@ -760,8 +760,6 @@ signals:
   [[nodiscard]] bool channelMatchesSelection(const QColor& color) const;
   QString saveRecipeProgram() const;
   QStringList saveRecipeArguments(const QString& asset_id, const QString& recipe_json) const;
-  bool useBuiltSaveRecipeBinary() const;
-  QString builtBinaryPath(const QString& binary_name) const;
   [[nodiscard]] QString withDisplayRevision(const QString& source) const;
 
   QVariantList histogram_red_;

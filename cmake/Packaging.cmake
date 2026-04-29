@@ -59,7 +59,16 @@ function(photo_editor_install_desktop_runtime target_name)
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-  foreach(helper_name IN ITEMS catalog_local_db catalog_migrate catalog_snapshot import_catalog save_edit_recipe)
+  foreach(helper_name IN ITEMS
+      catalog_carousel_documents
+      catalog_export_jobs
+      catalog_local_db
+      catalog_migrate
+      catalog_snapshot
+      catalog_state
+      catalog_timeline_documents
+      import_catalog
+      save_edit_recipe)
     set(helper_path "${PHOTO_EDITOR_RUST_BINARY_DIR}/${helper_name}${CMAKE_EXECUTABLE_SUFFIX}")
     if(EXISTS "${helper_path}")
       if(APPLE)

@@ -140,16 +140,6 @@ jobs:
           build_dir="build/${{ matrix.configure_preset }}"
           cpack --config "${build_dir}/CPackConfig.cmake" -B "${build_dir}/package"
 
-      - name: Generate macOS Sparkle appcast
-        if: runner.os == 'macOS' && steps.sparkle-macos.outputs.distribution_dir != '' && vars.PHOTO_EDITOR_MACOS_APPCAST_URL != '' && vars.PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY != ''
-        shell: bash
-        env:
-          PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR: ${{ steps.sparkle-macos.outputs.distribution_dir }}
-          PHOTO_EDITOR_MACOS_PACKAGE_DIR: build/${{ matrix.configure_preset }}/package
-        run: |
-          chmod +x ./scripts/generate-macos-appcast.sh
-          ./scripts/generate-macos-appcast.sh
-
       - name: Stage Windows install root
         if: runner.os == 'Windows'
         shell: bash
@@ -163,6 +153,10 @@ jobs:
           WINDOWS_SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
         run: |
           if [ -z "${WINDOWS_SIGNING_CERT_BASE64}" ]; then
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              echo "WINDOWS_SIGNING_CERT_BASE64 is required for tagged Windows releases." >&2
+              exit 1
+            fi
             echo "Skipping Windows signing certificate because WINDOWS_SIGNING_CERT_BASE64 is not configured."
             printf 'WINDOWS_SIGNING_CERT_PATH=\n' >> "${GITHUB_ENV}"
             exit 0
@@ -185,10 +179,7 @@ jobs:
           PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI: ${{ vars.PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI }}
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
         run: |
-          $packageVersion = "${{ github.ref_name }}"
-          if ([string]::IsNullOrWhiteSpace($packageVersion)) {
-            $packageVersion = "${{ steps.release-version.outputs.version }}"
-          }
+          $packageVersion = "${{ steps.release-version.outputs.version }}"
           ./scripts/package-windows-msix.ps1 `
             -InstallRoot "${env:RUNNER_TEMP}\photo-editor-windows-install" `
             -OutputDir "build/${{ matrix.configure_preset }}/package" `
@@ -208,4 +199,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: photo-editor-${{ runner.os }}
-          path: build/${{ matrix.configure_preset }}/package/**
+          path: |
+            build/${{ matrix.configure_preset }}/package/*.dmg
+            build/${{ matrix.configure_preset }}/package/*.zip
+            build/${{ matrix.configure_preset }}/package/*.tgz
+            build/${{ matrix.configure_preset }}/package/*.msix
+            build/${{ matrix.configure_preset }}/package/*.appinstaller
+            build/${{ matrix.configure_preset }}/package/*.xml
+            build/${{ matrix.configure_preset }}/package/*.txt
+            build/${{ matrix.configure_preset }}/package/signed-macos-*/*.dmg
+            build/${{ matrix.configure_preset }}/package/signed-macos-*/*.xml
+            build/${{ matrix.configure_preset }}/package/signed-macos-*/*.txt
+          if-no-files-found: error

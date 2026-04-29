@@ -392,11 +392,6 @@ class CatalogAssetModel final : public QAbstractListModel {
   QStringList importArguments(const QString& folder_path) const;
   QString stateProgram() const;
   QStringList stateArguments(const QStringList& command_arguments) const;
-  bool useBuiltSnapshotBinary() const;
-  bool useBuiltImportBinary() const;
-  bool useBuiltStateBinary() const;
-  QString builtBinaryPath(const QString& binary_name) const;
-
   QVector<CatalogAssetItem> all_assets_;
   QVector<CatalogAssetItem> assets_;
   QVector<ProjectRecord> projects_;

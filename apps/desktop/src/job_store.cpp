@@ -34,40 +34,12 @@ QString jobs_index_path() {
   return QDir(jobs_root_path()).filePath(QStringLiteral("index.json"));
 }
 
-QString built_binary_path(const QString& binary_name) {
-  return QDir::current().absoluteFilePath(QStringLiteral("rust/target/debug/%1").arg(binary_name));
-}
-
-bool use_built_helper_binary() {
-  const QFileInfo binary(built_binary_path(QStringLiteral("catalog_export_jobs")));
-  return binary.exists() && binary.isExecutable();
-}
-
 QString helper_program() {
-  if (use_built_helper_binary()) {
-    return built_binary_path(QStringLiteral("catalog_export_jobs"));
-  }
-  return QStringLiteral("cargo");
+  return AppBootstrap::helperProgram(QStringLiteral("catalog_export_jobs"));
 }
 
 QStringList helper_arguments(const QStringList& command_arguments) {
-  if (use_built_helper_binary()) {
-    return command_arguments;
-  }
-
-  QStringList arguments = {
-      QStringLiteral("run"),
-      QStringLiteral("--quiet"),
-      QStringLiteral("--manifest-path"),
-      QStringLiteral("rust/Cargo.toml"),
-      QStringLiteral("-p"),
-      QStringLiteral("photo-catalog"),
-      QStringLiteral("--bin"),
-      QStringLiteral("catalog_export_jobs"),
-      QStringLiteral("--"),
-  };
-  arguments.append(command_arguments);
-  return arguments;
+  return AppBootstrap::helperArguments(QStringLiteral("catalog_export_jobs"), command_arguments);
 }
 
 bool run_helper_command(
