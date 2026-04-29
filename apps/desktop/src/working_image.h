@@ -5,6 +5,7 @@
 
 #include <QColorSpace>
 #include <QImage>
+#include <QtGlobal>
 #include <QtGui/qrgbafloat.h>
 
 #include <algorithm>
@@ -47,7 +48,29 @@ struct WorkingImage final {
 }
 
 [[nodiscard]] inline QColorSpace linear_rec2020_color_space() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   return QColorSpace(QColorSpace::Primaries::Bt2020, QColorSpace::TransferFunction::Linear);
+#else
+  return linear_srgb_color_space();
+#endif
+}
+
+[[nodiscard]] inline QImage converted_to_color_space(
+    QImage image,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+  return image.convertedToColorSpace(target_color_space, output_format);
+#else
+  auto converted = image.convertedToColorSpace(target_color_space);
+  if (converted.isNull()) {
+    return {};
+  }
+
+  converted = converted.convertToFormat(output_format);
+  converted.setColorSpace(target_color_space);
+  return converted;
+#endif
 }
 
 [[nodiscard]] inline QColorSpace preview_color_space_for_name(const QString& profile_name) {
@@ -74,7 +97,11 @@ struct WorkingImage final {
   if (normalized.compare(QStringLiteral("Rec.2020"), Qt::CaseInsensitive) == 0 ||
       normalized.compare(QStringLiteral("rec2020"), Qt::CaseInsensitive) == 0 ||
       normalized.compare(QStringLiteral("rec-2020"), Qt::CaseInsensitive) == 0) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     return QColorSpace(QColorSpace::Bt2020);
+#else
+    return preview_color_space();
+#endif
   }
   return preview_color_space();
 }
@@ -112,8 +139,10 @@ struct WorkingImage final {
     image.setColorSpace(preview_color_space());
   }
 
-  const auto converted =
-      image.convertedToColorSpace(working_color_space(working_profile_name), QImage::Format_RGBA16FPx4);
+  const auto converted = converted_to_color_space(
+      image,
+      working_color_space(working_profile_name),
+      QImage::Format_RGBA16FPx4);
   if (!converted.isNull()) {
     return converted;
   }
@@ -217,7 +246,7 @@ struct WorkingImage final {
     return fallback;
   }
 
-  const auto converted = linear_image.convertedToColorSpace(target_color_space, output_format);
+  const auto converted = converted_to_color_space(linear_image, target_color_space, output_format);
   if (!converted.isNull()) {
     return converted;
   }
@@ -245,7 +274,7 @@ struct WorkingImage final {
     return fallback;
   }
 
-  const auto converted = image.convertedToColorSpace(target_color_space, output_format);
+  const auto converted = converted_to_color_space(image, target_color_space, output_format);
   if (!converted.isNull()) {
     return converted;
   }

@@ -43,6 +43,7 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QProcess>
+#include <QPoint>
 #include <QRect>
 #include <QRectF>
 #include <QSaveFile>
@@ -52,6 +53,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <limits>
+#include <queue>
 #include <vector>
 
 namespace photo_editor::desktop {

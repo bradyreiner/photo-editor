@@ -43,7 +43,7 @@ void EditorPreviewTextureItem::setController(QObject* controller) {
 QSGNode* EditorPreviewTextureItem::updatePaintNode(
     QSGNode* old_node,
     UpdatePaintNodeData*) {
-#if defined(QT_CONFIG) && QT_CONFIG(metal)
+#if defined(QT_FEATURE_metal) && QT_CONFIG(metal)
   if (!native_texture_available_ || native_texture_handle_ == 0 ||
       !native_texture_size_.isValid() || window() == nullptr ||
       window()->rendererInterface()->graphicsApi() != QSGRendererInterface::Metal) {
