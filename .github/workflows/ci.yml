@@ -45,6 +45,9 @@ jobs:
       - name: Validate release helper syntax
         run: bash -n scripts/*.sh
 
+      - name: Validate GitHub workflows
+        uses: raven-actions/actionlint@v2
+
   rust:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -159,6 +162,34 @@ jobs:
 
       - name: Run CTest
         run: ctest --preset test-ci-headless --output-on-failure
+
+  desktop-windows:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.7.3"
+          modules: "qtmultimedia qtshadertools qt5compat qtimageformats"
+          cache: true
+
+      - name: Configure desktop build
+        run: cmake --preset dev-windows-debug
+
+      - name: Build desktop targets
+        run: cmake --build --preset build-dev-windows-debug --parallel
+
+      - name: Run focused desktop controller tests
+        run: ctest --test-dir build/dev-windows-debug -R "app_shell_controller_test|app_bootstrap_test" --output-on-failure
 
   desktop-macos:
     runs-on: macos-14
