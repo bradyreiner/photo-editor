@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 opentelemetry = "0.31"
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "trace"] }
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = "0.31"
 tracing = "0.1"
 tracing-opentelemetry = "0.32.1"
