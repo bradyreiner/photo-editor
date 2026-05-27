@@ -99,11 +99,33 @@ struct PostColorUniforms {
   float mixer_hue[8];
   float mixer_sat[8];
   float mixer_lum[8];
+  float selective_cyan[8];
+  float selective_magenta[8];
+  float selective_yellow[8];
+  float selective_black[8];
+  float channel_mixer[9];
+  float black_and_white_mixer[8];
+  int black_and_white_enabled;
+  int color_replacement_enabled;
+  float color_replacement_source_hue;
+  float color_replacement_target_hue;
+  float color_replacement_range;
+  float color_replacement_strength;
+  int skin_tone_protection_enabled;
+  float skin_tone_line_hue;
+  float skin_tone_protection_range;
+  float skin_tone_protection_strength;
+  int color_harmony_enabled;
+  int color_harmony_mode;
+  float color_harmony_base_hue;
+  float color_harmony_strength;
   int use_master_curve;
+  int use_luma_curve;
   int use_red_curve;
   int use_green_curve;
   int use_blue_curve;
   int curve_lut_size;
+  int color_mixer_model;
   int width;
   int height;
 };
@@ -118,6 +140,17 @@ struct PreToneUniforms {
   float shadows;
   float whites;
   float blacks;
+  float brightness;
+  float filmic_toe;
+  float adaptive_contrast;
+  float levels_black_point;
+  float levels_gamma;
+  float levels_white_point;
+  float zone_deep_shadows;
+  float zone_shadows;
+  float zone_midtones;
+  float zone_lights;
+  float zone_highlights;
   float shoulder_threshold;
   int use_parametric_curve;
   int curve_lut_size;
@@ -558,7 +591,7 @@ void MetalPipelineBackend::apply_color_lut(
     copy_pixels_to_float_buffer(lut_data, lut.table);
 
     ColorAdjustmentUniforms uniforms{};
-    uniforms.lut_size = kLutSize;
+    uniforms.lut_size = lut.size;
     uniforms.width = width;
     uniforms.height = height;
 
@@ -664,7 +697,7 @@ void MetalPipelineBackend::apply_masks_and_color_lut(
     }
 
     ColorAdjustmentUniforms lut_uniforms{};
-    lut_uniforms.lut_size = kLutSize;
+    lut_uniforms.lut_size = lut.size;
     lut_uniforms.width = width;
     lut_uniforms.height = height;
 
@@ -930,11 +963,13 @@ bool MetalPipelineBackend::apply_post_color_effects(
   };
 
   auto master_curve_lut = build_perceptual_curve_lut(state.master_curve_points, kCurveLutSize);
+  auto luma_curve_lut = build_perceptual_curve_lut(state.luma_curve_points, kCurveLutSize);
   auto red_curve_lut = build_perceptual_curve_lut(state.red_curve_points, kCurveLutSize);
   auto green_curve_lut = build_perceptual_curve_lut(state.green_curve_points, kCurveLutSize);
   auto blue_curve_lut = build_perceptual_curve_lut(state.blue_curve_points, kCurveLutSize);
 
   const auto use_master_curve = !master_curve_lut.empty();
+  const auto use_luma_curve = !luma_curve_lut.empty();
   const auto use_red_curve = !red_curve_lut.empty();
   const auto use_green_curve = !green_curve_lut.empty();
   const auto use_blue_curve = !blue_curve_lut.empty();
@@ -942,10 +977,25 @@ bool MetalPipelineBackend::apply_post_color_effects(
       state.color_mixer_channels.begin(), state.color_mixer_channels.end(),
       [](const ColorMixerChannelAdjustment& channel) {
         return std::abs(channel.hue) > 1e-6 || std::abs(channel.saturation) > 1e-6 ||
-               std::abs(channel.luminance) > 1e-6;
+               std::abs(channel.luminance) > 1e-6 ||
+               std::abs(channel.selective_cyan) > 1e-6 ||
+               std::abs(channel.selective_magenta) > 1e-6 ||
+               std::abs(channel.selective_yellow) > 1e-6 ||
+               std::abs(channel.selective_black) > 1e-6;
       });
+  const auto& rgb_mixer = state.rgb_channel_mixer;
+  const auto has_rgb_channel_mixer =
+      std::abs(rgb_mixer.red_from_red - 100.0) > 1e-6 ||
+      std::abs(rgb_mixer.red_from_green) > 1e-6 ||
+      std::abs(rgb_mixer.red_from_blue) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_red) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_green - 100.0) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_blue) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_red) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_green) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_blue - 100.0) > 1e-6;
 
-  if (!use_master_curve && !use_red_curve && !use_green_curve && !use_blue_curve &&
+  if (!use_master_curve && !use_luma_curve && !use_red_curve && !use_green_curve && !use_blue_curve &&
       std::abs(state.saturation) <= 1e-6 && std::abs(state.vibrance) <= 1e-6 &&
       std::abs(state.grading_shadows_hue) <= 1e-6 && std::abs(state.grading_shadows_saturation) <= 1e-6 &&
       std::abs(state.grading_shadows_luminance) <= 1e-6 &&
@@ -953,7 +1003,9 @@ bool MetalPipelineBackend::apply_post_color_effects(
       std::abs(state.grading_midtones_luminance) <= 1e-6 &&
       std::abs(state.grading_highlights_hue) <= 1e-6 && std::abs(state.grading_highlights_saturation) <= 1e-6 &&
       std::abs(state.grading_highlights_luminance) <= 1e-6 &&
-      !has_per_channel_mixer &&
+      !has_per_channel_mixer && !has_rgb_channel_mixer && !state.black_and_white_enabled &&
+      (!state.color_replacement_enabled || std::abs(state.color_replacement_strength) <= 1e-6) &&
+      (!state.color_harmony_enabled || std::abs(state.color_harmony_strength) <= 1e-6) &&
       (std::abs(state.hue_adjustment) <= 1e-6 || state.color_mixer_channel.empty()) &&
       std::abs(state.saturation_adjustment) <= 1e-6 &&
       std::abs(state.luminance_adjustment) <= 1e-6) {
@@ -962,6 +1014,9 @@ bool MetalPipelineBackend::apply_post_color_effects(
 
   if (!use_master_curve) {
     master_curve_lut = build_identity_curve();
+  }
+  if (!use_luma_curve) {
+    luma_curve_lut = build_identity_curve();
   }
   if (!use_red_curve) {
     red_curve_lut = build_identity_curve();
@@ -979,14 +1034,17 @@ bool MetalPipelineBackend::apply_post_color_effects(
     id<MTLBuffer> pixel_buffer = [impl_->device newBufferWithLength:pixel_buffer_size
                                                             options:MTLResourceStorageModeShared];
     id<MTLBuffer> master_curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
-                                                                   options:MTLResourceStorageModeShared];
+                                                                    options:MTLResourceStorageModeShared];
+    id<MTLBuffer> luma_curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
+                                                                  options:MTLResourceStorageModeShared];
     id<MTLBuffer> red_curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
-                                                                options:MTLResourceStorageModeShared];
+                                                                 options:MTLResourceStorageModeShared];
     id<MTLBuffer> green_curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
                                                                   options:MTLResourceStorageModeShared];
     id<MTLBuffer> blue_curve_buffer = [impl_->device newBufferWithLength:curve_buffer_size
                                                                  options:MTLResourceStorageModeShared];
-    if (!pixel_buffer || !master_curve_buffer || !red_curve_buffer || !green_curve_buffer || !blue_curve_buffer) {
+    if (!pixel_buffer || !master_curve_buffer || !luma_curve_buffer || !red_curve_buffer ||
+        !green_curve_buffer || !blue_curve_buffer) {
       return false;
     }
 
@@ -994,6 +1052,7 @@ bool MetalPipelineBackend::apply_post_color_effects(
     copy_pixels_to_float_buffer(pixel_data, *pixels);
 
     std::copy(master_curve_lut.begin(), master_curve_lut.end(), static_cast<float*>([master_curve_buffer contents]));
+    std::copy(luma_curve_lut.begin(), luma_curve_lut.end(), static_cast<float*>([luma_curve_buffer contents]));
     std::copy(red_curve_lut.begin(), red_curve_lut.end(), static_cast<float*>([red_curve_buffer contents]));
     std::copy(green_curve_lut.begin(), green_curve_lut.end(), static_cast<float*>([green_curve_buffer contents]));
     std::copy(blue_curve_lut.begin(), blue_curve_lut.end(), static_cast<float*>([blue_curve_buffer contents]));
@@ -1024,12 +1083,63 @@ bool MetalPipelineBackend::apply_post_color_effects(
       uniforms.mixer_hue[channel] = static_cast<float>(mixer.hue);
       uniforms.mixer_sat[channel] = static_cast<float>(mixer.saturation);
       uniforms.mixer_lum[channel] = static_cast<float>(mixer.luminance);
+      uniforms.selective_cyan[channel] = static_cast<float>(mixer.selective_cyan);
+      uniforms.selective_magenta[channel] = static_cast<float>(mixer.selective_magenta);
+      uniforms.selective_yellow[channel] = static_cast<float>(mixer.selective_yellow);
+      uniforms.selective_black[channel] = static_cast<float>(mixer.selective_black);
     }
+    uniforms.channel_mixer[0] = static_cast<float>(state.rgb_channel_mixer.red_from_red / 100.0);
+    uniforms.channel_mixer[1] = static_cast<float>(state.rgb_channel_mixer.red_from_green / 100.0);
+    uniforms.channel_mixer[2] = static_cast<float>(state.rgb_channel_mixer.red_from_blue / 100.0);
+    uniforms.channel_mixer[3] = static_cast<float>(state.rgb_channel_mixer.green_from_red / 100.0);
+    uniforms.channel_mixer[4] = static_cast<float>(state.rgb_channel_mixer.green_from_green / 100.0);
+    uniforms.channel_mixer[5] = static_cast<float>(state.rgb_channel_mixer.green_from_blue / 100.0);
+    uniforms.channel_mixer[6] = static_cast<float>(state.rgb_channel_mixer.blue_from_red / 100.0);
+    uniforms.channel_mixer[7] = static_cast<float>(state.rgb_channel_mixer.blue_from_green / 100.0);
+    uniforms.channel_mixer[8] = static_cast<float>(state.rgb_channel_mixer.blue_from_blue / 100.0);
+    for (int channel = 0; channel < kColorMixerChannelCount; ++channel) {
+      uniforms.black_and_white_mixer[channel] =
+          static_cast<float>(state.black_and_white_mixer[static_cast<std::size_t>(channel)]);
+    }
+    uniforms.black_and_white_enabled = state.black_and_white_enabled ? 1 : 0;
+    uniforms.color_replacement_enabled = state.color_replacement_enabled ? 1 : 0;
+    uniforms.color_replacement_source_hue = static_cast<float>(state.color_replacement_source_hue);
+    uniforms.color_replacement_target_hue = static_cast<float>(state.color_replacement_target_hue);
+    uniforms.color_replacement_range = static_cast<float>(state.color_replacement_range);
+    uniforms.color_replacement_strength = static_cast<float>(state.color_replacement_strength);
+    uniforms.skin_tone_protection_enabled = state.skin_tone_protection_enabled ? 1 : 0;
+    uniforms.skin_tone_line_hue = static_cast<float>(state.skin_tone_line_hue);
+    uniforms.skin_tone_protection_range = static_cast<float>(state.skin_tone_protection_range);
+    uniforms.skin_tone_protection_strength = static_cast<float>(state.skin_tone_protection_strength);
+    uniforms.color_harmony_enabled = state.color_harmony_enabled ? 1 : 0;
+    if (state.color_harmony_mode == "Analogous") {
+      uniforms.color_harmony_mode = 1;
+    } else if (state.color_harmony_mode == "Triadic") {
+      uniforms.color_harmony_mode = 2;
+    } else if (state.color_harmony_mode == "Split Complementary") {
+      uniforms.color_harmony_mode = 3;
+    } else if (state.color_harmony_mode == "Tetradic") {
+      uniforms.color_harmony_mode = 4;
+    } else {
+      uniforms.color_harmony_mode = 0;
+    }
+    uniforms.color_harmony_base_hue = static_cast<float>(state.color_harmony_base_hue);
+    uniforms.color_harmony_strength = static_cast<float>(state.color_harmony_strength);
     uniforms.use_master_curve = use_master_curve ? 1 : 0;
+    uniforms.use_luma_curve = use_luma_curve ? 1 : 0;
     uniforms.use_red_curve = use_red_curve ? 1 : 0;
     uniforms.use_green_curve = use_green_curve ? 1 : 0;
     uniforms.use_blue_curve = use_blue_curve ? 1 : 0;
     uniforms.curve_lut_size = kCurveLutSize;
+    if (state.color_mixer_model == "HSL") {
+      uniforms.color_mixer_model = 1;
+    } else if (state.color_mixer_model == "HSV") {
+      uniforms.color_mixer_model = 2;
+    } else if (state.color_mixer_model == "LCH") {
+      uniforms.color_mixer_model = 3;
+    } else {
+      uniforms.color_mixer_model = 0;
+    }
     uniforms.width = width;
     uniforms.height = height;
 
@@ -1038,10 +1148,11 @@ bool MetalPipelineBackend::apply_post_color_effects(
     [encoder setComputePipelineState:impl_->post_color_pipeline];
     [encoder setBuffer:pixel_buffer offset:0 atIndex:0];
     [encoder setBuffer:master_curve_buffer offset:0 atIndex:1];
-    [encoder setBuffer:red_curve_buffer offset:0 atIndex:2];
-    [encoder setBuffer:green_curve_buffer offset:0 atIndex:3];
-    [encoder setBuffer:blue_curve_buffer offset:0 atIndex:4];
-    [encoder setBytes:&uniforms length:sizeof(uniforms) atIndex:5];
+    [encoder setBuffer:luma_curve_buffer offset:0 atIndex:2];
+    [encoder setBuffer:red_curve_buffer offset:0 atIndex:3];
+    [encoder setBuffer:green_curve_buffer offset:0 atIndex:4];
+    [encoder setBuffer:blue_curve_buffer offset:0 atIndex:5];
+    [encoder setBytes:&uniforms length:sizeof(uniforms) atIndex:6];
 
     NSUInteger thread_group_size = impl_->post_color_pipeline.maxTotalThreadsPerThreadgroup;
     if (thread_group_size > 256) thread_group_size = 256;
@@ -1142,6 +1253,17 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     uniforms.shadows = static_cast<float>(clamp_signed_percent(state.shadows) / 100.0);
     uniforms.whites = static_cast<float>(clamp_signed_percent(state.whites) / 100.0);
     uniforms.blacks = static_cast<float>(clamp_signed_percent(state.blacks) / 100.0);
+    uniforms.brightness = static_cast<float>(clamp_signed_percent(state.brightness) / 100.0);
+    uniforms.filmic_toe = static_cast<float>(clamp_signed_percent(state.filmic_toe) / 100.0);
+    uniforms.adaptive_contrast = static_cast<float>(clamp_signed_percent(state.adaptive_contrast) / 100.0);
+    uniforms.levels_black_point = static_cast<float>(std::clamp(state.levels_black_point, 0.0, 100.0) / 100.0);
+    uniforms.levels_gamma = static_cast<float>(clamp_signed_percent(state.levels_gamma) / 100.0);
+    uniforms.levels_white_point = static_cast<float>(std::clamp(state.levels_white_point, 0.0, 100.0) / 100.0);
+    uniforms.zone_deep_shadows = static_cast<float>(clamp_signed_percent(state.zone_deep_shadows) / 100.0);
+    uniforms.zone_shadows = static_cast<float>(clamp_signed_percent(state.zone_shadows) / 100.0);
+    uniforms.zone_midtones = static_cast<float>(clamp_signed_percent(state.zone_midtones) / 100.0);
+    uniforms.zone_lights = static_cast<float>(clamp_signed_percent(state.zone_lights) / 100.0);
+    uniforms.zone_highlights = static_cast<float>(clamp_signed_percent(state.zone_highlights) / 100.0);
     uniforms.shoulder_threshold = 1.0F;
     uniforms.use_parametric_curve = use_parametric_curve ? 1 : 0;
     uniforms.curve_lut_size = kCurveLutSize;
@@ -1209,10 +1331,17 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     for (std::size_t index = 0; index < pixel_count; ++index) {
       max_target_luminance = std::max(max_target_luminance, static_cast<double>(target_luminance[index]));
     }
+    const auto shoulder_control = clamp_signed_percent(state.filmic_shoulder) / 100.0;
+    const auto shoulder_shift = shoulder_control >= 0.0 ? shoulder_control * 0.18 : shoulder_control * 0.12;
     uniforms.shoulder_threshold = static_cast<float>(
         max_target_luminance <= 1.0
             ? 1.0
-            : std::clamp(0.98 - ((max_target_luminance - 1.0) / (max_target_luminance - 1.0 + 1.0)) * 0.18, 0.82, 0.98));
+            : std::clamp(
+                  0.98 -
+                      ((max_target_luminance - 1.0) / (max_target_luminance - 1.0 + 1.0)) * 0.18 -
+                      shoulder_shift,
+                  0.64,
+                  0.995));
 
     dispatch_pipeline(
         impl_->pre_tone_output_pipeline,

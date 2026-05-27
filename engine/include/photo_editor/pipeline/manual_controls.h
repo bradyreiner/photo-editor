@@ -13,7 +13,7 @@ struct ManualControlGroup final {
 
 inline std::vector<ManualControlGroup> DefaultManualControlGroups() {
   return {
-      {"global_tone", "Global Tone", {"exposure", "contrast", "highlights", "shadows", "whites", "blacks"}},
+      {"global_tone", "Global Tone", {"exposure", "contrast", "highlights", "shadows", "whites", "blacks", "brightness", "hdr_local_tone", "filmic_shoulder", "filmic_toe", "adaptive_contrast", "levels", "zones"}},
       {"white_balance", "White Balance", {"temperature", "tint", "eyedropper"}},
       {"presence", "Presence", {"texture", "clarity", "dehaze", "vibrance", "saturation"}},
       {"curve_color", "Curve and Color", {"tone_curve", "color_mixer", "color_grading", "black_and_white_mix"}},

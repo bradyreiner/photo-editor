@@ -441,6 +441,7 @@ bool cancelPersistedJobRecord(
       record.metadata_json.insert(QStringLiteral("canceled"), true);
       record.metadata_json.insert(QStringLiteral("canceledAt"), record.updated_at);
       record.metadata_json.insert(QStringLiteral("cancelAction"), QStringLiteral("dropped_from_queue"));
+      record.metadata_json.insert(QStringLiteral("cancellationReason"), QStringLiteral("dropped_from_queue"));
       return upsertPersistedJobRecord(record, error_message);
     }
 
@@ -458,6 +459,7 @@ bool cancelPersistedJobRecord(
       record.updated_at = iso_now();
       record.metadata_json.insert(QStringLiteral("cancellationRequested"), true);
       record.metadata_json.insert(QStringLiteral("cancellationRequestedAt"), record.updated_at);
+      record.metadata_json.insert(QStringLiteral("cancellationReason"), QStringLiteral("cooperative_cancel_requested"));
       return upsertPersistedJobRecord(record, error_message);
     }
 

@@ -14,11 +14,16 @@ struct BrushPreviewPoint final {
   double y = 0.5;
   double size = 0.05;
   double flow = 1.0;
+  double pressure = 1.0;
+  double tilt_x = 0.0;
+  double tilt_y = 0.0;
+  bool erase = false;
 };
 
 struct BrushPreviewStyle final {
   QColor color = QColor(94, 149, 211);
   double feather = 0.5;
+  double hardness = 0.25;
   double opacity = 0.38;
 };
 

@@ -211,7 +211,7 @@ Dialog {
                                         source: thumbnailSource
                                         fillMode: Image.PreserveAspectCrop
                                         asynchronous: true
-                                        cache: false
+                                        cache: true
                                         visible: thumbnailSource.length > 0
                                     }
 
@@ -342,8 +342,8 @@ Dialog {
                         anchors.fill: parent
                         source: root.selectedThumbnailSource
                         fillMode: Image.PreserveAspectFit
-                        asynchronous: false
-                        cache: false
+                        asynchronous: true
+                        cache: true
                         visible: root.selectedThumbnailSource.length > 0
                     }
 

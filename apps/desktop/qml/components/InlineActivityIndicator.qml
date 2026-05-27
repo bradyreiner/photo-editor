@@ -9,6 +9,8 @@ Rectangle {
     property string detail: ""
     property real progressValue: -1
     property color accent: theme.accentWarm400
+    property bool cancelable: false
+    signal cancelRequested()
 
     readonly property string summaryText: {
         const titleText = title ? String(title) : ""
@@ -60,6 +62,20 @@ Rectangle {
             Layout.preferredHeight: 3
             progress: root.progressValue
             accent: root.accent
+        }
+
+        Button {
+            id: cancelButton
+            objectName: "activityCancelButton"
+            visible: root.cancelable
+            text: "Cancel"
+            flat: true
+            padding: 4
+            leftPadding: 6
+            rightPadding: 6
+            font.family: theme.fontUi
+            font.pixelSize: 10
+            onClicked: root.cancelRequested()
         }
     }
 }

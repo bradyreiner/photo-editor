@@ -10,6 +10,36 @@ photo_editor_apply_warnings(color_pipeline_test)
 
 add_test(NAME color_pipeline_test COMMAND color_pipeline_test)
 
+add_executable(cube_lut_test cube_lut_test.cpp)
+target_link_libraries(cube_lut_test PRIVATE photo_engine)
+photo_editor_apply_warnings(cube_lut_test)
+
+add_test(NAME cube_lut_test COMMAND cube_lut_test)
+
+add_executable(raw_corpus_test raw_corpus_test.cpp)
+target_link_libraries(raw_corpus_test PRIVATE photo_engine)
+photo_editor_apply_warnings(raw_corpus_test)
+
+add_test(NAME raw_corpus_test COMMAND raw_corpus_test)
+
+add_executable(lens_profile_test lens_profile_test.cpp)
+target_link_libraries(lens_profile_test PRIVATE photo_engine)
+photo_editor_apply_warnings(lens_profile_test)
+
+add_test(NAME lens_profile_test COMMAND lens_profile_test)
+
+add_executable(color_chart_validation_test color_chart_validation_test.cpp)
+target_link_libraries(color_chart_validation_test PRIVATE photo_engine)
+photo_editor_apply_warnings(color_chart_validation_test)
+
+add_test(NAME color_chart_validation_test COMMAND color_chart_validation_test)
+
+add_executable(color_tool_invariant_test color_tool_invariant_test.cpp)
+target_link_libraries(color_tool_invariant_test PRIVATE photo_engine)
+photo_editor_apply_warnings(color_tool_invariant_test)
+
+add_test(NAME color_tool_invariant_test COMMAND color_tool_invariant_test)
+
 add_executable(catalog_contract_smoke_test catalog_contract_smoke_test.cpp)
 target_link_libraries(catalog_contract_smoke_test PRIVATE photo_engine)
 photo_editor_apply_warnings(catalog_contract_smoke_test)
@@ -123,6 +153,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_runner.cpp
     ../apps/desktop/src/job_store.h
     ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -149,6 +181,47 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   add_test(NAME catalog_asset_model_test COMMAND catalog_asset_model_test)
 
   add_executable(
+    thumbnail_benchmark_driver
+    thumbnail_benchmark_driver.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/catalog_asset_model.h
+    ../apps/desktop/src/catalog_asset_model.cpp
+    ../apps/desktop/src/job_runner.h
+    ../apps/desktop/src/job_runner.cpp
+    ../apps/desktop/src/job_store.h
+    ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/timeline_asset_store.h
+    ../apps/desktop/src/timeline_asset_store.cpp
+    ../apps/desktop/src/timeline_document_controller.h
+    ../apps/desktop/src/timeline_document_controller.cpp)
+  set_target_properties(thumbnail_benchmark_driver PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    thumbnail_benchmark_driver
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    thumbnail_benchmark_driver
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    thumbnail_benchmark_driver
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Widgets
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(thumbnail_benchmark_driver)
+
+  add_executable(
     desktop_shell_smoke_test
     desktop_shell_smoke_test.cpp
     ${photo_editor_desktop_observability_sources}
@@ -158,6 +231,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_shell_controller.cpp
     ../apps/desktop/src/brush_live_preview_item.h
     ../apps/desktop/src/brush_live_preview_item.cpp
+    ../apps/desktop/src/tablet_input_area.h
+    ../apps/desktop/src/tablet_input_area.cpp
     ../apps/desktop/src/editor_preview_texture_item.h
     ../apps/desktop/src/editor_preview_texture_item.cpp
     ../apps/desktop/src/carousel_document_controller.h
@@ -180,6 +255,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_runner.cpp
     ../apps/desktop/src/job_store.h
     ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ../apps/desktop/src/preview_backend_controller.h
@@ -278,6 +355,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
     ${photo_editor_desktop_ai_model_sources}
@@ -305,6 +384,113 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   add_test(NAME editor_preview_controller_test COMMAND editor_preview_controller_test)
 
   add_executable(
+    preview_benchmark_driver
+    preview_benchmark_driver.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(preview_benchmark_driver PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    preview_benchmark_driver
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    preview_benchmark_driver
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    preview_benchmark_driver
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(preview_benchmark_driver)
+
+  add_executable(
+    color_adjustment_benchmark_driver
+    color_adjustment_benchmark_driver.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp)
+  set_target_properties(color_adjustment_benchmark_driver PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    color_adjustment_benchmark_driver
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    color_adjustment_benchmark_driver
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    color_adjustment_benchmark_driver
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      photo_engine)
+  photo_editor_apply_warnings(color_adjustment_benchmark_driver)
+
+  add_executable(
+    render_parity_test
+    render_parity_test.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources})
+  target_include_directories(
+    render_parity_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    render_parity_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(render_parity_test)
+
+  add_test(NAME render_parity_test COMMAND render_parity_test)
+  set_tests_properties(render_parity_test PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(
+    render_golden_test
+    render_golden_test.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources})
+  target_include_directories(
+    render_golden_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    render_golden_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(render_golden_test)
+
+  add_test(NAME render_golden_test COMMAND render_golden_test)
+
+  add_executable(
     export_job_controller_test
     export_job_controller_test.cpp
     ${photo_editor_desktop_observability_sources}
@@ -316,6 +502,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_runner.cpp
     ../apps/desktop/src/job_store.h
     ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -377,6 +565,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_runner.cpp
     ../apps/desktop/src/job_store.h
     ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}

@@ -153,17 +153,37 @@ QString file_filter_from_suffixes(const QString& label, const QStringList& suffi
 }
 
 double crop_aspect_ratio(const QString& preset) {
-  if (preset == QStringLiteral("Square")) {
+  auto normalized = preset.trimmed().toLower();
+  normalized.replace(QLatin1Char(':'), QLatin1Char('x'));
+  normalized.remove(QLatin1Char(' '));
+  if (normalized == QStringLiteral("square") || normalized == QStringLiteral("1x1")) {
     return 1.0;
   }
-  if (preset == QStringLiteral("4x5")) {
-    return 4.0 / 5.0;
+  if (normalized == QStringLiteral("a3") || normalized == QStringLiteral("a4") ||
+      normalized == QStringLiteral("a5")) {
+    return 210.0 / 297.0;
   }
-  if (preset == QStringLiteral("3x2")) {
-    return 3.0 / 2.0;
+  if (normalized == QStringLiteral("a3landscape") ||
+      normalized == QStringLiteral("a4landscape") ||
+      normalized == QStringLiteral("a5landscape")) {
+    return 297.0 / 210.0;
   }
-  if (preset == QStringLiteral("16x9")) {
-    return 16.0 / 9.0;
+  const auto parts = normalized.split(QLatin1Char('x'), Qt::SkipEmptyParts);
+  if (parts.size() == 2) {
+    bool width_ok = false;
+    bool height_ok = false;
+    auto width_label = parts.at(0);
+    auto height_label = parts.at(1);
+    for (const auto& unit : {QStringLiteral("inches"), QStringLiteral("inch"), QStringLiteral("in"),
+                             QStringLiteral("cm"), QStringLiteral("mm")}) {
+      width_label.remove(unit);
+      height_label.remove(unit);
+    }
+    const auto width = width_label.toDouble(&width_ok);
+    const auto height = height_label.toDouble(&height_ok);
+    if (width_ok && height_ok && width > 0.0 && height > 0.0) {
+      return width / height;
+    }
   }
   return 0.0;
 }
@@ -230,8 +250,12 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
               .gamut_mapping_enabled = state.raw_gamut_mapping,
               .lens_correction_enabled = state.raw_lens_correction,
               .raw_white_balance_override_enabled = state.raw_white_balance_override,
+              .camera_matching_look =
+                  normalized_camera_matching_look_name(state.raw_camera_matching_look).toStdString(),
               .raw_white_balance_temperature = state.raw_white_balance_temperature,
               .raw_white_balance_tint = state.raw_white_balance_tint,
+              .raw_black_level = state.raw_black_level,
+              .raw_white_level = state.raw_white_level,
           },
       .exposure = state.exposure,
       .contrast = state.contrast,
@@ -239,6 +263,19 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .shadows = state.shadows,
       .whites = state.whites,
       .blacks = state.blacks,
+      .brightness = state.brightness,
+      .hdr_local_tone_mapping = state.hdr_local_tone_mapping,
+      .filmic_shoulder = state.filmic_shoulder,
+      .filmic_toe = state.filmic_toe,
+      .adaptive_contrast = state.adaptive_contrast,
+      .levels_black_point = state.levels_black_point,
+      .levels_gamma = state.levels_gamma,
+      .levels_white_point = state.levels_white_point,
+      .zone_deep_shadows = state.zone_deep_shadows,
+      .zone_shadows = state.zone_shadows,
+      .zone_midtones = state.zone_midtones,
+      .zone_lights = state.zone_lights,
+      .zone_highlights = state.zone_highlights,
       .temperature = state.temperature,
       .tint = state.tint,
       .texture = state.texture,
@@ -250,6 +287,7 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .curve_darks = state.curve_darks,
       .curve_lights = state.curve_lights,
       .curve_highlights = state.curve_highlights,
+      .color_mixer_model = state.color_mixer_model.toStdString(),
       .color_mixer_channel = state.hsl_channel.toStdString(),
       .hue_adjustment = state.hue_adjustment,
       .saturation_adjustment = state.saturation_adjustment,
@@ -262,9 +300,39 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
           channels[i].hue = state.mixer_channels[i].hue;
           channels[i].saturation = state.mixer_channels[i].saturation;
           channels[i].luminance = state.mixer_channels[i].luminance;
+          channels[i].selective_cyan = state.mixer_channels[i].selective_cyan;
+          channels[i].selective_magenta = state.mixer_channels[i].selective_magenta;
+          channels[i].selective_yellow = state.mixer_channels[i].selective_yellow;
+          channels[i].selective_black = state.mixer_channels[i].selective_black;
         }
         return channels;
       }(),
+      .rgb_channel_mixer = {
+          .red_from_red = state.rgb_channel_mixer.red_from_red,
+          .red_from_green = state.rgb_channel_mixer.red_from_green,
+          .red_from_blue = state.rgb_channel_mixer.red_from_blue,
+          .green_from_red = state.rgb_channel_mixer.green_from_red,
+          .green_from_green = state.rgb_channel_mixer.green_from_green,
+          .green_from_blue = state.rgb_channel_mixer.green_from_blue,
+          .blue_from_red = state.rgb_channel_mixer.blue_from_red,
+          .blue_from_green = state.rgb_channel_mixer.blue_from_green,
+          .blue_from_blue = state.rgb_channel_mixer.blue_from_blue,
+      },
+      .black_and_white_enabled = state.black_and_white_enabled,
+      .black_and_white_mixer = state.black_and_white_mixer,
+      .color_replacement_enabled = state.color_replacement_enabled,
+      .color_replacement_source_hue = state.color_replacement_source_hue,
+      .color_replacement_target_hue = state.color_replacement_target_hue,
+      .color_replacement_range = state.color_replacement_range,
+      .color_replacement_strength = state.color_replacement_strength,
+      .skin_tone_protection_enabled = state.skin_tone_protection_enabled,
+      .skin_tone_line_hue = state.skin_tone_line_hue,
+      .skin_tone_protection_range = state.skin_tone_protection_range,
+      .skin_tone_protection_strength = state.skin_tone_protection_strength,
+      .color_harmony_enabled = state.color_harmony_enabled,
+      .color_harmony_mode = state.color_harmony_mode.toStdString(),
+      .color_harmony_base_hue = state.color_harmony_base_hue,
+      .color_harmony_strength = state.color_harmony_strength,
       .linear_mask_enabled = state.linear_mask_enabled,
       .linear_mask_exposure = state.linear_mask_exposure,
       .linear_mask_temperature = state.linear_mask_temperature,

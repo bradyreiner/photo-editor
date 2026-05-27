@@ -30,6 +30,9 @@ struct ForegroundInstanceMap final {
 };
 
 [[nodiscard]] SegmentationResult generate_subject_mask(const QImage& source_image);
+[[nodiscard]] SegmentationResult generate_semantic_mask(
+    const QImage& source_image,
+    const QString& semantic_kind);
 [[nodiscard]] ForegroundInstanceMap generate_foreground_instance_map(const QImage& source_image);
 [[nodiscard]] SegmentationResult generate_object_mask_for_instance(
     const QImage& source_image,

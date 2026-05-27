@@ -15,6 +15,7 @@ Popup {
     Theme { id: theme }
 
     property var commands: []
+    readonly property int commandCount: commands.length
 
     function buildCommands() {
         let items = []

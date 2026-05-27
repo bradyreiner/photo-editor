@@ -4,6 +4,7 @@ members = [
   "crates/ffi",
   "crates/jobs",
   "crates/metadata",
+  "crates/mcp",
   "crates/telemetry",
 ]
 resolver = "2"

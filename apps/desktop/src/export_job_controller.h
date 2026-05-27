@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QString>
+#include <QVariantMap>
 #include <QVariantList>
 #include <QVector>
 
@@ -37,10 +38,46 @@ class ExportJobController final : public QObject {
       const QString& recipe_json,
       const QString& preset,
       const QString& destination_directory);
+  Q_INVOKABLE bool queueExportWithCropConstraint(
+      const QString& asset_id,
+      const QString& media_type,
+      const QString& display_label,
+      const QString& source_path,
+      const QString& edited_preview_source,
+      const QString& recipe_json,
+      const QString& preset,
+      const QString& destination_directory,
+      const QString& crop_preset,
+      double crop_x,
+      double crop_y,
+      double crop_width,
+      double crop_height);
   Q_INVOKABLE int queueBatchExport(
       const QVariantList& assets,
       const QString& preset,
       const QString& destination_directory);
+  Q_INVOKABLE int queueBatchExportWithCropConstraint(
+      const QVariantList& assets,
+      const QString& preset,
+      const QString& destination_directory,
+      const QString& crop_preset,
+      double crop_x,
+      double crop_y,
+      double crop_width,
+      double crop_height);
+  Q_INVOKABLE QVariantMap exportPreflight(
+      const QString& media_type,
+      const QString& source_path,
+      const QString& edited_preview_source,
+      const QString& recipe_json,
+      const QString& preset,
+      const QString& destination_directory,
+      int histogram_sample_count,
+      int shadow_clip_count,
+      int highlight_clip_count,
+      int raw_clip_sample_count,
+      int raw_shadow_clip_count,
+      int raw_highlight_clip_count) const;
   Q_INVOKABLE void retryJob(const QString& job_id);
   Q_INVOKABLE void removeJob(const QString& job_id);
   Q_INVOKABLE void clearFinishedJobs();
@@ -59,6 +96,7 @@ class ExportJobController final : public QObject {
     QString source_path;
     QString edited_preview_source;
     QString recipe_json;
+    QJsonObject metadata_json;
     QString preset;
     QString destination_directory;
     QString output_path;

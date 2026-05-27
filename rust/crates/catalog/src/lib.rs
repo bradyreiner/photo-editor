@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::{PgPoolOptions, PgRow};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, QueryBuilder, Row};
 
 pub use importer::{
     discover_assets, extract_metadata, fallback_metadata, is_supported_photo_path,
@@ -23,6 +23,7 @@ pub use local_database::{
 const DEFAULT_DATABASE_URL: &str =
     "postgresql://photo_editor:photo_editor@localhost:5433/photo_editor";
 const DEFAULT_MAX_CONNECTIONS: u32 = 10;
+const ASSET_IMPORT_BATCH_SIZE: usize = 1000;
 pub const APP_DATA_DIR_ENV: &str = "PHOTO_EDITOR_APP_DATA_DIR";
 pub const LOG_DIR_ENV: &str = "PHOTO_EDITOR_LOG_DIR";
 pub const BACKUP_DIR_ENV: &str = "PHOTO_EDITOR_BACKUP_DIR";
@@ -335,12 +336,90 @@ impl CatalogService {
     }
 
     pub async fn import_summary(&self, summary: &ImportSummary) -> Result<(), sqlx::Error> {
-        self.upsert_drive(&summary.drive).await?;
+        let mut transaction = self.pool.begin().await?;
 
-        for asset in &summary.assets {
-            self.upsert_asset(asset).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO drives (drive_id, display_name, mount_path, is_online, last_seen_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            ON CONFLICT (drive_id) DO UPDATE SET
+                display_name = EXCLUDED.display_name,
+                mount_path = EXCLUDED.mount_path,
+                is_online = EXCLUDED.is_online,
+                last_seen_at = NOW()
+            "#,
+        )
+        .bind(&summary.drive.drive_id)
+        .bind(&summary.drive.display_name)
+        .bind(&summary.drive.mount_path)
+        .bind(summary.drive.online)
+        .execute(&mut *transaction)
+        .await?;
+
+        for asset_batch in summary.assets.chunks(ASSET_IMPORT_BATCH_SIZE) {
+            let mut query_builder: QueryBuilder<'_, Postgres> = QueryBuilder::new(
+                r#"
+                INSERT INTO assets (
+                    asset_id,
+                    drive_id,
+                    root_path,
+                    relative_path,
+                    import_mode,
+                    capture_year,
+                    capture_month,
+                    capture_day,
+                    camera_make,
+                    camera_model,
+                    lens_model,
+                    iso,
+                    shutter_speed,
+                    aperture,
+                    created_at,
+                    updated_at
+                )
+                "#,
+            );
+            query_builder.push_values(asset_batch, |mut row, asset| {
+                row.push_bind(&asset.asset_id)
+                    .push_bind(&asset.location.drive_id)
+                    .push_bind(&asset.location.root_path)
+                    .push_bind(&asset.location.relative_path)
+                    .push_bind(asset.import_mode.as_database_value())
+                    .push_bind(i32::from(asset.capture_year))
+                    .push_bind(i32::from(asset.capture_month))
+                    .push_bind(i32::from(asset.capture_day))
+                    .push_bind(&asset.camera_make)
+                    .push_bind(&asset.camera_model)
+                    .push_bind(&asset.lens_model)
+                    .push_bind(asset.iso)
+                    .push_bind(&asset.shutter_speed)
+                    .push_bind(asset.aperture)
+                    .push("NOW()")
+                    .push("NOW()");
+            });
+            query_builder.push(
+                r#"
+                ON CONFLICT (asset_id) DO UPDATE SET
+                    drive_id = EXCLUDED.drive_id,
+                    root_path = EXCLUDED.root_path,
+                    relative_path = EXCLUDED.relative_path,
+                    import_mode = EXCLUDED.import_mode,
+                    capture_year = EXCLUDED.capture_year,
+                    capture_month = EXCLUDED.capture_month,
+                    capture_day = EXCLUDED.capture_day,
+                    camera_make = EXCLUDED.camera_make,
+                    camera_model = EXCLUDED.camera_model,
+                    lens_model = EXCLUDED.lens_model,
+                    iso = EXCLUDED.iso,
+                    shutter_speed = EXCLUDED.shutter_speed,
+                    aperture = EXCLUDED.aperture,
+                    updated_at = NOW()
+                "#,
+            );
+            query_builder.build().execute(&mut *transaction).await?;
         }
 
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -422,6 +501,7 @@ impl CatalogService {
         asset_id: &str,
         recipe_json: &Value,
     ) -> Result<(), sqlx::Error> {
+        let mut transaction = self.pool.begin().await?;
         sqlx::query(
             r#"
             INSERT INTO edit_recipes (asset_id, recipe_json, updated_at)
@@ -433,8 +513,9 @@ impl CatalogService {
         )
         .bind(asset_id)
         .bind(recipe_json)
-        .execute(&self.pool)
+        .execute(&mut *transaction)
         .await?;
+        transaction.commit().await?;
 
         Ok(())
     }

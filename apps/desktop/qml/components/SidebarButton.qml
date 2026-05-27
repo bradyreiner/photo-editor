@@ -19,17 +19,17 @@ Button {
 
     Theme { id: theme }
 
-    readonly property bool clippedShape: root.shape === "clipped" || (root.shape === "auto" && root.iconOnly)
+    readonly property bool clippedShape: root.shape === "clipped" || root.shape === "auto"
     readonly property color iconOnlyFill: root.down
-                                         ? theme.alpha(theme.ink700, 0.9)
-                                         : root.highlighted
-                                           ? theme.alpha(root.accent, 0.18)
-                                           : (root.hovered ? theme.alpha(theme.glassLift, 0.68) : theme.alpha(theme.glassBase, 0.54))
+                                            ? theme.alpha(root.accent, 0.22)
+                                          : root.highlighted
+                                            ? theme.alpha(root.accent, 0.18)
+                                            : (root.hovered ? theme.alpha(root.accent, 0.10) : theme.alpha(theme.ink950, 0.50))
     readonly property color iconOnlyBorder: root.visualFocus
                                            ? theme.alpha(theme.focusRing, 0.9)
                                            : root.highlighted
-                                              ? theme.alpha(root.accent, 0.68)
-                                              : (root.hovered ? theme.alpha(theme.glassEdge, 0.42) : theme.alpha(theme.glassEdge, 0.18))
+                                               ? theme.alpha(root.accent, 0.76)
+                                               : (root.hovered ? theme.alpha(root.accent, 0.46) : theme.alpha(root.accent, 0.24))
 
     implicitHeight: iconOnly ? 40 : (compact ? theme.controlHeight : theme.controlHeightTall)
     implicitWidth: iconOnly ? 40 : implicitBackgroundWidth
@@ -64,8 +64,8 @@ Button {
         CutCornerSurface {
             anchors.fill: parent
             visible: root.clippedShape
-            cut: theme.cutCorner
-            cutTopLeft: true
+            cut: root.iconOnly ? 8 : theme.cutCorner
+            cutTopLeft: false
             cutTopRight: false
             cutBottomRight: true
             cutBottomLeft: false
@@ -82,8 +82,25 @@ Button {
                          : root.visualFocus
                            ? theme.alpha(theme.focusRing, 0.9)
                            : root.highlighted
-                             ? theme.alpha(root.accent, 0.34)
-                             : (root.hovered ? theme.alpha(theme.lineStrong, 0.16) : "transparent")
+                              ? theme.alpha(root.accent, 0.34)
+                              : (root.hovered ? theme.alpha(root.accent, 0.34) : theme.alpha(root.accent, 0.18))
+        }
+
+        Rectangle {
+            width: root.iconOnly ? 3 : 4
+            height: root.iconOnly ? 15 : 18
+            anchors.right: parent.right
+            anchors.rightMargin: root.iconOnly ? 5 : 6
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: root.iconOnly ? 5 : 5
+            color: root.accent
+            opacity: root.enabled ? (root.highlighted ? 1.0 : (root.hovered ? 0.74 : 0.42)) : 0.18
+            rotation: 34
+            transformOrigin: Item.Center
+
+            Behavior on opacity {
+                NumberAnimation { duration: theme.durationFast }
+            }
         }
 
         Rectangle {

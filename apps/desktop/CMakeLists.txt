@@ -13,6 +13,7 @@ set(photo_editor_desktop_sources
   src/brush_preview_compositor.cpp
   src/carousel_document_controller.cpp
   src/catalog_asset_model.cpp
+  src/decoded_image_cache.cpp
   src/editor_preview_controller.cpp
   src/editor_preview_image_provider.cpp
   src/editor_preview_texture.cpp
@@ -27,6 +28,7 @@ set(photo_editor_desktop_sources
   src/main.cpp
   src/preview_backend_controller.cpp
   src/app_bootstrap.cpp
+  src/tablet_input_area.cpp
   src/timeline_asset_store.cpp
   src/timeline_document_controller.cpp
   src/timeline_playback_controller.cpp
@@ -127,7 +129,10 @@ qt_add_qml_module(photo_editor_app
     qml/components/AppIcon.qml
     qml/components/AppPreferencesDialog.qml
     qml/components/BrandPanel.qml
+    qml/components/BrandWordmark.qml
     qml/components/ColorChannelButton.qml
+    qml/components/ColorWheelControl.qml
+    qml/components/CommandButtonSurface.qml
     qml/components/CommandPaletteDialog.qml
     qml/components/ConfirmActionButton.qml
     qml/components/CropOverlay.qml
@@ -136,11 +141,13 @@ qt_add_qml_module(photo_editor_app
     qml/components/GalleryPickerDialog.qml
     qml/components/GlassSurface.qml
     qml/components/HistogramDisplay.qml
+    qml/components/HorizonStraightenOverlay.qml
     qml/components/InfoPill.qml
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
     qml/components/InlineActivityIndicator.qml
     qml/components/KeyboardShortcutsDialog.qml
+    qml/components/LayerTransformOverlay.qml
     qml/components/MetricCard.qml
     qml/components/ProgressStrip.qml
     qml/components/PopupSurface.qml
@@ -155,6 +162,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/ToneComboBox.qml
     qml/components/ToneCurveEditor.qml
     qml/components/ToneTextField.qml
+    qml/components/TransformOverlay.qml
     qml/workspaces/CarouselView.qml
     qml/workspaces/EditView.qml
     qml/workspaces/EditWorkspace.qml
@@ -166,6 +174,7 @@ qt_add_qml_module(photo_editor_app
     qml/workspaces/MaskInspectorSections.qml
     qml/workspaces/MaskView.qml
     qml/workspaces/SequenceWorkspace.qml
+    qml/workspaces/StudioWorkspace.qml
     qml/workspaces/TimelineView.qml
 )
 

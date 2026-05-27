@@ -11,6 +11,7 @@ Item {
     property bool showLuminance: true
     property bool showRgb: true
     property bool logScale: true
+    property bool framed: true
     property real shadowClipRatio: 0
     property real highlightClipRatio: 0
 
@@ -19,8 +20,8 @@ Item {
     GlassSurface {
         anchors.fill: parent
         radius: theme.radiusPanel
-        surfaceOpacity: 0.38
-        edgeOpacity: 0.14
+        surfaceOpacity: root.framed ? 0.38 : 0.0
+        edgeOpacity: root.framed ? 0.14 : 0.0
 
         Canvas {
             id: histogramCanvas
@@ -40,20 +41,24 @@ Item {
 
                 if (root.showLuminance && root.luminanceData.length === 256) {
                     drawChannel(ctx, root.luminanceData, w, h,
-                                Qt.rgba(0.75, 0.75, 0.75, 0.35));
+                                Qt.rgba(0.86, 0.86, 0.84, 0.18),
+                                Qt.rgba(0.86, 0.86, 0.84, 0.58));
                 }
                 if (root.showRgb) {
                     if (root.blueData.length === 256) {
                         drawChannel(ctx, root.blueData, w, h,
-                                    Qt.rgba(0.25, 0.45, 1.0, 0.45));
+                                    Qt.rgba(0.0, 0.76, 1.0, 0.18),
+                                    Qt.rgba(0.0, 0.76, 1.0, 0.44));
                     }
                     if (root.greenData.length === 256) {
                         drawChannel(ctx, root.greenData, w, h,
-                                    Qt.rgba(0.2, 0.85, 0.3, 0.45));
+                                    Qt.rgba(0.22, 1.0, 0.68, 0.16),
+                                    Qt.rgba(0.22, 1.0, 0.68, 0.42));
                     }
                     if (root.redData.length === 256) {
                         drawChannel(ctx, root.redData, w, h,
-                                    Qt.rgba(1.0, 0.25, 0.25, 0.45));
+                                    Qt.rgba(1.0, 0.22, 0.18, 0.16),
+                                    Qt.rgba(1.0, 0.22, 0.18, 0.42));
                     }
                 }
             }
@@ -72,8 +77,15 @@ Item {
 
             function drawGuides(ctx, w, h) {
                 ctx.save();
-                ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.08);
+                ctx.strokeStyle = Qt.rgba(1, 1, 1, 0.07);
                 ctx.lineWidth = 1;
+                for (var i = 1; i < 4; ++i) {
+                    var x = Math.round((w / 4) * i) + 0.5;
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, h);
+                    ctx.stroke();
+                }
                 [0.25, 0.5, 0.75].forEach(function(ratio) {
                     var y = guideY(h, ratio);
                     ctx.beginPath();
@@ -100,7 +112,7 @@ Item {
                 return Math.log(1 + v * 31) / Math.log(32);
             }
 
-            function drawChannel(ctx, data, w, h, color) {
+            function drawChannel(ctx, data, w, h, fillColor, strokeColor) {
                 ctx.beginPath();
                 ctx.moveTo(0, h);
                 var step = w / 255;
@@ -112,8 +124,22 @@ Item {
                 }
                 ctx.lineTo(w, h);
                 ctx.closePath();
-                ctx.fillStyle = color;
+                ctx.fillStyle = fillColor;
                 ctx.fill();
+
+                ctx.beginPath();
+                for (var j = 0; j < 256; j++) {
+                    var strokeVal = plotValue(data[j] || 0);
+                    var sx = j * step;
+                    var sy = h - strokeVal * h;
+                    if (j === 0)
+                        ctx.moveTo(sx, sy);
+                    else
+                        ctx.lineTo(sx, sy);
+                }
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 1;
+                ctx.stroke();
             }
         }
     }

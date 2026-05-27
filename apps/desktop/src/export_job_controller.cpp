@@ -5,13 +5,16 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QImageReader>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
 
 #include <algorithm>
+#include <cmath>
 
+#include "edit_recipe_state.h"
 #include "photo_render_utils.h"
 
 namespace photo_editor::desktop {
@@ -66,6 +69,99 @@ bool should_render_photo_job(const QString& media_type, const QString& preset) {
   return is_photo_media(media_type) && !is_original_copy_preset(preset);
 }
 
+QVariantMap preflight_issue(const QString& severity, const QString& code, const QString& message) {
+  QVariantMap issue;
+  issue.insert(QStringLiteral("severity"), severity);
+  issue.insert(QStringLiteral("code"), code);
+  issue.insert(QStringLiteral("message"), message);
+  return issue;
+}
+
+int preset_max_edge(const QString& preset) {
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+    return 1440;
+  }
+  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
+    return 2048;
+  }
+  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+    return 2560;
+  }
+  return 0;
+}
+
+QString preset_format(const QString& preset) {
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("TIFF");
+  }
+  if (normalized.compare(QStringLiteral("Original Copy"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("Source");
+  }
+  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0 ||
+      normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0 ||
+      normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+    return QStringLiteral("JPEG");
+  }
+  return QStringLiteral("PNG");
+}
+
+QSize estimated_export_size(const QSize& source_size, const EditRecipeState& state, const QString& preset) {
+  if (!source_size.isValid()) {
+    return {};
+  }
+
+  auto width = source_size.width();
+  auto height = source_size.height();
+  if (state.crop_rect_width > 0.0 && state.crop_rect_height > 0.0) {
+    width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * state.crop_rect_width)));
+    height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * state.crop_rect_height)));
+  }
+
+  const auto max_edge = preset_max_edge(preset);
+  if (max_edge > 0 && std::max(width, height) > max_edge) {
+    const auto scale = static_cast<double>(max_edge) / static_cast<double>(std::max(width, height));
+    width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * scale)));
+    height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * scale)));
+  }
+
+  return QSize(width, height);
+}
+
+QJsonObject export_crop_metadata(
+    const QString& crop_preset,
+    double crop_x,
+    double crop_y,
+    double crop_width,
+    double crop_height) {
+  const auto normalized_preset = crop_preset.trimmed();
+  const auto has_preset = !normalized_preset.isEmpty() &&
+                          normalized_preset.compare(QStringLiteral("Current"), Qt::CaseInsensitive) != 0;
+  const auto has_rect = crop_width > 0.0 && crop_height > 0.0;
+  if (!has_preset && !has_rect) {
+    return {};
+  }
+
+  QJsonObject crop;
+  crop.insert(QStringLiteral("enabled"), true);
+  if (has_preset) {
+    crop.insert(QStringLiteral("preset"), normalized_preset);
+  }
+  if (has_rect) {
+    const auto width = qBound(0.01, crop_width, 1.0);
+    const auto height = qBound(0.01, crop_height, 1.0);
+    crop.insert(QStringLiteral("x"), qBound(0.0, crop_x, 1.0 - width));
+    crop.insert(QStringLiteral("y"), qBound(0.0, crop_y, 1.0 - height));
+    crop.insert(QStringLiteral("width"), width);
+    crop.insert(QStringLiteral("height"), height);
+  }
+
+  QJsonObject metadata;
+  metadata.insert(QStringLiteral("exportCrop"), crop);
+  return metadata;
+}
+
 }  // namespace
 
 ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {
@@ -118,6 +214,36 @@ bool ExportJobController::queueExport(
     const QString& recipe_json,
     const QString& preset,
     const QString& destination_directory) {
+  return queueExportWithCropConstraint(
+      asset_id,
+      media_type,
+      display_label,
+      source_path,
+      edited_preview_source,
+      recipe_json,
+      preset,
+      destination_directory,
+      QString(),
+      0.0,
+      0.0,
+      0.0,
+      0.0);
+}
+
+bool ExportJobController::queueExportWithCropConstraint(
+    const QString& asset_id,
+    const QString& media_type,
+    const QString& display_label,
+    const QString& source_path,
+    const QString& edited_preview_source,
+    const QString& recipe_json,
+    const QString& preset,
+    const QString& destination_directory,
+    const QString& crop_preset,
+    double crop_x,
+    double crop_y,
+    double crop_width,
+    double crop_height) {
   const auto normalized_destination = normalized_local_path(destination_directory);
   if (normalized_destination.isEmpty()) {
     setStatus(QStringLiteral("Choose an export destination first."));
@@ -136,6 +262,7 @@ bool ExportJobController::queueExport(
   job.source_path = normalized_local_path(source_path);
   job.edited_preview_source = edited_preview_source.trimmed();
   job.recipe_json = recipe_json.trimmed();
+  job.metadata_json = export_crop_metadata(crop_preset, crop_x, crop_y, crop_width, crop_height);
   job.preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
   job.destination_directory = normalized_destination;
   job.display_label = display_label_for_job(display_label, job.source_path);
@@ -167,6 +294,19 @@ int ExportJobController::queueBatchExport(
     const QVariantList& assets,
     const QString& preset,
     const QString& destination_directory) {
+  return queueBatchExportWithCropConstraint(
+      assets, preset, destination_directory, QString(), 0.0, 0.0, 0.0, 0.0);
+}
+
+int ExportJobController::queueBatchExportWithCropConstraint(
+    const QVariantList& assets,
+    const QString& preset,
+    const QString& destination_directory,
+    const QString& crop_preset,
+    double crop_x,
+    double crop_y,
+    double crop_width,
+    double crop_height) {
   int queued = 0;
   for (const auto& value : assets) {
     const auto asset = value.toMap();
@@ -177,12 +317,197 @@ int ExportJobController::queueBatchExport(
     const auto display_label = asset.value(QStringLiteral("displayLabel")).toString();
     const auto effective_preset =
         is_photo_media(media_type) ? preset : QStringLiteral("Original Copy");
-    if (queueExport(asset_id, media_type, display_label, file_path,
-                    QString(), recipe_json, effective_preset, destination_directory)) {
+    const auto effective_crop_preset = is_photo_media(media_type) ? crop_preset : QString();
+    if (queueExportWithCropConstraint(
+            asset_id,
+            media_type,
+            display_label,
+            file_path,
+            QString(),
+            recipe_json,
+            effective_preset,
+            destination_directory,
+            effective_crop_preset,
+            crop_x,
+            crop_y,
+            crop_width,
+            crop_height)) {
       ++queued;
     }
   }
   return queued;
+}
+
+QVariantMap ExportJobController::exportPreflight(
+    const QString& media_type,
+    const QString& source_path,
+    const QString& edited_preview_source,
+    const QString& recipe_json,
+    const QString& preset,
+    const QString& destination_directory,
+    int histogram_sample_count,
+    int shadow_clip_count,
+    int highlight_clip_count,
+    int raw_clip_sample_count,
+    int raw_shadow_clip_count,
+    int raw_highlight_clip_count) const {
+  QVariantList issues;
+  auto error_count = 0;
+  auto warning_count = 0;
+  auto add_issue = [&](const QString& severity, const QString& code, const QString& message) {
+    issues.push_back(preflight_issue(severity, code, message));
+    if (severity == QStringLiteral("error")) {
+      ++error_count;
+    } else if (severity == QStringLiteral("warning")) {
+      ++warning_count;
+    }
+  };
+
+  const auto normalized_media_type = media_type.trimmed().toLower();
+  const auto normalized_preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
+  const auto normalized_source = normalized_local_path(source_path);
+  const auto normalized_preview = normalized_local_path(edited_preview_source);
+  const auto normalized_destination = normalized_local_path(destination_directory);
+  const auto render_photo = should_render_photo_job(normalized_media_type, normalized_preset);
+
+  if (normalized_destination.isEmpty()) {
+    add_issue(
+        QStringLiteral("error"),
+        QStringLiteral("destination-missing"),
+        QStringLiteral("Choose an export destination."));
+  } else {
+    const QFileInfo destination_info(normalized_destination);
+    if (destination_info.exists() && !destination_info.isDir()) {
+      add_issue(
+          QStringLiteral("error"),
+          QStringLiteral("destination-not-folder"),
+          QStringLiteral("The export destination is not a folder."));
+    } else if (!destination_info.exists()) {
+      add_issue(
+          QStringLiteral("warning"),
+          QStringLiteral("destination-create"),
+          QStringLiteral("The destination folder will be created before export."));
+    } else if (!QFileInfo(normalized_destination).isWritable()) {
+      add_issue(
+          QStringLiteral("error"),
+          QStringLiteral("destination-unwritable"),
+          QStringLiteral("The export destination is not writable."));
+    }
+  }
+
+  QSize source_size;
+  if (render_photo) {
+    QImageReader reader(normalized_source);
+    source_size = reader.size();
+    if (normalized_source.isEmpty() || !QFileInfo::exists(normalized_source) ||
+        !preview_supported(normalized_source)) {
+      add_issue(
+          QStringLiteral("error"),
+          QStringLiteral("source-missing"),
+          QStringLiteral("The rendered export source is missing or unsupported."));
+    } else if (!source_size.isValid()) {
+      add_issue(
+          QStringLiteral("warning"),
+          QStringLiteral("source-size-unknown"),
+          QStringLiteral("The source dimensions could not be read before export."));
+    }
+  } else if (normalized_source.isEmpty() && normalized_preview.isEmpty()) {
+    add_issue(
+        QStringLiteral("error"),
+        QStringLiteral("source-missing"),
+        QStringLiteral("No source or rendered preview is available to export."));
+  } else if (!normalized_source.isEmpty() && !QFileInfo::exists(normalized_source) &&
+             (normalized_preview.isEmpty() || !QFileInfo::exists(normalized_preview))) {
+    add_issue(
+        QStringLiteral("error"),
+        QStringLiteral("source-missing"),
+        QStringLiteral("The original source and preview fallback are both unavailable."));
+  }
+
+  const auto validation = validate_edit_recipe_json(recipe_json);
+  if (!recipe_json.trimmed().isEmpty() && !validation.valid) {
+    add_issue(
+        QStringLiteral("error"),
+        QStringLiteral("recipe-invalid"),
+        QStringLiteral("The edit recipe has invalid export settings."));
+  }
+
+  const auto recipe_state = parse_edit_recipe_json(recipe_json);
+  const auto estimated_size = estimated_export_size(source_size, recipe_state, normalized_preset);
+  if (render_photo && estimated_size.isValid() &&
+      (estimated_size.width() < 512 || estimated_size.height() < 512)) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("export-size-small"),
+        QStringLiteral("The estimated export size is below 512 px on one edge."));
+  }
+
+  if (render_photo &&
+      normalized_preset.compare(QStringLiteral("Original Copy"), Qt::CaseInsensitive) != 0 &&
+      recipe_state.output_color_space.trimmed().isEmpty()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("profile-default"),
+        QStringLiteral("No explicit output profile is set; the export will use the recipe default."));
+  }
+
+  const auto output_profile =
+      recipe_state.output_color_space.trimmed().isEmpty() ? QStringLiteral("sRGB")
+                                                          : recipe_state.output_color_space.trimmed();
+  if ((normalized_preset.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0 ||
+       normalized_preset.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0 ||
+       normalized_preset.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) &&
+      output_profile.compare(QStringLiteral("sRGB"), Qt::CaseInsensitive) != 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("profile-web-wide-gamut"),
+        QStringLiteral("This web preset is using a non-sRGB output profile."));
+  }
+
+  if (recipe_state.soft_proof_enabled &&
+      recipe_state.soft_proof_profile.compare(output_profile, Qt::CaseInsensitive) != 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("soft-proof-mismatch"),
+        QStringLiteral("The active soft proof profile differs from the export output profile."));
+  }
+
+  if (!recipe_state.raw_gamut_mapping &&
+      output_profile.compare(QStringLiteral("sRGB"), Qt::CaseInsensitive) == 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("gamut-mapping-off"),
+        QStringLiteral("RAW gamut mapping is off for an sRGB export."));
+  }
+
+  if (histogram_sample_count > 0 && shadow_clip_count + highlight_clip_count > 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("preview-clipping"),
+        QStringLiteral("The current preview has shadow or highlight clipping."));
+  }
+
+  if (raw_clip_sample_count > 0 && raw_shadow_clip_count + raw_highlight_clip_count > 0) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("raw-clipping"),
+        QStringLiteral("The source has RAW clipping before edits."));
+  }
+
+  QVariantMap result;
+  result.insert(QStringLiteral("ok"), error_count == 0);
+  result.insert(QStringLiteral("issueCount"), issues.size());
+  result.insert(QStringLiteral("errorCount"), error_count);
+  result.insert(QStringLiteral("warningCount"), warning_count);
+  result.insert(QStringLiteral("issues"), issues);
+  result.insert(QStringLiteral("preset"), normalized_preset);
+  result.insert(QStringLiteral("format"), preset_format(normalized_preset));
+  result.insert(QStringLiteral("outputColorSpace"), output_profile);
+  result.insert(QStringLiteral("softProofEnabled"), recipe_state.soft_proof_enabled);
+  result.insert(QStringLiteral("softProofProfile"), recipe_state.soft_proof_profile);
+  result.insert(QStringLiteral("estimatedPixelWidth"), estimated_size.isValid() ? estimated_size.width() : 0);
+  result.insert(QStringLiteral("estimatedPixelHeight"), estimated_size.isValid() ? estimated_size.height() : 0);
+  return result;
 }
 
 void ExportJobController::retryJob(const QString& job_id) {
@@ -251,6 +576,13 @@ QVariantMap ExportJobController::jobMap(const ExportJob& job) const {
   value.insert(QStringLiteral("mediaType"), job.media_type);
   value.insert(QStringLiteral("displayLabel"), job.display_label);
   value.insert(QStringLiteral("preset"), job.preset);
+  value.insert(QStringLiteral("metadata"), job.metadata_json.toVariantMap());
+  value.insert(
+      QStringLiteral("exportCrop"),
+      job.metadata_json.value(QStringLiteral("exportCrop")).toObject().toVariantMap());
+  value.insert(
+      QStringLiteral("previewExportDiff"),
+      job.metadata_json.value(QStringLiteral("previewExportDiff")).toObject().toVariantMap());
   value.insert(QStringLiteral("destinationDirectory"), job.destination_directory);
   value.insert(QStringLiteral("outputPath"), job.output_path);
   value.insert(QStringLiteral("status"), job.status);
@@ -280,6 +612,7 @@ ExportJobController::ExportJob ExportJobController::jobFromRecord(const Persiste
   job.source_path = record.source_path;
   job.edited_preview_source = record.edited_preview_source;
   job.recipe_json = record.recipe_json;
+  job.metadata_json = record.metadata_json;
   job.preset = record.preset_name;
   job.destination_directory = record.destination_path;
   job.output_path = record.output_path;
@@ -323,7 +656,8 @@ void ExportJobController::loadPersistedJobs(bool emit_signal) {
       if (lhs.job_id != rhs.job_id || lhs.asset_id != rhs.asset_id || lhs.media_type != rhs.media_type ||
           lhs.display_label != rhs.display_label || lhs.source_path != rhs.source_path ||
           lhs.edited_preview_source != rhs.edited_preview_source || lhs.recipe_json != rhs.recipe_json ||
-          lhs.preset != rhs.preset || lhs.destination_directory != rhs.destination_directory ||
+          lhs.metadata_json != rhs.metadata_json || lhs.preset != rhs.preset ||
+          lhs.destination_directory != rhs.destination_directory ||
           lhs.output_path != rhs.output_path || lhs.status != rhs.status ||
           lhs.error_message != rhs.error_message || lhs.created_at != rhs.created_at ||
           lhs.updated_at != rhs.updated_at || lhs.progress != rhs.progress) {
@@ -350,6 +684,7 @@ void ExportJobController::persistJob(const ExportJob& job) const {
   record.source_path = job.source_path;
   record.edited_preview_source = job.edited_preview_source;
   record.recipe_json = job.recipe_json;
+  record.metadata_json = job.metadata_json;
   record.preset_name = job.preset;
   record.destination_path = job.destination_directory;
   record.output_path = job.output_path;

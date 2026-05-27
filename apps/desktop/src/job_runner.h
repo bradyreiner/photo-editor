@@ -26,6 +26,7 @@ class JobRunner final : public QObject {
   QFutureWatcher<QVariantMap> async_job_watcher_;
   QString active_job_id_;
   QString active_job_kind_;
+  qint64 active_queue_wait_ms_ = 0;
   QElapsedTimer active_job_timer_;
 };
 

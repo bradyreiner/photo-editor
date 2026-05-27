@@ -35,7 +35,7 @@ Rectangle {
                 font.family: theme.fontUi
                 font.pixelSize: 9
                 font.weight: Font.DemiBold
-                font.letterSpacing: 1.2
+                font.letterSpacing: 0
             }
 
             Label {

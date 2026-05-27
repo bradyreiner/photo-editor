@@ -61,8 +61,7 @@ class CpuBrushPreviewCompositor final : public BrushPreviewCompositor {
     const auto base_green = style.color.greenF();
     const auto base_blue = style.color.blueF();
     const auto style_opacity = clamp_unit(style.opacity);
-    const auto softness = std::clamp(style.feather, 0.05, 1.0);
-    const auto inner_scale = std::max(0.0, 1.0 - softness);
+    const auto inner_scale = std::clamp(style.hardness, 0.0, 0.98);
 
     for (const auto& point : points) {
       const auto clamped_size = std::max(0.01, point.size);

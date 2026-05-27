@@ -3,46 +3,50 @@ import QtQuick
 QtObject {
     property bool darkMode: typeof appShell !== "undefined" ? appShell.darkMode : true
 
-    readonly property string fontDisplay: Qt.platform.os === "osx" ? "SF Pro Display" : "Noto Sans"
-    readonly property string fontUi: Qt.platform.os === "osx" ? "SF Pro Text" : "Noto Sans"
-    readonly property string fontMono: "Menlo"
+    readonly property string fontDisplay: Qt.platform.os === "osx" ? "Helvetica Neue" : "Noto Sans"
+    readonly property string fontUi: Qt.platform.os === "osx" ? "Helvetica Neue" : "Noto Sans"
+    readonly property string fontMono: Qt.platform.os === "osx" ? "Menlo" : "Noto Sans Mono"
 
-    readonly property color ink950: darkMode ? "#050505" : "#fbfaf7"
-    readonly property color ink900: darkMode ? "#090a0b" : "#f3f1ec"
-    readonly property color ink850: darkMode ? "#0e1012" : "#e9e5dc"
-    readonly property color ink800: darkMode ? "#141619" : "#ddd7cd"
-    readonly property color ink750: darkMode ? "#1d2024" : "#cfc7ba"
-    readonly property color ink700: darkMode ? "#292d32" : "#bfb5a7"
-    readonly property color lineStrong: darkMode ? "#60646b" : "#aaa094"
-    readonly property color lineSoft: darkMode ? "#2c3036" : "#d0c6b8"
+    readonly property color ink950: darkMode ? "#0A0A0C" : "#f7f6f2"
+    readonly property color ink900: darkMode ? "#0D0E10" : "#efede8"
+    readonly property color ink850: darkMode ? "#111315" : "#e4e0d8"
+    readonly property color ink800: darkMode ? "#141416" : "#d8d1c7"
+    readonly property color ink750: darkMode ? "#1E1F22" : "#c8beb0"
+    readonly property color ink700: darkMode ? "#2A2C30" : "#b8ad9e"
+    readonly property color lineStrong: darkMode ? "#4C5055" : "#9c9388"
+    readonly property color lineSoft: darkMode ? "#353638" : "#c8beb0"
 
-    readonly property color textStrong: darkMode ? "#f7f4ee" : "#171512"
-    readonly property color textMain: darkMode ? "#e4ded4" : "#302b25"
-    readonly property color textMuted: darkMode ? "#aeb4bd" : "#665d54"
-    readonly property color textFaint: darkMode ? "#717b88" : "#8a8075"
+    readonly property color textStrong: darkMode ? "#E6E6E3" : "#121211"
+    readonly property color textMain: darkMode ? "#C8CBCB" : "#282520"
+    readonly property color textMuted: darkMode ? "#8F949B" : "#645d54"
+    readonly property color textFaint: darkMode ? "#565D66" : "#8b8177"
 
-    readonly property color accentWarm500: "#b8c3cf"
-    readonly property color accentWarm400: "#d7dde4"
-    readonly property color accentWarm300: "#f4f7fa"
-    readonly property color accentWarmFill: darkMode ? "#171d25" : "#edf1f4"
+    readonly property color accentWarm500: "#29D794"
+    readonly property color accentWarm400: "#39FFAE"
+    readonly property color accentWarm300: "#8AFFCE"
+    readonly property color accentWarmFill: darkMode ? "#0B2A1E" : "#d9f6e9"
 
-    readonly property color accentCool500: "#7f8c9a"
-    readonly property color accentCool400: "#b8c3cf"
-    readonly property color accentCool300: "#f4f7fa"
-    readonly property color accentCoolFill: darkMode ? "#141a22" : "#edf1f4"
+    readonly property color accentCool500: "#00A7D8"
+    readonly property color accentCool400: "#00C2FF"
+    readonly property color accentCool300: "#7FE2FF"
+    readonly property color accentCoolFill: darkMode ? "#062230" : "#ddf5fb"
 
-    readonly property color success: "#7bd88f"
-    readonly property color warning: "#d4a15f"
-    readonly property color error: "#d76c78"
-    readonly property color focusRing: darkMode ? "#f4f7fa" : "#4b5662"
-    readonly property color focusFill: darkMode ? "#1c242e" : "#e5e9ed"
+    readonly property color success: "#39FFAE"
+    readonly property color warning: "#FFB000"
+    readonly property color error: "#FF3830"
+    readonly property color focusRing: "#39FFAE"
+    readonly property color focusFill: darkMode ? "#103326" : "#d9f6e9"
 
-    readonly property color glassBase: darkMode ? "#0d0f11" : "#f6f1ea"
-    readonly property color glassLift: darkMode ? "#17191c" : "#ffffff"
-    readonly property color glassEdge: darkMode ? "#5d6066" : "#d5cbbc"
-    readonly property color polar: "#f4f7fa"
+    readonly property color glassBase: darkMode ? "#0D0E10" : "#f2eee7"
+    readonly property color glassLift: darkMode ? "#17191C" : "#ffffff"
+    readonly property color glassEdge: darkMode ? "#353638" : "#c9c0b4"
+    readonly property color polar: "#E6E6E3"
     readonly property color ember: accentWarm400
-    readonly property int cutCorner: 7
+    readonly property color vectorGreen: "#39FFAE"
+    readonly property color signalAmber: "#FFB000"
+    readonly property color signalCyan: "#00C2FF"
+    readonly property color signalRed: "#FF3830"
+    readonly property int cutCorner: 6
 
     readonly property int space4: 4
     readonly property int space5: 5
@@ -77,6 +81,7 @@ QtObject {
     readonly property int radiusChip: radius6
     readonly property int radiusPanel: 0
     readonly property int radiusSurface: 0
+    readonly property int chromeBorderWidth: 0
 
     readonly property int durationFast: 110
     readonly property int durationMedium: 180

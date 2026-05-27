@@ -35,6 +35,8 @@ That means:
 
 For the prioritized breakdown, see [docs/next-level-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/next-level-roadmap.md).
 For the concrete color-management and render-pipeline plan, see [docs/color-science-roadmap.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/color-science-roadmap.md).
+For the long-form aspirational capability checklist, see [docs/world-class-photo-editor-checklist.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/world-class-photo-editor-checklist.md).
+For the focused tool and UI/UX polish plan, see [docs/tool-polish-audit.md](/Users/bradyreiner/projects/PersonalProjects/photo-editor/docs/tool-polish-audit.md).
 
 ### Core workflow
 

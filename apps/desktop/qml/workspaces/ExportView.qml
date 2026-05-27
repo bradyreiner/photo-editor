@@ -223,10 +223,16 @@ Rectangle {
         const assets = buildSelectedAssetList()
         if (assets.length === 0)
             return
-        const queued = exportJobs.queueBatchExport(
+        const cropPreset = cropConstraintCombo.currentText === "Current" ? "" : cropConstraintCombo.currentText
+        const queued = exportJobs.queueBatchExportWithCropConstraint(
             assets,
             presetCombo.currentText,
-            destinationField.text.trim())
+            destinationField.text.trim(),
+            cropPreset,
+            0,
+            0,
+            0,
+            0)
         if (queued > 0) {
             batchQueuedFeedback.text = "Queued " + queued + (queued === 1 ? " export." : " exports.")
             batchQueuedFeedback.visible = true
@@ -238,7 +244,8 @@ Rectangle {
         const colorSpace = colorSpaceCombo.currentText
         const recipeJson = overrideRecipeColorSpace(
             catalogAssets.selectedRecipeJson, colorSpace)
-        exportJobs.queueExport(
+        const cropPreset = cropConstraintCombo.currentText === "Current" ? "" : cropConstraintCombo.currentText
+        exportJobs.queueExportWithCropConstraint(
                     catalogAssets.selectedAssetId,
                     catalogAssets.selectedMediaType,
                     currentSelectionLabel(),
@@ -246,7 +253,31 @@ Rectangle {
                     editorPreview.previewSource,
                     recipeJson,
                     presetCombo.currentText,
-                    destinationField.text)
+                    destinationField.text,
+                    cropPreset,
+                    0,
+                    0,
+                     0,
+                     0)
+    }
+
+    function currentPreflight() {
+        const colorSpace = colorSpaceCombo.currentText
+        const recipeJson = overrideRecipeColorSpace(
+            catalogAssets.selectedRecipeJson || "", colorSpace)
+        return exportJobs.exportPreflight(
+            catalogAssets.selectedMediaType || "photo",
+            catalogAssets.selectedFilePath || "",
+            editorPreview.previewSource || "",
+            recipeJson,
+            presetCombo.currentText,
+            destinationField.text,
+            editorPreview.histogramSampleCount,
+            editorPreview.histogramShadowClipCount,
+            editorPreview.histogramHighlightClipCount,
+            editorPreview.rawClipSampleCount,
+            editorPreview.rawShadowClipCount,
+            editorPreview.rawHighlightClipCount)
     }
 
     Component.onCompleted: {
@@ -668,6 +699,17 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
+                        title: "Export Crop"
+
+                        ToneComboBox {
+                            id: cropConstraintCombo
+                            Layout.fillWidth: true
+                            model: ["Current", "Original", "1:1", "4:5", "5:4", "8x10 in", "10x8 in", "A4", "A4 Landscape"]
+                        }
+                    }
+
+                    InspectorSection {
+                        Layout.fillWidth: true
                         title: "Destination"
 
                         ToneTextField {
@@ -694,6 +736,82 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: "Reset"
                                 onClicked: destinationField.text = exportJobs.defaultDestinationDirectory()
+                            }
+                        }
+                    }
+
+                    InspectorSection {
+                        id: exportPreflightSection
+                        objectName: "exportPreflightSection"
+                        Layout.fillWidth: true
+                        visible: hasSingleSelection && !hasBatchSelection
+                        title: "Preflight"
+
+                        property var preflight: root.currentPreflight()
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                objectName: "exportPreflightStatusLabel"
+                                text: exportPreflightSection.preflight.ok
+                                      ? "Ready"
+                                      : exportPreflightSection.preflight.errorCount + " blocking"
+                                color: exportPreflightSection.preflight.ok ? theme.accentCool400 : theme.accentWarm400
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                                font.weight: Font.Medium
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: exportPreflightSection.preflight.format + "  " +
+                                      exportPreflightSection.preflight.outputColorSpace + "  " +
+                                      (exportPreflightSection.preflight.estimatedPixelWidth > 0
+                                       ? exportPreflightSection.preflight.estimatedPixelWidth + " x " +
+                                         exportPreflightSection.preflight.estimatedPixelHeight
+                                       : "Size pending")
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                horizontalAlignment: Text.AlignRight
+                                elide: Text.ElideRight
+                            }
+                        }
+
+                        Label {
+                            visible: exportPreflightSection.preflight.softProofEnabled
+                            text: "Soft proof " + exportPreflightSection.preflight.softProofProfile
+                            color: theme.textMuted
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            Layout.fillWidth: true
+                        }
+
+                        Repeater {
+                            objectName: "exportPreflightIssueRepeater"
+                            model: exportPreflightSection.preflight.issues || []
+
+                            delegate: Rectangle {
+                                Layout.fillWidth: true
+                                implicitHeight: issueText.implicitHeight + 10
+                                radius: 6
+                                color: modelData.severity === "error" ? "#2d1718" : "#262214"
+                                border.width: 1
+                                border.color: modelData.severity === "error" ? "#7f2d34" : "#6f5a25"
+
+                                Label {
+                                    id: issueText
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    text: modelData.message
+                                    color: modelData.severity === "error" ? "#ffb0b8" : "#f2d18a"
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    wrapMode: Text.WordWrap
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                             }
                         }
                     }
@@ -750,6 +868,7 @@ Rectangle {
                 text: "Queue Export"
                 tone: "primary"
                 enabled: hasSingleSelection && destinationField.text.trim().length > 0
+                         && root.currentPreflight().errorCount === 0
                 onClicked: root.queueCurrentSelection()
             }
 

@@ -155,7 +155,7 @@ Popup {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Opening PhotoEditor"
+                        text: "Opening Virel Studio"
                         color: theme.textStrong
                         font.family: theme.fontDisplay
                         font.pixelSize: 20
@@ -164,7 +164,7 @@ Popup {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.catalogLoading && root.catalogStatus.length > 0 ? root.catalogStatus : "Bringing the editor online."
+                        text: root.catalogLoading && root.catalogStatus.length > 0 ? root.catalogStatus : "Bringing the command environment online."
                         color: theme.textMuted
                         font.family: theme.fontUi
                         font.pixelSize: 12

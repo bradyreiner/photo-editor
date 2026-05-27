@@ -308,7 +308,7 @@ GlassSurface {
                             fillMode: Image.PreserveAspectFit
                             visible: root.hasSource && source.length > 0 && !root.sourceUsesPlayer()
                             cache: false
-                            asynchronous: false
+                            asynchronous: true
                         }
 
                         Label {
@@ -527,7 +527,7 @@ GlassSurface {
                                 anchors.fill: parent
                                 source: thumbnailSource
                                 fillMode: Image.PreserveAspectCrop
-                                cache: false
+                                cache: true
                                 asynchronous: true
                                 visible: source.toString().length > 0
                             }

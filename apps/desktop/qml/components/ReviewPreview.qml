@@ -53,7 +53,7 @@ Rectangle {
             anchors.margins: 2
             source: root.imageSource
             asynchronous: true
-            cache: false
+            cache: true
             fillMode: Image.PreserveAspectFit
         }
 
@@ -177,7 +177,7 @@ Rectangle {
                 anchors.centerIn: parent
                 source: root.imageSource
                 asynchronous: true
-                cache: false
+                cache: true
                 fillMode: Image.PreserveAspectFit
                 width: Math.max(1, previewImage.paintedWidth * 2.4)
                 height: Math.max(1, previewImage.paintedHeight * 2.4)

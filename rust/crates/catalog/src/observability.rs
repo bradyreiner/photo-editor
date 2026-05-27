@@ -95,6 +95,7 @@ impl Logger {
     }
 
     fn write_record(&self, severity: &str, event: &str, fields: Value) -> std::io::Result<()> {
+        let fields = standardized_fields(event, fields);
         let fields_json = serde_json::to_string(&fields).unwrap_or_else(|_| "null".to_string());
         let mut record = Map::new();
         record.insert(
@@ -149,6 +150,75 @@ impl Logger {
     }
 }
 
+fn workflow_for_event(event: &str) -> Option<&'static str> {
+    if event.starts_with("preview.") {
+        Some("preview")
+    } else if event.starts_with("thumbnail.") || event.starts_with("benchmark.thumbnail") {
+        Some("thumbnail")
+    } else if event.starts_with("catalog.") || event.starts_with("catalog_") {
+        Some("catalog")
+    } else if event.starts_with("job.") {
+        Some("jobs")
+    } else if event.starts_with("desktop.startup") {
+        Some("startup")
+    } else if event.starts_with("benchmark.") {
+        Some("benchmark")
+    } else {
+        None
+    }
+}
+
+fn insert_if_missing(object: &mut Map<String, Value>, key: &str, value: Value) {
+    if object.contains_key(key) || value.is_null() {
+        return;
+    }
+    if value.as_str().is_some_and(|value| value.is_empty()) {
+        return;
+    }
+    object.insert(key.to_string(), value);
+}
+
+fn standardized_fields(event: &str, fields: Value) -> Value {
+    let mut object = match fields {
+        Value::Object(object) => object,
+        other => {
+            let mut object = Map::new();
+            object.insert("value".to_string(), other);
+            object
+        }
+    };
+
+    if let Some(workflow) = workflow_for_event(event) {
+        insert_if_missing(&mut object, "workflow", Value::String(workflow.to_string()));
+    }
+    insert_if_missing(
+        &mut object,
+        "thread",
+        Value::String(format!("{:?}", std::thread::current().id())),
+    );
+    if let Some(reason) = object.get("render_reason").cloned() {
+        insert_if_missing(&mut object, "reason", reason);
+    }
+    if !object.contains_key("interactive") {
+        if let Some(full_resolution) = object.get("full_resolution").and_then(Value::as_bool) {
+            object.insert("interactive".to_string(), Value::Bool(!full_resolution));
+        } else if let Some(draft_interactive) = object.get("draft_interactive").cloned() {
+            insert_if_missing(&mut object, "interactive", draft_interactive);
+        }
+    }
+    if let Some(cache_hit) = object.get("decoded_cache_hit").cloned() {
+        insert_if_missing(&mut object, "cache_hit", cache_hit);
+    }
+    if let Some(cache_hit) = object.get("linear_cache_hit").cloned() {
+        insert_if_missing(&mut object, "cache_hit", cache_hit);
+    }
+    if let Some(cache_hit) = object.get("decoded_cache_lookup").cloned() {
+        insert_if_missing(&mut object, "cache_hit", cache_hit);
+    }
+
+    Value::Object(object)
+}
+
 fn default_run_directory(log_dir: &Path, session_id: &str) -> PathBuf {
     let timestamp = OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -157,4 +227,30 @@ fn default_run_directory(log_dir: &Path, session_id: &str) -> PathBuf {
     log_dir
         .join("runs")
         .join(format!("{timestamp}-{session_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::standardized_fields;
+    use serde_json::json;
+
+    #[test]
+    fn standardized_fields_adds_perf_aliases() {
+        let fields = standardized_fields(
+            "preview.render.completed",
+            json!({
+                "render_reason": "slider_drag",
+                "full_resolution": false,
+                "decoded_cache_hit": true
+            }),
+        );
+
+        assert_eq!(fields["workflow"], "preview");
+        assert_eq!(fields["reason"], "slider_drag");
+        assert_eq!(fields["interactive"], true);
+        assert_eq!(fields["cache_hit"], true);
+        assert!(fields["thread"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+    }
 }

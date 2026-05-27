@@ -6,18 +6,38 @@ Item {
     id: root
 
     property color accent: theme.accentWarm400
-    property string selectedChannel: "Master"
+    property string selectedChannel: "RGB"
+    property string curveMode: "Point"
     property var pointsModel: []
-    property var availableChannels: ["Master", "Red", "Green", "Blue"]
-    readonly property real graphInset: 16
+    property var availableChannels: ["RGB", "Luma", "Red", "Green", "Blue"]
+    property var presetNames: []
+    property var histogramRedData: []
+    property var histogramGreenData: []
+    property var histogramBlueData: []
+    property var histogramLuminanceData: []
+    property var presetPreviewProvider: null
+    property var previewPointsModel: []
+    property bool histogramLogScale: true
+    property bool compactMode: false
+    readonly property real histogramPrimaryFillOpacity: 0.10
+    readonly property real histogramPrimaryStrokeOpacity: 0.28
+    readonly property real histogramLuminanceFillOpacity: 0.11
+    readonly property real histogramLuminanceStrokeOpacity: 0.30
+    readonly property real histogramRgbFillOpacity: 0.035
+    readonly property real histogramRgbStrokeOpacity: 0.12
+    readonly property real graphInset: compactMode ? 10 : 16
     readonly property real handleHitRadius: 28
     readonly property real endpointHandleHitRadius: 36
+    readonly property int pointCount: currentPoints().length
+    readonly property bool selectedPointDeletable: effectiveSelectedIndex() > 0 && effectiveSelectedIndex() < pointCount - 1
+    readonly property string channelModeLabel: selectedChannel + " " + curveMode
     signal pointsEdited(var points)
     signal channelSelected(string channel)
+    signal presetSelected(string preset)
 
     Theme { id: theme }
 
-    implicitHeight: 292
+    implicitHeight: compactMode ? 178 : 328
 
     function clampUnit(value) {
         return Math.max(0, Math.min(1, value));
@@ -30,8 +50,8 @@ Item {
         ];
     }
 
-    function currentPoints() {
-        const source = pointsModel && pointsModel.length >= 2 ? pointsModel : defaultPoints();
+    function normalizedPoints(sourceModel) {
+        const source = sourceModel && sourceModel.length >= 2 ? sourceModel : defaultPoints();
         const points = [];
         for (let index = 0; index < source.length; ++index) {
             points.push({
@@ -47,8 +67,18 @@ Item {
         return points;
     }
 
+    function currentPoints() {
+        return normalizedPoints(pointsModel);
+    }
+
+    function displayPoints() {
+        return previewPointsModel && previewPointsModel.length >= 2
+                ? normalizedPoints(previewPointsModel)
+                : currentPoints();
+    }
+
     function graphPoint(index) {
-        const point = currentPoints()[index];
+        const point = displayPoints()[index];
         const graphWidth = Math.max(1, curveArea.width - root.graphInset * 2);
         const graphHeight = Math.max(1, curveArea.height - root.graphInset * 2);
         return Qt.point(
@@ -58,7 +88,7 @@ Item {
     }
 
     function closestHandle(mouseX, mouseY) {
-        const points = currentPoints();
+        const points = displayPoints();
         let bestIndex = -1;
         let bestDistance = Number.POSITIVE_INFINITY;
         for (let index = 0; index < points.length; ++index) {
@@ -125,13 +155,90 @@ Item {
     function removePoint(index) {
         const points = currentPoints();
         if (index <= 0 || index >= points.length - 1)
-            return;
+            return false;
         points.splice(index, 1);
+        pointsEdited(points);
+        return true;
+    }
+
+    function deleteSelectedPoint() {
+        const index = effectiveSelectedIndex();
+        if (!removePoint(index))
+            return false;
+        interaction.selectedIndex = Math.min(index, Math.max(0, currentPoints().length - 2));
+        interaction.draggingIndex = -1;
+        curveCanvas.requestPaint();
+        return true;
+    }
+
+    function resetActiveCurve() {
+        interaction.selectedIndex = -1;
+        interaction.draggingIndex = -1;
+        pointsEdited(defaultPoints());
+        curveCanvas.requestPaint();
+    }
+
+    function testSelectPoint(index) {
+        interaction.selectedIndex = Math.max(-1, Math.min(index, currentPoints().length - 1));
+        return interaction.selectedIndex;
+    }
+
+    function testDeleteSelectedPoint() {
+        return deleteSelectedPoint();
+    }
+
+    function testResetActiveCurve() {
+        resetActiveCurve();
+        return true;
+    }
+
+    function effectiveSelectedIndex() {
+        const points = currentPoints();
+        if (interaction.selectedIndex >= 0 && interaction.selectedIndex < points.length)
+            return interaction.selectedIndex;
+        return 0;
+    }
+
+    function selectedInputText() {
+        const points = currentPoints();
+        const index = effectiveSelectedIndex();
+        if (index < 0 || index >= points.length)
+            return "0";
+        return Math.round(points[index].x * 255).toString();
+    }
+
+    function selectedOutputText() {
+        const points = currentPoints();
+        const index = effectiveSelectedIndex();
+        if (index < 0 || index >= points.length)
+            return "0";
+        return Math.round(points[index].y * 255).toString();
+    }
+
+    function updateSelectedNumeric(axis, text) {
+        const points = currentPoints();
+        const index = effectiveSelectedIndex();
+        const parsed = Number.parseFloat(text);
+        if (index < 0 || index >= points.length || !Number.isFinite(parsed))
+            return;
+
+        const value = clampUnit(parsed / 255.0);
+        const updated = {
+            x: points[index].x,
+            y: points[index].y
+        };
+        if (axis === "x" && index > 0 && index < points.length - 1) {
+            updated.x = Math.max(points[index - 1].x + 0.01, Math.min(points[index + 1].x - 0.01, value));
+        } else if (axis === "y") {
+            updated.y = value;
+        }
+
+        points[index] = updated;
         pointsEdited(points);
     }
 
     function sampledCurvePoints() {
-        const points = currentPoints();
+        const points = displayPoints();
         if (points.length < 2)
             return defaultPoints();
 
@@ -193,29 +300,60 @@ Item {
         return samples;
     }
 
+    function previewPreset(preset) {
+        if (typeof presetPreviewProvider !== "function")
+            return false;
+        const previewPoints = presetPreviewProvider(preset);
+        if (!previewPoints || previewPoints.length < 2)
+            return false;
+        previewPointsModel = previewPoints;
+        curveCanvas.requestPaint();
+        return true;
+    }
+
+    function clearPresetPreview() {
+        if (!previewPointsModel || previewPointsModel.length === 0)
+            return false;
+        previewPointsModel = [];
+        curveCanvas.requestPaint();
+        return true;
+    }
+
+    function testPreviewPreset(preset) {
+        return previewPreset(preset);
+    }
+
+    function testClearPresetPreview() {
+        return clearPresetPreview();
+    }
+
     Rectangle {
         anchors.fill: parent
         radius: 0
-        color: theme.alpha(theme.glassBase, 0.18)
-        border.width: 1
-        border.color: theme.alpha(theme.glassEdge, 0.12)
+        color: "transparent"
+        border.width: 0
     }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: theme.space12
-        spacing: theme.space10
+        anchors.leftMargin: theme.space6
+        anchors.rightMargin: theme.space6
+        anchors.topMargin: theme.space6
+        anchors.bottomMargin: theme.space4
+        spacing: theme.space6
 
         RowLayout {
             Layout.fillWidth: true
             spacing: 8
+            visible: !root.compactMode
 
             Label {
+                objectName: root.objectName.length > 0 ? root.objectName + "TitleLabel" : ""
                 text: "Point Curve"
                 color: theme.textStrong
                 font.family: theme.fontUi
-                font.pixelSize: 13
-                font.weight: Font.Bold
+                font.pixelSize: 12
+                font.weight: Font.DemiBold
             }
 
             Item {
@@ -223,11 +361,12 @@ Item {
             }
 
             Label {
-                text: "IN / OUT"
+                objectName: root.objectName.length > 0 ? root.objectName + "ValueHeaderLabel" : ""
+                text: "In / Out"
                 color: theme.textFaint
-                font.family: theme.fontMono
+                font.family: theme.fontUi
                 font.pixelSize: 9
-                font.letterSpacing: 1.0
+                font.letterSpacing: 0
             }
         }
 
@@ -242,25 +381,154 @@ Item {
                     required property var modelData
 
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 25
+                    Layout.preferredHeight: 24
                     radius: 0
-                    color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.16) : theme.alpha(theme.ink950, 0.28)
+                    color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.08) : theme.alpha(theme.ink950, 0.30)
                     border.width: 1
-                    border.color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.56) : theme.alpha(theme.glassEdge, 0.16)
+                    border.color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.50) : theme.alpha(theme.glassEdge, 0.14)
 
                     Label {
                         anchors.centerIn: parent
-                        text: modelData.toUpperCase()
+                        text: modelData
                         color: root.selectedChannel === modelData ? theme.textStrong : theme.textMuted
                         font.family: theme.fontUi
                         font.pixelSize: 9
                         font.weight: Font.DemiBold
-                        font.letterSpacing: 0.8
+                        font.letterSpacing: 0
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: 1
+                        visible: root.selectedChannel === modelData
+                        color: root.accent
                     }
 
                     MouseArea {
                         anchors.fill: parent
                         onClicked: root.channelSelected(modelData)
+                    }
+                }
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            visible: !root.compactMode
+
+            Rectangle {
+                objectName: root.objectName.length > 0 ? root.objectName + "ChannelModeBadge" : ""
+                Layout.preferredHeight: 22
+                Layout.preferredWidth: 112
+                radius: 3
+                color: theme.alpha(root.accent, 0.08)
+                border.width: 1
+                border.color: theme.alpha(root.accent, 0.34)
+
+                Label {
+                    anchors.centerIn: parent
+                    text: root.channelModeLabel
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0
+                }
+            }
+
+            Rectangle {
+                objectName: root.objectName.length > 0 ? root.objectName + "PointCountBadge" : ""
+                Layout.preferredHeight: 22
+                Layout.preferredWidth: 72
+                radius: 3
+                color: theme.alpha(theme.ink950, 0.30)
+                border.width: 1
+                border.color: theme.alpha(theme.glassEdge, 0.16)
+
+                Label {
+                    anchors.centerIn: parent
+                    text: root.pointCount + " pts"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0
+                }
+            }
+
+            Item {
+                Layout.fillWidth: true
+            }
+
+            Button {
+                objectName: root.objectName.length > 0 ? root.objectName + "DeletePointButton" : ""
+                Layout.preferredHeight: 22
+                Layout.preferredWidth: 62
+                enabled: root.selectedPointDeletable
+                text: "Delete"
+                font.family: theme.fontUi
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+                onClicked: root.deleteSelectedPoint()
+            }
+
+            Button {
+                objectName: root.objectName.length > 0 ? root.objectName + "ResetCurveButton" : ""
+                Layout.preferredHeight: 22
+                Layout.preferredWidth: 52
+                text: "Reset"
+                font.family: theme.fontUi
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+                onClicked: root.resetActiveCurve()
+            }
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: 4
+            columnSpacing: 4
+            rowSpacing: 4
+            visible: !root.compactMode && root.presetNames && root.presetNames.length > 0
+
+            Repeater {
+                model: root.presetNames
+
+                delegate: Rectangle {
+                    required property var modelData
+
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 24
+                    radius: 3
+                    color: theme.alpha(theme.ink950, 0.30)
+                    border.width: 1
+                    border.color: theme.alpha(theme.glassEdge, 0.16)
+
+                    Label {
+                        anchors.centerIn: parent
+                        anchors.leftMargin: 4
+                        anchors.rightMargin: 4
+                        width: parent.width - 8
+                        text: modelData
+                        elide: Text.ElideRight
+                        horizontalAlignment: Text.AlignHCenter
+                        color: theme.textMuted
+                        font.family: theme.fontUi
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 0
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        hoverEnabled: true
+                        onEntered: root.previewPreset(modelData)
+                        onExited: root.clearPresetPreview()
+                        onClicked: root.presetSelected(modelData)
                     }
                 }
             }
@@ -273,10 +541,11 @@ Item {
             Rectangle {
                 id: curveArea
                 anchors.fill: parent
-                radius: 0
-                color: theme.alpha(theme.ink950, 0.68)
+                radius: 3
+                color: theme.alpha(theme.ink950, 0.54)
                 border.width: 1
                 border.color: theme.alpha(theme.polar, 0.10)
+                antialiasing: true
 
                 Canvas {
                     id: curveCanvas
@@ -294,8 +563,10 @@ Item {
                         const graphRight = graphLeft + graphWidth;
                         const graphBottom = graphTop + graphHeight;
 
+                        drawHistogramBackdrop(ctx, graphLeft, graphTop, graphWidth, graphHeight);
+
                         ctx.lineWidth = 1;
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.055);
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.045);
                         for (let index = 1; index < 8; ++index) {
                             const x = graphLeft + (graphWidth / 8) * index;
                             const y = graphTop + (graphHeight / 8) * index;
@@ -309,7 +580,7 @@ Item {
                             ctx.stroke();
                         }
 
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.14);
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.10);
                         for (let index = 1; index < 4; ++index) {
                             const x = graphLeft + (graphWidth / 4) * index;
                             const y = graphTop + (graphHeight / 4) * index;
@@ -323,17 +594,33 @@ Item {
                             ctx.stroke();
                         }
 
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.24);
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.14);
                         ctx.beginPath();
                         ctx.moveTo(graphLeft, graphBottom);
                         ctx.lineTo(graphRight, graphTop);
                         ctx.stroke();
 
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.28);
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.13);
                         ctx.strokeRect(graphLeft, graphTop, graphWidth, graphHeight);
 
                         const samples = root.sampledCurvePoints();
                         if (samples.length > 0) {
+                            const fillGradient = ctx.createLinearGradient(0, graphTop, 0, graphBottom);
+                            fillGradient.addColorStop(0, theme.alpha(root.accent, 0.18));
+                            fillGradient.addColorStop(1, theme.alpha(root.accent, 0.01));
+                            ctx.fillStyle = fillGradient;
+                            ctx.beginPath();
+                            ctx.moveTo(graphLeft + samples[0].x * graphWidth, graphBottom);
+                            for (let index = 0; index < samples.length; ++index) {
+                                ctx.lineTo(
+                                    graphLeft + samples[index].x * graphWidth,
+                                    graphTop + (1.0 - samples[index].y) * graphHeight
+                                );
+                            }
+                            ctx.lineTo(graphLeft + samples[samples.length - 1].x * graphWidth, graphBottom);
+                            ctx.closePath();
+                            ctx.fill();
+
                             ctx.strokeStyle = root.accent;
                             ctx.lineWidth = 2.4;
                             ctx.lineJoin = "round";
@@ -353,11 +640,87 @@ Item {
                         }
                     }
 
+                    function plotHistogramValue(value) {
+                        const v = Math.max(0, value || 0);
+                        if (!root.histogramLogScale)
+                            return Math.min(1, v);
+                        return Math.log(1 + v * 31) / Math.log(32);
+                    }
+
+                    function drawHistogramChannel(ctx, data, graphLeft, graphTop, graphWidth, graphHeight, fillColor, strokeColor) {
+                        if (!data || data.length !== 256)
+                            return;
+
+                        ctx.save();
+                        ctx.beginPath();
+                        ctx.moveTo(graphLeft, graphTop + graphHeight);
+                        const step = graphWidth / 255;
+                        for (let index = 0; index < 256; ++index) {
+                            const value = plotHistogramValue(data[index]);
+                            ctx.lineTo(graphLeft + index * step, graphTop + graphHeight - value * graphHeight);
+                        }
+                        ctx.lineTo(graphLeft + graphWidth, graphTop + graphHeight);
+                        ctx.closePath();
+                        ctx.fillStyle = fillColor;
+                        ctx.fill();
+
+                        ctx.beginPath();
+                        for (let strokeIndex = 0; strokeIndex < 256; ++strokeIndex) {
+                            const strokeValue = plotHistogramValue(data[strokeIndex]);
+                            const x = graphLeft + strokeIndex * step;
+                            const y = graphTop + graphHeight - strokeValue * graphHeight;
+                            if (strokeIndex === 0)
+                                ctx.moveTo(x, y);
+                            else
+                                ctx.lineTo(x, y);
+                        }
+                        ctx.strokeStyle = strokeColor;
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                        ctx.restore();
+                    }
+
+                    function drawHistogramBackdrop(ctx, graphLeft, graphTop, graphWidth, graphHeight) {
+                        if (root.selectedChannel === "Red") {
+                            drawHistogramChannel(ctx, root.histogramRedData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(1.0, 0.22, 0.18, root.histogramPrimaryFillOpacity),
+                                                 Qt.rgba(1.0, 0.22, 0.18, root.histogramPrimaryStrokeOpacity));
+                            return;
+                        }
+                        if (root.selectedChannel === "Green") {
+                            drawHistogramChannel(ctx, root.histogramGreenData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(0.22, 1.0, 0.68, root.histogramPrimaryFillOpacity),
+                                                 Qt.rgba(0.22, 1.0, 0.68, root.histogramPrimaryStrokeOpacity));
+                            return;
+                        }
+                        if (root.selectedChannel === "Blue") {
+                            drawHistogramChannel(ctx, root.histogramBlueData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(0.0, 0.76, 1.0, root.histogramPrimaryFillOpacity),
+                                                 Qt.rgba(0.0, 0.76, 1.0, root.histogramPrimaryStrokeOpacity));
+                            return;
+                        }
+
+                        drawHistogramChannel(ctx, root.histogramLuminanceData, graphLeft, graphTop, graphWidth, graphHeight,
+                                             Qt.rgba(0.86, 0.86, 0.84, root.histogramLuminanceFillOpacity),
+                                             Qt.rgba(0.86, 0.86, 0.84, root.histogramLuminanceStrokeOpacity));
+                        if (root.selectedChannel === "RGB") {
+                            drawHistogramChannel(ctx, root.histogramBlueData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(0.0, 0.76, 1.0, root.histogramRgbFillOpacity),
+                                                 Qt.rgba(0.0, 0.76, 1.0, root.histogramRgbStrokeOpacity));
+                            drawHistogramChannel(ctx, root.histogramGreenData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(0.22, 1.0, 0.68, root.histogramRgbFillOpacity),
+                                                 Qt.rgba(0.22, 1.0, 0.68, root.histogramRgbStrokeOpacity));
+                            drawHistogramChannel(ctx, root.histogramRedData, graphLeft, graphTop, graphWidth, graphHeight,
+                                                 Qt.rgba(1.0, 0.22, 0.18, root.histogramRgbFillOpacity),
+                                                 Qt.rgba(1.0, 0.22, 0.18, root.histogramRgbStrokeOpacity));
+                        }
+                    }
+
                     Component.onCompleted: requestPaint()
                 }
 
                 Repeater {
-                    model: root.currentPoints()
+                    model: root.displayPoints()
 
                     delegate: Rectangle {
                         required property var modelData
@@ -368,13 +731,14 @@ Item {
                         x: handlePoint.x - width / 2
                         y: handlePoint.y - height / 2
                         width: index === 0 || index === root.currentPoints().length - 1
-                               ? (index === interaction.selectedIndex ? 15 : 13)
-                               : (index === interaction.selectedIndex ? 13 : 11)
+                               ? (index === interaction.selectedIndex ? 12 : 10)
+                               : (index === interaction.selectedIndex ? 11 : 9)
                         height: width
-                        radius: 1
-                        color: index === 0 || index === root.currentPoints().length - 1 ? theme.alpha(theme.polar, 0.94) : root.accent
+                        radius: width / 2
+                        color: index === 0 || index === root.currentPoints().length - 1 ? theme.alpha(theme.polar, 0.86) : root.accent
                         border.width: 1
                         border.color: index === interaction.selectedIndex ? theme.polar : theme.alpha(theme.ink950, 0.8)
+                        antialiasing: true
 
                         Rectangle {
                             anchors.centerIn: parent
@@ -420,6 +784,7 @@ Item {
                     property int selectedIndex: -1
 
                     onPressed: function (mouse) {
+                        root.clearPresetPreview();
                         const handleIndex = root.closestHandle(mouse.x, mouse.y);
                         if (handleIndex >= 0) {
                             draggingIndex = handleIndex;
@@ -456,55 +821,64 @@ Item {
             }
         }
 
-        Rectangle {
+        RowLayout {
             Layout.fillWidth: true
-            implicitHeight: 32
-            radius: 0
-            color: theme.alpha(theme.ink950, 0.34)
-            border.width: 1
-            border.color: theme.alpha(theme.glassEdge, 0.12)
+            spacing: 8
+            visible: !root.compactMode
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 8
-                spacing: 8
+            Label {
+                text: "Point " + (root.effectiveSelectedIndex() + 1)
+                color: theme.textFaint
+                font.family: theme.fontUi
+                font.pixelSize: 9
+                font.weight: Font.DemiBold
+            }
 
-                Label {
-                    text: {
-                        const points = root.currentPoints();
-                        if (interaction.selectedIndex === 0)
-                            return "Black Point";
-                        if (interaction.selectedIndex === points.length - 1)
-                            return "White Point";
-                        if (interaction.selectedIndex > 0 && interaction.selectedIndex < points.length - 1)
-                            return "Point " + interaction.selectedIndex;
-                        return "Drag endpoints for black and white points";
-                    }
-                    color: theme.textFaint
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                    font.letterSpacing: 0.4
-                }
+            Label {
+                text: "In"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 9
+            }
 
-                Item {
-                    Layout.fillWidth: true
-                }
+            ToneTextField {
+                Layout.preferredWidth: 58
+                text: root.selectedInputText()
+                enabled: root.effectiveSelectedIndex() > 0 && root.effectiveSelectedIndex() < root.currentPoints().length - 1
+                horizontalAlignment: TextInput.AlignHCenter
+                validator: IntValidator { bottom: 0; top: 255 }
+                onAccepted: root.updateSelectedNumeric("x", text)
+                onEditingFinished: root.updateSelectedNumeric("x", text)
+            }
 
-                Label {
-                    text: {
-                        const points = root.currentPoints();
-                        const index = Math.max(0, Math.min(points.length - 1, interaction.selectedIndex >= 0 ? interaction.selectedIndex : 0));
-                        return "In " + Math.round(points[index].x * 255) + "  Out " + Math.round(points[index].y * 255);
-                    }
-                    color: theme.textStrong
-                    font.family: theme.fontMono
-                    font.pixelSize: 10
-                    font.weight: Font.DemiBold
-                }
+            Label {
+                text: "Out"
+                color: theme.textMuted
+                font.family: theme.fontUi
+                font.pixelSize: 9
+            }
+
+            ToneTextField {
+                Layout.preferredWidth: 58
+                text: root.selectedOutputText()
+                horizontalAlignment: TextInput.AlignHCenter
+                validator: IntValidator { bottom: 0; top: 255 }
+                onAccepted: root.updateSelectedNumeric("y", text)
+                onEditingFinished: root.updateSelectedNumeric("y", text)
+            }
+
+            Item {
+                Layout.fillWidth: true
             }
         }
+
     }
 
     onPointsModelChanged: curveCanvas.requestPaint()
     onSelectedChannelChanged: curveCanvas.requestPaint()
+    onHistogramRedDataChanged: curveCanvas.requestPaint()
+    onHistogramGreenDataChanged: curveCanvas.requestPaint()
+    onHistogramBlueDataChanged: curveCanvas.requestPaint()
+    onHistogramLuminanceDataChanged: curveCanvas.requestPaint()
+    onHistogramLogScaleChanged: curveCanvas.requestPaint()
 }

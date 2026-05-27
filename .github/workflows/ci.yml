@@ -218,6 +218,43 @@ jobs:
       - name: Run focused desktop smoke tests
         run: ctest --test-dir build/dev-macos-debug -R "desktop_shell_smoke_test|app_shell_controller_test|app_bootstrap_test" --output-on-failure
 
+      - name: Create preview performance corpus
+        run: python3 scripts/perf/create-preview-corpus.py --output "${RUNNER_TEMP}/preview-synthetic-v1" --count 8 --force
+
+      - name: Run preview performance smoke
+        run: |
+          python3 scripts/perf/run-benchmark.py \
+            --scenario perf-preview-raster \
+            --app build/dev-macos-debug/tests/preview_benchmark_driver \
+            --output-root "${RUNNER_TEMP}/photo-editor-perf" \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --event benchmark.preview_corpus.completed \
+            --timeout 90 \
+            --settle-seconds 0 \
+            -- \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json"
+
+      - name: Check loose performance smoke thresholds
+        run: |
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event benchmark.preview_asset.completed \
+            --field elapsed_ms \
+            --min-count 8 \
+            --p95-max 30000
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event benchmark.preview_corpus.completed \
+            --field elapsed_ms \
+            --min-count 1 \
+            --max 120000
+
+      - name: Upload performance smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-editor-preview-perf-smoke
+          path: ${{ runner.temp }}/photo-editor-perf
+          if-no-files-found: ignore
+
   release-macos-build:
     runs-on: macos-14
     timeout-minutes: 35

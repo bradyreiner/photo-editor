@@ -3,10 +3,13 @@
 
 #include <QCoreApplication>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
 
 #include "app_bootstrap.h"
+#include "observability.h"
 
 namespace {
 
@@ -60,6 +63,28 @@ int main(int argc, char** argv) {
       environment.value(QStringLiteral("PHOTO_EDITOR_BACKUP_DIR")) != photo_editor::desktop::AppBootstrap::backupLocation() ||
       environment.value(QStringLiteral("PHOTO_EDITOR_DATABASE_URL")) != QStringLiteral("postgres://example/test")) {
     return fail("prepared process environment should include runtime and database settings");
+  }
+
+  const auto observability_message = photo_editor::desktop::observability::structuredMessage(
+      QStringLiteral("preview.render.completed"),
+      {
+          {QStringLiteral("render_reason"), QStringLiteral("slider_drag")},
+          {QStringLiteral("full_resolution"), false},
+          {QStringLiteral("decoded_cache_hit"), true},
+      });
+  const auto observability_json = QJsonDocument::fromJson(observability_message.toUtf8());
+  if (!observability_json.isObject()) {
+    return fail("structured observability messages should be JSON objects");
+  }
+  const auto observability_fields = observability_json.object();
+  if (observability_fields.value(QStringLiteral("event")).toString() !=
+          QStringLiteral("preview.render.completed") ||
+      observability_fields.value(QStringLiteral("workflow")).toString() != QStringLiteral("preview") ||
+      observability_fields.value(QStringLiteral("reason")).toString() != QStringLiteral("slider_drag") ||
+      !observability_fields.value(QStringLiteral("interactive")).toBool() ||
+      !observability_fields.value(QStringLiteral("cache_hit")).toBool() ||
+      observability_fields.value(QStringLiteral("thread")).toString().isEmpty()) {
+    return fail("structured observability messages should expose standard performance fields");
   }
 
   const auto missing_helper_name = QStringLiteral("definitely_missing_photo_editor_helper");

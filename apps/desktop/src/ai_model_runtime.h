@@ -22,13 +22,31 @@ struct AiInpaintRequest final {
   int mask_width = 0;
   int mask_height = 0;
   QString retouch_mode;
+  QString prompt;
+  QString quality_mode;
+  int seed = 1;
 };
 
 struct AiInpaintResult final {
   bool success = false;
   QString error_message;
   QString model_name;
+  QString prompt;
+  QString quality_mode;
+  int seed = 1;
+  bool fallback = false;
+  QString region_kind;
+  bool edge_continuation = false;
+  bool texture_synthesis = false;
+  double texture_strength = 0.0;
+  double region_coverage = 0.0;
+  int region_x = 0;
+  int region_y = 0;
+  int region_width = 0;
+  int region_height = 0;
   QImage patch_image;
+  QVector<QImage> candidate_images;
+  int candidate_index = 0;
   int patch_x = 0;
   int patch_y = 0;
   int patch_width = 0;

@@ -4,6 +4,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QJsonObject>
 #include <QProcess>
 #include <QRegularExpression>
@@ -12,6 +13,9 @@
 #include <QStringList>
 #include <QVariantList>
 #include <QVector>
+
+#include <memory>
+#include <vector>
 
 #include "job_store.h"
 
@@ -54,6 +58,10 @@ struct CatalogAssetItem final {
   QString sync_group_key;
   int sync_group_size = 1;
   bool online = false;
+  bool virtual_copy = false;
+  QString source_asset_id;
+  QString variant_name;
+  int variant_index = 0;
 };
 
 struct CullingStateRecord final {
@@ -73,6 +81,9 @@ struct ThumbnailTaskResult final {
   QString file_path;
   QString recipe_json;
   QString thumbnail_source;
+  qint64 queue_wait_ms = 0;
+  qint64 elapsed_ms = 0;
+  QString queue_priority;
 };
 
 struct DeleteAssetsTaskResult final {
@@ -97,6 +108,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(QStringList selectedAssetIds READ selectedAssetIds NOTIFY selectionChanged)
   Q_PROPERTY(int selectedAssetCount READ selectedAssetCount NOTIFY selectionChanged)
   Q_PROPERTY(bool hasMultiSelection READ hasMultiSelection NOTIFY selectionChanged)
+  Q_PROPERTY(QVariantList selectedSurveyAssets READ selectedSurveyAssets NOTIFY surveyAssetsChanged)
+  Q_PROPERTY(int selectedSurveyAssetCount READ selectedSurveyAssetCount NOTIFY surveyAssetsChanged)
   Q_PROPERTY(int visiblePickedCount READ visiblePickedCount NOTIFY cullingStatsChanged)
   Q_PROPERTY(int visibleRejectedCount READ visibleRejectedCount NOTIFY cullingStatsChanged)
   Q_PROPERTY(int visibleUnmarkedCount READ visibleUnmarkedCount NOTIFY cullingStatsChanged)
@@ -133,6 +146,10 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_PROPERTY(bool selectedBestShotSuggested READ selectedBestShotSuggested NOTIFY selectedAssetChanged)
   Q_PROPERTY(int selectedSyncGroupSize READ selectedSyncGroupSize NOTIFY selectedAssetChanged)
   Q_PROPERTY(bool selectedOnline READ selectedOnline NOTIFY selectedAssetChanged)
+  Q_PROPERTY(bool selectedVirtualCopy READ selectedVirtualCopy NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedSourceAssetId READ selectedSourceAssetId NOTIFY selectedAssetChanged)
+  Q_PROPERTY(QString selectedVariantName READ selectedVariantName NOTIFY selectedAssetChanged)
+  Q_PROPERTY(int selectedVariantIndex READ selectedVariantIndex NOTIFY selectedAssetChanged)
   Q_PROPERTY(QStringList projectNames READ projectNames NOTIFY projectNamesChanged)
   Q_PROPERTY(int projectStatsRevision READ projectStatsRevision NOTIFY projectStatsRevisionChanged)
   Q_PROPERTY(QStringList captureYears READ captureYears NOTIFY captureYearsChanged)
@@ -177,6 +194,10 @@ class CatalogAssetModel final : public QAbstractListModel {
     SyncGroupKeyRole,
     SyncGroupSizeRole,
     OnlineRole,
+    VirtualCopyRole,
+    SourceAssetIdRole,
+    VariantNameRole,
+    VariantIndexRole,
   };
 
   explicit CatalogAssetModel(QObject* parent = nullptr);
@@ -199,6 +220,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QStringList selectedAssetIds() const;
   [[nodiscard]] int selectedAssetCount() const;
   [[nodiscard]] bool hasMultiSelection() const;
+  [[nodiscard]] QVariantList selectedSurveyAssets() const;
+  [[nodiscard]] int selectedSurveyAssetCount() const;
   [[nodiscard]] int visiblePickedCount() const;
   [[nodiscard]] int visibleRejectedCount() const;
   [[nodiscard]] int visibleUnmarkedCount() const;
@@ -235,6 +258,10 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] bool selectedBestShotSuggested() const;
   [[nodiscard]] int selectedSyncGroupSize() const;
   [[nodiscard]] bool selectedOnline() const;
+  [[nodiscard]] bool selectedVirtualCopy() const;
+  [[nodiscard]] QString selectedSourceAssetId() const;
+  [[nodiscard]] QString selectedVariantName() const;
+  [[nodiscard]] int selectedVariantIndex() const;
   [[nodiscard]] QStringList projectNames() const;
   [[nodiscard]] int projectStatsRevision() const;
   [[nodiscard]] QStringList captureYears() const;
@@ -248,6 +275,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   [[nodiscard]] QString searchFilter() const;
 
   Q_INVOKABLE void refresh();
+  Q_INVOKABLE void clearFilters();
   Q_INVOKABLE void refreshImportSources();
   Q_INVOKABLE void importFolder();
   Q_INVOKABLE void importFolderPath(const QString& folder_path);
@@ -271,6 +299,9 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE int assetCountForProject(const QString& project_name) const;
   Q_INVOKABLE QVariantList timelinePickerAssets(const QString& project_name = QString()) const;
   Q_INVOKABLE QVariantMap assetAt(int index) const;
+  Q_INVOKABLE QVariantList surveyAssets(int selected_index, int maximum_count = 6) const;
+  Q_INVOKABLE QVariantMap surveyAssetAt(int selected_index, int position, int maximum_count = 6) const;
+  Q_INVOKABLE int surveyAssetCount(int selected_index, int maximum_count = 6) const;
   Q_INVOKABLE bool assetSelected(const QString& asset_id) const;
   Q_INVOKABLE void setSelectedRating(int rating);
   Q_INVOKABLE void toggleSelectedPick();
@@ -283,9 +314,38 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QStringList& asset_ids,
       const QString& recipe_json,
       const QStringList& adjustment_groups = {});
+  Q_INVOKABLE int applyPresetRecipeJsonToAssetIds(
+      const QStringList& asset_ids,
+      const QString& preset_recipe_json,
+      const QStringList& adjustment_groups = {});
+  Q_INVOKABLE void setImportPresetRecipeJson(
+      const QString& preset_recipe_json,
+      const QStringList& adjustment_groups = {});
+  Q_INVOKABLE void clearImportPresetRecipeJson();
+  Q_INVOKABLE QString createVirtualCopyForAsset(
+      const QString& asset_id,
+      const QString& variant_name = QString());
+  Q_INVOKABLE QString createVirtualCopyForSelectedAsset(const QString& variant_name = QString());
+  Q_INVOKABLE QString createCropVariantForAsset(
+      const QString& asset_id,
+      const QString& variant_name,
+      const QString& crop_preset,
+      double crop_x = 0.0,
+      double crop_y = 0.0,
+      double crop_width = 0.0,
+      double crop_height = 0.0);
+  Q_INVOKABLE QString createCropVariantForSelectedAsset(
+      const QString& variant_name,
+      const QString& crop_preset,
+      double crop_x = 0.0,
+      double crop_y = 0.0,
+      double crop_width = 0.0,
+      double crop_height = 0.0);
+  Q_INVOKABLE QStringList recipeVariantAssetIds(const QString& asset_id) const;
   Q_INVOKABLE void refreshOnlineState();
   Q_INVOKABLE int relinkSelectedAssetToFolder(const QString& folder_url);
   Q_INVOKABLE int relinkOfflineAssetsToFolder(const QString& folder_url);
+  Q_INVOKABLE void setVisibleAssetRange(int first_index, int last_index);
   void replaceAssetsForTesting(const QVector<CatalogAssetItem>& items);
 
   void setProjectFilter(const QString& project_filter);
@@ -312,6 +372,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void selectedIndexChanged();
   void selectedAssetChanged();
   void selectionChanged();
+  void surveyAssetsChanged();
   void projectNamesChanged();
   void projectStatsRevisionChanged();
   void captureYearsChanged();
@@ -345,6 +406,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   void queueThumbnailRefreshes();
   void startNextThumbnailTask();
   void applyThumbnailResult(const ThumbnailTaskResult& result);
+  [[nodiscard]] QString thumbnailQueuePriorityForAssetId(const QString& asset_id) const;
   void setSelectedIndexInternal(int index);
   void startImport(const QString& folder_path);
   void startImport(
@@ -352,6 +414,8 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QStringList& selected_file_paths,
       const QString& project_name);
   void applyFilters(const QString& preferred_asset_id = {});
+  void rebuildAllAssetIndexMap();
+  void rebuildVisibleAssetIndexMap();
   void rebuildImportSources();
   void rebuildProjectMetadata();
   void rebuildCaptureYears();
@@ -394,15 +458,20 @@ class CatalogAssetModel final : public QAbstractListModel {
   QStringList stateArguments(const QStringList& command_arguments) const;
   QVector<CatalogAssetItem> all_assets_;
   QVector<CatalogAssetItem> assets_;
+  QHash<QString, qsizetype> all_asset_index_by_id_;
+  QHash<QString, qsizetype> visible_asset_index_by_id_;
   QVector<ProjectRecord> projects_;
   QHash<QString, CullingStateRecord> culling_states_;
   QHash<QString, QString> recipe_overrides_;
+  QString import_preset_recipe_json_;
+  QStringList import_preset_adjustment_groups_;
+  QVector<CatalogAssetItem> virtual_copies_;
   QHash<QString, QString> relinked_file_paths_;
   QStringList capture_years_;
   QVariantList import_sources_;
   QProcess snapshot_process_;
   QProcess import_process_;
-  QFutureWatcher<ThumbnailTaskResult> thumbnail_watcher_;
+  std::vector<std::unique_ptr<QFutureWatcher<ThumbnailTaskResult>>> thumbnail_watchers_;
   QFutureWatcher<DeleteAssetsTaskResult> delete_watcher_;
   QString status_ = QStringLiteral("Idle");
   QString error_message_;
@@ -431,8 +500,12 @@ class CatalogAssetModel final : public QAbstractListModel {
   int visible_online_count_ = 0;
   int visible_offline_count_ = 0;
   QSet<QString> queued_thumbnail_asset_ids_;
+  QHash<QString, qint64> thumbnail_queued_at_msecs_;
   QStringList pending_thumbnail_asset_ids_;
-  QString active_thumbnail_asset_id_;
+  QSet<QString> active_thumbnail_asset_ids_;
+  QHash<QFutureWatcher<ThumbnailTaskResult>*, QString> active_thumbnail_asset_by_watcher_;
+  int visible_thumbnail_first_index_ = -1;
+  int visible_thumbnail_last_index_ = -1;
   QString import_selection_manifest_path_;
   QStringList pending_import_file_paths_;
   QString pending_import_project_name_;

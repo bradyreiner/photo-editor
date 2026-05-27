@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "catalog_import.started",
         serde_json::json!({
             "mount_path": mount_path.display().to_string(),
-            "drive_id": drive_id,
+            "drive_id": &drive_id,
             "selected_path_count": selected_paths.len(),
         }),
     );
@@ -40,12 +40,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         selected_paths,
     };
 
+    let discovery_started_at = Instant::now();
     let summary = discover_assets(&request)?;
+    let discovery_elapsed_ms = discovery_started_at.elapsed().as_millis() as u64;
+    logger.info(
+        "catalog_import.discovery.completed",
+        serde_json::json!({
+            "drive_id": &drive_id,
+            "candidate_assets": summary.assets.len(),
+            "skipped_unsupported": summary.skipped_unsupported,
+            "elapsed_ms": discovery_elapsed_ms,
+        }),
+    );
     AppRuntimePaths::from_env().ensure_directories()?;
     let config = PostgresCatalogConfig::from_env();
     let catalog = CatalogService::connect(&config).await?;
     catalog.initialize_schema().await?;
+    let database_started_at = Instant::now();
     catalog.import_summary(&summary).await?;
+    let database_elapsed_ms = database_started_at.elapsed().as_millis() as u64;
 
     println!(
         "Imported {} assets for drive '{}' (skipped {} unsupported files).",
@@ -60,6 +73,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "drive_name": drive_name,
             "imported_assets": summary.assets.len(),
             "skipped_unsupported": summary.skipped_unsupported,
+            "discovery_elapsed_ms": discovery_elapsed_ms,
+            "database_elapsed_ms": database_elapsed_ms,
             "elapsed_ms": started_at.elapsed().as_millis() as u64,
         }),
     );

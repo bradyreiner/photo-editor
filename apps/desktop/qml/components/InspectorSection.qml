@@ -13,24 +13,34 @@ Rectangle {
     property string titleFontFamily: theme.fontMono
     property int titlePixelSize: 10
     property int titleWeight: Font.DemiBold
-    property real titleLetterSpacing: 0.9
+    property real titleLetterSpacing: 0
     property bool expandable: false
     property bool expanded: true
     default property alias contentData: body.data
 
     Theme { id: theme }
 
-    implicitHeight: sectionLayout.implicitHeight + theme.space18
-    radius: theme.radiusPanel
-    color: theme.alpha(theme.glassBase, 0.34)
-    border.width: 1
-    border.color: theme.alpha(theme.glassEdge, 0.14)
+    implicitHeight: sectionLayout.implicitHeight + theme.space12
+    radius: 0
+    color: "transparent"
+    border.width: 0
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: 1
+        color: theme.alpha(theme.lineSoft, 0.30)
+    }
 
     ColumnLayout {
         id: sectionLayout
         anchors.fill: parent
-        anchors.margins: theme.sectionPadding
-        spacing: theme.gapPanel + 1
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        anchors.topMargin: theme.space10
+        anchors.bottomMargin: theme.space4
+        spacing: theme.space8
 
         Item {
             Layout.fillWidth: true
@@ -50,12 +60,12 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: theme.gapControl
+                    spacing: theme.space8
 
                     Rectangle {
                         visible: root.showAccentMarker
-                        Layout.preferredWidth: root.showAccentMarker ? 18 : 0
-                        Layout.preferredHeight: 2
+                        Layout.preferredWidth: root.showAccentMarker ? 10 : 0
+                        Layout.preferredHeight: 1
                         radius: 1
                         color: theme.polar
                     }
@@ -67,6 +77,7 @@ Rectangle {
                         font.pixelSize: root.titlePixelSize
                         font.weight: root.titleWeight
                         font.letterSpacing: root.titleLetterSpacing
+                        verticalAlignment: Text.AlignVCenter
                     }
 
                     Item {
@@ -77,7 +88,7 @@ Rectangle {
                         visible: root.expandable
                         name: "chevron-right"
                         rotation: root.expanded ? 90 : 0
-                        color: theme.textFaint
+                        color: root.expanded ? theme.textMuted : theme.textFaint
                         Layout.preferredWidth: 10
                         Layout.preferredHeight: 10
                     }
@@ -101,7 +112,7 @@ Rectangle {
             id: body
             visible: !root.expandable || root.expanded
             Layout.fillWidth: true
-            spacing: theme.gapControl + 1
+            spacing: theme.space5
         }
     }
 }

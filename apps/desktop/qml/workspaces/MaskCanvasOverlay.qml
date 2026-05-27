@@ -22,8 +22,35 @@ Item {
     property real brushResizeStartFlow: 1.0
     property var smartSelectStrokePoints: []
     property bool smartSelectStrokeActive: false
+    property bool tabletBrushStrokeActive: false
+    property var pendingCanvasPaints: []
 
     visible: imageWidth > 0 && imageHeight > 0
+
+    Timer {
+        id: canvasPaintTimer
+        interval: 16
+        repeat: false
+        onTriggered: {
+            const canvases = root.pendingCanvasPaints
+            root.pendingCanvasPaints = []
+            for (let index = 0; index < canvases.length; ++index) {
+                const canvas = canvases[index]
+                if (canvas && canvas.visible)
+                    canvas.requestPaint()
+            }
+        }
+    }
+
+    function requestCanvasPaint(canvas) {
+        if (!canvas || !canvas.visible)
+            return
+        if (pendingCanvasPaints.indexOf(canvas) >= 0)
+            return
+        pendingCanvasPaints = pendingCanvasPaints.concat([canvas])
+        if (!canvasPaintTimer.running)
+            canvasPaintTimer.start()
+    }
 
     function previewPointX(normalizedX) {
         return normalizedX * previewItem.width
@@ -48,6 +75,21 @@ Item {
             x: Math.max(0, Math.min(1, previewItem.width > 0 ? mouseX / previewItem.width : 0.5)),
             y: Math.max(0, Math.min(1, previewItem.height > 0 ? mouseY / previewItem.height : 0.5))
         }
+    }
+
+    function pointerPressure(mouse) {
+        if (!mouse || mouse.pressure === undefined || mouse.pressure <= 0)
+            return 1.0
+        return Math.max(0.0, Math.min(1.0, mouse.pressure))
+    }
+
+    function pointerTilt(mouse, axisName) {
+        if (!mouse || mouse[axisName] === undefined)
+            return 0.0
+        const rawTilt = mouse[axisName]
+        if (Math.abs(rawTilt) <= 1.0)
+            return Math.max(-1.0, Math.min(1.0, rawTilt))
+        return Math.max(-1.0, Math.min(1.0, rawTilt / 60.0))
     }
 
     function brushResizeGestureArmed() {
@@ -291,6 +333,7 @@ Item {
 
         ctx.lineJoin = "round"
         ctx.lineCap = "round"
+        const marching = editorPreview.maskPreviewMode === "marching-ants"
 
         for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
             const haloPoints = root.normalizedOutlinePath(outlinePaths[pathIndex])
@@ -308,7 +351,8 @@ Item {
             if (!root.buildOutlinePath(ctx, basePoints))
                 continue
             if (ctx.setLineDash)
-                ctx.setLineDash([])
+                ctx.setLineDash(marching ? [10, 7] : [])
+            ctx.lineDashOffset = marching ? -editRoot.selectionOutlinePhase : 0
             ctx.lineWidth = isCandidate ? 3.4 : 3
             ctx.strokeStyle = root.outlineBaseColor()
             ctx.stroke()
@@ -319,7 +363,8 @@ Item {
             if (!root.buildOutlinePath(ctx, accentPoints))
                 continue
             if (ctx.setLineDash)
-                ctx.setLineDash([])
+                ctx.setLineDash(marching ? [10, 7] : [])
+            ctx.lineDashOffset = marching ? 10 - editRoot.selectionOutlinePhase : 0
             ctx.lineWidth = isCandidate ? 1.8 : 1.5
             ctx.strokeStyle = root.outlineAccentColor(accentColor, isCandidate)
             ctx.stroke()
@@ -528,7 +573,7 @@ Item {
                             target: editorPreview
 
                             function onMaskOverlayChanged() {
-                                radialCanvas.requestPaint()
+                                root.requestCanvasPaint(radialCanvas)
                             }
                         }
 
@@ -730,21 +775,19 @@ Item {
                             }
                         }
 
-                        onVisibleChanged: requestPaint()
-                        onWidthChanged: requestPaint()
-                        onHeightChanged: requestPaint()
+                        onVisibleChanged: root.requestCanvasPaint(brushCanvas)
+                        onWidthChanged: root.requestCanvasPaint(brushCanvas)
+                        onHeightChanged: root.requestCanvasPaint(brushCanvas)
 
                         Connections {
                             target: editorPreview
 
                             function onMaskOverlayChanged() {
-                                if (brushCanvas.visible)
-                                    brushCanvas.requestPaint()
+                                root.requestCanvasPaint(brushCanvas)
                             }
 
                             function onActiveBrushStrokeChanged() {
-                                if (brushCanvas.visible)
-                                    brushCanvas.requestPaint()
+                                root.requestCanvasPaint(brushCanvas)
                             }
                         }
                     }
@@ -804,6 +847,76 @@ Item {
                         }
                     }
 
+                    TabletInputArea {
+                        anchors.fill: parent
+                        enabled: active && !editRoot.spacePanActive
+                        z: 4
+
+                        onTabletPressed: function(x, y, pressure, tiltX, tiltY, eraser) {
+                            editRoot.forceActiveFocus()
+                            editorPreview.activeMaskIndex = index
+                            root.hoverX = x
+                            root.hoverY = y
+                            root.hoverActive = true
+                            if (root.brushResizeGestureArmed()) {
+                                root.beginBrushResize(x, y)
+                                root.tabletBrushStrokeActive = false
+                                return
+                            }
+                            if (mask.retouchMode === "clone" &&
+                                    (editRoot.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
+                                editorPreview.setActiveMaskCloneSource(
+                                            x / brushOverlay.width,
+                                            y / brushOverlay.height)
+                                editRoot.clearTransientTools()
+                                root.tabletBrushStrokeActive = false
+                                return
+                            }
+                            editorPreview.beginActiveBrushStroke()
+                            root.tabletBrushStrokeActive = true
+                            editorPreview.addBrushPointWithTabletEraser(
+                                        x / brushOverlay.width,
+                                        y / brushOverlay.height,
+                                        pressure,
+                                        tiltX,
+                                        tiltY,
+                                        eraser)
+                        }
+
+                        onTabletMoved: function(x, y, pressure, tiltX, tiltY, eraser) {
+                            root.hoverX = x
+                            root.hoverY = y
+                            root.hoverActive = true
+                            if (root.brushResizeActive) {
+                                root.updateBrushResize(x, y, brushOverlay.width, brushOverlay.height)
+                                return
+                            }
+                            if (!root.tabletBrushStrokeActive || editRoot.cloneSourcePickArmed ||
+                                    (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
+                                return
+                            editorPreview.addBrushPointWithTabletEraser(
+                                        x / brushOverlay.width,
+                                        y / brushOverlay.height,
+                                        pressure,
+                                        tiltX,
+                                        tiltY,
+                                        eraser)
+                        }
+
+                        onTabletReleased: function(x, y, pressure, tiltX, tiltY, eraser) {
+                            root.hoverX = x
+                            root.hoverY = y
+                            if (root.brushResizeActive) {
+                                root.endBrushResize()
+                                root.tabletBrushStrokeActive = false
+                                return
+                            }
+                            if (root.tabletBrushStrokeActive)
+                                editorPreview.endActiveBrushStroke()
+                            root.tabletBrushStrokeActive = false
+                        }
+                    }
+
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.LeftButton
@@ -826,7 +939,7 @@ Item {
                             if (!pressed || editRoot.cloneSourcePickArmed ||
                                     (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                 return
-                            editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
+                            editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                         }
                         onPressed: function(mouse) {
                             editRoot.forceActiveFocus()
@@ -847,7 +960,7 @@ Item {
                                 editRoot.clearTransientTools()
                                 return
                             }
-                            editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
+                            editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                         }
                         onReleased: {
                             if (root.brushResizeActive) {
@@ -868,7 +981,7 @@ Item {
 
                 Item {
                     id: polygonOverlay
-                    visible: mask.kind === "polygon"
+                    visible: mask.kind === "polygon" || mask.kind === "lasso"
                     anchors.fill: parent
                     opacity: emphasis
 
@@ -880,7 +993,7 @@ Item {
                             target: editorPreview
 
                             function onMaskOverlayChanged() {
-                                polygonCanvas.requestPaint()
+                                root.requestCanvasPaint(polygonCanvas)
                             }
                         }
 
@@ -932,8 +1045,9 @@ Item {
 
                 Rectangle {
                     visible: active &&
-                             (mask.kind === "luminance" ||
-                              mask.kind === "color")
+                              (mask.kind === "luminance" ||
+                               mask.kind === "color" ||
+                               mask.kind === "depth")
                     anchors.fill: parent
                     color: Qt.alpha(accent, 0.08)
                     border.width: 1
@@ -961,6 +1075,10 @@ Item {
                                     ? "Color range · " +
                                       Math.round((mask.hueCenter || 0.08) * 360) + "° ±" +
                                       Math.round((mask.hueRange || 0.12) * 360) + "°"
+                                    : mask.kind === "depth"
+                                      ? "Depth range · " +
+                                        Math.round((mask.depthMin || 0.2) * 100) + "-" +
+                                        Math.round((mask.depthMax || 0.8) * 100) + "%"
                                     : ""
                             color: "#f2f4f6"
                             font.family: theme.fontUi
@@ -1032,6 +1150,7 @@ Item {
             id: activeSelectionMatte
             anchors.fill: parent
             visible: editorPreview.hasActiveMask &&
+                     editorPreview.maskPreviewMode !== "marching-ants" &&
                      editorPreview.activeMaskPreviewSource.length > 0
             source: editorPreview.activeMaskPreviewSource
             fillMode: Image.Stretch
@@ -1045,14 +1164,21 @@ Item {
         Canvas {
             id: activeSelectionOutline
             anchors.fill: parent
-            visible: false
+            visible: editorPreview.hasActiveMask &&
+                     (editorPreview.maskPreviewMode === "marching-ants" ||
+                      editorPreview.maskPreviewMode === "edge") &&
+                     editorPreview.activeMaskOutlinePaths.length > 0
             z: 96
 
             Connections {
                 target: editorPreview
 
                 function onMaskOverlayChanged() {
-                    activeSelectionOutline.requestPaint()
+                    root.requestCanvasPaint(activeSelectionOutline)
+                }
+
+                function onControlsChanged() {
+                    root.requestCanvasPaint(activeSelectionOutline)
                 }
             }
 
@@ -1060,7 +1186,7 @@ Item {
                 target: editRoot
 
                 function onSelectionOutlinePhaseChanged() {
-                    activeSelectionOutline.requestPaint()
+                    root.requestCanvasPaint(activeSelectionOutline)
                 }
             }
 
@@ -1076,6 +1202,32 @@ Item {
                                    : null
                 const accent = editRoot.maskAccent(activeMask)
                 root.strokeOutlinePaths(ctx, outlinePaths, accent, false)
+            }
+        }
+
+        Rectangle {
+            readonly property rect patchBounds: editorPreview.activeInpaintPatchBounds
+
+            visible: editorPreview.inpaintPatchDiagnosticsEnabled &&
+                     patchBounds.width > 0 &&
+                     patchBounds.height > 0
+            x: patchBounds.x * previewItem.width
+            y: patchBounds.y * previewItem.height
+            width: Math.max(1, patchBounds.width * previewItem.width)
+            height: Math.max(1, patchBounds.height * previewItem.height)
+            z: 97
+            color: "transparent"
+            border.width: 2
+            border.color: "#f2c56b"
+
+            Rectangle {
+                x: -1
+                y: -1
+                width: parent.width + 2
+                height: parent.height + 2
+                color: "transparent"
+                border.width: 1
+                border.color: "#18130b"
             }
         }
 
@@ -1104,7 +1256,7 @@ Item {
                 target: editorPreview
 
                 function onSmartSelectPreviewChanged() {
-                    smartPreviewOutline.requestPaint()
+                    root.requestCanvasPaint(smartPreviewOutline)
                 }
             }
 
@@ -1112,7 +1264,7 @@ Item {
                 target: editRoot
 
                 function onSelectionOutlinePhaseChanged() {
-                    smartPreviewOutline.requestPaint()
+                    root.requestCanvasPaint(smartPreviewOutline)
                 }
             }
 
@@ -1160,7 +1312,7 @@ Item {
                 }
                 if (!editRoot.lassoDrawArmed)
                     return
-                editorPreview.startPolygonSelection(editRoot.manualSelectionSubtractActive())
+                editorPreview.startLassoSelection(editRoot.manualSelectionSubtractActive())
                 editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
             }
 
@@ -1186,7 +1338,7 @@ Item {
 
                 if (!editRoot.lassoDrawArmed || !pressed)
                     return
-                if (editorPreview.activeMaskKind === "polygon")
+                if (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso")
                     editorPreview.activeMaskOperation = editRoot.manualSelectionSubtractActive() ? "subtract" : "add"
                 editorPreview.appendActivePolygonPoint(mouse.x / previewItem.width, mouse.y / previewItem.height)
             }

@@ -33,6 +33,36 @@ bool string_equals_ci(std::string_view left, std::string_view right) {
   return trimmed_lower(left) == trimmed_lower(right);
 }
 
+bool ends_with_ci(std::string_view value, std::string_view suffix) {
+  const auto normalized = trimmed_lower(value);
+  const auto normalized_suffix = trimmed_lower(suffix);
+  return normalized.size() >= normalized_suffix.size() &&
+         normalized.compare(
+             normalized.size() - normalized_suffix.size(),
+             normalized_suffix.size(),
+             normalized_suffix) == 0;
+}
+
+std::string basename_copy(std::string_view value) {
+  const auto trimmed = trim_copy(value);
+  const auto slash = trimmed.find_last_of("/\\");
+  return slash == std::string::npos ? trimmed : trimmed.substr(slash + 1);
+}
+
+std::string prefixed_profile_name(std::string_view value, std::string_view prefix) {
+  const auto trimmed = trim_copy(value);
+  const auto separator = trimmed.find(':');
+  const auto label = separator == std::string::npos ? basename_copy(trimmed)
+                                                     : trim_copy(std::string_view(trimmed).substr(separator + 1));
+  if (label.empty()) {
+    return std::string(prefix);
+  }
+  std::string result(prefix);
+  result += ": ";
+  result += label;
+  return result;
+}
+
 }  // namespace
 
 RgbColorSpace make_linear_srgb_color_space() {
@@ -147,6 +177,15 @@ RgbColorSpace make_rec2020_color_space() {
 
 std::string normalize_input_color_profile_name(std::string_view value) {
   const auto normalized = trimmed_lower(value);
+  if (normalized.rfind("camera dcp:", 0) == 0 || normalized.rfind("dcp:", 0) == 0 ||
+      ends_with_ci(value, ".dcp")) {
+    return prefixed_profile_name(value, "Camera DCP");
+  }
+  if (normalized.rfind("camera icc:", 0) == 0 || normalized.rfind("icc:", 0) == 0 ||
+      normalized.rfind("camera icm:", 0) == 0 || normalized.rfind("icm:", 0) == 0 ||
+      ends_with_ci(value, ".icc") || ends_with_ci(value, ".icm")) {
+    return prefixed_profile_name(value, "Camera ICC");
+  }
   if (normalized == "camera native" || normalized == "camera-native") {
     return "Camera Native";
   }
@@ -158,6 +197,18 @@ std::string normalize_input_color_profile_name(std::string_view value) {
   }
   if (normalized == "display p3" || normalized == "display-p3" || normalized == "p3") {
     return "Display P3";
+  }
+  if (normalized == "adobe rgb" || normalized == "adobe-rgb") {
+    return "Adobe RGB";
+  }
+  if (normalized == "prophoto rgb" || normalized == "prophoto-rgb" || normalized == "prophoto") {
+    return "ProPhoto RGB";
+  }
+  if (normalized == "rec.709" || normalized == "rec709" || normalized == "rec-709") {
+    return "Rec.709";
+  }
+  if (normalized == "rec.2020" || normalized == "rec2020" || normalized == "rec-2020") {
+    return "Rec.2020";
   }
   return "Embedded";
 }
@@ -213,6 +264,20 @@ std::string normalize_render_intent_name(std::string_view value) {
 
 InputColorProfile input_color_profile_from_name(std::string_view value) {
   const auto normalized = normalize_input_color_profile_name(value);
+  if (trimmed_lower(normalized).rfind("camera dcp:", 0) == 0) {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::CameraDcpProfile,
+        .color_space = make_linear_prophoto_rgb_color_space(),
+    };
+  }
+  if (trimmed_lower(normalized).rfind("camera icc:", 0) == 0) {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::CameraIccProfile,
+        .color_space = make_linear_prophoto_rgb_color_space(),
+    };
+  }
   if (normalized == "Camera Native") {
     return InputColorProfile{
         .profile_name = normalized,
@@ -239,6 +304,34 @@ InputColorProfile input_color_profile_from_name(std::string_view value) {
         .profile_name = normalized,
         .kind = InputTransformKind::EmbeddedProfile,
         .color_space = make_srgb_color_space(),
+    };
+  }
+  if (normalized == "Adobe RGB") {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::EmbeddedProfile,
+        .color_space = make_adobe_rgb_color_space(),
+    };
+  }
+  if (normalized == "ProPhoto RGB") {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::EmbeddedProfile,
+        .color_space = make_prophoto_rgb_color_space(),
+    };
+  }
+  if (normalized == "Rec.709") {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::EmbeddedProfile,
+        .color_space = make_rec709_color_space(),
+    };
+  }
+  if (normalized == "Rec.2020") {
+    return InputColorProfile{
+        .profile_name = normalized,
+        .kind = InputTransformKind::EmbeddedProfile,
+        .color_space = make_rec2020_color_space(),
     };
   }
   return InputColorProfile{
@@ -338,7 +431,9 @@ const char* render_intent_name(RenderIntent intent) {
   }
 }
 
-CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata) {
+CameraProfile resolve_camera_profile(
+    const DecodedImageMetadata& metadata,
+    const InputColorProfile& input_profile) {
   if (!metadata.valid) {
     return {};
   }
@@ -346,6 +441,7 @@ CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata) {
   CameraProfile profile{
       .valid = true,
       .profile_name = "Generic Camera",
+      .profile_format = "Generic",
       .camera_make = trim_copy(metadata.camera_make),
       .camera_model = trim_copy(metadata.camera_model),
   };
@@ -355,6 +451,41 @@ CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata) {
       profile.profile_name += " ";
     }
     profile.profile_name += profile.camera_model;
+  }
+
+  if (input_profile.kind == InputTransformKind::CameraDcpProfile) {
+    profile.profile_name = input_profile.profile_name;
+    profile.profile_format = "DCP";
+    profile.dual_illuminant = true;
+    profile.tungsten_temperature = 2850.0;
+    profile.daylight_temperature = 6500.0;
+    profile.camera_to_xyz_d50_tungsten = {
+        1.13, -0.06, -0.02,
+        -0.04, 1.05, -0.01,
+        0.01, -0.04, 1.12,
+    };
+    profile.camera_to_xyz_d50_daylight = {
+        1.04, -0.03, -0.01,
+        -0.02, 1.02, 0.01,
+        -0.01, -0.01, 1.05,
+    };
+    profile.camera_to_xyz_d50 = profile.camera_to_xyz_d50_daylight;
+    profile.reference_temperature = 6500.0;
+    profile.reference_tint = metadata.as_shot_tint;
+    return profile;
+  }
+
+  if (input_profile.kind == InputTransformKind::CameraIccProfile) {
+    profile.profile_name = input_profile.profile_name;
+    profile.profile_format = "ICC";
+    profile.camera_to_xyz_d50 = {
+        1.02, 0.02, -0.02,
+        0.01, 0.98, 0.01,
+        -0.02, 0.04, 1.04,
+    };
+    profile.reference_temperature = 5000.0;
+    profile.reference_tint = metadata.as_shot_tint;
+    return profile;
   }
 
   if (string_equals_ci(profile.camera_make, "Apple")) {
@@ -377,6 +508,10 @@ CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata) {
   return profile;
 }
 
+CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata) {
+  return resolve_camera_profile(metadata, input_color_profile_from_name(metadata.input_profile_name));
+}
+
 InputTransformRecipe resolve_input_transform_recipe(
     const InputColorProfile& input_profile,
     const CameraProfile& camera_profile,
@@ -390,6 +525,8 @@ InputTransformRecipe resolve_input_transform_recipe(
   }
 
   if (input_profile.kind == InputTransformKind::CameraNative ||
+      input_profile.kind == InputTransformKind::CameraDcpProfile ||
+      input_profile.kind == InputTransformKind::CameraIccProfile ||
       input_profile.kind == InputTransformKind::RawDecoderDefault ||
       !metadata.camera_make.empty() || !metadata.camera_model.empty()) {
     recipe.has_source_white_balance = true;
@@ -422,6 +559,10 @@ ColorPipelineConfig default_color_pipeline_config() {
       .camera_profile = {},
       .input_transform_recipe = {},
       .render_intent = RenderIntent::Perceptual,
+      .output_headroom = 1.0,
+      .black_point_compensation_enabled = true,
+      .source_black_point = 0.0,
+      .output_black_point = 0.0,
   };
 }
 

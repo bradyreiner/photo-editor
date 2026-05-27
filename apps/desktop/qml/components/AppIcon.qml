@@ -80,6 +80,27 @@ Canvas {
             line(ctx, midX, h * 0.18, midX, h * 0.82)
             line(ctx, w * 0.18, midY, w * 0.82, midY)
             break
+        case "minus":
+            line(ctx, w * 0.18, midY, w * 0.82, midY)
+            break
+        case "check":
+            line(ctx, w * 0.18, midY, w * 0.42, h * 0.74)
+            line(ctx, w * 0.42, h * 0.74, w * 0.82, h * 0.28)
+            break
+        case "star":
+            poly(ctx, [
+                [midX, h * 0.14],
+                [w * 0.60, h * 0.40],
+                [w * 0.88, h * 0.40],
+                [w * 0.66, h * 0.58],
+                [w * 0.74, h * 0.84],
+                [midX, h * 0.68],
+                [w * 0.26, h * 0.84],
+                [w * 0.34, h * 0.58],
+                [w * 0.12, h * 0.40],
+                [w * 0.40, h * 0.40]
+            ], false)
+            break
         case "save":
             rect(ctx, w * 0.18, h * 0.16, w * 0.64, h * 0.68, false)
             line(ctx, w * 0.28, h * 0.28, w * 0.72, h * 0.28)
@@ -96,6 +117,34 @@ Canvas {
         case "source":
             rect(ctx, w * 0.16, h * 0.24, w * 0.68, h * 0.52, false)
             poly(ctx, [[w * 0.44, h * 0.38], [w * 0.44, h * 0.62], [w * 0.62, midY]], true)
+            break
+        case "folder":
+            line(ctx, w * 0.16, h * 0.36, w * 0.38, h * 0.36)
+            line(ctx, w * 0.38, h * 0.36, w * 0.46, h * 0.28)
+            line(ctx, w * 0.46, h * 0.28, w * 0.84, h * 0.28)
+            rect(ctx, w * 0.16, h * 0.36, w * 0.68, h * 0.42, false)
+            break
+        case "drive":
+            rect(ctx, w * 0.16, h * 0.28, w * 0.68, h * 0.44, false)
+            line(ctx, w * 0.24, h * 0.56, w * 0.64, h * 0.56)
+            circle(ctx, w * 0.72, h * 0.56, w * 0.04, true)
+            break
+        case "cloud":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.22, h * 0.64)
+            ctx.bezierCurveTo(w * 0.14, h * 0.58, w * 0.18, h * 0.42, w * 0.34, h * 0.42)
+            ctx.bezierCurveTo(w * 0.40, h * 0.26, w * 0.66, h * 0.28, w * 0.70, h * 0.48)
+            ctx.bezierCurveTo(w * 0.86, h * 0.48, w * 0.90, h * 0.68, w * 0.76, h * 0.72)
+            ctx.lineTo(w * 0.24, h * 0.72)
+            ctx.stroke()
+            break
+        case "filter":
+            poly(ctx, [[w * 0.16, h * 0.24], [w * 0.84, h * 0.24], [w * 0.58, h * 0.54], [w * 0.58, h * 0.78], [w * 0.42, h * 0.86], [w * 0.42, h * 0.54]], false)
+            break
+        case "clock":
+            circle(ctx, midX, midY, w * 0.30, false)
+            line(ctx, midX, midY, midX, h * 0.32)
+            line(ctx, midX, midY, w * 0.66, h * 0.58)
             break
         case "media":
             rect(ctx, w * 0.16, h * 0.2, w * 0.24, h * 0.24, false)
@@ -323,6 +372,14 @@ Canvas {
             rect(ctx, w * 0.18, h * 0.58, w * 0.22, h * 0.22, false)
             rect(ctx, w * 0.6, h * 0.58, w * 0.22, h * 0.22, false)
             break
+        case "list":
+            line(ctx, w * 0.34, h * 0.28, w * 0.82, h * 0.28)
+            line(ctx, w * 0.34, midY, w * 0.82, midY)
+            line(ctx, w * 0.34, h * 0.72, w * 0.82, h * 0.72)
+            circle(ctx, w * 0.2, h * 0.28, w * 0.035, true)
+            circle(ctx, w * 0.2, midY, w * 0.035, true)
+            circle(ctx, w * 0.2, h * 0.72, w * 0.035, true)
+            break
         case "survey":
             rect(ctx, w * 0.18, h * 0.24, w * 0.28, h * 0.22, false)
             rect(ctx, w * 0.54, h * 0.24, w * 0.28, h * 0.22, false)
@@ -340,6 +397,41 @@ Canvas {
             line(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.22)
             line(ctx, w * 0.78, h * 0.36, w * 0.78, h * 0.82)
             line(ctx, w * 0.36, h * 0.78, w * 0.82, h * 0.78)
+            break
+        case "local-adjust":
+            line(ctx, w * 0.18, h * 0.72, w * 0.72, h * 0.18)
+            line(ctx, w * 0.48, h * 0.18, w * 0.72, h * 0.18)
+            line(ctx, w * 0.72, h * 0.18, w * 0.72, h * 0.42)
+            circle(ctx, w * 0.32, h * 0.68, w * 0.08, false)
+            break
+        case "retouch":
+            line(ctx, w * 0.22, h * 0.72, w * 0.68, h * 0.26)
+            line(ctx, w * 0.58, h * 0.16, w * 0.78, h * 0.36)
+            line(ctx, w * 0.28, h * 0.78, w * 0.18, h * 0.86)
+            circle(ctx, w * 0.74, h * 0.22, w * 0.07, false)
+            break
+        case "geometry":
+            line(ctx, w * 0.2, midY, w * 0.8, midY)
+            line(ctx, midX, h * 0.2, midX, h * 0.8)
+            rect(ctx, w * 0.28, h * 0.28, w * 0.44, h * 0.44, false)
+            break
+        case "scope":
+            rect(ctx, w * 0.16, h * 0.24, w * 0.68, h * 0.52, false)
+            line(ctx, w * 0.24, h * 0.64, w * 0.38, h * 0.44)
+            line(ctx, w * 0.38, h * 0.44, w * 0.52, h * 0.58)
+            line(ctx, w * 0.52, h * 0.58, w * 0.72, h * 0.34)
+            break
+        case "menu":
+            line(ctx, w * 0.24, h * 0.32, w * 0.76, h * 0.32)
+            line(ctx, w * 0.24, midY, w * 0.76, midY)
+            line(ctx, w * 0.24, h * 0.68, w * 0.76, h * 0.68)
+            break
+        case "reset":
+            ctx.beginPath()
+            ctx.arc(midX, midY, w * 0.26, Math.PI * 0.18, Math.PI * 1.72)
+            ctx.stroke()
+            line(ctx, w * 0.31, h * 0.18, w * 0.48, h * 0.16)
+            line(ctx, w * 0.31, h * 0.18, w * 0.34, h * 0.35)
             break
         case "compare":
             rect(ctx, w * 0.16, h * 0.2, w * 0.3, h * 0.6, false)

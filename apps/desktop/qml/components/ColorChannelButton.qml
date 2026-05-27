@@ -12,14 +12,14 @@ Rectangle {
 
     Theme { id: theme }
 
-    implicitWidth: Math.max(72, labelText.implicitWidth + 28)
-    implicitHeight: theme.controlHeight
-    radius: theme.radiusControl
-    color: root.selected ? theme.alpha(root.swatch, 0.16) : theme.alpha(theme.glassBase, 0.38)
+    implicitWidth: Math.max(68, labelText.implicitWidth + 24)
+    implicitHeight: theme.controlHeightDense
+    radius: 1
+    color: root.selected ? theme.alpha(root.swatch, 0.10) : theme.alpha(theme.ink950, 0.28)
     border.width: root.activeFocus ? 2 : 1
     border.color: root.activeFocus
                   ? theme.alpha(theme.focusRing, 0.92)
-                  : (root.selected ? theme.alpha(root.swatch, 0.46) : theme.alpha(theme.glassEdge, 0.22))
+                  : (root.selected ? theme.alpha(root.swatch, 0.40) : theme.alpha(theme.glassEdge, 0.16))
 
     Keys.onReturnPressed: root.clicked()
     Keys.onEnterPressed: root.clicked()
@@ -29,9 +29,9 @@ Rectangle {
         spacing: theme.gapControl
 
         Rectangle {
-            width: 8
-            height: 8
-            radius: 4
+            width: 7
+            height: 7
+            radius: 3.5
             color: root.swatch
         }
 
@@ -40,8 +40,9 @@ Rectangle {
             text: root.label
             color: root.selected ? theme.textStrong : theme.textMain
             font.family: theme.fontUi
-            font.pixelSize: 11
-            font.weight: Font.Medium
+            font.pixelSize: 10
+            font.weight: Font.DemiBold
+            font.letterSpacing: 0
         }
     }
 

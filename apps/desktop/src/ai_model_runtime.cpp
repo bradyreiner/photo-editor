@@ -13,6 +13,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -137,6 +138,435 @@ QColor average_patch_boundary_color(const QImage& source, const QRect& bounds) {
       static_cast<int>(alpha / count));
 }
 
+double inpaint_mask_coverage(const AiInpaintRequest& request, const QRect& bounds) {
+  if (!bounds.isValid()) {
+    return 0.0;
+  }
+
+  auto masked = 0;
+  auto area = 0;
+  for (int y = bounds.top(); y <= bounds.bottom(); ++y) {
+    for (int x = bounds.left(); x <= bounds.right(); ++x) {
+      ++area;
+      if (static_cast<unsigned char>(request.mask_data.at(y * request.mask_width + x)) > 0U) {
+        ++masked;
+      }
+    }
+  }
+  return area > 0 ? static_cast<double>(masked) / static_cast<double>(area) : 0.0;
+}
+
+QString inpaint_region_kind(const AiInpaintRequest& request, double coverage) {
+  const auto mode = request.retouch_mode.trimmed().toLower();
+  if (mode == QStringLiteral("heal") && coverage <= 0.10) {
+    return QStringLiteral("detail-heal");
+  }
+  if (mode == QStringLiteral("patch")) {
+    return coverage >= 0.28 ? QStringLiteral("large-patch") : QStringLiteral("patch-region");
+  }
+  if (coverage <= 0.05) {
+    return QStringLiteral("spot");
+  }
+  if (coverage >= 0.28) {
+    return QStringLiteral("large-object");
+  }
+  return QStringLiteral("object");
+}
+
+double prompt_texture_multiplier(const QString& prompt) {
+  const auto normalized = prompt.trimmed().toLower();
+  if (normalized.isEmpty()) {
+    return 1.0;
+  }
+  if (normalized.contains(QStringLiteral("smooth")) ||
+      normalized.contains(QStringLiteral("soft")) ||
+      normalized.contains(QStringLiteral("clean"))) {
+    return 0.65;
+  }
+  if (normalized.contains(QStringLiteral("texture")) ||
+      normalized.contains(QStringLiteral("grain")) ||
+      normalized.contains(QStringLiteral("detail"))) {
+    return 1.25;
+  }
+  return 1.0;
+}
+
+void populate_inpaint_region_result(
+    AiInpaintResult* result,
+    const AiInpaintRequest& request,
+    const QRect& bounds) {
+  if (result == nullptr || !bounds.isValid()) {
+    return;
+  }
+
+  const auto coverage = inpaint_mask_coverage(request, bounds);
+  result->prompt = request.prompt.trimmed();
+  const auto quality_mode = request.quality_mode.trimmed().toLower();
+  result->quality_mode =
+      quality_mode == QStringLiteral("final") ? QStringLiteral("final") : QStringLiteral("preview");
+  result->seed = std::max(1, request.seed);
+  result->region_kind = inpaint_region_kind(request, coverage);
+  result->region_coverage = coverage;
+  result->region_x = bounds.x();
+  result->region_y = bounds.y();
+  result->region_width = bounds.width();
+  result->region_height = bounds.height();
+}
+
+AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const QString& source_error = {}) {
+  AiInpaintResult result;
+  if (!valid_inpaint_mask(request)) {
+    result.error_message = QStringLiteral("Invalid inpaint request.");
+    return result;
+  }
+
+  const auto bounds = inpaint_mask_bounds(request);
+  if (!bounds.isValid()) {
+    result.error_message = QStringLiteral("Inpaint mask is empty.");
+    return result;
+  }
+  populate_inpaint_region_result(&result, request, bounds);
+
+  auto source = request.source_image;
+  if (!source.colorSpace().isValid()) {
+    source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  }
+  if (source.format() != QImage::Format_ARGB32) {
+    source = source.convertToFormat(QImage::Format_ARGB32);
+  }
+
+  auto patch = source.copy(bounds);
+  const auto patch_width = patch.width();
+  const auto patch_height = patch.height();
+  std::vector<QRgb> pixels(static_cast<std::size_t>(patch_width * patch_height));
+  std::vector<uint8_t> masked(static_cast<std::size_t>(patch_width * patch_height), 0U);
+  std::vector<uint8_t> known(static_cast<std::size_t>(patch_width * patch_height), 0U);
+  for (int y = 0; y < patch_height; ++y) {
+    const auto* scanline = reinterpret_cast<const QRgb*>(patch.constScanLine(y));
+    for (int x = 0; x < patch_width; ++x) {
+      const auto index = static_cast<std::size_t>(y * patch_width + x);
+      pixels[index] = scanline[x];
+      const auto source_x = bounds.x() + x;
+      const auto source_y = bounds.y() + y;
+      const auto mask_value =
+          static_cast<unsigned char>(request.mask_data.at(source_y * request.mask_width + source_x));
+      masked[index] = mask_value > 0U ? 1U : 0U;
+      known[index] = mask_value > 0U ? 0U : 1U;
+    }
+  }
+
+  const auto fallback_color = average_patch_boundary_color(source, bounds);
+  const auto fallback_rgb = fallback_color.rgba();
+  const auto max_iterations = std::max(8, patch_width + patch_height);
+  std::vector<QRgb> next_pixels = pixels;
+  std::vector<uint8_t> next_known = known;
+  for (int iteration = 0; iteration < max_iterations; ++iteration) {
+    auto progressed = false;
+    for (int y = 0; y < patch_height; ++y) {
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index] || known[index]) {
+          continue;
+        }
+
+        double red = 0.0;
+        double green = 0.0;
+        double blue = 0.0;
+        double alpha = 0.0;
+        double weight = 0.0;
+        for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+          const auto sample_y = y + offset_y;
+          if (sample_y < 0 || sample_y >= patch_height) {
+            continue;
+          }
+          for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+            const auto sample_x = x + offset_x;
+            if ((offset_x == 0 && offset_y == 0) || sample_x < 0 || sample_x >= patch_width) {
+              continue;
+            }
+            const auto sample_index = static_cast<std::size_t>(sample_y * patch_width + sample_x);
+            if (!known[sample_index]) {
+              continue;
+            }
+            const auto sample = pixels[sample_index];
+            auto candidate_red = qRed(sample);
+            auto candidate_green = qGreen(sample);
+            auto candidate_blue = qBlue(sample);
+            auto candidate_alpha = qAlpha(sample);
+            auto candidate_weight = 1.0;
+            const auto far_x = x + (offset_x * 2);
+            const auto far_y = y + (offset_y * 2);
+            if (far_x >= 0 && far_x < patch_width && far_y >= 0 && far_y < patch_height) {
+              const auto far_index = static_cast<std::size_t>(far_y * patch_width + far_x);
+              if (known[far_index]) {
+                const auto far = pixels[far_index];
+                candidate_red = std::clamp((qRed(sample) * 2) - qRed(far), 0, 255);
+                candidate_green = std::clamp((qGreen(sample) * 2) - qGreen(far), 0, 255);
+                candidate_blue = std::clamp((qBlue(sample) * 2) - qBlue(far), 0, 255);
+                candidate_alpha = std::clamp((qAlpha(sample) * 2) - qAlpha(far), 0, 255);
+                candidate_weight = 2.0;
+              }
+            }
+            red += static_cast<double>(candidate_red) * candidate_weight;
+            green += static_cast<double>(candidate_green) * candidate_weight;
+            blue += static_cast<double>(candidate_blue) * candidate_weight;
+            alpha += static_cast<double>(candidate_alpha) * candidate_weight;
+            weight += candidate_weight;
+          }
+        }
+        if (weight <= 0.0) {
+          continue;
+        }
+        next_pixels[index] =
+            qRgba(static_cast<int>(std::lround(red / weight)),
+                  static_cast<int>(std::lround(green / weight)),
+                  static_cast<int>(std::lround(blue / weight)),
+                  static_cast<int>(std::lround(alpha / weight)));
+        next_known[index] = 1U;
+        progressed = true;
+      }
+    }
+    pixels.swap(next_pixels);
+    known.swap(next_known);
+    if (!progressed) {
+      break;
+    }
+  }
+
+  for (std::size_t index = 0; index < pixels.size(); ++index) {
+    if (masked[index] && !known[index]) {
+      pixels[index] = fallback_rgb;
+      known[index] = 1U;
+    }
+  }
+
+  next_pixels = pixels;
+  const auto smoothing_passes = result.region_kind == QStringLiteral("detail-heal") ||
+                                      result.region_kind == QStringLiteral("spot")
+                                  ? 1
+                                  : result.region_kind == QStringLiteral("large-object") ||
+                                        result.region_kind == QStringLiteral("large-patch")
+                                      ? 3
+                                      : 2;
+  for (int pass = 0; pass < smoothing_passes; ++pass) {
+    for (int y = 0; y < patch_height; ++y) {
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          continue;
+        }
+        int red = qRed(pixels[index]) * 2;
+        int green = qGreen(pixels[index]) * 2;
+        int blue = qBlue(pixels[index]) * 2;
+        int alpha = qAlpha(pixels[index]) * 2;
+        int weight = 2;
+        for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+          const auto sample_y = y + offset_y;
+          if (sample_y < 0 || sample_y >= patch_height) {
+            continue;
+          }
+          for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+            const auto sample_x = x + offset_x;
+            if ((offset_x == 0 && offset_y == 0) || sample_x < 0 || sample_x >= patch_width) {
+              continue;
+            }
+            const auto sample = pixels[static_cast<std::size_t>(sample_y * patch_width + sample_x)];
+            red += qRed(sample);
+            green += qGreen(sample);
+            blue += qBlue(sample);
+            alpha += qAlpha(sample);
+            ++weight;
+          }
+        }
+        next_pixels[index] =
+            qRgba(red / weight, green / weight, blue / weight, alpha / weight);
+      }
+    }
+    pixels.swap(next_pixels);
+  }
+
+  std::vector<std::array<int, 3>> texture_residuals;
+  texture_residuals.reserve(static_cast<std::size_t>(patch_width + patch_height));
+  for (int y = 0; y < patch_height; ++y) {
+    for (int x = 0; x < patch_width; ++x) {
+      const auto index = static_cast<std::size_t>(y * patch_width + x);
+      if (masked[index]) {
+        continue;
+      }
+
+      auto touches_mask = false;
+      int red = 0;
+      int green = 0;
+      int blue = 0;
+      int count = 0;
+      for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+        const auto sample_y = y + offset_y;
+        if (sample_y < 0 || sample_y >= patch_height) {
+          continue;
+        }
+        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+          const auto sample_x = x + offset_x;
+          if ((offset_x == 0 && offset_y == 0) || sample_x < 0 || sample_x >= patch_width) {
+            continue;
+          }
+          const auto sample_index = static_cast<std::size_t>(sample_y * patch_width + sample_x);
+          if (masked[sample_index]) {
+            touches_mask = true;
+            continue;
+          }
+          const auto sample = pixels[sample_index];
+          red += qRed(sample);
+          green += qGreen(sample);
+          blue += qBlue(sample);
+          ++count;
+        }
+      }
+      if (!touches_mask || count <= 0) {
+        continue;
+      }
+
+      const auto pixel = pixels[index];
+      const std::array<int, 3> residual{
+          qRed(pixel) - (red / count),
+          qGreen(pixel) - (green / count),
+          qBlue(pixel) - (blue / count),
+      };
+      if (std::abs(residual[0]) + std::abs(residual[1]) + std::abs(residual[2]) > 2) {
+        texture_residuals.push_back(residual);
+      }
+    }
+  }
+
+  if (!texture_residuals.empty()) {
+    const auto base_texture_strength = result.region_kind == QStringLiteral("detail-heal") ||
+                                               result.region_kind == QStringLiteral("spot")
+                                           ? 0.22
+                                           : result.region_kind == QStringLiteral("large-object") ||
+                                                 result.region_kind == QStringLiteral("large-patch")
+                                               ? 0.34
+                                               : 0.28;
+    const auto texture_strength =
+        std::clamp(base_texture_strength * prompt_texture_multiplier(result.prompt), 0.0, 0.5);
+    for (int y = 0; y < patch_height; ++y) {
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          continue;
+        }
+        const auto residual_index =
+            (static_cast<std::size_t>(x) * 73856093ULL +
+             static_cast<std::size_t>(y) * 19349663ULL +
+             static_cast<std::size_t>(result.seed) * 83492791ULL) %
+            texture_residuals.size();
+        const auto residual = texture_residuals[residual_index];
+        const auto pixel = pixels[index];
+        pixels[index] = qRgba(
+            std::clamp(qRed(pixel) + static_cast<int>(std::lround(residual[0] * texture_strength)), 0, 255),
+            std::clamp(qGreen(pixel) + static_cast<int>(std::lround(residual[1] * texture_strength)), 0, 255),
+            std::clamp(qBlue(pixel) + static_cast<int>(std::lround(residual[2] * texture_strength)), 0, 255),
+            qAlpha(pixel));
+      }
+    }
+    result.texture_synthesis = true;
+    result.texture_strength = texture_strength;
+  }
+
+  for (int y = 0; y < patch_height; ++y) {
+    auto* scanline = reinterpret_cast<QRgb*>(patch.scanLine(y));
+    for (int x = 0; x < patch_width; ++x) {
+      scanline[x] = pixels[static_cast<std::size_t>(y * patch_width + x)];
+    }
+  }
+  patch.setColorSpace(source.colorSpace());
+
+  const auto image_from_pixels = [&](const std::vector<QRgb>& candidate_pixels) {
+    auto image = patch;
+    for (int y = 0; y < patch_height; ++y) {
+      auto* scanline = reinterpret_cast<QRgb*>(image.scanLine(y));
+      for (int x = 0; x < patch_width; ++x) {
+        scanline[x] = candidate_pixels[static_cast<std::size_t>(y * patch_width + x)];
+      }
+    }
+    image.setColorSpace(source.colorSpace());
+    return image;
+  };
+
+  auto smooth_candidate = pixels;
+  for (int y = 0; y < patch_height; ++y) {
+    for (int x = 0; x < patch_width; ++x) {
+      const auto index = static_cast<std::size_t>(y * patch_width + x);
+      if (!masked[index]) {
+        continue;
+      }
+      int red = 0;
+      int green = 0;
+      int blue = 0;
+      int alpha = 0;
+      int count = 0;
+      for (int offset_y = -1; offset_y <= 1; ++offset_y) {
+        const auto sample_y = y + offset_y;
+        if (sample_y < 0 || sample_y >= patch_height) {
+          continue;
+        }
+        for (int offset_x = -1; offset_x <= 1; ++offset_x) {
+          const auto sample_x = x + offset_x;
+          if (sample_x < 0 || sample_x >= patch_width) {
+            continue;
+          }
+          const auto sample = pixels[static_cast<std::size_t>(sample_y * patch_width + sample_x)];
+          red += qRed(sample);
+          green += qGreen(sample);
+          blue += qBlue(sample);
+          alpha += qAlpha(sample);
+          ++count;
+        }
+      }
+      if (count > 0) {
+        smooth_candidate[index] = qRgba(red / count, green / count, blue / count, alpha / count);
+      }
+    }
+  }
+
+  auto textured_candidate = pixels;
+  if (!texture_residuals.empty()) {
+    const auto boost = std::clamp(result.texture_strength * 1.35, 0.0, 0.65);
+    for (int y = 0; y < patch_height; ++y) {
+      for (int x = 0; x < patch_width; ++x) {
+        const auto index = static_cast<std::size_t>(y * patch_width + x);
+        if (!masked[index]) {
+          continue;
+        }
+        const auto residual_index =
+            (static_cast<std::size_t>(x) * 83492791ULL +
+             static_cast<std::size_t>(y) * 2971215073ULL +
+             static_cast<std::size_t>(result.seed) * 73856093ULL) %
+            texture_residuals.size();
+        const auto residual = texture_residuals[residual_index];
+        const auto pixel = pixels[index];
+        textured_candidate[index] = qRgba(
+            std::clamp(qRed(pixel) + static_cast<int>(std::lround(residual[0] * boost)), 0, 255),
+            std::clamp(qGreen(pixel) + static_cast<int>(std::lround(residual[1] * boost)), 0, 255),
+            std::clamp(qBlue(pixel) + static_cast<int>(std::lround(residual[2] * boost)), 0, 255),
+            qAlpha(pixel));
+      }
+    }
+  }
+
+  result.success = true;
+  result.fallback = true;
+  result.edge_continuation = true;
+  result.model_name = QStringLiteral("cpu-diffusion-inpaint-v1");
+  result.error_message = source_error;
+  result.patch_image = patch;
+  result.candidate_images = {patch, image_from_pixels(smooth_candidate), image_from_pixels(textured_candidate)};
+  result.candidate_index = 0;
+  result.patch_x = bounds.x();
+  result.patch_y = bounds.y();
+  result.patch_width = bounds.width();
+  result.patch_height = bounds.height();
+  return result;
+}
+
 AiInpaintResult run_fake_inpaint(const AiInpaintRequest& request) {
   AiInpaintResult result;
   if (!valid_inpaint_mask(request)) {
@@ -173,7 +603,9 @@ AiInpaintResult run_fake_inpaint(const AiInpaintRequest& request) {
 
   result.success = true;
   result.model_name = QStringLiteral("test-fake-lama");
+  populate_inpaint_region_result(&result, request, bounds);
   result.patch_image = patch;
+  result.candidate_images = {patch};
   result.patch_x = bounds.x();
   result.patch_y = bounds.y();
   result.patch_width = bounds.width();
@@ -489,7 +921,9 @@ class OnnxAiRuntime final {
       output_image.setColorSpace(QColorSpace(QColorSpace::SRgb));
       result.success = true;
       result.model_name = QStringLiteral("lama-onnx");
+      populate_inpaint_region_result(&result, request, bounds);
       result.patch_image = output_image;
+      result.candidate_images = {output_image};
       result.patch_x = bounds.x();
       result.patch_y = bounds.y();
       result.patch_width = bounds.width();
@@ -584,11 +1018,15 @@ AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request) {
   }
 
 #if defined(PHOTO_EDITOR_HAS_ONNXRUNTIME) && PHOTO_EDITOR_HAS_ONNXRUNTIME
-  return onnx_ai_runtime().runInpaint(request);
+  result = onnx_ai_runtime().runInpaint(request);
+  if (result.success) {
+    return result;
+  }
+  return run_cpu_diffusion_inpaint(request, result.error_message);
 #else
   result.error_message =
       QStringLiteral("LaMa inpaint runtime is not linked in this build.");
-  return result;
+  return run_cpu_diffusion_inpaint(request, result.error_message);
 #endif
 }
 

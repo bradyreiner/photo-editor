@@ -1,6 +1,8 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
+import PhotoEditor
 import "../components"
 
 Rectangle {
@@ -9,30 +11,114 @@ Rectangle {
     color: "transparent"
     property bool objectPickArmed: false
     property bool objectPickCreateNew: false
+    property string objectPickMode: "selection"
     property bool polygonDrawArmed: false
     property bool lassoDrawArmed: false
     property bool cloneSourcePickArmed: false
+    property bool tabletBrushStrokeActive: false
+    property var smartSelectStrokePoints: []
+    property bool smartSelectStrokeActive: false
     property real selectionOutlinePhase: 0
+
+    FileDialog {
+        id: alphaMaskFileDialog
+        title: "Import Alpha Mask"
+        nameFilters: ["Image masks (*.png *.tif *.tiff *.jpg *.jpeg *.webp)", "All files (*)"]
+        onAccepted: {
+            root.clearTransientTools()
+            editorPreview.addAlphaImageMask(selectedFile)
+        }
+    }
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
     }
 
+    function pointerPressure(mouse) {
+        if (!mouse || mouse.pressure === undefined || mouse.pressure <= 0)
+            return 1.0
+        return clamp(mouse.pressure, 0.0, 1.0)
+    }
+
+    function pointerTilt(mouse, axisName) {
+        if (!mouse || mouse[axisName] === undefined)
+            return 0.0
+        const rawTilt = mouse[axisName]
+        if (Math.abs(rawTilt) <= 1.0)
+            return clamp(rawTilt, -1.0, 1.0)
+        return clamp(rawTilt / 60.0, -1.0, 1.0)
+    }
+
     function clearTransientTools() {
         objectPickArmed = false
         objectPickCreateNew = false
+        objectPickMode = "selection"
         polygonDrawArmed = false
         lassoDrawArmed = false
         cloneSourcePickArmed = false
+        smartSelectStrokePoints = []
+        smartSelectStrokeActive = false
+    }
+
+    function normalizedStrokePoint(mouseX, mouseY) {
+        return {
+            "x": clamp(mouseX / Math.max(1, previewItem.width), 0.0, 1.0),
+            "y": clamp(mouseY / Math.max(1, previewItem.height), 0.0, 1.0)
+        }
+    }
+
+    function appendSmartSelectStrokePoint(mouseX, mouseY, force) {
+        const point = normalizedStrokePoint(mouseX, mouseY)
+        const points = smartSelectStrokePoints
+        if (!force && points.length > 0) {
+            const lastPoint = points[points.length - 1]
+            const deltaX = (point.x - lastPoint.x) * previewItem.width
+            const deltaY = (point.y - lastPoint.y) * previewItem.height
+            if ((deltaX * deltaX) + (deltaY * deltaY) < 81)
+                return false
+        }
+        smartSelectStrokePoints = points.concat([point])
+        return true
+    }
+
+    function beginSmartSelectStroke(mouseX, mouseY) {
+        smartSelectStrokeActive = true
+        smartSelectStrokePoints = []
+        appendSmartSelectStrokePoint(mouseX, mouseY, true)
+        editorPreview.scheduleSmartSelectPreviewPath(smartSelectStrokePoints)
+    }
+
+    function updateSmartSelectStroke(mouseX, mouseY) {
+        if (!smartSelectStrokeActive)
+            return
+        if (appendSmartSelectStrokePoint(mouseX, mouseY, false))
+            editorPreview.scheduleSmartSelectPreviewPath(smartSelectStrokePoints)
+    }
+
+    function commitSmartSelectStroke() {
+        if (!smartSelectStrokeActive || smartSelectStrokePoints.length === 0) {
+            smartSelectStrokePoints = []
+            smartSelectStrokeActive = false
+            return
+        }
+        editorPreview.pickMaskPath(smartSelectStrokePoints, objectPickMode, objectPickCreateNew)
+        objectPickCreateNew = false
+        smartSelectStrokePoints = []
+        smartSelectStrokeActive = false
     }
 
     function selectTool(mode) {
         clearTransientTools()
-        if (mode === "smart")
+        if (mode === "smart") {
             objectPickArmed = true
-        else if (mode === "smart-new") {
+            objectPickMode = "selection"
+        } else if (mode === "smart-subtract") {
+            objectPickArmed = true
+            objectPickMode = "selection-subtract"
+        } else if (mode === "smart-new") {
             objectPickArmed = true
             objectPickCreateNew = true
+            objectPickMode = "selection"
         } else if (mode === "polygon")
             polygonDrawArmed = true
         else if (mode === "lasso")
@@ -48,18 +134,34 @@ Rectangle {
             return "Polygon"
         if (objectPickArmed && objectPickCreateNew)
             return "New Smart Selection"
+        if (objectPickArmed && objectPickMode === "selection-subtract")
+            return "Subtract Smart Selection"
         if (objectPickArmed)
             return "Smart Select"
         if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "clone")
             return "Clone Stamp"
         if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "heal")
             return "Heal Brush"
+        if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "patch")
+            return "Patch Brush"
+        if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "dust")
+            return "Dust Removal"
+        if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "red-eye")
+            return "Red-Eye Removal"
+        if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "skin-cleanup")
+            return "Skin Cleanup"
+        if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "frequency-smoothing")
+            return "Frequency Smoothing"
         if (editorPreview.activeMaskKind === "polygon")
             return "Polygon Selection"
-        if (editorPreview.activeMaskKind === "object")
-            return "Smart Selection"
-        if (editorPreview.activeMaskKind === "subject")
-            return "Subject Selection"
+        if (editorPreview.activeMaskKind === "lasso")
+            return "Lasso Selection"
+        if (editorPreview.activeMaskKind === "depth")
+            return "Depth Range"
+        if (editorPreview.activeMaskKind === "alpha")
+            return "Alpha Image Selection"
+        if (isAiMaskKind(editorPreview.activeMaskKind))
+            return aiMaskLabel(editorPreview.activeMaskKind) + " Selection"
         if (editorPreview.activeMaskKind === "brush" &&
                 (editorPreview.activeMaskRetouchMode === "remove" || editorPreview.activeMaskRemoveStrength > 0))
             return "Remove Brush"
@@ -93,10 +195,34 @@ Rectangle {
                 editorPreview.activeMaskKind === "radial" ||
                 editorPreview.activeMaskKind === "brush" ||
                 editorPreview.activeMaskKind === "polygon" ||
-                editorPreview.activeMaskKind === "subject" ||
-                editorPreview.activeMaskKind === "object" ||
+                editorPreview.activeMaskKind === "alpha" ||
+                isAiMaskKind(editorPreview.activeMaskKind) ||
                 editorPreview.activeMaskKind === "luminance" ||
                 editorPreview.activeMaskKind === "color")
+    }
+
+    function isAiMaskKind(kind) {
+        return kind === "subject" || kind === "sky" || kind === "background" ||
+               kind === "people" || kind === "face" || kind === "hair" ||
+               kind === "clothing" || kind === "object"
+    }
+
+    function aiMaskLabel(kind) {
+        if (kind === "sky")
+            return "Sky"
+        if (kind === "background")
+            return "Background"
+        if (kind === "people")
+            return "People"
+        if (kind === "face")
+            return "Face"
+        if (kind === "hair")
+            return "Hair"
+        if (kind === "clothing")
+            return "Clothing"
+        if (kind === "object")
+            return "Object"
+        return "Subject"
     }
 
     function previewImageX() {
@@ -126,20 +252,40 @@ Rectangle {
             return "#7cb5ff"
         if (mask.kind === "brush" && mask.retouchMode === "heal")
             return "#72cbb2"
+        if (mask.toolRole === "retouch" && mask.retouchMode === "dust")
+            return "#c2b36a"
+        if (mask.toolRole === "retouch" && mask.retouchMode === "red-eye")
+            return "#d36a5e"
+        if (mask.toolRole === "retouch" && mask.retouchMode === "skin-cleanup")
+            return "#d7a08c"
+        if (mask.toolRole === "retouch" && mask.retouchMode === "frequency-smoothing")
+            return "#c994d8"
         if (mask.kind === "brush" && mask.retouchMode === "remove")
             return "#d98962"
         if (mask.kind === "radial")
             return "#8ab8d8"
         if (mask.kind === "brush")
             return "#cf8f4d"
-        if (mask.kind === "polygon")
+        if (mask.kind === "polygon" || mask.kind === "lasso")
             return "#7ec97a"
         if (mask.kind === "luminance")
             return "#d8d27a"
         if (mask.kind === "color")
             return "#c77dd8"
+        if (mask.kind === "depth")
+            return "#72b7a6"
+        if (mask.kind === "alpha")
+            return "#a3b35f"
         if (mask.kind === "subject")
             return "#5fc9b5"
+        if (mask.kind === "sky")
+            return "#6db7e8"
+        if (mask.kind === "background")
+            return "#9b8fdc"
+        if (mask.kind === "people" || mask.kind === "face")
+            return "#d889a8"
+        if (mask.kind === "hair" || mask.kind === "clothing")
+            return "#c4a35f"
         if (mask.kind === "object")
             return "#5e95d3"
         return "#c99a52"
@@ -150,9 +296,9 @@ Rectangle {
             return 0.25
         if (editorPreview.activeMaskKind === "brush")
             return 0.75
-        if (editorPreview.activeMaskKind === "polygon")
+        if (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso")
             return 0.06
-        if (editorPreview.activeMaskKind === "subject" || editorPreview.activeMaskKind === "object")
+        if (editorPreview.activeMaskKind === "alpha" || isAiMaskKind(editorPreview.activeMaskKind))
             return 0.5
         return 0.22
     }
@@ -165,8 +311,8 @@ Rectangle {
     }
 
     function nudgeActiveMaskFeather(delta) {
-        const minimum = editorPreview.activeMaskKind === "polygon" ? 0.0 : 0.05
-        const maximum = editorPreview.activeMaskKind === "polygon" ? 0.2 : 1.0
+        const minimum = (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") ? 0.0 : 0.05
+        const maximum = (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") ? 0.2 : 1.0
         editorPreview.activeMaskFeather = clamp(
                     editorPreview.activeMaskFeather + delta,
                     minimum,
@@ -570,6 +716,53 @@ Rectangle {
                                     }
                                 }
 
+                                TabletInputArea {
+                                    anchors.fill: parent
+                                    enabled: active
+                                    z: 4
+
+                                    onTabletPressed: function(x, y, pressure, tiltX, tiltY, eraser) {
+                                        editorPreview.activeMaskIndex = index
+                                        if (mask.retouchMode === "clone" &&
+                                                (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
+                                            editorPreview.setActiveMaskCloneSource(
+                                                        x / brushOverlay.width,
+                                                        y / brushOverlay.height)
+                                            root.cloneSourcePickArmed = false
+                                            root.tabletBrushStrokeActive = false
+                                            return
+                                        }
+                                        editorPreview.beginActiveBrushStroke()
+                                        root.tabletBrushStrokeActive = true
+                                        editorPreview.addBrushPointWithTabletEraser(
+                                                    x / brushOverlay.width,
+                                                    y / brushOverlay.height,
+                                                    pressure,
+                                                    tiltX,
+                                                    tiltY,
+                                                    eraser)
+                                    }
+
+                                    onTabletMoved: function(x, y, pressure, tiltX, tiltY, eraser) {
+                                        if (!root.tabletBrushStrokeActive || root.cloneSourcePickArmed ||
+                                                (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
+                                            return
+                                        editorPreview.addBrushPointWithTabletEraser(
+                                                    x / brushOverlay.width,
+                                                    y / brushOverlay.height,
+                                                    pressure,
+                                                    tiltX,
+                                                    tiltY,
+                                                    eraser)
+                                    }
+
+                                    onTabletReleased: function(x, y, pressure, tiltX, tiltY, eraser) {
+                                        if (root.tabletBrushStrokeActive)
+                                            editorPreview.endActiveBrushStroke()
+                                        root.tabletBrushStrokeActive = false
+                                    }
+                                }
+
                                 MouseArea {
                                     anchors.fill: parent
                                     acceptedButtons: Qt.LeftButton
@@ -585,20 +778,20 @@ Rectangle {
                                             root.cloneSourcePickArmed = false
                                             return
                                         }
-                                        editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
+                                        editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                     onPositionChanged: function(mouse) {
                                         if (!pressed || root.cloneSourcePickArmed ||
                                                 (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                             return
-                                        editorPreview.addBrushPoint(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height)
+                                        editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                 }
                             }
 
                             Item {
                                 id: polygonOverlay
-                                visible: mask.kind === "polygon"
+                                visible: mask.kind === "polygon" || mask.kind === "lasso"
                                 anchors.fill: parent
                                 opacity: active ? 0.95 : 0.56
 
@@ -664,7 +857,7 @@ Rectangle {
                             }
 
                             Rectangle {
-                                visible: active && (mask.kind === "luminance" || mask.kind === "color" || mask.kind === "subject" || mask.kind === "object")
+                                visible: active && (mask.kind === "luminance" || mask.kind === "color" || mask.kind === "depth" || mask.kind === "alpha" || root.isAiMaskKind(mask.kind))
                                 anchors.centerIn: parent
                                 radius: 10
                                 color: Qt.alpha(accent, 0.18)
@@ -680,9 +873,11 @@ Rectangle {
                                           ? "Luminance range active"
                                           : mask.kind === "color"
                                             ? "Color range active"
-                                            : mask.kind === "subject"
-                                              ? "AI subject mask active"
-                                              : "Smart selection active"
+                                            : mask.kind === "depth"
+                                              ? "Depth range active"
+                                              : mask.kind === "alpha"
+                                                ? "Alpha image mask active"
+                                            : "AI " + root.aiMaskLabel(mask.kind).toLowerCase() + " mask active"
                                     color: "#f2f4f6"
                                     font.family: "Avenir Next"
                                     font.pixelSize: 12
@@ -697,9 +892,10 @@ Rectangle {
                         anchors.fill: parent
                         visible: editorPreview.hasActiveMask &&
                                  editorPreview.activeMaskOutlinePoints.length >= 2 &&
-                                 (editorPreview.activeMaskKind === "subject" ||
-                                  editorPreview.activeMaskKind === "object" ||
-                                  editorPreview.activeMaskKind === "polygon")
+                                 (editorPreview.activeMaskKind === "alpha" ||
+                                  root.isAiMaskKind(editorPreview.activeMaskKind) ||
+                                   editorPreview.activeMaskKind === "polygon" ||
+                                   editorPreview.activeMaskKind === "lasso")
                         z: 96
 
                         Connections {
@@ -757,31 +953,37 @@ Rectangle {
                         z: 100
 
                         onPressed: function(mouse) {
+                            if (root.objectPickArmed) {
+                                root.beginSmartSelectStroke(mouse.x, mouse.y)
+                                return
+                            }
                             if (!root.lassoDrawArmed)
                                 return
-                            editorPreview.startPolygonSelection()
+                            editorPreview.startLassoSelection()
                             editorPreview.appendActivePolygonPoint(
                                         mouse.x / previewItem.width,
                                         mouse.y / previewItem.height)
                         }
 
                         onClicked: function(mouse) {
+                            if (root.objectPickArmed)
+                                return
                             if (root.lassoDrawArmed)
                                 return
                             if (root.polygonDrawArmed) {
                                 editorPreview.appendActivePolygonPoint(
                                             mouse.x / previewItem.width,
                                             mouse.y / previewItem.height)
-                            } else {
-                                editorPreview.smartSelectObjectAt(
-                                            mouse.x / previewItem.width,
-                                            mouse.y / previewItem.height,
-                                            root.objectPickCreateNew)
-                                root.objectPickCreateNew = false
                             }
                         }
 
                         onPositionChanged: function(mouse) {
+                            if (root.objectPickArmed) {
+                                if (pressed)
+                                    root.updateSmartSelectStroke(mouse.x, mouse.y)
+                                else
+                                    editorPreview.scheduleSmartSelectPreview(mouse.x / previewItem.width, mouse.y / previewItem.height)
+                            }
                             if (!root.lassoDrawArmed || !pressed)
                                 return
                             editorPreview.appendActivePolygonPoint(
@@ -798,7 +1000,11 @@ Rectangle {
                             root.polygonDrawArmed = false
                         }
 
-                        onReleased: {
+                        onReleased: function(mouse) {
+                            if (root.objectPickArmed) {
+                                root.commitSmartSelectStroke()
+                                return
+                            }
                             if (!root.lassoDrawArmed)
                                 return
                             root.lassoDrawArmed = false
@@ -906,18 +1112,36 @@ Rectangle {
 
                             ActionButton {
                                 Layout.fillWidth: true
-                                text: "Smart Select"
-                                active: root.objectPickArmed && !root.objectPickCreateNew
+                                text: "Smart +"
+                                active: root.objectPickArmed &&
+                                        root.objectPickMode === "selection" &&
+                                        !root.objectPickCreateNew
                                 enabled: editorPreview.hasAsset
-                                onClicked: root.selectTool(root.objectPickArmed && !root.objectPickCreateNew ? "" : "smart")
+                                onClicked: root.selectTool(root.objectPickArmed &&
+                                                           root.objectPickMode === "selection" &&
+                                                           !root.objectPickCreateNew ? "" : "smart")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Smart -"
+                                active: root.objectPickArmed &&
+                                        root.objectPickMode === "selection-subtract"
+                                enabled: editorPreview.hasAsset && editorPreview.hasActiveMask
+                                onClicked: root.selectTool(root.objectPickArmed &&
+                                                           root.objectPickMode === "selection-subtract" ? "" : "smart-subtract")
                             }
 
                             ActionButton {
                                 Layout.fillWidth: true
                                 text: "New Selection"
-                                active: root.objectPickArmed && root.objectPickCreateNew
+                                active: root.objectPickArmed &&
+                                        root.objectPickMode === "selection" &&
+                                        root.objectPickCreateNew
                                 enabled: editorPreview.hasAsset
-                                onClicked: root.selectTool(root.objectPickArmed && root.objectPickCreateNew ? "" : "smart-new")
+                                onClicked: root.selectTool(root.objectPickArmed &&
+                                                           root.objectPickMode === "selection" &&
+                                                           root.objectPickCreateNew ? "" : "smart-new")
                             }
 
                             ActionButton {
@@ -986,13 +1210,84 @@ Rectangle {
                             }
 
                             ActionButton {
-                                Layout.columnSpan: 2
                                 Layout.fillWidth: true
-                                text: "AI Subject"
+                                text: "Depth Range"
+                                onClicked: editorPreview.addMask("depth")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Alpha Image"
+                                onClicked: alphaMaskFileDialog.open()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Subject"
                                 enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
                                 onClicked: {
                                     root.clearTransientTools()
-                                    editorPreview.addSubjectMask()
+                                    editorPreview.addAIMask("subject")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Sky"
+                                enabled: editorPreview.hasAsset
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("sky")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Background"
+                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("background")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "People"
+                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("people")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Face"
+                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("face")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Hair"
+                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("hair")
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Clothing"
+                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                onClicked: {
+                                    root.clearTransientTools()
+                                    editorPreview.addAIMask("clothing")
                                 }
                             }
                         }
@@ -1176,7 +1471,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Retouch"
-                        subtitle: "Heal, clone, and remove live outside mask sets."
+                        subtitle: "Heal, clone, skin, red-eye, dust, and remove live outside mask sets."
 
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -1239,6 +1534,50 @@ Rectangle {
                                                 font.pixelSize: 11
                                             }
                                         }
+
+                                        RowLayout {
+                                            spacing: 4
+
+                                            ActionButton {
+                                                text: "Rename"
+                                                compact: true
+                                                onClicked: {
+                                                    editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    activeMaskNameField.forceActiveFocus()
+                                                    activeMaskNameField.selectAll()
+                                                }
+                                            }
+
+                                            ActionButton {
+                                                text: modelData.enabled ? "Off" : "On"
+                                                compact: true
+                                                accent: modelData.enabled ? "#d98962" : root.maskAccent(modelData)
+                                                onClicked: {
+                                                    editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    editorPreview.activeMaskEnabled = !modelData.enabled
+                                                }
+                                            }
+
+                                            ActionButton {
+                                                text: "Up"
+                                                compact: true
+                                                enabled: modelData.flatIndex > 0
+                                                onClicked: {
+                                                    editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    editorPreview.moveActiveMask(-1)
+                                                }
+                                            }
+
+                                            ActionButton {
+                                                text: "Down"
+                                                compact: true
+                                                enabled: modelData.flatIndex < editorPreview.maskCount - 1
+                                                onClicked: {
+                                                    editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    editorPreview.moveActiveMask(1)
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1251,6 +1590,32 @@ Rectangle {
                                 font.family: "Avenir Next"
                                 font.pixelSize: 12
                             }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                visible: editorPreview.retouchCount > 0
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    text: "Before"
+                                    compact: true
+                                    accent: "#8fb7d8"
+                                    tone: active ? "primary" : "secondary"
+                                    active: editorPreview.retouchBeforeAfterEnabled
+                                    onClicked: editorPreview.retouchBeforeAfterEnabled = true
+                                }
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    text: "After"
+                                    compact: true
+                                    accent: "#8fb7d8"
+                                    tone: active ? "primary" : "secondary"
+                                    active: !editorPreview.retouchBeforeAfterEnabled
+                                    onClicked: editorPreview.retouchBeforeAfterEnabled = false
+                                }
+                            }
                         }
                     }
 
@@ -1260,10 +1625,103 @@ Rectangle {
                         visible: editorPreview.hasActiveMask
 
                         ToneTextField {
+                            id: activeMaskNameField
                             Layout.fillWidth: true
                             text: editorPreview.activeMaskName
                             placeholderText: "Mask name"
                             onEditingFinished: editorPreview.activeMaskName = text
+                        }
+
+                        ToneTextField {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                      editorPreview.activeMaskRetouchMode === "patch")
+                            text: editorPreview.inpaintPrompt
+                            placeholderText: "Optional inpaint prompt"
+                            enabled: !editorPreview.activeMaskCommitted
+                            onEditingFinished: editorPreview.inpaintPrompt = text
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                      editorPreview.activeMaskRetouchMode === "patch")
+
+                            ToneTextField {
+                                Layout.fillWidth: true
+                                text: editorPreview.inpaintSeed.toString()
+                                placeholderText: "Seed"
+                                enabled: !editorPreview.activeMaskCommitted
+                                onEditingFinished: editorPreview.inpaintSeed = Math.max(1, parseInt(text) || 1)
+                            }
+
+                            ActionButton {
+                                Layout.preferredWidth: 112
+                                text: "Regenerate"
+                                enabled: !editorPreview.activeMaskCommitted
+                                onClicked: editorPreview.regenerateInpaintSeed()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                      editorPreview.activeMaskRetouchMode === "patch")
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Preview"
+                                active: editorPreview.inpaintQualityMode === "preview"
+                                enabled: !editorPreview.activeMaskCommitted
+                                onClicked: editorPreview.inpaintQualityMode = "preview"
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Final"
+                                active: editorPreview.inpaintQualityMode === "final"
+                                enabled: !editorPreview.activeMaskCommitted
+                                onClicked: editorPreview.inpaintQualityMode = "final"
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                      editorPreview.activeMaskRetouchMode === "patch")
+                            label: "INPAINT BLEND"
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            defaultValue: 100
+                            value: Math.round(editorPreview.inpaintBlendAmount * 100)
+                            valueText: Math.round(editorPreview.inpaintBlendAmount * 100) + "%"
+                            accent: root.activeMaskAccent
+                            onValueDragged: function(value) { editorPreview.inpaintBlendAmount = value / 100 }
+                            onResetRequested: editorPreview.inpaintBlendAmount = 1.0
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskToolRole === "retouch" &&
+                                     (editorPreview.activeMaskRetouchMode === "remove" ||
+                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                      editorPreview.activeMaskRetouchMode === "patch") &&
+                                     editorPreview.activeInpaintPatchBounds.width > 0
+                            text: editorPreview.inpaintPatchDiagnosticsEnabled ? "Hide Patch Bounds" : "Show Patch Bounds"
+                            active: editorPreview.inpaintPatchDiagnosticsEnabled
+                            accent: "#f2c56b"
+                            onClicked: editorPreview.inpaintPatchDiagnosticsEnabled = !editorPreview.inpaintPatchDiagnosticsEnabled
                         }
 
                         RowLayout {
@@ -1344,6 +1802,10 @@ Rectangle {
                                 onClicked: {
                                     editorPreview.activeMaskSelectionInverted = false
                                     editorPreview.activeMaskSelectionExpand = 0
+                                    editorPreview.activeMaskSelectionSmooth = 0
+                                    editorPreview.activeMaskSelectionFineEdge = 0
+                                    editorPreview.activeMaskSelectionEdgeContrast = 0
+                                    editorPreview.activeMaskSelectionDecontaminate = 0
                                     editorPreview.activeMaskFeather = root.activeMaskResetFeather()
                                 }
                             }
@@ -1389,7 +1851,10 @@ Rectangle {
                                 iconName: "brush-tool"
                                 onClicked: {
                                     root.clearTransientTools()
-                                    editorPreview.startSelectionBrush(false)
+                                    if (root.isAiMaskKind(editorPreview.activeMaskKind))
+                                        editorPreview.startAIMaskRefineBrush(false)
+                                    else
+                                        editorPreview.startSelectionBrush(false)
                                 }
                             }
 
@@ -1399,7 +1864,10 @@ Rectangle {
                                 iconName: "brush-subtract"
                                 onClicked: {
                                     root.clearTransientTools()
-                                    editorPreview.startSelectionBrush(true)
+                                    if (root.isAiMaskKind(editorPreview.activeMaskKind))
+                                        editorPreview.startAIMaskRefineBrush(true)
+                                    else
+                                        editorPreview.startSelectionBrush(true)
                                 }
                             }
 
@@ -1450,12 +1918,56 @@ Rectangle {
                             Layout.fillWidth: true
                             label: "Edge Softness"
                             valueText: editorPreview.activeMaskFeather.toFixed(2)
-                            from: editorPreview.activeMaskKind === "polygon" ? 0.0 : 0.05
-                            to: editorPreview.activeMaskKind === "polygon" ? 0.2 : 1.0
+                            from: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") ? 0.0 : 0.05
+                            to: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") ? 0.2 : 1.0
                             stepSize: 0.01
                             value: editorPreview.activeMaskFeather
                             onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
                             onResetRequested: editorPreview.activeMaskFeather = root.activeMaskResetFeather()
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Smooth"
+                            valueText: Math.round(editorPreview.activeMaskSelectionSmooth).toString()
+                            from: 0
+                            to: 100
+                            value: editorPreview.activeMaskSelectionSmooth
+                            onValueDragged: function(value) { editorPreview.activeMaskSelectionSmooth = value }
+                            onResetRequested: editorPreview.activeMaskSelectionSmooth = 0
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Fine Edge"
+                            valueText: Math.round(editorPreview.activeMaskSelectionFineEdge).toString()
+                            from: 0
+                            to: 100
+                            value: editorPreview.activeMaskSelectionFineEdge
+                            onValueDragged: function(value) { editorPreview.activeMaskSelectionFineEdge = value }
+                            onResetRequested: editorPreview.activeMaskSelectionFineEdge = 0
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Edge Contrast"
+                            valueText: Math.round(editorPreview.activeMaskSelectionEdgeContrast).toString()
+                            from: 0
+                            to: 100
+                            value: editorPreview.activeMaskSelectionEdgeContrast
+                            onValueDragged: function(value) { editorPreview.activeMaskSelectionEdgeContrast = value }
+                            onResetRequested: editorPreview.activeMaskSelectionEdgeContrast = 0
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Decontaminate"
+                            valueText: Math.round(editorPreview.activeMaskSelectionDecontaminate).toString()
+                            from: 0
+                            to: 100
+                            value: editorPreview.activeMaskSelectionDecontaminate
+                            onValueDragged: function(value) { editorPreview.activeMaskSelectionDecontaminate = value }
+                            onResetRequested: editorPreview.activeMaskSelectionDecontaminate = 0
                         }
                     }
 
@@ -1641,14 +2153,17 @@ Rectangle {
                             Layout.fillWidth: true
                             visible: editorPreview.activeMaskRetouchMode === "remove" ||
                                      editorPreview.activeMaskRetouchMode === "heal" ||
+                                     editorPreview.activeMaskRetouchMode === "patch" ||
                                      editorPreview.activeMaskRetouchMode === "clone"
                             text: editorPreview.activeMaskRetouchMode === "remove"
                                   ? "Paint over unwanted objects to remove them from the image."
                                   : editorPreview.activeMaskRetouchMode === "heal"
                                     ? "Heal Brush uses the retouch fill pass with softer defaults for blemishes and seams."
-                                    : (editorPreview.activeMaskCloneSourceSet
-                                       ? "Clone Stamp is ready. Paint to stamp from the marked source point."
-                                       : "Clone Stamp needs a source point before you paint.")
+                                    : editorPreview.activeMaskRetouchMode === "patch"
+                                      ? "Patch Brush fills a painted repair area with an auto-masked retouch pass."
+                                      : (editorPreview.activeMaskCloneSourceSet
+                                         ? "Clone Stamp is ready. Paint to stamp from the marked source point."
+                                         : "Clone Stamp needs a source point before you paint.")
                             wrapMode: Text.WordWrap
                             color: "#8f98a2"
                             font.family: "Avenir Next"
@@ -1678,6 +2193,28 @@ Rectangle {
                                 color: "#8f98a2"
                                 font.family: "Avenir Next"
                                 font.pixelSize: 11
+                            }
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 8
+                            rowSpacing: 8
+                            visible: editorPreview.activeMaskKind === "brush"
+
+                            Repeater {
+                                model: editorPreview.brushPresetNames
+
+                                ActionButton {
+                                    required property string modelData
+                                    Layout.fillWidth: true
+                                    text: modelData
+                                    compact: true
+                                    active: editorPreview.activeMaskBrushPreset === modelData
+                                    accent: editorPreview.hasActiveMask ? root.maskAccent(editorPreview.maskStack[editorPreview.activeMaskIndex]) : "#8ab8d8"
+                                    onClicked: editorPreview.applyActiveMaskBrushPreset(modelData)
+                                }
                             }
                         }
 
@@ -1743,6 +2280,82 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
+                            label: "Brush Hardness"
+                            valueText: Math.round(editorPreview.activeMaskBrushHardness * 100).toString() + "%"
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushHardness
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushHardness = value }
+                            onResetRequested: editorPreview.activeMaskBrushHardness = 0.25
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Brush Spacing"
+                            valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "%"
+                            from: 0.05
+                            to: 2.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushSpacing
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushSpacing = value }
+                            onResetRequested: editorPreview.activeMaskBrushSpacing = 0.75
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Stroke Smoothing"
+                            valueText: Math.round(editorPreview.activeMaskBrushSmoothing * 100).toString() + "%"
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushSmoothing
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushSmoothing = value }
+                            onResetRequested: editorPreview.activeMaskBrushSmoothing = 0.0
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: editorPreview.activeMaskBrushBuildup ? "Flow Buildup" : "Single Pass Flow"
+                            active: editorPreview.activeMaskBrushBuildup
+                            compact: true
+                            onClicked: editorPreview.activeMaskBrushBuildup = !editorPreview.activeMaskBrushBuildup
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: editorPreview.activeMaskBrushEraseMode ? "Erase Mode" : "Paint Mode"
+                            active: editorPreview.activeMaskBrushEraseMode
+                            accent: editorPreview.activeMaskBrushEraseMode
+                                    ? "#d98962"
+                                    : (editorPreview.hasActiveMask ? root.maskAccent(editorPreview.maskStack[editorPreview.activeMaskIndex]) : "#8ab8d8")
+                            compact: true
+                            onClicked: editorPreview.activeMaskBrushEraseMode = !editorPreview.activeMaskBrushEraseMode
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: editorPreview.activeMaskBrushAutoMask ? "Auto Mask" : "Freehand Mask"
+                            active: editorPreview.activeMaskBrushAutoMask
+                            compact: true
+                            onClicked: editorPreview.activeMaskBrushAutoMask = !editorPreview.activeMaskBrushAutoMask
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskBrushAutoMask
+                            label: "Auto-Mask Range"
+                            valueText: Math.round(editorPreview.activeMaskBrushAutoMaskTolerance * 100).toString() + "%"
+                            from: 0.02
+                            to: 0.75
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushAutoMaskTolerance
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushAutoMaskTolerance = value }
+                            onResetRequested: editorPreview.activeMaskBrushAutoMaskTolerance = 0.18
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
                             visible: editorPreview.activeMaskRetouchMode === "clone"
                             label: "Source Scale"
                             valueText: editorPreview.activeMaskCloneScale.toFixed(2) + "x"
@@ -1788,8 +2401,8 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Polygon"
-                        visible: editorPreview.activeMaskKind === "polygon"
+                        title: editorPreview.activeMaskKind === "lasso" ? "Lasso" : "Polygon"
+                        visible: editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso"
 
                         Label {
                             Layout.fillWidth: true
@@ -1936,8 +2549,8 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "AI Subject"
-                        visible: editorPreview.activeMaskKind === "subject" || editorPreview.activeMaskKind === "object"
+                        title: "AI Refine"
+                        visible: root.isAiMaskKind(editorPreview.activeMaskKind)
 
                         InspectorSlider {
                             Layout.fillWidth: true
@@ -1955,7 +2568,7 @@ Rectangle {
                             Layout.fillWidth: true
                             text: editorPreview.activeMaskKind === "object"
                                   ? "Object masks are created by clicking a detected foreground object in the preview."
-                                  : "Subject masks are generated automatically from the source image and stay editable as part of the mask stack."
+                                  : "AI " + root.aiMaskLabel(editorPreview.activeMaskKind).toLowerCase() + " masks are generated automatically from the source image and stay editable as part of the mask stack."
                             wrapMode: Text.WordWrap
                             color: "#8f98a2"
                             font.family: "Avenir Next"

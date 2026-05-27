@@ -16,6 +16,64 @@ Dialog {
     readonly property bool macStyle: Qt.platform.os === "osx"
     readonly property string primaryLabel: macStyle ? "Cmd" : "Ctrl"
     readonly property string redoLabel: macStyle ? "Cmd+Shift+Z" : "Ctrl+Y"
+    property string shortcutEditorStatus: ""
+    property string activeShortcutPreset: "app-native"
+    property string shortcutSearchText: ""
+    property var editableShortcuts: [
+        { "id": "command-palette", "label": "Command Palette", "sequence": primary("K"), "defaultSequence": primary("K") },
+        { "id": "workspace-library", "label": "Go To Library", "sequence": primary("1"), "defaultSequence": primary("1") },
+        { "id": "workspace-edit", "label": "Go To Edit", "sequence": primary("2"), "defaultSequence": primary("2") },
+        { "id": "queue-export", "label": "Queue Export", "sequence": primary("Shift+E"), "defaultSequence": primary("Shift+E") },
+        { "id": "toggle-full-edit", "label": "Full-Screen Edit", "sequence": "F", "defaultSequence": "F" }
+    ]
+    readonly property int editableShortcutCount: editableShortcuts.length
+    readonly property var shortcutPresetMappings: [
+        {
+            "id": "app-native",
+            "label": "App Native",
+            "sequences": {
+                "command-palette": primary("K"),
+                "workspace-library": primary("1"),
+                "workspace-edit": primary("2"),
+                "queue-export": primary("Shift+E"),
+                "toggle-full-edit": "F"
+            }
+        },
+        {
+            "id": "lightroom",
+            "label": "Lightroom",
+            "sequences": {
+                "command-palette": primary("K"),
+                "workspace-library": "G",
+                "workspace-edit": "D",
+                "queue-export": primary("Shift+E"),
+                "toggle-full-edit": "F"
+            }
+        },
+        {
+            "id": "photoshop",
+            "label": "Photoshop",
+            "sequences": {
+                "command-palette": primary("Alt+K"),
+                "workspace-library": "F5",
+                "workspace-edit": "F6",
+                "queue-export": primary("Alt+Shift+S"),
+                "toggle-full-edit": "F"
+            }
+        },
+        {
+            "id": "capture-one",
+            "label": "Capture One",
+            "sequences": {
+                "command-palette": primary("K"),
+                "workspace-library": primary("B"),
+                "workspace-edit": primary("E"),
+                "queue-export": primary("D"),
+                "toggle-full-edit": "F11"
+            }
+        }
+    ]
+    readonly property int shortcutPresetCount: shortcutPresetMappings.length
     readonly property var shortcutSections: [
         {
             title: "Global",
@@ -23,6 +81,7 @@ Dialog {
             items: [
                 { "keys": primary("O"), "description": "Import a folder into the library." },
                 { "keys": primary("N"), "description": "Create a new timeline." },
+                { "keys": primary("1-5"), "description": "Switch directly between Library, Edit, Carousel, Timeline, and Export." },
                 { "keys": primary("A"), "description": "Select all visible items in Library, Import, or Timeline." },
                 { "keys": primary("Shift+A"), "description": "Clear the active library, import, or timeline selection." },
                 { "keys": primary("Shift+E"), "description": "Queue the current selection for export." },
@@ -95,6 +154,175 @@ Dialog {
         return primaryLabel + "+" + key
     }
 
+    function shortcutSequence(shortcutId) {
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            if (editableShortcuts[i].id === shortcutId)
+                return String(editableShortcuts[i].sequence || "")
+        }
+        return ""
+    }
+
+    function shortcutConflictIds(sequence, excludingShortcutId) {
+        const cleanSequence = String(sequence || "").trim().toLowerCase()
+        const cleanExcludedId = String(excludingShortcutId || "")
+        let conflicts = []
+        if (cleanSequence.length === 0)
+            return conflicts
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            const shortcut = editableShortcuts[i]
+            if (shortcut.id !== cleanExcludedId
+                    && String(shortcut.sequence || "").trim().toLowerCase() === cleanSequence)
+                conflicts.push(shortcut.id)
+        }
+        return conflicts
+    }
+
+    function shortcutWouldConflict(shortcutId, sequence) {
+        return shortcutConflictIds(sequence, shortcutId).length > 0
+    }
+
+    function shortcutConflictCount() {
+        let count = 0
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            if (shortcutConflictIds(editableShortcuts[i].sequence, editableShortcuts[i].id).length > 0)
+                count += 1
+        }
+        return count
+    }
+
+    function shortcutMatchesQuery(label, keys, query) {
+        const cleanQuery = String(query || shortcutSearchText || "").trim().toLowerCase()
+        if (cleanQuery.length === 0)
+            return true
+        return String(label || "").toLowerCase().indexOf(cleanQuery) !== -1
+            || String(keys || "").toLowerCase().indexOf(cleanQuery) !== -1
+    }
+
+    function editableShortcutMatches(shortcut) {
+        return shortcutMatchesQuery(shortcut.label + " " + shortcut.id, shortcut.sequence, shortcutSearchText)
+    }
+
+    function sectionShortcutMatchCount(section) {
+        let count = 0
+        for (let i = 0; i < section.items.length; ++i) {
+            const item = section.items[i]
+            if (shortcutMatchesQuery(item.description, item.keys, shortcutSearchText))
+                count += 1
+        }
+        return count
+    }
+
+    function shortcutSearchResultCount() {
+        let count = 0
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            if (editableShortcutMatches(editableShortcuts[i]))
+                count += 1
+        }
+        for (let sectionIndex = 0; sectionIndex < shortcutSections.length; ++sectionIndex)
+            count += sectionShortcutMatchCount(shortcutSections[sectionIndex])
+        return count
+    }
+
+    function presetForId(presetId) {
+        for (let i = 0; i < shortcutPresetMappings.length; ++i) {
+            if (shortcutPresetMappings[i].id === presetId)
+                return shortcutPresetMappings[i]
+        }
+        return null
+    }
+
+    function shortcutPresetNames() {
+        let names = []
+        for (let i = 0; i < shortcutPresetMappings.length; ++i)
+            names.push(shortcutPresetMappings[i].label)
+        return names
+    }
+
+    function shortcutPresetWouldConflict(presetId) {
+        const preset = presetForId(String(presetId || ""))
+        if (preset === null)
+            return false
+        let usedSequences = {}
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            const shortcut = editableShortcuts[i]
+            const sequence = String(preset.sequences[shortcut.id] || shortcut.sequence || "").trim().toLowerCase()
+            if (sequence.length === 0)
+                continue
+            if (usedSequences[sequence])
+                return true
+            usedSequences[sequence] = true
+        }
+        return false
+    }
+
+    function applyShortcutPreset(presetId) {
+        const cleanPresetId = String(presetId || "")
+        const preset = presetForId(cleanPresetId)
+        if (preset === null) {
+            shortcutEditorStatus = "Shortcut preset was not found."
+            return false
+        }
+        if (shortcutPresetWouldConflict(cleanPresetId)) {
+            shortcutEditorStatus = "Shortcut preset contains conflicts."
+            return false
+        }
+
+        const shortcuts = editableShortcuts.slice(0)
+        for (let i = 0; i < shortcuts.length; ++i) {
+            const shortcut = shortcuts[i]
+            shortcuts[i] = {
+                "id": shortcut.id,
+                "label": shortcut.label,
+                "sequence": String(preset.sequences[shortcut.id] || shortcut.sequence || "").trim(),
+                "defaultSequence": shortcut.defaultSequence
+            }
+        }
+        editableShortcuts = shortcuts
+        activeShortcutPreset = cleanPresetId
+        shortcutEditorStatus = "Applied " + preset.label + " shortcuts."
+        return true
+    }
+
+    function setShortcutSequence(shortcutId, sequence) {
+        const cleanId = String(shortcutId || "")
+        const cleanSequence = String(sequence || "").trim()
+        if (cleanId.length === 0 || cleanSequence.length === 0) {
+            shortcutEditorStatus = "Shortcut cannot be empty."
+            return false
+        }
+        const conflicts = shortcutConflictIds(cleanSequence, cleanId)
+        if (conflicts.length > 0) {
+            shortcutEditorStatus = "Shortcut conflicts with " + conflicts.join(", ") + "."
+            return false
+        }
+
+        const shortcuts = editableShortcuts.slice(0)
+        for (let i = 0; i < shortcuts.length; ++i) {
+            if (shortcuts[i].id === cleanId) {
+                shortcuts[i] = {
+                    "id": shortcuts[i].id,
+                    "label": shortcuts[i].label,
+                    "sequence": cleanSequence,
+                    "defaultSequence": shortcuts[i].defaultSequence
+                }
+                editableShortcuts = shortcuts
+                shortcutEditorStatus = "Shortcut updated."
+                return true
+            }
+        }
+        shortcutEditorStatus = "Shortcut was not found."
+        return false
+    }
+
+    function resetShortcutSequence(shortcutId) {
+        for (let i = 0; i < editableShortcuts.length; ++i) {
+            if (editableShortcuts[i].id === shortcutId)
+                return setShortcutSequence(shortcutId, editableShortcuts[i].defaultSequence)
+        }
+        shortcutEditorStatus = "Shortcut was not found."
+        return false
+    }
+
     parent: Overlay.overlay
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
@@ -142,6 +370,18 @@ Dialog {
                 }
             }
 
+            TextField {
+                objectName: "shortcutSearchField"
+                Layout.preferredWidth: 240
+                placeholderText: "Search shortcuts"
+                text: root.shortcutSearchText
+                selectByMouse: true
+                color: theme.textStrong
+                font.family: theme.fontUi
+                font.pixelSize: 12
+                onTextEdited: root.shortcutSearchText = text
+            }
+
             ActionButton {
                 text: "Close"
                 compact: true
@@ -159,6 +399,101 @@ Dialog {
                 width: Math.max(0, parent.width)
                 spacing: theme.space16
 
+                GlassSurface {
+                    objectName: "editableShortcutsPanel"
+                    Layout.fillWidth: true
+                    radius: theme.radiusPanel
+                    accent: theme.accentWarm400
+                    accentRail: false
+                    elevated: true
+                    implicitHeight: editableBody.implicitHeight + theme.panelPadding * 2
+
+                    ColumnLayout {
+                        id: editableBody
+                        anchors.fill: parent
+                        anchors.margins: theme.panelPadding
+                        spacing: theme.space12
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Editable Shortcuts"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 16
+                            font.weight: Font.DemiBold
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: theme.space8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Preset mappings"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 11
+                            }
+
+                            Repeater {
+                                model: root.shortcutPresetMappings
+
+                                delegate: ActionButton {
+                                    required property var modelData
+                                    text: modelData.label
+                                    compact: true
+                                    enabled: root.activeShortcutPreset !== modelData.id
+                                    onClicked: root.applyShortcutPreset(modelData.id)
+                                }
+                            }
+                        }
+
+                        Repeater {
+                            model: root.editableShortcuts
+
+                            delegate: RowLayout {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                visible: root.editableShortcutMatches(modelData)
+                                spacing: theme.space12
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                }
+
+                                TextField {
+                                    Layout.preferredWidth: 150
+                                    text: modelData.sequence
+                                    selectByMouse: true
+                                    color: theme.textStrong
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 12
+                                    onEditingFinished: root.setShortcutSequence(modelData.id, text)
+                                }
+
+                                ActionButton {
+                                    text: "Reset"
+                                    compact: true
+                                    onClicked: root.resetShortcutSequence(modelData.id)
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: root.shortcutEditorStatus.length > 0
+                            text: root.shortcutEditorStatus
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                        }
+                    }
+                }
+
                 Repeater {
                     model: root.shortcutSections
 
@@ -166,6 +501,7 @@ Dialog {
                         required property var modelData
 
                         Layout.fillWidth: true
+                        visible: root.sectionShortcutMatchCount(modelData) > 0
                         radius: theme.radiusPanel
                         accent: modelData.accent
                         accentRail: false
@@ -194,6 +530,7 @@ Dialog {
                                     required property var modelData
 
                                     Layout.fillWidth: true
+                                    visible: root.shortcutMatchesQuery(modelData.description, modelData.keys, root.shortcutSearchText)
                                     radius: theme.radiusControl
                                     surfaceOpacity: 0.46
                                     edgeOpacity: 0.22

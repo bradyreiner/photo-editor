@@ -2,6 +2,7 @@
 
 #include "app_bootstrap.h"
 #include "edit_recipe_state.h"
+#include "observability.h"
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 #include "timeline_asset_store.h"
@@ -15,6 +16,7 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDirIterator>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
@@ -33,6 +35,7 @@
 #include <QStringList>
 #include <QUuid>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVariantMap>
 
 namespace photo_editor::desktop {
@@ -41,6 +44,8 @@ namespace {
 
 constexpr int kThumbnailEdge = 768;
 constexpr int kThumbnailDecodeCeiling = 1280;
+constexpr int kMaxConcurrentThumbnailTasks = 3;
+constexpr int kVisibleThumbnailPrefetchRows = 18;
 
 const QStringList& supported_video_extensions() {
   static const QStringList kExtensions = {
@@ -431,27 +436,25 @@ QString thumbnail_cache_path_for_key(const QString& key) {
   return QDir(thumbnail_cache_root()).filePath(QStringLiteral("%1.jpg").arg(QString::fromLatin1(hash)));
 }
 
-QString photo_thumbnail_cache_key(const QString& file_path, const QString& recipe_json) {
-  return QStringLiteral("photo-v2:%1:%2").arg(file_path, recipe_json.trimmed());
+QString versioned_local_file_url(const QString& file_path) {
+  QFileInfo file_info(file_path);
+  if (!file_info.exists()) {
+    return {};
+  }
+
+  auto url = QUrl::fromLocalFile(file_info.absoluteFilePath());
+  QUrlQuery query;
+  query.addQueryItem(
+      QStringLiteral("v"),
+      QStringLiteral("%1-%2")
+          .arg(file_info.lastModified().toUTC().toMSecsSinceEpoch())
+          .arg(file_info.size()));
+  url.setQuery(query);
+  return url.toString();
 }
 
-QString cached_photo_thumbnail(const QString& file_path, const QString& recipe_json) {
-  if (!preview_supported(file_path)) {
-    return {};
-  }
-
-  const QFileInfo source_info(file_path);
-  if (!source_info.exists() || !source_info.isReadable()) {
-    return {};
-  }
-
-  const auto cache_path = thumbnail_cache_path_for_key(photo_thumbnail_cache_key(file_path, recipe_json));
-  const QFileInfo cache_info(cache_path);
-  if (!cache_info.exists() || cache_info.lastModified() < source_info.lastModified()) {
-    return {};
-  }
-
-  return QUrl::fromLocalFile(cache_path).toString();
+QString photo_thumbnail_cache_key(const QString& file_path, const QString& recipe_json) {
+  return QStringLiteral("photo-v2:%1:%2").arg(file_path, recipe_json.trimmed());
 }
 
 QString cached_video_poster(const QString& file_path) {
@@ -466,7 +469,7 @@ QString cached_video_poster(const QString& file_path) {
     return {};
   }
 
-  return QUrl::fromLocalFile(cache_path).toString();
+  return versioned_local_file_url(cache_path);
 }
 
 double probe_video_duration_seconds(const QString& file_path) {
@@ -539,7 +542,7 @@ QString ensure_thumbnail(const QString& file_path, const QString& recipe_json) {
   const QFileInfo cache_info(cache_path);
 
   if (cache_info.exists() && cache_info.lastModified() >= source_info.lastModified()) {
-    return QUrl::fromLocalFile(cache_path).toString();
+    return versioned_local_file_url(cache_path);
   }
 
   QDir().mkpath(thumbnail_cache_root());
@@ -575,7 +578,7 @@ QString ensure_thumbnail(const QString& file_path, const QString& recipe_json) {
     return {};
   }
 
-  return QUrl::fromLocalFile(cache_path).toString();
+  return versioned_local_file_url(cache_path);
 }
 
 QString ensure_video_poster(const QString& file_path) {
@@ -592,7 +595,7 @@ QString ensure_video_poster(const QString& file_path) {
   const auto cache_path = thumbnail_cache_path_for_key(QStringLiteral("video-v2:%1").arg(file_path));
   const QFileInfo cache_info(cache_path);
   if (cache_info.exists() && cache_info.lastModified() >= source_info.lastModified()) {
-    return QUrl::fromLocalFile(cache_path).toString();
+    return versioned_local_file_url(cache_path);
   }
 
   QDir().mkpath(thumbnail_cache_root());
@@ -616,7 +619,7 @@ QString ensure_video_poster(const QString& file_path) {
     return {};
   }
 
-  return QFileInfo::exists(cache_path) ? QUrl::fromLocalFile(cache_path).toString() : QString{};
+  return QFileInfo::exists(cache_path) ? versioned_local_file_url(cache_path) : QString{};
 }
 
 QString thumbnail_source_for_path(const QString& file_path, const QString& recipe_json = {}) {
@@ -630,23 +633,12 @@ QString thumbnail_source_for_path(const QString& file_path, const QString& recip
   return ensure_thumbnail(file_path, recipe_json);
 }
 
-QString cached_thumbnail_source_for_path(const QString& file_path, const QString& recipe_json = {}) {
-  const auto media_type = media_type_for_path(file_path);
-  if (media_type == QStringLiteral("video")) {
-    return cached_video_poster(file_path);
-  }
-  if (media_type == QStringLiteral("audio")) {
-    return {};
-  }
-  return cached_photo_thumbnail(file_path, recipe_json);
-}
-
-void refresh_thumbnail_source_for_item(CatalogAssetItem* item) {
+void clear_thumbnail_source_for_item(CatalogAssetItem* item) {
   if (item == nullptr || item->media_type == QStringLiteral("timeline")) {
     return;
   }
 
-  item->thumbnail_source = cached_thumbnail_source_for_path(item->file_path, item->recipe_json);
+  item->thumbnail_source.clear();
 }
 
 QDateTime parse_iso_datetime(const QString& value) {
@@ -689,7 +681,7 @@ QVector<CatalogAssetItem> load_timeline_asset_items() {
     item.online = QFileInfo(record.document_path).exists() && QFileInfo(record.render_path).exists();
 
     if (!record.poster_path.isEmpty() && QFileInfo::exists(record.poster_path)) {
-      item.thumbnail_source = QUrl::fromLocalFile(record.poster_path).toString();
+      item.thumbnail_source = versioned_local_file_url(record.poster_path);
     } else if (!record.render_path.isEmpty()) {
       item.thumbnail_source = cached_video_poster(record.render_path);
     }
@@ -892,7 +884,7 @@ void apply_relinked_path_to_item(CatalogAssetItem* item, const QString& file_pat
   item->file_path = normalized_path;
   item->location_path = normalized_path;
   item->media_type = media_type_for_path(normalized_path);
-  item->thumbnail_source = cached_thumbnail_source_for_path(normalized_path, item->recipe_json);
+  clear_thumbnail_source_for_item(item);
 
   const auto parent_path = QFileInfo(normalized_path).absolutePath();
   if (!parent_path.isEmpty()) {
@@ -920,10 +912,6 @@ bool refresh_online_state_for_item(CatalogAssetItem* item) {
   } else {
     const QFileInfo source_info(item->file_path);
     next_online = source_info.exists() && source_info.isFile();
-  }
-
-  if (next_online && item->thumbnail_source.isEmpty()) {
-    item->thumbnail_source = cached_thumbnail_source_for_path(item->file_path, item->recipe_json);
   }
 
   const auto changed = item->online != next_online;
@@ -1030,7 +1018,6 @@ QVector<CatalogAssetItem> parse_assets(const QJsonArray& asset_array) {
     if (recipe_value.isObject()) {
       item.recipe_json = QString::fromUtf8(QJsonDocument(recipe_value.toObject()).toJson(QJsonDocument::Compact));
     }
-    item.thumbnail_source = cached_thumbnail_source_for_path(item.file_path, item.recipe_json);
     item.imported_at_value = parse_imported_at(asset);
     item.imported_at = format_datetime(item.imported_at_value, QStringLiteral("Unknown import time"));
     item.drive_id = location.value("drive_id").toString();
@@ -1067,7 +1054,12 @@ CatalogAssetModel::CatalogAssetModel(QObject* parent)
 
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &CatalogAssetModel::pollActiveImportJob);
 
-  connect(&thumbnail_watcher_, &QFutureWatcher<ThumbnailTaskResult>::finished, this, &CatalogAssetModel::handleThumbnailFinished);
+  thumbnail_watchers_.reserve(kMaxConcurrentThumbnailTasks);
+  for (int index = 0; index < kMaxConcurrentThumbnailTasks; ++index) {
+    auto watcher = std::make_unique<QFutureWatcher<ThumbnailTaskResult>>(this);
+    connect(watcher.get(), &QFutureWatcher<ThumbnailTaskResult>::finished, this, &CatalogAssetModel::handleThumbnailFinished);
+    thumbnail_watchers_.push_back(std::move(watcher));
+  }
   connect(&delete_watcher_, &QFutureWatcher<DeleteAssetsTaskResult>::finished, this, &CatalogAssetModel::handleDeleteFinished);
 }
 
@@ -1147,6 +1139,14 @@ QVariant CatalogAssetModel::data(const QModelIndex& index, int role) const {
       return item.sync_group_size;
     case OnlineRole:
       return item.online;
+    case VirtualCopyRole:
+      return item.virtual_copy;
+    case SourceAssetIdRole:
+      return item.source_asset_id;
+    case VariantNameRole:
+      return item.variant_name;
+    case VariantIndexRole:
+      return item.variant_index;
     default:
       return {};
   }
@@ -1184,6 +1184,10 @@ QHash<int, QByteArray> CatalogAssetModel::roleNames() const {
       {SyncGroupKeyRole, "syncGroupKey"},
       {SyncGroupSizeRole, "syncGroupSize"},
       {OnlineRole, "online"},
+      {VirtualCopyRole, "virtualCopy"},
+      {SourceAssetIdRole, "sourceAssetId"},
+      {VariantNameRole, "variantName"},
+      {VariantIndexRole, "variantIndex"},
   };
 }
 
@@ -1223,6 +1227,14 @@ QStringList CatalogAssetModel::selectedAssetIds() const {
 int CatalogAssetModel::selectedAssetCount() const { return static_cast<int>(selectedAssetIds().size()); }
 
 bool CatalogAssetModel::hasMultiSelection() const { return selectedAssetCount() > 1; }
+
+QVariantList CatalogAssetModel::selectedSurveyAssets() const {
+  return surveyAssets(selected_index_, 6);
+}
+
+int CatalogAssetModel::selectedSurveyAssetCount() const {
+  return surveyAssetCount(selected_index_, 6);
+}
 
 int CatalogAssetModel::visiblePickedCount() const { return visible_picked_count_; }
 
@@ -1426,6 +1438,34 @@ bool CatalogAssetModel::selectedOnline() const {
   return false;
 }
 
+bool CatalogAssetModel::selectedVirtualCopy() const {
+  if (const auto* item = selectedItem()) {
+    return item->virtual_copy;
+  }
+  return false;
+}
+
+QString CatalogAssetModel::selectedSourceAssetId() const {
+  if (const auto* item = selectedItem()) {
+    return item->source_asset_id;
+  }
+  return {};
+}
+
+QString CatalogAssetModel::selectedVariantName() const {
+  if (const auto* item = selectedItem()) {
+    return item->variant_name;
+  }
+  return {};
+}
+
+int CatalogAssetModel::selectedVariantIndex() const {
+  if (const auto* item = selectedItem()) {
+    return item->variant_index;
+  }
+  return 0;
+}
+
 QVariantMap CatalogAssetModel::assetMap(const CatalogAssetItem& item) const {
   QVariantMap map;
   map.insert(QStringLiteral("assetId"), item.asset_id);
@@ -1461,6 +1501,10 @@ QVariantMap CatalogAssetModel::assetMap(const CatalogAssetItem& item) const {
   map.insert(QStringLiteral("syncGroupKey"), item.sync_group_key);
   map.insert(QStringLiteral("syncGroupSize"), item.sync_group_size);
   map.insert(QStringLiteral("online"), item.online);
+  map.insert(QStringLiteral("virtualCopy"), item.virtual_copy);
+  map.insert(QStringLiteral("sourceAssetId"), item.source_asset_id);
+  map.insert(QStringLiteral("variantName"), item.variant_name);
+  map.insert(QStringLiteral("variantIndex"), item.variant_index);
   return map;
 }
 
@@ -1568,6 +1612,70 @@ QVariantMap CatalogAssetModel::assetAt(int index) const {
   return assetMap(assets_.at(index));
 }
 
+QVariantList CatalogAssetModel::surveyAssets(int selected_index, int maximum_count) const {
+  QVariantList items;
+  if (assets_.isEmpty() || maximum_count <= 0) {
+    return items;
+  }
+
+  const auto asset_count = static_cast<int>(assets_.size());
+  if (selected_index < 0 || selected_index >= asset_count) {
+    selected_index = std::clamp(selected_index, 0, asset_count - 1);
+  }
+
+  const auto append_asset = [this, &items, maximum_count, asset_count](int index) {
+    if (items.size() >= maximum_count || index < 0 || index >= asset_count) {
+      return;
+    }
+
+    auto map = assetMap(assets_.at(index));
+    map.insert(QStringLiteral("visibleIndex"), index);
+    items.push_back(map);
+  };
+
+  const auto& current = assets_.at(selected_index);
+  if (!current.burst_key.isEmpty() && current.burst_size > 1) {
+    for (auto index = 0; index < asset_count; ++index) {
+      if (assets_.at(index).burst_key == current.burst_key) {
+        append_asset(index);
+      }
+    }
+    return items;
+  }
+
+  if (!current.duplicate_group_key.isEmpty() && current.duplicate_group_size > 1) {
+    for (auto index = 0; index < asset_count; ++index) {
+      if (assets_.at(index).duplicate_group_key == current.duplicate_group_key) {
+        append_asset(index);
+      }
+    }
+    return items;
+  }
+
+  const auto half_window = std::max(0, maximum_count / 2);
+  auto start = std::max(0, selected_index - half_window);
+  if (start + maximum_count > asset_count) {
+    start = std::max(0, asset_count - maximum_count);
+  }
+  const auto end = std::min(asset_count, start + maximum_count);
+  for (auto index = start; index < end; ++index) {
+    append_asset(index);
+  }
+  return items;
+}
+
+QVariantMap CatalogAssetModel::surveyAssetAt(int selected_index, int position, int maximum_count) const {
+  const auto items = surveyAssets(selected_index, maximum_count);
+  if (position < 0 || position >= items.size()) {
+    return {};
+  }
+  return items.at(position).toMap();
+}
+
+int CatalogAssetModel::surveyAssetCount(int selected_index, int maximum_count) const {
+  return static_cast<int>(surveyAssets(selected_index, maximum_count).size());
+}
+
 bool CatalogAssetModel::assetSelected(const QString& asset_id) const {
   return selected_asset_ids_.contains(asset_id);
 }
@@ -1596,6 +1704,38 @@ void CatalogAssetModel::refresh() {
 }
 
 void CatalogAssetModel::refreshImportSources() { rebuildImportSources(); }
+
+void CatalogAssetModel::clearFilters() {
+  const auto preferred_asset_id = selectedAssetId();
+  auto changed = false;
+
+  const auto reset_string = [&changed](QString* value, const QString& next) {
+    if (*value == next) {
+      return;
+    }
+    *value = next;
+    changed = true;
+  };
+
+  reset_string(&project_filter_, QStringLiteral("all"));
+  reset_string(&import_date_filter_, QStringLiteral("all"));
+  reset_string(&capture_year_filter_, QStringLiteral("all"));
+  reset_string(&media_type_filter_, QStringLiteral("all"));
+  reset_string(&review_filter_, QStringLiteral("all"));
+  reset_string(&availability_filter_, QStringLiteral("all"));
+  reset_string(&search_filter_, {});
+  if (minimum_rating_filter_ != 0) {
+    minimum_rating_filter_ = 0;
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  emit filtersChanged();
+  applyFilters(preferred_asset_id);
+}
 
 void CatalogAssetModel::importFolder() {
   if (busy()) {
@@ -1714,7 +1854,7 @@ void CatalogAssetModel::startImport(
   const auto normalized_project_name = normalizedProjectName(project_name);
   pending_import_project_name_ = normalized_project_name;
   pending_import_file_paths_ =
-      normalized_project_name.isEmpty()
+      normalized_project_name.isEmpty() && import_preset_recipe_json_.isEmpty()
           ? QStringList{}
           : (selected_file_paths.isEmpty() ? collect_importable_file_paths(normalized_path) : selected_file_paths);
   beginImportJob(
@@ -2181,8 +2321,17 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
   auto updated_count = 0;
   auto persisted_all = true;
 
-  for (auto& item : all_assets_) {
-    if (!target_asset_ids.contains(item.asset_id) || item.media_type != QStringLiteral("photo")) {
+  for (const auto& asset_id : target_asset_ids) {
+    const auto index_iterator = all_asset_index_by_id_.constFind(asset_id);
+    if (index_iterator == all_asset_index_by_id_.cend()) {
+      continue;
+    }
+    const auto asset_index = index_iterator.value();
+    if (asset_index < 0 || asset_index >= all_assets_.size()) {
+      continue;
+    }
+    auto& item = all_assets_[asset_index];
+    if (item.media_type != QStringLiteral("photo")) {
       continue;
     }
 
@@ -2194,7 +2343,7 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
     }
 
     item.recipe_json = next_recipe_json;
-    item.thumbnail_source = cached_thumbnail_source_for_path(item.file_path, next_recipe_json);
+    clear_thumbnail_source_for_item(&item);
     updated_recipe_jsons.insert(item.asset_id, next_recipe_json);
     updated_thumbnail_sources.insert(item.asset_id, item.thumbnail_source);
     QString error_message;
@@ -2211,10 +2360,17 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
     return 0;
   }
 
-  for (qsizetype index = 0; index < assets_.size(); ++index) {
+  for (auto iterator = updated_recipe_jsons.cbegin(); iterator != updated_recipe_jsons.cend(); ++iterator) {
+    const auto visible_index_iterator = visible_asset_index_by_id_.constFind(iterator.key());
+    if (visible_index_iterator == visible_asset_index_by_id_.cend()) {
+      continue;
+    }
+    const auto index = visible_index_iterator.value();
+    if (index < 0 || index >= assets_.size()) {
+      continue;
+    }
     auto& item = assets_[index];
-    const auto iterator = updated_recipe_jsons.constFind(item.asset_id);
-    if (iterator == updated_recipe_jsons.cend()) {
+    if (item.asset_id != iterator.key()) {
       continue;
     }
 
@@ -2244,6 +2400,218 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
   return updated_count;
 }
 
+int CatalogAssetModel::applyPresetRecipeJsonToAssetIds(
+    const QStringList& asset_ids,
+    const QString& preset_recipe_json,
+    const QStringList& adjustment_groups) {
+  const auto updated_count = applyRecipeJsonToAssetIds(asset_ids, preset_recipe_json, adjustment_groups);
+  if (updated_count > 0) {
+    setStatus(QStringLiteral("Applied preset to %1 %2.")
+                  .arg(updated_count)
+                  .arg(updated_count == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
+  }
+  return updated_count;
+}
+
+void CatalogAssetModel::setImportPresetRecipeJson(
+    const QString& preset_recipe_json,
+    const QStringList& adjustment_groups) {
+  import_preset_recipe_json_ = preset_recipe_json.trimmed();
+  import_preset_adjustment_groups_ = adjustment_groups;
+}
+
+void CatalogAssetModel::clearImportPresetRecipeJson() {
+  import_preset_recipe_json_.clear();
+  import_preset_adjustment_groups_.clear();
+}
+
+QString CatalogAssetModel::createVirtualCopyForAsset(
+    const QString& asset_id,
+    const QString& variant_name) {
+  const auto trimmed_asset_id = asset_id.trimmed();
+  if (trimmed_asset_id.isEmpty()) {
+    return {};
+  }
+
+  const auto source_index_iterator = all_asset_index_by_id_.constFind(trimmed_asset_id);
+  const auto source_index = source_index_iterator == all_asset_index_by_id_.cend()
+                                ? qsizetype{-1}
+                                : source_index_iterator.value();
+  const auto* source_item =
+      source_index >= 0 && source_index < all_assets_.size() ? &all_assets_.at(source_index) : nullptr;
+  if (source_item != nullptr && source_item->media_type != QStringLiteral("photo")) {
+    source_item = nullptr;
+  }
+  if (source_item == nullptr) {
+    return {};
+  }
+
+  const auto root_asset_id = source_item->virtual_copy && !source_item->source_asset_id.trimmed().isEmpty()
+                                 ? source_item->source_asset_id.trimmed()
+                                 : source_item->asset_id;
+  auto next_variant_index = 1;
+  for (const auto& item : all_assets_) {
+    if (item.source_asset_id == root_asset_id) {
+      next_variant_index = std::max(next_variant_index, item.variant_index + 1);
+    }
+  }
+
+  auto copy = *source_item;
+  copy.asset_id = QStringLiteral("%1::variant-%2").arg(root_asset_id).arg(next_variant_index);
+  while (std::any_of(
+      all_assets_.cbegin(),
+      all_assets_.cend(),
+      [&copy](const CatalogAssetItem& item) { return item.asset_id == copy.asset_id; })) {
+    ++next_variant_index;
+    copy.asset_id = QStringLiteral("%1::variant-%2").arg(root_asset_id).arg(next_variant_index);
+  }
+  copy.virtual_copy = true;
+  copy.source_asset_id = root_asset_id;
+  copy.variant_index = next_variant_index;
+  copy.variant_name = variant_name.trimmed().isEmpty()
+                          ? QStringLiteral("Virtual Copy %1").arg(next_variant_index)
+                          : variant_name.trimmed();
+  copy.camera_label = QStringLiteral("%1 (%2)").arg(source_item->camera_label, copy.variant_name);
+  clear_thumbnail_source_for_item(&copy);
+  copy.burst_key.clear();
+  copy.burst_size = 1;
+  copy.burst_position = 1;
+  copy.duplicate_group_key.clear();
+  copy.duplicate_group_size = 1;
+  copy.duplicate_group_position = 1;
+  copy.best_shot_suggested = false;
+  copy.sync_group_key.clear();
+  copy.sync_group_size = 1;
+
+  virtual_copies_.push_back(copy);
+  recipe_overrides_.insert(copy.asset_id, copy.recipe_json);
+  saveProjects();
+  updateAssets([&]() {
+    QVector<CatalogAssetItem> base_items;
+    base_items.reserve(all_assets_.size());
+    for (const auto& item : all_assets_) {
+      if (!item.virtual_copy && item.media_type != QStringLiteral("timeline")) {
+        base_items.push_back(item);
+      }
+    }
+    return base_items;
+  }());
+  selectIndex([&]() {
+    const auto copy_index_iterator = visible_asset_index_by_id_.constFind(copy.asset_id);
+    if (copy_index_iterator != visible_asset_index_by_id_.cend()) {
+      return static_cast<int>(copy_index_iterator.value());
+    }
+    return selected_index_;
+  }());
+  setStatus(QStringLiteral("Created virtual copy '%1'.").arg(copy.variant_name));
+  return copy.asset_id;
+}
+
+QString CatalogAssetModel::createVirtualCopyForSelectedAsset(const QString& variant_name) {
+  return createVirtualCopyForAsset(selectedAssetId(), variant_name);
+}
+
+QString CatalogAssetModel::createCropVariantForAsset(
+    const QString& asset_id,
+    const QString& variant_name,
+    const QString& crop_preset,
+    double crop_x,
+    double crop_y,
+    double crop_width,
+    double crop_height) {
+  const auto normalized_preset = crop_preset.trimmed();
+  const auto has_rect = crop_width > 0.0 && crop_height > 0.0;
+  if (normalized_preset.isEmpty() && !has_rect) {
+    return {};
+  }
+
+  const auto copy_id = createVirtualCopyForAsset(asset_id, variant_name);
+  if (copy_id.isEmpty()) {
+    return {};
+  }
+
+  auto copy_recipe_json = QString();
+  for (const auto& item : all_assets_) {
+    if (item.asset_id == copy_id) {
+      copy_recipe_json = item.recipe_json;
+      break;
+    }
+  }
+  auto crop_state = parse_edit_recipe_json(copy_recipe_json);
+  crop_state.crop_preset = normalized_preset.isEmpty() ? QStringLiteral("Original") : normalized_preset;
+  crop_state.crop_zoom = 1.0;
+  if (has_rect) {
+    const auto width = qBound(0.01, crop_width, 1.0);
+    const auto height = qBound(0.01, crop_height, 1.0);
+    crop_state.crop_rect_x = qBound(0.0, crop_x, 1.0 - width);
+    crop_state.crop_rect_y = qBound(0.0, crop_y, 1.0 - height);
+    crop_state.crop_rect_width = width;
+    crop_state.crop_rect_height = height;
+  } else {
+    crop_state.crop_rect_x = 0.0;
+    crop_state.crop_rect_y = 0.0;
+    crop_state.crop_rect_width = 0.0;
+    crop_state.crop_rect_height = 0.0;
+  }
+
+  if (applyRecipeJsonToAssetIds({copy_id}, serialize_edit_recipe_json(crop_state)) == 1) {
+    setStatus(QStringLiteral("Created crop variant '%1'.")
+                  .arg(variant_name.trimmed().isEmpty() ? copy_id : variant_name.trimmed()));
+  }
+  return copy_id;
+}
+
+QString CatalogAssetModel::createCropVariantForSelectedAsset(
+    const QString& variant_name,
+    const QString& crop_preset,
+    double crop_x,
+    double crop_y,
+    double crop_width,
+    double crop_height) {
+  return createCropVariantForAsset(
+      selectedAssetId(), variant_name, crop_preset, crop_x, crop_y, crop_width, crop_height);
+}
+
+QStringList CatalogAssetModel::recipeVariantAssetIds(const QString& asset_id) const {
+  const auto trimmed_asset_id = asset_id.trimmed();
+  if (trimmed_asset_id.isEmpty()) {
+    return {};
+  }
+
+  QString root_asset_id;
+  for (const auto& item : all_assets_) {
+    if (item.asset_id == trimmed_asset_id) {
+      root_asset_id = item.virtual_copy && !item.source_asset_id.trimmed().isEmpty()
+                          ? item.source_asset_id.trimmed()
+                          : item.asset_id;
+      break;
+    }
+  }
+  if (root_asset_id.isEmpty()) {
+    return {};
+  }
+
+  QVector<CatalogAssetItem> variants;
+  for (const auto& item : all_assets_) {
+    if (item.source_asset_id == root_asset_id) {
+      variants.push_back(item);
+    }
+  }
+  std::sort(
+      variants.begin(),
+      variants.end(),
+      [](const CatalogAssetItem& left, const CatalogAssetItem& right) {
+        return left.variant_index < right.variant_index;
+      });
+
+  QStringList asset_ids;
+  asset_ids.reserve(variants.size());
+  for (const auto& variant : variants) {
+    asset_ids.push_back(variant.asset_id);
+  }
+  return asset_ids;
+}
+
 void CatalogAssetModel::refreshOnlineState() {
   auto changed = false;
   for (auto& item : all_assets_) {
@@ -2265,6 +2633,24 @@ int CatalogAssetModel::relinkSelectedAssetToFolder(const QString& folder_url) {
 
 int CatalogAssetModel::relinkOfflineAssetsToFolder(const QString& folder_url) {
   return relinkAssetsToFolder(folder_url, false);
+}
+
+void CatalogAssetModel::setVisibleAssetRange(int first_index, int last_index) {
+  if (first_index < 0 || last_index < first_index || assets_.isEmpty()) {
+    first_index = -1;
+    last_index = -1;
+  } else {
+    first_index = std::clamp(first_index, 0, static_cast<int>(assets_.size()) - 1);
+    last_index = std::clamp(last_index, first_index, static_cast<int>(assets_.size()) - 1);
+  }
+
+  if (visible_thumbnail_first_index_ == first_index && visible_thumbnail_last_index_ == last_index) {
+    return;
+  }
+
+  visible_thumbnail_first_index_ = first_index;
+  visible_thumbnail_last_index_ = last_index;
+  queueThumbnailRefreshes();
 }
 
 void CatalogAssetModel::replaceAssetsForTesting(const QVector<CatalogAssetItem>& items) {
@@ -2667,12 +3053,23 @@ void CatalogAssetModel::removeDeletedAssets(const QStringList& asset_ids) {
     relinked_file_paths_.remove(asset_id);
     queued_thumbnail_asset_ids_.remove(asset_id);
     pending_thumbnail_asset_ids_.removeAll(asset_id);
+    thumbnail_queued_at_msecs_.remove(asset_id);
   }
+  virtual_copies_.erase(
+      std::remove_if(
+          virtual_copies_.begin(),
+          virtual_copies_.end(),
+          [&deleted_asset_ids](const CatalogAssetItem& item) {
+            return deleted_asset_ids.contains(item.asset_id) ||
+                   deleted_asset_ids.contains(item.source_asset_id);
+          }),
+      virtual_copies_.end());
 
   rebuildProjectMetadata();
   rebuildCaptureYears();
   rebuildBurstMetadata();
   rebuildIntelligenceMetadata();
+  rebuildAllAssetIndexMap();
   bumpProjectStatsRevision();
   saveProjects();
   applyFilters();
@@ -2852,6 +3249,21 @@ void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
   const auto previous_total_count = all_assets_.size();
 
   all_assets_ = items;
+  QSet<QString> imported_asset_ids;
+  imported_asset_ids.reserve(all_assets_.size());
+  for (auto& item : all_assets_) {
+    item.virtual_copy = false;
+    item.source_asset_id = item.asset_id;
+    item.variant_name = QStringLiteral("Original");
+    item.variant_index = 0;
+    imported_asset_ids.insert(item.asset_id);
+  }
+  for (const auto& virtual_copy : virtual_copies_) {
+    if (!imported_asset_ids.contains(virtual_copy.source_asset_id)) {
+      continue;
+    }
+    all_assets_.push_back(virtual_copy);
+  }
   loadTimelineAssets();
   for (auto& item : all_assets_) {
     apply_culling_state_to_item(&item, cullingStateForAsset(item.asset_id));
@@ -2864,11 +3276,18 @@ void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
       apply_relinked_path_to_item(&item, relinked_path);
       refresh_online_state_for_item(&item);
     }
-    refresh_thumbnail_source_for_item(&item);
+    if (item.virtual_copy && item.source_asset_id.trimmed().isEmpty()) {
+      item.source_asset_id = item.asset_id;
+    }
+    if (item.variant_name.trimmed().isEmpty()) {
+      item.variant_name = item.virtual_copy ? QStringLiteral("Virtual Copy") : QStringLiteral("Original");
+    }
+    clear_thumbnail_source_for_item(&item);
   }
   rebuildProjectMetadata();
   rebuildBurstMetadata();
   rebuildIntelligenceMetadata();
+  rebuildAllAssetIndexMap();
   bumpProjectStatsRevision();
   rebuildCaptureYears();
 
@@ -2880,9 +3299,10 @@ void CatalogAssetModel::updateAssets(const QVector<CatalogAssetItem>& items) {
 }
 
 void CatalogAssetModel::queueThumbnailRefreshes() {
+  const auto now_msecs = QDateTime::currentMSecsSinceEpoch();
   QStringList next_asset_ids;
   QSet<QString> seen_asset_ids;
-  next_asset_ids.reserve(assets_.size() + all_assets_.size());
+  next_asset_ids.reserve(assets_.size() + all_assets_.size() + kVisibleThumbnailPrefetchRows * 2);
 
   const auto append_asset = [&](const CatalogAssetItem& item) {
     if (item.asset_id.isEmpty() || seen_asset_ids.contains(item.asset_id) || !item.thumbnail_source.isEmpty() ||
@@ -2896,6 +3316,14 @@ void CatalogAssetModel::queueThumbnailRefreshes() {
   if (const auto* item = selectedItem()) {
     append_asset(*item);
   }
+  if (visible_thumbnail_first_index_ >= 0 && visible_thumbnail_last_index_ >= visible_thumbnail_first_index_) {
+    const auto first_index = std::max(0, visible_thumbnail_first_index_ - kVisibleThumbnailPrefetchRows);
+    const auto last_index =
+        std::min(static_cast<int>(assets_.size()) - 1, visible_thumbnail_last_index_ + kVisibleThumbnailPrefetchRows);
+    for (auto index = first_index; index <= last_index; ++index) {
+      append_asset(assets_.at(index));
+    }
+  }
   for (const auto& item : assets_) {
     append_asset(item);
   }
@@ -2906,11 +3334,15 @@ void CatalogAssetModel::queueThumbnailRefreshes() {
   QStringList reordered_queue;
   reordered_queue.reserve(next_asset_ids.size() + pending_thumbnail_asset_ids_.size());
   QSet<QString> queued_asset_ids = queued_thumbnail_asset_ids_;
-  queued_asset_ids.insert(active_thumbnail_asset_id_);
+  queued_asset_ids.unite(active_thumbnail_asset_ids_);
 
   for (const auto& asset_id : next_asset_ids) {
+    if (active_thumbnail_asset_ids_.contains(asset_id)) {
+      continue;
+    }
     if (!queued_asset_ids.contains(asset_id)) {
       queued_asset_ids.insert(asset_id);
+      thumbnail_queued_at_msecs_.insert(asset_id, now_msecs);
     }
     reordered_queue.push_back(asset_id);
   }
@@ -2931,38 +3363,73 @@ void CatalogAssetModel::queueThumbnailRefreshes() {
 }
 
 void CatalogAssetModel::startNextThumbnailTask() {
-  if (thumbnail_watcher_.isRunning()) {
-    return;
-  }
-
-  while (!pending_thumbnail_asset_ids_.isEmpty()) {
-    const auto asset_id = pending_thumbnail_asset_ids_.takeFirst();
-    queued_thumbnail_asset_ids_.remove(asset_id);
-
-    const auto iterator = std::find_if(
-        all_assets_.cbegin(),
-        all_assets_.cend(),
-        [&asset_id](const CatalogAssetItem& item) { return item.asset_id == asset_id; });
-    if (iterator == all_assets_.cend() || !iterator->thumbnail_source.isEmpty() || !iterator->online ||
-        iterator->file_path.trimmed().isEmpty()) {
+  auto started_task = false;
+  for (const auto& watcher : thumbnail_watchers_) {
+    if (watcher->isRunning() || active_thumbnail_asset_by_watcher_.contains(watcher.get())) {
       continue;
     }
 
-    active_thumbnail_asset_id_ = asset_id;
-    const auto file_path = iterator->file_path;
-    const auto recipe_json = iterator->recipe_json;
-    thumbnail_watcher_.setFuture(QtConcurrent::run([asset_id, file_path, recipe_json]() {
-      return ThumbnailTaskResult{
-          .asset_id = asset_id,
-          .file_path = file_path,
-          .recipe_json = recipe_json,
-          .thumbnail_source = thumbnail_source_for_path(file_path, recipe_json),
-      };
-    }));
-    return;
+    while (!pending_thumbnail_asset_ids_.isEmpty()) {
+      const auto asset_id = pending_thumbnail_asset_ids_.takeFirst();
+      queued_thumbnail_asset_ids_.remove(asset_id);
+      const auto queued_at_msecs = thumbnail_queued_at_msecs_.take(asset_id);
+      const auto queue_wait_ms =
+          queued_at_msecs > 0 ? qMax<qint64>(0, QDateTime::currentMSecsSinceEpoch() - queued_at_msecs) : 0;
+
+      const auto index_iterator = all_asset_index_by_id_.constFind(asset_id);
+      const auto asset_index = index_iterator == all_asset_index_by_id_.cend() ? qsizetype{-1} : index_iterator.value();
+      if (asset_index < 0 || asset_index >= all_assets_.size() ||
+          !all_assets_.at(asset_index).thumbnail_source.isEmpty() || !all_assets_.at(asset_index).online ||
+          all_assets_.at(asset_index).file_path.trimmed().isEmpty()) {
+        observability::logInfo(
+            photoEditorCatalogLog(),
+            QStringLiteral("thumbnail.canceled"),
+            {
+                {QStringLiteral("asset_id"), asset_id},
+                {QStringLiteral("queue_wait_ms"), queue_wait_ms},
+                {QStringLiteral("cancellation_reason"), QStringLiteral("stale_or_ineligible")},
+            });
+        continue;
+      }
+
+      active_thumbnail_asset_ids_.insert(asset_id);
+      active_thumbnail_asset_by_watcher_.insert(watcher.get(), asset_id);
+      const auto& item = all_assets_.at(asset_index);
+      const auto file_path = item.file_path;
+      const auto recipe_json = item.recipe_json;
+      const auto queue_priority = thumbnailQueuePriorityForAssetId(asset_id);
+      observability::logInfo(
+          photoEditorCatalogLog(),
+          QStringLiteral("thumbnail.started"),
+          {
+              {QStringLiteral("asset_id"), asset_id},
+              {QStringLiteral("file_path"), file_path},
+              {QStringLiteral("queue_wait_ms"), queue_wait_ms},
+              {QStringLiteral("queue_priority"), queue_priority},
+              {QStringLiteral("active_worker_count"), active_thumbnail_asset_ids_.size()},
+              {QStringLiteral("worker_limit"), kMaxConcurrentThumbnailTasks},
+          });
+      watcher->setFuture(QtConcurrent::run([asset_id, file_path, recipe_json, queue_wait_ms, queue_priority]() {
+        QElapsedTimer timer;
+        timer.start();
+        return ThumbnailTaskResult{
+            .asset_id = asset_id,
+            .file_path = file_path,
+            .recipe_json = recipe_json,
+            .thumbnail_source = thumbnail_source_for_path(file_path, recipe_json),
+            .queue_wait_ms = queue_wait_ms,
+            .elapsed_ms = timer.elapsed(),
+            .queue_priority = queue_priority,
+        };
+      }));
+      started_task = true;
+      break;
+    }
   }
 
-  active_thumbnail_asset_id_.clear();
+  if (!started_task && pending_thumbnail_asset_ids_.isEmpty() && active_thumbnail_asset_ids_.isEmpty()) {
+    thumbnail_queued_at_msecs_.clear();
+  }
 }
 
 void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) {
@@ -2972,33 +3439,34 @@ void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
 
   auto selected_changed = false;
   auto visible_index = -1;
-  auto updated_any = false;
-  for (auto& item : all_assets_) {
-    if (item.asset_id != result.asset_id || item.file_path != result.file_path || item.recipe_json != result.recipe_json) {
-      continue;
-    }
-    if (!result.thumbnail_source.isEmpty()) {
-      item.thumbnail_source = result.thumbnail_source;
-      updated_any = true;
-    }
-    break;
-  }
-
-  if (!updated_any) {
+  const auto all_index_iterator = all_asset_index_by_id_.constFind(result.asset_id);
+  const auto all_index =
+      all_index_iterator == all_asset_index_by_id_.cend() ? qsizetype{-1} : all_index_iterator.value();
+  if (all_index < 0 || all_index >= all_assets_.size()) {
     return;
   }
 
-  for (qsizetype index = 0; index < assets_.size(); ++index) {
-    auto& item = assets_[index];
-    if (item.asset_id != result.asset_id || item.file_path != result.file_path || item.recipe_json != result.recipe_json) {
-      continue;
+  auto& all_item = all_assets_[all_index];
+  if (all_item.file_path != result.file_path || all_item.recipe_json != result.recipe_json ||
+      result.thumbnail_source.isEmpty()) {
+    return;
+  }
+  all_item.thumbnail_source = result.thumbnail_source;
+
+  const auto visible_index_iterator = visible_asset_index_by_id_.constFind(result.asset_id);
+  if (visible_index_iterator != visible_asset_index_by_id_.cend()) {
+    const auto index = visible_index_iterator.value();
+    if (index >= 0 && index < assets_.size()) {
+      auto& item = assets_[index];
+      if (item.file_path != result.file_path || item.recipe_json != result.recipe_json) {
+        return;
+      }
+      item.thumbnail_source = result.thumbnail_source;
+      visible_index = static_cast<int>(index);
+      if (selected_index_ == visible_index) {
+        selected_changed = true;
+      }
     }
-    item.thumbnail_source = result.thumbnail_source;
-    visible_index = static_cast<int>(index);
-    if (selected_index_ == visible_index) {
-      selected_changed = true;
-    }
-    break;
   }
 
   if (visible_index >= 0) {
@@ -3012,10 +3480,63 @@ void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
   }
 }
 
+QString CatalogAssetModel::thumbnailQueuePriorityForAssetId(const QString& asset_id) const {
+  if (asset_id.isEmpty()) {
+    return QStringLiteral("unknown");
+  }
+  if (const auto* item = selectedItem(); item != nullptr && item->asset_id == asset_id) {
+    return QStringLiteral("selected");
+  }
+
+  const auto visible_index_iterator = visible_asset_index_by_id_.constFind(asset_id);
+  const auto visible_index = visible_index_iterator == visible_asset_index_by_id_.cend()
+                                 ? -1
+                                 : static_cast<int>(visible_index_iterator.value());
+  if (visible_index < 0) {
+    return QStringLiteral("background");
+  }
+  if (visible_thumbnail_first_index_ >= 0 && visible_thumbnail_last_index_ >= visible_thumbnail_first_index_) {
+    if (visible_index >= visible_thumbnail_first_index_ && visible_index <= visible_thumbnail_last_index_) {
+      return QStringLiteral("visible_window");
+    }
+    if (visible_index >= visible_thumbnail_first_index_ - kVisibleThumbnailPrefetchRows &&
+        visible_index <= visible_thumbnail_last_index_ + kVisibleThumbnailPrefetchRows) {
+      return QStringLiteral("visible_prefetch");
+    }
+  }
+  return QStringLiteral("filtered");
+}
+
 void CatalogAssetModel::handleThumbnailFinished() {
-  const auto result = thumbnail_watcher_.result();
-  active_thumbnail_asset_id_.clear();
+  QFutureWatcher<ThumbnailTaskResult>* watcher = nullptr;
+  const auto* finished_watcher = sender();
+  for (const auto& candidate : thumbnail_watchers_) {
+    if (candidate.get() == finished_watcher) {
+      watcher = candidate.get();
+      break;
+    }
+  }
+  if (watcher == nullptr) {
+    return;
+  }
+  const auto result = watcher->result();
+  active_thumbnail_asset_by_watcher_.remove(watcher);
+  active_thumbnail_asset_ids_.remove(result.asset_id);
   applyThumbnailResult(result);
+  observability::logInfo(
+      photoEditorCatalogLog(),
+      QStringLiteral("thumbnail.completed"),
+      {
+          {QStringLiteral("asset_id"), result.asset_id},
+          {QStringLiteral("file_path"), result.file_path},
+          {QStringLiteral("success"), !result.thumbnail_source.isEmpty()},
+          {QStringLiteral("queue_wait_ms"), result.queue_wait_ms},
+          {QStringLiteral("elapsed_ms"), result.elapsed_ms},
+          {QStringLiteral("queue_priority"), result.queue_priority},
+          {QStringLiteral("active_worker_count"), active_thumbnail_asset_ids_.size()},
+          {QStringLiteral("worker_limit"), kMaxConcurrentThumbnailTasks},
+          {QStringLiteral("cancellation_reason"), QString()},
+      });
   startNextThumbnailTask();
 }
 
@@ -3033,6 +3554,7 @@ void CatalogAssetModel::setSelectedIndexInternal(int index) {
   selected_index_ = index;
   emit selectedIndexChanged();
   emit selectedAssetChanged();
+  emit surveyAssetsChanged();
 }
 
 void CatalogAssetModel::applyFilters(const QString& preferred_asset_id) {
@@ -3052,6 +3574,7 @@ void CatalogAssetModel::applyFilters(const QString& preferred_asset_id) {
   const auto previous_count = assets_.size();
   beginResetModel();
   assets_ = filtered_assets;
+  rebuildVisibleAssetIndexMap();
   endResetModel();
 
   if (previous_count != assets_.size()) {
@@ -3063,22 +3586,38 @@ void CatalogAssetModel::applyFilters(const QString& preferred_asset_id) {
   queueThumbnailRefreshes();
 }
 
-void CatalogAssetModel::reconcileSelection(const QString& preferred_asset_id) {
-  QSet<QString> visible_asset_ids;
-  visible_asset_ids.reserve(assets_.size());
-  for (const auto& item : assets_) {
-    visible_asset_ids.insert(item.asset_id);
+void CatalogAssetModel::rebuildAllAssetIndexMap() {
+  all_asset_index_by_id_.clear();
+  all_asset_index_by_id_.reserve(static_cast<int>(all_assets_.size()));
+  for (qsizetype index = 0; index < all_assets_.size(); ++index) {
+    const auto& asset_id = all_assets_.at(index).asset_id;
+    if (!asset_id.isEmpty() && !all_asset_index_by_id_.contains(asset_id)) {
+      all_asset_index_by_id_.insert(asset_id, index);
+    }
   }
+}
 
+void CatalogAssetModel::rebuildVisibleAssetIndexMap() {
+  visible_asset_index_by_id_.clear();
+  visible_asset_index_by_id_.reserve(static_cast<int>(assets_.size()));
+  for (qsizetype index = 0; index < assets_.size(); ++index) {
+    const auto& asset_id = assets_.at(index).asset_id;
+    if (!asset_id.isEmpty() && !visible_asset_index_by_id_.contains(asset_id)) {
+      visible_asset_index_by_id_.insert(asset_id, index);
+    }
+  }
+}
+
+void CatalogAssetModel::reconcileSelection(const QString& preferred_asset_id) {
   QSet<QString> next_selected_asset_ids;
   for (const auto& asset_id : selected_asset_ids_) {
-    if (visible_asset_ids.contains(asset_id)) {
+    if (visible_asset_index_by_id_.contains(asset_id)) {
       next_selected_asset_ids.insert(asset_id);
     }
   }
 
   QString next_primary_asset_id;
-  if (!preferred_asset_id.isEmpty() && visible_asset_ids.contains(preferred_asset_id)) {
+  if (!preferred_asset_id.isEmpty() && visible_asset_index_by_id_.contains(preferred_asset_id)) {
     next_primary_asset_id = preferred_asset_id;
   } else if (selected_index_ >= 0 && selected_index_ < assets_.size()) {
     const auto current_asset_id = assets_.at(selected_index_).asset_id;
@@ -3100,11 +3639,9 @@ void CatalogAssetModel::reconcileSelection(const QString& preferred_asset_id) {
 
   auto next_index = -1;
   if (!next_primary_asset_id.isEmpty()) {
-    for (qsizetype index = 0; index < assets_.size(); ++index) {
-      if (assets_.at(index).asset_id == next_primary_asset_id) {
-        next_index = static_cast<int>(index);
-        break;
-      }
+    const auto index_iterator = visible_asset_index_by_id_.constFind(next_primary_asset_id);
+    if (index_iterator != visible_asset_index_by_id_.cend()) {
+      next_index = static_cast<int>(index_iterator.value());
     }
   }
 
@@ -3117,6 +3654,7 @@ void CatalogAssetModel::reconcileSelection(const QString& preferred_asset_id) {
     emit selectedIndexChanged();
   }
   emit selectedAssetChanged();
+  emit surveyAssetsChanged();
   if (selection_set_changed) {
     emit selectionChanged();
   }
@@ -3308,6 +3846,7 @@ void CatalogAssetModel::loadProjects() {
   projects_.clear();
   culling_states_.clear();
   recipe_overrides_.clear();
+  virtual_copies_.clear();
   relinked_file_paths_.clear();
 
   QFile file(projectsFilePath());
@@ -3371,6 +3910,43 @@ void CatalogAssetModel::loadProjects() {
     recipe_overrides_.insert(asset_id, recipe_json);
   }
 
+  const auto virtual_copy_array = document.object().value(QStringLiteral("virtualCopies")).toArray();
+  for (const auto& value : virtual_copy_array) {
+    if (!value.isObject()) {
+      continue;
+    }
+    const auto object = value.toObject();
+    CatalogAssetItem item;
+    item.asset_id = object.value(QStringLiteral("assetId")).toString().trimmed();
+    item.source_asset_id = object.value(QStringLiteral("sourceAssetId")).toString().trimmed();
+    item.variant_name = object.value(QStringLiteral("variantName")).toString().trimmed();
+    item.variant_index = object.value(QStringLiteral("variantIndex")).toInt();
+    item.file_path = normalize_local_path(object.value(QStringLiteral("filePath")).toString());
+    item.location_path = item.file_path;
+    item.recipe_json = object.value(QStringLiteral("recipeJson")).toString().trimmed();
+    item.capture_date = object.value(QStringLiteral("captureDate")).toString();
+    item.capture_date_value = QDate::fromString(object.value(QStringLiteral("captureDateValue")).toString(), Qt::ISODate);
+    item.camera_label = object.value(QStringLiteral("cameraLabel")).toString();
+    item.lens_model = object.value(QStringLiteral("lensModel")).toString();
+    item.iso_label = object.value(QStringLiteral("iso")).toString();
+    item.shutter_speed = object.value(QStringLiteral("shutterSpeed")).toString();
+    item.aperture_label = object.value(QStringLiteral("aperture")).toString();
+    item.drive_id = object.value(QStringLiteral("driveId")).toString();
+    item.import_mode = object.value(QStringLiteral("importMode")).toString();
+    item.imported_at = object.value(QStringLiteral("importedAt")).toString();
+    item.imported_at_value = QDateTime::fromString(object.value(QStringLiteral("importedAtValue")).toString(), Qt::ISODate);
+    item.media_type = QStringLiteral("photo");
+    item.online = object.value(QStringLiteral("online")).toBool(true);
+    item.virtual_copy = true;
+    if (item.asset_id.isEmpty() || item.source_asset_id.isEmpty() || item.file_path.isEmpty()) {
+      continue;
+    }
+    if (item.variant_name.isEmpty()) {
+      item.variant_name = QStringLiteral("Virtual Copy");
+    }
+    virtual_copies_.push_back(item);
+  }
+
   const auto relinked_paths_object = document.object().value(QStringLiteral("relinkedPaths")).toObject();
   for (auto iterator = relinked_paths_object.begin(); iterator != relinked_paths_object.end(); ++iterator) {
     const auto asset_id = iterator.key().trimmed();
@@ -3424,6 +4000,33 @@ void CatalogAssetModel::saveProjects() const {
     recipe_override_object.insert(iterator.key(), iterator.value());
   }
 
+  QJsonArray virtual_copy_array;
+  for (const auto& item : virtual_copies_) {
+    if (item.asset_id.trimmed().isEmpty() || item.source_asset_id.trimmed().isEmpty()) {
+      continue;
+    }
+    QJsonObject object;
+    object.insert(QStringLiteral("assetId"), item.asset_id);
+    object.insert(QStringLiteral("sourceAssetId"), item.source_asset_id);
+    object.insert(QStringLiteral("variantName"), item.variant_name);
+    object.insert(QStringLiteral("variantIndex"), item.variant_index);
+    object.insert(QStringLiteral("filePath"), item.file_path);
+    object.insert(QStringLiteral("recipeJson"), item.recipe_json);
+    object.insert(QStringLiteral("captureDate"), item.capture_date);
+    object.insert(QStringLiteral("captureDateValue"), item.capture_date_value.toString(Qt::ISODate));
+    object.insert(QStringLiteral("cameraLabel"), item.camera_label);
+    object.insert(QStringLiteral("lensModel"), item.lens_model);
+    object.insert(QStringLiteral("iso"), item.iso_label);
+    object.insert(QStringLiteral("shutterSpeed"), item.shutter_speed);
+    object.insert(QStringLiteral("aperture"), item.aperture_label);
+    object.insert(QStringLiteral("driveId"), item.drive_id);
+    object.insert(QStringLiteral("importMode"), item.import_mode);
+    object.insert(QStringLiteral("importedAt"), item.imported_at);
+    object.insert(QStringLiteral("importedAtValue"), item.imported_at_value.toString(Qt::ISODate));
+    object.insert(QStringLiteral("online"), item.online);
+    virtual_copy_array.push_back(object);
+  }
+
   QJsonObject relinked_paths_object;
   for (auto iterator = relinked_file_paths_.cbegin(); iterator != relinked_file_paths_.cend(); ++iterator) {
     const auto file_path = normalize_local_path(iterator.value());
@@ -3437,6 +4040,7 @@ void CatalogAssetModel::saveProjects() const {
   root.insert(QStringLiteral("projects"), project_array);
   root.insert(QStringLiteral("cullingStates"), culling_object);
   root.insert(QStringLiteral("recipeOverrides"), recipe_override_object);
+  root.insert(QStringLiteral("virtualCopies"), virtual_copy_array);
   root.insert(QStringLiteral("relinkedPaths"), relinked_paths_object);
 
   QSaveFile file(projectsFilePath());
@@ -3515,7 +4119,7 @@ void CatalogAssetModel::finalizePendingImportProjectAssignment() {
   pending_import_project_name_.clear();
   pending_import_file_paths_.clear();
 
-  if (project_name.isEmpty() || pending_file_paths.isEmpty()) {
+  if (pending_file_paths.isEmpty()) {
     return;
   }
 
@@ -3534,12 +4138,30 @@ void CatalogAssetModel::finalizePendingImportProjectAssignment() {
   }
 
   if (imported_asset_ids.isEmpty()) {
-    setStatus(QStringLiteral("Import completed, but no assets were assigned to '%1'.").arg(project_name));
+    if (!project_name.isEmpty()) {
+      setStatus(QStringLiteral("Import completed, but no assets were assigned to '%1'.").arg(project_name));
+    }
     return;
   }
 
-  addAssetsToProject(imported_asset_ids, project_name);
-  setStatus(QStringLiteral("Imported %1 assets into '%2'.").arg(imported_asset_ids.size()).arg(project_name));
+  auto applied_preset_count = 0;
+  if (!import_preset_recipe_json_.isEmpty()) {
+    applied_preset_count = applyPresetRecipeJsonToAssetIds(
+        imported_asset_ids,
+        import_preset_recipe_json_,
+        import_preset_adjustment_groups_);
+  }
+  if (!project_name.isEmpty()) {
+    addAssetsToProject(imported_asset_ids, project_name);
+    setStatus(
+        applied_preset_count > 0
+            ? QStringLiteral("Imported %1 assets into '%2' and applied an import preset.")
+                  .arg(imported_asset_ids.size())
+                  .arg(project_name)
+            : QStringLiteral("Imported %1 assets into '%2'.").arg(imported_asset_ids.size()).arg(project_name));
+  } else if (applied_preset_count > 0) {
+    setStatus(QStringLiteral("Applied import preset to %1 imported assets.").arg(applied_preset_count));
+  }
 }
 
 QString CatalogAssetModel::projectsFilePath() const {
@@ -3584,21 +4206,22 @@ void CatalogAssetModel::setAssetCullingState(const QString& asset_id, const Cull
     culling_states_.insert(asset_id, normalized_state);
   }
 
-  for (auto& item : all_assets_) {
-    if (item.asset_id == asset_id) {
-      apply_culling_state_to_item(&item, normalized_state);
+  const auto all_index_iterator = all_asset_index_by_id_.constFind(asset_id);
+  if (all_index_iterator != all_asset_index_by_id_.cend()) {
+    const auto all_index = all_index_iterator.value();
+    if (all_index >= 0 && all_index < all_assets_.size()) {
+      apply_culling_state_to_item(&all_assets_[all_index], normalized_state);
     }
   }
 
   int visible_index = -1;
-  for (qsizetype index = 0; index < assets_.size(); ++index) {
-    if (assets_.at(index).asset_id != asset_id) {
-      continue;
+  const auto visible_index_iterator = visible_asset_index_by_id_.constFind(asset_id);
+  if (visible_index_iterator != visible_asset_index_by_id_.cend()) {
+    const auto index = visible_index_iterator.value();
+    if (index >= 0 && index < assets_.size()) {
+      apply_culling_state_to_item(&assets_[index], normalized_state);
+      visible_index = static_cast<int>(index);
     }
-
-    apply_culling_state_to_item(&assets_[index], normalized_state);
-    visible_index = static_cast<int>(index);
-    break;
   }
 
   if (!persisted_to_catalog) {

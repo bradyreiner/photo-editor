@@ -242,6 +242,30 @@ int main(int argc, char** argv) {
     if (std::abs(asset_1_recipe.temperature) > 1e-6 || std::abs(asset_2_recipe.temperature) > 1e-6) {
       return fail("tone-only sync should leave color settings untouched");
     }
+    photo_editor::desktop::EditRecipeState preset_state;
+    preset_state.exposure = -0.4;
+    preset_state.temperature = 12.0;
+    const auto preset_recipe = photo_editor::desktop::serialize_edit_recipe_json(preset_state);
+    if (model.applyPresetRecipeJsonToAssetIds(
+            model.selectedAssetIds(),
+            preset_recipe,
+            {QStringLiteral("color")}) != 2) {
+      return fail("batch preset apply should update every selected photo");
+    }
+    const auto preset_asset_1_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        model.data(model.index(0, 0), photo_editor::desktop::CatalogAssetModel::RecipeJsonRole).toString());
+    const auto preset_asset_2_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        model.data(model.index(1, 0), photo_editor::desktop::CatalogAssetModel::RecipeJsonRole).toString());
+    if (std::abs(preset_asset_1_recipe.temperature - 12.0) > 1e-6 ||
+        std::abs(preset_asset_2_recipe.temperature - 12.0) > 1e-6) {
+      return fail("batch preset apply should copy selected preset groups into every target");
+    }
+    if (std::abs(preset_asset_1_recipe.exposure - 1.15) > 1e-6 ||
+        std::abs(preset_asset_2_recipe.exposure - 1.15) > 1e-6) {
+      return fail("batch preset apply should leave excluded groups untouched");
+    }
+    model.setImportPresetRecipeJson(preset_recipe, {QStringLiteral("color")});
+    model.clearImportPresetRecipeJson();
 
     model.toggleSelectionIndex(1);
     model.toggleSelectionIndex(0);
@@ -418,6 +442,9 @@ int main(int argc, char** argv) {
         thumbnail_model.data(
             thumbnail_model.index(0, 0),
             photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole).toString();
+    if (!QUrl(initial_thumbnail).hasQuery()) {
+      return fail("thumbnail sources should include immutable version query parameters for QML image caching");
+    }
     const QImage initial_image(QUrl(initial_thumbnail).toLocalFile());
     if (initial_image.isNull()) {
       return fail("initial thumbnail image should be readable from disk");
@@ -437,6 +464,9 @@ int main(int argc, char** argv) {
     if (edited_thumbnail.isEmpty()) {
       return fail("thumbnail should be regenerated after applying recipe edits");
     }
+    if (!QUrl(edited_thumbnail).hasQuery()) {
+      return fail("edited thumbnail sources should keep immutable version query parameters");
+    }
 
     const QImage edited_image(QUrl(edited_thumbnail).toLocalFile());
     if (edited_image.isNull()) {
@@ -447,6 +477,107 @@ int main(int argc, char** argv) {
     const auto edited_value = qGray(edited_image.pixel(0, 0));
     if (edited_value <= initial_value) {
       return fail("edited thumbnail should reflect brighter exposure");
+    }
+  }
+
+  {
+    auto base_asset = make_asset(QStringLiteral("variant-source"), QStringLiteral("IMG_variant.jpg"));
+    base_asset.file_path = runtime_root.filePath(QStringLiteral("variants/IMG_variant.jpg"));
+    base_asset.location_path = base_asset.file_path;
+    if (!write_file(base_asset.file_path)) {
+      return fail("virtual copy source file should be created");
+    }
+
+    photo_editor::desktop::CatalogAssetModel variant_model;
+    variant_model.replaceAssetsForTesting({base_asset});
+    variant_model.selectIndex(0);
+
+    const auto virtual_copy_id =
+        variant_model.createVirtualCopyForSelectedAsset(QStringLiteral("Black and White"));
+    if (virtual_copy_id.isEmpty()) {
+      return fail("creating a selected virtual copy should return a variant asset id");
+    }
+    if (variant_model.assetCount() != 2 || variant_model.totalAssetCount() != 2) {
+      return fail("virtual copies should appear as additional catalog recipe variants");
+    }
+    if (!variant_model.selectedVirtualCopy() ||
+        variant_model.selectedSourceAssetId() != QStringLiteral("variant-source") ||
+        variant_model.selectedVariantName() != QStringLiteral("Black and White") ||
+        variant_model.selectedFilePath() != base_asset.file_path) {
+      return fail("virtual copies should keep the source file and expose variant metadata");
+    }
+    const auto variant_ids = variant_model.recipeVariantAssetIds(QStringLiteral("variant-source"));
+    if (variant_ids.size() != 2 || variant_ids.at(0) != QStringLiteral("variant-source") ||
+        variant_ids.at(1) != virtual_copy_id) {
+      return fail("recipe variants should be discoverable from the source asset");
+    }
+
+    photo_editor::desktop::EditRecipeState variant_recipe;
+    variant_recipe.exposure = -0.75;
+    if (variant_model.applyRecipeJsonToAssetIds(
+            {virtual_copy_id},
+            photo_editor::desktop::serialize_edit_recipe_json(variant_recipe),
+            {QStringLiteral("tone")}) != 1) {
+      return fail("recipe edits should apply independently to virtual copies");
+    }
+    const auto base_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        variant_model.data(variant_model.index(0, 0), photo_editor::desktop::CatalogAssetModel::RecipeJsonRole).toString());
+    const auto copy_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        variant_model.data(variant_model.index(1, 0), photo_editor::desktop::CatalogAssetModel::RecipeJsonRole).toString());
+    if (std::abs(base_recipe.exposure) > 1e-6 || std::abs(copy_recipe.exposure + 0.75) > 1e-6) {
+      return fail("virtual copy recipes should not overwrite the source asset recipe");
+    }
+
+    photo_editor::desktop::CatalogAssetModel reloaded_variant_model;
+    reloaded_variant_model.replaceAssetsForTesting({base_asset});
+    const auto reloaded_variant_ids =
+        reloaded_variant_model.recipeVariantAssetIds(QStringLiteral("variant-source"));
+    if (reloaded_variant_model.assetCount() != 2 ||
+        reloaded_variant_ids.size() != 2 ||
+        reloaded_variant_ids.at(1) != virtual_copy_id) {
+      return fail("virtual copies should persist across catalog model reloads");
+    }
+    reloaded_variant_model.selectIndex(1);
+    const auto reloaded_copy_recipe =
+        photo_editor::desktop::parse_edit_recipe_json(reloaded_variant_model.selectedRecipeJson());
+    if (!reloaded_variant_model.selectedVirtualCopy() ||
+        reloaded_variant_model.selectedVariantName() != QStringLiteral("Black and White") ||
+        std::abs(reloaded_copy_recipe.exposure + 0.75) > 1e-6) {
+      return fail("persisted virtual copies should restore metadata and independent recipes");
+    }
+
+    const auto crop_variant_id = reloaded_variant_model.createCropVariantForAsset(
+        QStringLiteral("variant-source"),
+        QStringLiteral("Square Crop"),
+        QStringLiteral("1:1"));
+    if (crop_variant_id.isEmpty()) {
+      return fail("crop variants should be creatable as virtual copies");
+    }
+    const auto crop_variant_ids =
+        reloaded_variant_model.recipeVariantAssetIds(QStringLiteral("variant-source"));
+    if (crop_variant_ids.size() != 3 || crop_variant_ids.at(2) != crop_variant_id) {
+      return fail("crop variants should be listed with the source asset recipe variants");
+    }
+    auto crop_variant_row = -1;
+    for (int row = 0; row < reloaded_variant_model.assetCount(); ++row) {
+      if (reloaded_variant_model.assetAt(row).value(QStringLiteral("assetId")).toString() == crop_variant_id) {
+        crop_variant_row = row;
+        break;
+      }
+    }
+    if (crop_variant_row < 0) {
+      return fail("crop variant virtual copy should appear in the visible catalog");
+    }
+    const auto crop_variant_map = reloaded_variant_model.assetAt(crop_variant_row);
+    const auto crop_variant_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        crop_variant_map.value(QStringLiteral("recipeJson")).toString());
+    const auto source_variant_recipe = photo_editor::desktop::parse_edit_recipe_json(
+        reloaded_variant_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
+    if (!crop_variant_map.value(QStringLiteral("virtualCopy")).toBool() ||
+        crop_variant_map.value(QStringLiteral("sourceAssetId")).toString() != QStringLiteral("variant-source") ||
+        crop_variant_recipe.crop_preset != QStringLiteral("1:1") ||
+        source_variant_recipe.crop_preset == QStringLiteral("1:1")) {
+      return fail("crop variants should store crop changes on the virtual copy only");
     }
   }
 

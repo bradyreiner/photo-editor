@@ -21,9 +21,15 @@ Item {
     enabled: visible
 
     readonly property real minNormalizedSize: 0.05
+    readonly property real goldenRatio: 1.61803398875
+    readonly property real goldenMajor: 1 / goldenRatio
+    readonly property real goldenMinor: 1 - goldenMajor
     readonly property color frameColor: "#f4f7fa"
     readonly property color guideColor: "#d8e0e7"
-    readonly property real handleSize: 14
+    readonly property real guideLineOpacity: 0.38
+    readonly property real guideSpiralOpacity: 0.42
+    readonly property real handleVisualSize: 14
+    readonly property real handleHitSize: 30
     readonly property rect normalizedRect: normalizedCropRect()
     readonly property rect cropScreenRect: Qt.rect(
         imageX + normalizedRect.x * imageWidth,
@@ -83,16 +89,24 @@ Item {
     }
 
     function handleRect(mode) {
+        return handleRectForSize(mode, handleHitSize);
+    }
+
+    function visualHandleRect(mode) {
+        return handleRectForSize(mode, handleVisualSize);
+    }
+
+    function handleRectForSize(mode, size) {
         if (mode === "topLeft") {
-            return Qt.rect(cropScreenRect.x - handleSize / 2, cropScreenRect.y - handleSize / 2, handleSize, handleSize);
+            return Qt.rect(cropScreenRect.x - size / 2, cropScreenRect.y - size / 2, size, size);
         }
         if (mode === "topRight") {
-            return Qt.rect(cropScreenRect.x + cropScreenRect.width - handleSize / 2, cropScreenRect.y - handleSize / 2, handleSize, handleSize);
+            return Qt.rect(cropScreenRect.x + cropScreenRect.width - size / 2, cropScreenRect.y - size / 2, size, size);
         }
         if (mode === "bottomLeft") {
-            return Qt.rect(cropScreenRect.x - handleSize / 2, cropScreenRect.y + cropScreenRect.height - handleSize / 2, handleSize, handleSize);
+            return Qt.rect(cropScreenRect.x - size / 2, cropScreenRect.y + cropScreenRect.height - size / 2, size, size);
         }
-        return Qt.rect(cropScreenRect.x + cropScreenRect.width - handleSize / 2, cropScreenRect.y + cropScreenRect.height - handleSize / 2, handleSize, handleSize);
+        return Qt.rect(cropScreenRect.x + cropScreenRect.width - size / 2, cropScreenRect.y + cropScreenRect.height - size / 2, size, size);
     }
 
     function hitMode(mouseX, mouseY) {
@@ -109,6 +123,10 @@ Item {
         if (pointInRect(mouseX, mouseY, cropScreenRect))
             return rectNearlyFullImage(normalizedRect) ? "draw" : "move";
         return "draw";
+    }
+
+    function testHitMode(mouseX, mouseY) {
+        return hitMode(mouseX, mouseY);
     }
 
     function cursorForMode(mode) {
@@ -333,7 +351,7 @@ Item {
             height: parent.height
             x: parent.width / 3
             color: guideColor
-            opacity: guideMode === "Thirds" ? 0.7 : 0
+            opacity: guideMode === "Thirds" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -341,7 +359,7 @@ Item {
             height: parent.height
             x: parent.width * 2 / 3
             color: guideColor
-            opacity: guideMode === "Thirds" ? 0.7 : 0
+            opacity: guideMode === "Thirds" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -349,7 +367,7 @@ Item {
             height: 1
             y: parent.height / 3
             color: guideColor
-            opacity: guideMode === "Thirds" ? 0.7 : 0
+            opacity: guideMode === "Thirds" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -357,7 +375,7 @@ Item {
             height: 1
             y: parent.height * 2 / 3
             color: guideColor
-            opacity: guideMode === "Thirds" ? 0.7 : 0
+            opacity: guideMode === "Thirds" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -365,7 +383,7 @@ Item {
             height: parent.height
             x: parent.width / 2
             color: guideColor
-            opacity: guideMode === "Center" ? 0.7 : 0
+            opacity: guideMode === "Center" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -373,7 +391,39 @@ Item {
             height: 1
             y: parent.height / 2
             color: guideColor
-            opacity: guideMode === "Center" ? 0.7 : 0
+            opacity: guideMode === "Center" ? guideLineOpacity : 0
+        }
+
+        Rectangle {
+            width: 1
+            height: parent.height
+            x: parent.width * goldenMinor
+            color: guideColor
+            opacity: guideMode === "Golden Ratio" ? guideLineOpacity : 0
+        }
+
+        Rectangle {
+            width: 1
+            height: parent.height
+            x: parent.width * goldenMajor
+            color: guideColor
+            opacity: guideMode === "Golden Ratio" ? guideLineOpacity : 0
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            y: parent.height * goldenMinor
+            color: guideColor
+            opacity: guideMode === "Golden Ratio" ? guideLineOpacity : 0
+        }
+
+        Rectangle {
+            width: parent.width
+            height: 1
+            y: parent.height * goldenMajor
+            color: guideColor
+            opacity: guideMode === "Golden Ratio" ? guideLineOpacity : 0
         }
 
         Rectangle {
@@ -382,7 +432,7 @@ Item {
             x: 0
             y: 0
             color: guideColor
-            opacity: guideMode === "Diagonal" ? 0.7 : 0
+            opacity: guideMode === "Diagonal" ? guideLineOpacity : 0
             rotation: Math.atan2(parent.height, parent.width) * 180 / Math.PI
             transformOrigin: Item.Left
         }
@@ -393,18 +443,66 @@ Item {
             x: 0
             y: parent.height
             color: guideColor
-            opacity: guideMode === "Diagonal" ? 0.7 : 0
+            opacity: guideMode === "Diagonal" ? guideLineOpacity : 0
             rotation: -Math.atan2(parent.height, parent.width) * 180 / Math.PI
             transformOrigin: Item.Left
+        }
+
+        Canvas {
+            id: goldenSpiralCanvas
+            anchors.fill: parent
+            opacity: guideMode === "Golden Spiral" ? guideSpiralOpacity : 0
+            visible: opacity > 0
+
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            Connections {
+                target: root
+                function onGuideModeChanged() { goldenSpiralCanvas.requestPaint() }
+            }
+
+            onPaint: {
+                const ctx = getContext("2d");
+                ctx.reset();
+                ctx.clearRect(0, 0, width, height);
+                if (width <= 1 || height <= 1)
+                    return;
+
+                ctx.save();
+                ctx.rect(0, 0, width, height);
+                ctx.clip();
+                ctx.strokeStyle = root.guideColor;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+
+                const maxRadius = Math.min(width, height) * 0.92;
+                const centerX = width * root.goldenMajor;
+                const centerY = height * root.goldenMajor;
+                const maxTheta = Math.PI * 2.45;
+                const stepCount = 220;
+                for (let step = 0; step <= stepCount; ++step) {
+                    const theta = (step / stepCount) * maxTheta;
+                    const radius = maxRadius * Math.pow(root.goldenRatio, (theta - maxTheta) / (Math.PI / 2));
+                    const x = centerX - Math.cos(theta) * radius;
+                    const y = centerY - Math.sin(theta) * radius;
+                    if (step === 0)
+                        ctx.moveTo(x, y);
+                    else
+                        ctx.lineTo(x, y);
+                }
+
+                ctx.stroke();
+                ctx.restore();
+            }
         }
     }
 
     Repeater {
         model: [
-            handleRect("topLeft"),
-            handleRect("topRight"),
-            handleRect("bottomLeft"),
-            handleRect("bottomRight")
+            visualHandleRect("topLeft"),
+            visualHandleRect("topRight"),
+            visualHandleRect("bottomLeft"),
+            visualHandleRect("bottomRight")
         ]
 
         delegate: Rectangle {

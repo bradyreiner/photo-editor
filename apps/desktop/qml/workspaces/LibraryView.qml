@@ -282,8 +282,8 @@ Rectangle {
         localSelectedFilePath = "";
     }
 
-    function selectLocalFile(index) {
-        localSelectedFilePath = localImageModel.get(index, "filePath");
+    function selectLocalFile(filePath) {
+        localSelectedFilePath = filePath;
     }
 
     function importCurrentFolder() {
@@ -1618,6 +1618,27 @@ Rectangle {
                         contentHeight: galleryFlow.height
                         boundsBehavior: Flickable.StopAtBounds
 
+                        function updateVisibleAssetRange() {
+                            if (!catalogAssets)
+                                return
+                            if (!visible || catalogAssets.assetCount <= 0 || galleryFlow.columns <= 0) {
+                                catalogAssets.setVisibleAssetRange(-1, -1)
+                                return
+                            }
+                            const tileHeight = Math.max(1, Math.max(168, galleryFlow.tileWidth * 0.72) + galleryFlow.spacing)
+                            const firstRow = Math.max(0, Math.floor(contentY / tileHeight))
+                            const visibleRows = Math.max(1, Math.ceil(height / tileHeight) + 1)
+                            const first = Math.max(0, firstRow * galleryFlow.columns)
+                            const last = Math.min(catalogAssets.assetCount - 1, ((firstRow + visibleRows) * galleryFlow.columns) - 1)
+                            catalogAssets.setVisibleAssetRange(first, last)
+                        }
+
+                        Component.onCompleted: updateVisibleAssetRange()
+                        onContentYChanged: updateVisibleAssetRange()
+                        onHeightChanged: updateVisibleAssetRange()
+                        onWidthChanged: updateVisibleAssetRange()
+                        onVisibleChanged: updateVisibleAssetRange()
+
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
                         }
@@ -1629,6 +1650,9 @@ Rectangle {
 
                             property int columns: Math.max(2, Math.floor(width / 256))
                             property real tileWidth: Math.floor((width - ((columns - 1) * spacing)) / columns)
+
+                            onColumnsChanged: galleryFlick.updateVisibleAssetRange()
+                            onTileWidthChanged: galleryFlick.updateVisibleAssetRange()
 
                             Repeater {
                                 model: catalogAssets
@@ -1708,7 +1732,7 @@ Rectangle {
                                             anchors.fill: parent
                                             source: thumbnailSource
                                             asynchronous: true
-                                            cache: false
+                                            cache: true
                                             fillMode: Image.PreserveAspectCrop
                                             sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
                                             sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
@@ -1994,6 +2018,8 @@ Rectangle {
 
                                 delegate: Rectangle {
                                     required property int index
+                                    required property string fileName
+                                    required property string fileUrl
 
                                     width: Math.max(108, folderLabel.implicitWidth + theme.space20)
                                     height: 34
@@ -2005,7 +2031,7 @@ Rectangle {
                                     Label {
                                         id: folderLabel
                                         anchors.centerIn: parent
-                                        text: localFolderModel.get(index, "fileName")
+                                        text: fileName
                                         color: theme.textMain
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
@@ -2014,7 +2040,7 @@ Rectangle {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: root.openLocalFolder(localFolderModel.get(index, "fileUrl"))
+                                        onClicked: root.openLocalFolder(fileUrl)
                                     }
                                 }
                             }
@@ -2030,12 +2056,15 @@ Rectangle {
 
                                 delegate: Rectangle {
                                     required property int index
+                                    required property string filePath
+                                    required property string fileName
+                                    required property string fileUrl
 
                                     width: 204
                                     height: 206
                                     radius: theme.radius12
                                     color: theme.alpha(theme.ink900, 0.94)
-                                    border.width: root.localSelectedFilePath === localImageModel.get(index, "filePath") ? 1 : 0
+                                    border.width: root.localSelectedFilePath === filePath ? 1 : 0
                                     border.color: theme.accentWarm400
 
                                     ColumnLayout {
@@ -2052,15 +2081,15 @@ Rectangle {
 
                                             Image {
                                                 anchors.fill: parent
-                                                source: localImageModel.get(index, "fileUrl")
+                                                source: fileUrl
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
-                                                cache: false
+                                                cache: true
                                             }
                                         }
 
                                         Label {
-                                            text: localImageModel.get(index, "fileName")
+                                            text: fileName
                                             color: theme.textStrong
                                             font.family: theme.fontUi
                                             font.pixelSize: 11
@@ -2071,7 +2100,7 @@ Rectangle {
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: root.selectLocalFile(index)
+                                        onClicked: root.selectLocalFile(filePath)
                                     }
                                 }
                             }
@@ -2142,7 +2171,7 @@ Rectangle {
                             visible: root.hasSelection && !catalogAssets.hasMultiSelection
                             source: catalogAssets.selectedThumbnailSource
                             asynchronous: true
-                            cache: false
+                            cache: true
                             fillMode: Image.PreserveAspectFit
                             opacity: catalogAssets.selectedOnline ? 1.0 : 0.42
                         }

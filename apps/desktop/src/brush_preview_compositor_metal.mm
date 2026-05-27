@@ -21,6 +21,7 @@ struct BrushUniforms {
   float size;
   float flow;
   float feather;
+  float hardness;
   float opacity;
   simd_float4 color;
   simd_uint2 texture_size;
@@ -36,6 +37,7 @@ struct BrushUniforms {
   float size;
   float flow;
   float feather;
+  float hardness;
   float opacity;
   float4 color;
   uint2 texture_size;
@@ -72,7 +74,7 @@ kernel void composite_brush_dab(
   float denom_y = max(float(max(int(uniforms.texture_size.y) - 1, 1)), 1.0);
   float2 pixel = float2(float(gid.x) / denom_x, float(gid.y) / denom_y);
   float distance_norm = distance(pixel, uniforms.center) / max(uniforms.size, 0.01);
-  float inner_scale = max(0.0, 1.0 - uniforms.feather);
+  float inner_scale = clamp(uniforms.hardness, 0.0, 0.98);
   float weight = uniforms.flow * (1.0 - smoothstep_safe(inner_scale, 1.0, distance_norm));
   float src_alpha = clamp(weight * uniforms.opacity, 0.0, 1.0);
   if (src_alpha <= 1e-6) {
@@ -249,6 +251,7 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
           .size = static_cast<float>(clamped_size),
           .flow = static_cast<float>(std::clamp(point.flow, 0.0, 1.0)),
           .feather = static_cast<float>(std::clamp(style.feather, 0.05, 1.0)),
+          .hardness = static_cast<float>(std::clamp(style.hardness, 0.0, 0.98)),
           .opacity = static_cast<float>(std::clamp(style.opacity, 0.0, 1.0)),
           .color = simd_make_float4(
               static_cast<float>(style.color.redF()),

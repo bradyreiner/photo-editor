@@ -250,7 +250,7 @@ Dialog {
             return "Tune launch behavior, preview acceleration, and default workspace routing."
         if (index === 1)
             return "Set timeline defaults and restore workspace controls."
-        return "Review the folders PhotoEditor uses for application data, cache, logs, and backups."
+        return "Review the folders Virel Studio uses for application data, cache, logs, and backups."
     }
 
     parent: Overlay.overlay
@@ -504,7 +504,7 @@ Dialog {
 
                                 PreferenceToggleRow {
                                     title: "Reopen last workspace on launch"
-                                    description: "When enabled, PhotoEditor returns to the last workspace you were using instead of the startup workspace above."
+                                    description: "When enabled, Virel Studio returns to the last workspace you were using instead of the startup workspace above."
                                     checked: appShell.reopenLastWorkspace
                                     onToggled: function(checked) {
                                         appShell.reopenLastWorkspace = checked
@@ -514,7 +514,7 @@ Dialog {
 
                             PreferenceSection {
                                 title: "Preview Backend"
-                                subtitle: "Choose how PhotoEditor handles interactive preview acceleration. CPU fallback always remains available."
+                                subtitle: "Choose how Virel Studio handles interactive preview acceleration. CPU fallback always remains available."
 
                                 Label {
                                     Layout.fillWidth: true
@@ -692,7 +692,7 @@ Dialog {
 
                             PreferenceSection {
                                 title: "Runtime Paths"
-                                subtitle: "These folders hold PhotoEditor application data, generated cache, logs, and local backups."
+                                subtitle: "These folders hold Virel Studio application data, generated cache, logs, and local backups."
 
                                 StorageCard {
                                     label: "Application Data"

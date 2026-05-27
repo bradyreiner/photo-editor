@@ -13,7 +13,7 @@ ApplicationWindow {
     minimumWidth: 1024
     minimumHeight: 720
     visible: true
-    title: "PhotoEditor"
+    title: "Virel Studio"
     color: theme.ink950
     font.family: theme.fontUi
     font.pixelSize: 12
@@ -28,6 +28,7 @@ ApplicationWindow {
     property string localEditorFilePath: ""
     property string localEditorPreviewSource: ""
     property string localEditorDisplayName: ""
+    readonly property var catalogAssetModel: catalogAssets
     readonly property bool macStyle: Qt.platform.os === "osx"
     readonly property int libraryWorkspaceIndex: 0
     readonly property int editWorkspaceIndex: 1
@@ -38,7 +39,7 @@ ApplicationWindow {
     readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export"]
     readonly property var workspaceSubtitles: [
         "Browse imported assets or bring media into the catalog.",
-        "Refine a single image and handle local masking without leaving the canvas.",
+        "Refine tone, color, crop, retouch, and local adjustments.",
         "Assemble social slides and mixed-media carousel layouts.",
         "Cut video on a dedicated editing timeline.",
         "Prepare deliveries and export jobs."
@@ -139,6 +140,23 @@ ApplicationWindow {
             return normalizedJobProgress(latestAssetExportJob)
         return -1
     }
+    readonly property string primaryActivityKind: {
+        if (catalogAssets.deleting)
+            return "catalog_delete"
+        if (catalogAssets.loading)
+            return "catalog_refresh"
+        if (catalogAssets.importing)
+            return "catalog_import"
+        if (editorPreview.processing)
+            return "preview_render"
+        if (jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0)
+            return "timeline_render"
+        if (jobQueue && jobQueue.activeJobCountForKind("asset_export") > 0)
+            return "asset_export"
+        return "none"
+    }
+    readonly property bool primaryActivityCancelable: supportsLongOperationCancel(primaryActivityKind)
+    readonly property int activityIndicatorBottomMargin: currentWorkspace === editWorkspaceIndex ? 104 : 12
 
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
@@ -171,6 +189,32 @@ ApplicationWindow {
         if (raw > 0)
             return Math.max(0.05, Math.min(1, raw / 100.0))
         return -1
+    }
+
+    function supportsLongOperationCancel(kind) {
+        return ["catalog_import", "timeline_render", "asset_export"].indexOf(String(kind || "")) >= 0
+    }
+
+    function cancellableActivityKinds() {
+        return ["catalog_import", "timeline_render", "asset_export"]
+    }
+
+    function primaryActivityControlSignature() {
+        return primaryActivityKind + "|" + String(primaryActivityProgress) + "|" + String(primaryActivityCancelable)
+    }
+
+    function cancelJobForKind(kind) {
+        if (!jobQueue || !supportsLongOperationCancel(kind))
+            return false
+        const latestJob = jobQueue.latestJobForKind(kind)
+        const jobId = latestJob && latestJob.jobId ? String(latestJob.jobId) : ""
+        if (jobId.length === 0)
+            return false
+        return jobQueue.cancelJob(jobId)
+    }
+
+    function cancelPrimaryActivity() {
+        return cancelJobForKind(primaryActivityKind)
     }
 
     function workspaceBadgeCount(index) {
@@ -229,6 +273,19 @@ ApplicationWindow {
 
     function activeCarouselView() {
         return currentWorkspace === carouselWorkspaceIndex ? activeWorkspaceItem() : null
+    }
+
+    function switchToWorkspaceIndex(index) {
+        const workspaceIndex = Number(index)
+        if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
+            return false
+
+        currentWorkspace = workspaceIndex
+        return true
+    }
+
+    function switchWorkspaceByNumber(number) {
+        return switchToWorkspaceIndex(Number(number) - 1)
     }
 
     function canSelectAllCurrentWorkspace() {
@@ -320,7 +377,8 @@ ApplicationWindow {
     }
 
     function canOpenSelectedPhotoInEdit() {
-        return catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo"
+        return (catalogAssets.selectedAssetId.length > 0 && catalogAssets.selectedMediaType === "photo")
+                || catalogAssets.assetCount > 0
     }
 
     function canOpenSelectedTimeline() {
@@ -431,6 +489,9 @@ ApplicationWindow {
     }
 
     function loadSelectedAssetIntoEditor() {
+        if (catalogAssets.selectedAssetId.length === 0 && catalogAssets.assetCount > 0)
+            catalogAssets.selectIndex(0)
+
         syncEditorRecipeToCatalog(catalogAssets.selectedAssetId)
         if (catalogAssets.selectedAssetId.length === 0 || catalogAssets.selectedMediaType !== "photo") {
             editorPreview.loadAsset(
@@ -497,6 +558,9 @@ ApplicationWindow {
         if (!canOpenSelectedPhotoInEdit())
             return
 
+        if (catalogAssets.selectedAssetId.length === 0 && catalogAssets.assetCount > 0)
+            catalogAssets.selectIndex(0)
+
         editorUsesLocalAsset = false
         editWorkspaceMode = "adjust"
         currentWorkspace = editWorkspaceIndex
@@ -511,13 +575,17 @@ ApplicationWindow {
     }
 
     function createTimelineFromMenu() {
+        timelineDocument.createTimeline()
         currentWorkspace = timelineWorkspaceIndex
-        timelineDocument.closeTimeline()
     }
 
     function createCarouselFromMenu() {
+        carouselDocument.createCarouselWithSettings({
+            "carouselName": "Untitled Carousel",
+            "format": "4x5",
+            "slideCount": 1
+        })
         currentWorkspace = carouselWorkspaceIndex
-        carouselDocument.closeCarousel()
     }
 
     function saveCurrentTimeline() {
@@ -690,7 +758,12 @@ ApplicationWindow {
         checkable: true
         checked: editorPreview.compareMode
         enabled: editorPreview.hasAsset
-        onTriggered: editorPreview.compareMode = !editorPreview.compareMode
+        onTriggered: {
+            const nextCompareMode = !editorPreview.compareMode
+            editorPreview.compareMode = nextCompareMode
+            window.editWorkspaceMode = nextCompareMode ? "compare" : "adjust"
+            window.currentWorkspace = window.editWorkspaceIndex
+        }
     }
 
     Action {
@@ -964,41 +1037,46 @@ ApplicationWindow {
     Action {
         id: switchToLibraryAction
         text: "Library"
+        shortcut: window.primaryShortcut("1")
         checkable: true
         checked: window.currentWorkspace === window.libraryWorkspaceIndex
-        onTriggered: window.currentWorkspace = window.libraryWorkspaceIndex
+        onTriggered: window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
     }
 
     Action {
         id: switchToEditAction
         text: "Edit"
+        shortcut: window.primaryShortcut("2")
         checkable: true
         checked: window.currentWorkspace === window.editWorkspaceIndex
-        onTriggered: window.currentWorkspace = window.editWorkspaceIndex
+        onTriggered: window.switchToWorkspaceIndex(window.editWorkspaceIndex)
     }
 
     Action {
         id: switchToCarouselAction
         text: "Carousel"
+        shortcut: window.primaryShortcut("3")
         checkable: true
         checked: window.currentWorkspace === window.carouselWorkspaceIndex
-        onTriggered: window.currentWorkspace = window.carouselWorkspaceIndex
+        onTriggered: window.switchToWorkspaceIndex(window.carouselWorkspaceIndex)
     }
 
     Action {
         id: switchToTimelineAction
         text: "Timeline"
+        shortcut: window.primaryShortcut("4")
         checkable: true
         checked: window.currentWorkspace === window.timelineWorkspaceIndex
-        onTriggered: window.currentWorkspace = window.timelineWorkspaceIndex
+        onTriggered: window.switchToWorkspaceIndex(window.timelineWorkspaceIndex)
     }
 
     Action {
         id: switchToExportAction
         text: "Export"
+        shortcut: window.primaryShortcut("5")
         checkable: true
         checked: window.currentWorkspace === window.exportWorkspaceIndex
-        onTriggered: window.currentWorkspace = window.exportWorkspaceIndex
+        onTriggered: window.switchToWorkspaceIndex(window.exportWorkspaceIndex)
     }
 
     Action {
@@ -1116,7 +1194,7 @@ ApplicationWindow {
 
     Action {
         id: aboutAction
-        text: "About PhotoEditor"
+        text: "About Virel Studio"
         onTriggered: aboutDialog.open()
     }
 
@@ -1304,137 +1382,236 @@ ApplicationWindow {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 8
-        spacing: 6
+        spacing: 0
 
-        RowLayout {
+        Rectangle {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            spacing: 6
+            Layout.preferredHeight: 52
+            color: theme.alpha(theme.ink900, 0.94)
 
             Rectangle {
-                Layout.preferredWidth: 56
-                Layout.fillHeight: true
-                radius: 0
-                color: theme.alpha(theme.glassBase, 0.72)
-                border.width: 0
-                border.color: "transparent"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 1
+                color: theme.alpha(theme.lineSoft, 0.78)
+            }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 8
-                    spacing: 8
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 18
+                anchors.rightMargin: 18
+                spacing: 18
 
-                    Rectangle {
-                        Layout.alignment: Qt.AlignHCenter
-                        implicitWidth: 30
-                        implicitHeight: 30
-                        radius: 10
-                        color: theme.alpha(theme.ink950, 0.32)
-                        border.width: 1
-                        border.color: theme.alpha(theme.polar, 0.12)
+                BrandWordmark {
+                    Layout.preferredWidth: 198
+                    Layout.preferredHeight: implicitHeight
+                    Layout.alignment: Qt.AlignVCenter
+                    compact: true
+                    showMark: false
+                }
 
-                        AppIcon {
-                            anchors.centerIn: parent
-                            name: "media"
-                            color: theme.textStrong
-                            implicitWidth: 14
-                            implicitHeight: 14
-                        }
-                    }
+                RowLayout {
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.fillWidth: true
+                    spacing: 18
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: theme.alpha(theme.polar, 0.12)
-                    }
+                    Item { Layout.fillWidth: true }
 
                     Repeater {
                         model: workspaceTitles
 
-                        delegate: SidebarButton {
+                        delegate: Button {
+                            id: workspaceTab
+
                             required property int index
                             required property string modelData
 
-                            Layout.alignment: Qt.AlignHCenter
-                            Layout.preferredWidth: implicitWidth
-                            Layout.preferredHeight: implicitHeight
-                            title: modelData
-                            tooltipText: modelData + "  •  " + workspaceSubtitles[index]
-                            compact: false
-                            iconOnly: true
-                            kind: window.workspaceKinds[index]
-                            accent: window.workspaceAccent(index)
-                            badgeText: window.workspaceBadgeText(index)
-                            badgeEmphasis: window.workspaceBadgeEmphasis(index)
-                            highlighted: index === window.currentWorkspace
+                            objectName: "workspaceTab" + workspaceTab.modelData
+                            text: workspaceTab.modelData
+                            Layout.preferredWidth: Math.max(74, tabLabel.implicitWidth + 18)
+                            Layout.preferredHeight: 52
+                            flat: true
+                            hoverEnabled: true
+                            focusPolicy: Qt.TabFocus
+                            activeFocusOnTab: true
+                            ToolTip.visible: hovered
+                            ToolTip.delay: 350
+                            ToolTip.timeout: 2800
+                            ToolTip.text: workspaceSubtitles[index]
                             onClicked: window.currentWorkspace = index
+
+                            background: Item {
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    height: 2
+                                    color: workspaceTab.index === window.currentWorkspace
+                                           ? window.workspaceAccent(workspaceTab.index)
+                                           : "transparent"
+                                }
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    anchors.topMargin: 7
+                                    anchors.bottomMargin: 7
+                                    color: workspaceTab.down
+                                           ? theme.alpha(theme.polar, 0.08)
+                                           : workspaceTab.hovered
+                                             ? theme.alpha(theme.polar, 0.045)
+                                             : "transparent"
+                                }
+                            }
+
+                            contentItem: Item {
+                                Text {
+                                    id: tabLabel
+                                    objectName: "workspaceTabLabel" + workspaceTab.modelData
+                                    anchors.centerIn: parent
+                                    text: workspaceTab.modelData
+                                    color: workspaceTab.index === window.currentWorkspace
+                                           ? theme.textStrong
+                                           : (workspaceTab.hovered ? theme.textMain : theme.textMuted)
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 12
+                                    font.weight: workspaceTab.index === window.currentWorkspace ? Font.DemiBold : Font.Normal
+                                    font.letterSpacing: 0
+                                }
+
+                                Rectangle {
+                                    visible: window.workspaceBadgeText(workspaceTab.index).length > 0
+                                    anchors.left: tabLabel.right
+                                    anchors.leftMargin: 5
+                                    anchors.verticalCenter: tabLabel.verticalCenter
+                                    width: 6
+                                    height: 6
+                                    radius: 0
+                                    color: window.workspaceBadgeEmphasis(workspaceTab.index)
+                                           ? theme.signalRed
+                                           : window.workspaceAccent(workspaceTab.index)
+                                }
+                            }
                         }
                     }
 
-                    Item { Layout.fillHeight: true }
+                    Item { Layout.fillWidth: true }
                 }
-            }
-
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                radius: 0
-                color: theme.alpha(theme.glassBase, 0.64)
-                border.width: 0
-                border.color: "transparent"
 
                 ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 3
-                    spacing: 6
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.preferredWidth: 250
+                    spacing: 3
 
-                    Loader {
-                        id: workspaceLoader
+                    Text {
+                        objectName: "topSelectionStatusLabel"
                         Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
+                        text: window.currentSelectionLabel().length > 0
+                              ? window.currentSelectionLabel()
+                              : "No active asset"
+                        color: window.currentSelectionLabel().length > 0 ? theme.textMain : theme.textFaint
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        font.letterSpacing: 0
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideMiddle
                     }
+
+                    Text {
+                        objectName: "topWorkspaceStatusLabel"
+                        Layout.fillWidth: true
+                        text: window.workspaceTitles[window.currentWorkspace] + " / v" + appShell.appVersion
+                        color: theme.textFaint
+                        font.family: theme.fontUi
+                        font.pixelSize: 9
+                        font.letterSpacing: 0
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            radius: 0
+            color: theme.alpha(theme.glassBase, 0.78)
+            border.width: 0
+            border.color: "transparent"
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 1
+                color: theme.alpha(theme.polar, 0.045)
+            }
+
+            Loader {
+                id: workspaceLoader
+                anchors.fill: parent
+                anchors.margins: 6
+                sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
+            }
+
+            InlineActivityIndicator {
+                id: floatingActivityIndicator
+                objectName: "floatingActivityIndicator"
+                visible: window.anyAppActivity
+                width: Math.min(320, Math.max(190, parent.width * 0.26))
+                z: 2
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: 12
+                anchors.bottomMargin: window.activityIndicatorBottomMargin
+                title: window.primaryActivityTitle
+                detail: window.primaryActivityDetail
+                progressValue: window.primaryActivityProgress
+                accent: window.primaryActivityAccent
+                cancelable: window.primaryActivityCancelable
+                onCancelRequested: window.cancelPrimaryActivity()
+            }
+
+            RowLayout {
+                visible: false
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.leftMargin: 18
+                anchors.rightMargin: 18
+                anchors.bottomMargin: 8
+                spacing: 18
+                z: 1
+
+                Text {
+                    text: "Virel Studio"
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.letterSpacing: 0
                 }
 
                 Rectangle {
-                    id: releaseVersionBadge
-                    z: 3
-                    anchors.top: parent.top
-                    anchors.right: parent.right
-                    anchors.topMargin: 11
-                    anchors.rightMargin: 12
-                    implicitWidth: releaseVersionLabel.implicitWidth + 18
-                    implicitHeight: 24
-                    radius: theme.radiusControl
-                    color: theme.alpha(theme.ink950, 0.52)
-                    border.width: 1
-                    border.color: theme.alpha(theme.polar, 0.12)
-
-                    Label {
-                        id: releaseVersionLabel
-                        anchors.centerIn: parent
-                        text: "v" + appShell.appVersion
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        font.weight: Font.DemiBold
-                    }
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 12
+                    color: theme.alpha(theme.lineSoft, 0.62)
                 }
 
-                InlineActivityIndicator {
-                    id: floatingActivityIndicator
-                    visible: window.anyAppActivity
-                    width: Math.min(320, Math.max(190, parent.width * 0.26))
-                    z: 2
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    anchors.rightMargin: 12
-                    anchors.bottomMargin: 12
-                    title: window.primaryActivityTitle
-                    detail: window.primaryActivityDetail
-                    progressValue: window.primaryActivityProgress
-                    accent: window.primaryActivityAccent
+                Text {
+                    text: "Visual command environment"
+                    color: theme.textFaint
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.letterSpacing: 0
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Rectangle {
+                    Layout.preferredWidth: 84
+                    Layout.preferredHeight: 1
+                    color: window.anyAppActivity ? window.primaryActivityAccent : theme.alpha(theme.vectorGreen, 0.58)
                 }
             }
         }
@@ -1454,18 +1631,20 @@ ApplicationWindow {
 
     KeyboardShortcutsDialog {
         id: keyboardShortcutsDialog
+        objectName: "keyboardShortcutsDialog"
         parent: Overlay.overlay
     }
 
     CommandPaletteDialog {
         id: commandPaletteDialog
+        objectName: "commandPaletteDialog"
         parent: Overlay.overlay
         commands: [
-            { action: switchToLibraryAction, category: "Navigate", shortcutHint: "" },
-            { action: switchToEditAction, category: "Navigate", shortcutHint: "" },
-            { action: switchToCarouselAction, category: "Navigate", shortcutHint: "" },
-            { action: switchToTimelineAction, category: "Navigate", shortcutHint: "" },
-            { action: switchToExportAction, category: "Navigate", shortcutHint: "" },
+            { action: switchToLibraryAction, category: "Navigate", shortcutHint: macStyle ? "⌘1" : "Ctrl+1" },
+            { action: switchToEditAction, category: "Navigate", shortcutHint: macStyle ? "⌘2" : "Ctrl+2" },
+            { action: switchToCarouselAction, category: "Navigate", shortcutHint: macStyle ? "⌘3" : "Ctrl+3" },
+            { action: switchToTimelineAction, category: "Navigate", shortcutHint: macStyle ? "⌘4" : "Ctrl+4" },
+            { action: switchToExportAction, category: "Navigate", shortcutHint: macStyle ? "⌘5" : "Ctrl+5" },
             { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
             { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
             { action: newCarouselAction, category: "File", shortcutHint: "" },
@@ -1482,9 +1661,13 @@ ApplicationWindow {
             { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
             { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
             { action: toggleCropAction, category: "Edit", shortcutHint: "" },
+            { action: addSequenceMarkerAction, category: "Timeline", shortcutHint: "M" },
             { action: splitAtPlayheadAction, category: "Timeline", shortcutHint: macStyle ? "⌘\\" : "Ctrl+\\" },
             { action: removeSelectedClipAction, category: "Timeline", shortcutHint: "" },
             { action: openTimelineMediaBrowserAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘M" : "Ctrl+Shift+M" },
+            { action: toggleTimelinePlaybackAction, category: "Timeline", shortcutHint: "Space" },
+            { action: stepTimelineBackwardAction, category: "Timeline", shortcutHint: "Left" },
+            { action: stepTimelineForwardAction, category: "Timeline", shortcutHint: "Right" },
             { action: addTimelineVideoTrackAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘T" : "Ctrl+Shift+T" },
             { action: zoomInTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘=" : "Ctrl+=" },
             { action: zoomOutTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘-" : "Ctrl+-" },
@@ -1493,11 +1676,20 @@ ApplicationWindow {
             { action: timelineRazorToolAction, category: "Timeline", shortcutHint: "B" },
             { action: timelineSlipToolAction, category: "Timeline", shortcutHint: "Y" },
             { action: timelineRollToolAction, category: "Timeline", shortcutHint: "N" },
-            { action: toggleSnappingAction, category: "Timeline", shortcutHint: "S" },
+            { action: timelineToggleSnapAction, category: "Timeline", shortcutHint: "S" },
+            { action: timelineGoToStartAction, category: "Timeline", shortcutHint: "Home" },
+            { action: timelineGoToEndAction, category: "Timeline", shortcutHint: "End" },
+            { action: timelineDeleteClipAction, category: "Timeline", shortcutHint: "Backspace" },
+            { action: timelineSelectAllAction, category: "Timeline", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
+            { action: toggleSourcePanelAction, category: "Timeline", shortcutHint: "" },
+            { action: toggleEffectsPanelAction, category: "Timeline", shortcutHint: "" },
             { action: toggleRippleAction, category: "Timeline", shortcutHint: "" },
             { action: restoreTimelineLayoutAction, category: "Timeline", shortcutHint: "" },
             { action: carouselAddSlideAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
             { action: carouselRemoveSlideAction, category: "Carousel", shortcutHint: "" },
+            { action: carouselMoveBackwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘[" : "Ctrl+[" },
+            { action: carouselMoveForwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘]" : "Ctrl+]" },
+            { action: carouselAssignSelectedMediaAction, category: "Carousel", shortcutHint: "" },
             { action: carouselExportAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘C" : "Ctrl+Shift+C" },
             { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
             { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
@@ -1506,9 +1698,15 @@ ApplicationWindow {
             { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
             { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
             { action: aboutAction, category: "Help", shortcutHint: "" },
+            { action: runtimePathsAction, category: "Help", shortcutHint: "" },
+            { action: openAppDataFolderAction, category: "Help", shortcutHint: "" },
+            { action: openLogFolderAction, category: "Help", shortcutHint: "" },
+            { action: openBackupsFolderAction, category: "Help", shortcutHint: "" },
+            { action: openCacheFolderAction, category: "Help", shortcutHint: "" },
             { action: clearFinishedExportsAction, category: "Export", shortcutHint: "" },
             { action: minimizeWindowAction, category: "Window", shortcutHint: "" },
             { action: zoomWindowAction, category: "Window", shortcutHint: "" },
+            { action: bringWindowToFrontAction, category: "Window", shortcutHint: "" },
             { action: quitAction, category: "App", shortcutHint: macStyle ? "⌘Q" : "Ctrl+Q" }
         ]
     }
@@ -1519,7 +1717,7 @@ ApplicationWindow {
         modal: true
         width: 420
         standardButtons: Dialog.Ok
-        title: "About PhotoEditor"
+        title: "About Virel Studio"
 
         background: Rectangle {
             radius: theme.radius16
@@ -1531,13 +1729,9 @@ ApplicationWindow {
         contentItem: ColumnLayout {
             spacing: 12
 
-            Label {
+            BrandWordmark {
                 Layout.fillWidth: true
-                text: "PhotoEditor Desktop"
-                color: theme.textStrong
-                font.family: theme.fontUi
-                font.pixelSize: 18
-                font.weight: Font.DemiBold
+                Layout.preferredHeight: implicitHeight
             }
 
             Label {
@@ -1577,15 +1771,31 @@ ApplicationWindow {
     Component {
         id: libraryView
 
-        LibraryWorkspace {
-            mode: window.libraryWorkspaceMode
-            onModeSelected: function(mode) {
-                window.libraryWorkspaceMode = mode
-            }
+        StudioWorkspace {
+            page: "library"
+            catalogAssets: window.catalogAssetModel
+            importModeOpen: window.libraryWorkspaceMode === "import"
             onAssetActivated: function(destination) {
                 if (destination === "edit") {
                     window.editWorkspaceMode = "adjust"
                     window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+
+                if (destination === "masks") {
+                    window.editWorkspaceMode = "masks"
+                    window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+
+                if (destination === "compare") {
+                    window.editWorkspaceMode = "compare"
+                    window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+
+                if (destination === "export") {
+                    window.currentWorkspace = window.exportWorkspaceIndex
                     return
                 }
 
@@ -1613,10 +1823,31 @@ ApplicationWindow {
     Component {
         id: editView
 
-        EditWorkspace {
-            mode: window.editWorkspaceMode
-            onModeSelected: function(mode) {
-                window.editWorkspaceMode = mode
+        StudioWorkspace {
+            page: "edit"
+            catalogAssets: window.catalogAssetModel
+            editTool: window.editWorkspaceMode === "compare" ? "compare"
+                      : window.editWorkspaceMode === "masks" ? "masks"
+                      : "adjust"
+            onAssetActivated: function(destination) {
+                if (destination === "library") {
+                    window.currentWorkspace = window.libraryWorkspaceIndex
+                    return
+                }
+                if (destination === "masks") {
+                    window.editWorkspaceMode = "masks"
+                    window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+                if (destination === "compare") {
+                    window.editWorkspaceMode = "compare"
+                    window.currentWorkspace = window.editWorkspaceIndex
+                    return
+                }
+                if (destination === "export") {
+                    window.currentWorkspace = window.exportWorkspaceIndex
+                    return
+                }
             }
         }
     }
@@ -1636,6 +1867,9 @@ ApplicationWindow {
     Component {
         id: exportView
 
-        ExportView {}
+        StudioWorkspace {
+            page: "export"
+            catalogAssets: window.catalogAssetModel
+        }
     }
 }

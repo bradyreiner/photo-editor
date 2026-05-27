@@ -15,7 +15,19 @@ namespace photo_editor::desktop {
 
 using RenderEditState = EditRecipeState;
 
+enum class RenderBackendPreference {
+  Auto,
+  CpuOnly,
+  GpuOnly,
+};
+
+struct RenderBackendTelemetry final {
+  QString backend;
+  QString fallback_reason;
+};
+
 [[nodiscard]] bool preview_supported(const QString& file_path);
+[[nodiscard]] bool render_backend_available(RenderBackendPreference backend_preference);
 [[nodiscard]] bool decode_source_image(
     const QString& file_path,
     QImage* image,
@@ -33,7 +45,16 @@ using RenderEditState = EditRecipeState;
     const RenderEditState& state,
     const QColorSpace& target_color_space,
     QImage::Format output_format = QImage::Format_ARGB32,
-    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr);
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
+    RenderBackendTelemetry* telemetry = nullptr);
+[[nodiscard]] QImage render_output_image_with_backend(
+    const QImage& image,
+    const RenderEditState& state,
+    const QColorSpace& target_color_space,
+    QImage::Format output_format,
+    RenderBackendPreference backend_preference,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
+    RenderBackendTelemetry* telemetry = nullptr);
 void apply_color_adjustments(QImage* image, const RenderEditState& state);
 
 }  // namespace photo_editor::desktop

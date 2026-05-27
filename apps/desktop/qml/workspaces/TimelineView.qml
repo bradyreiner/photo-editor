@@ -1600,7 +1600,7 @@ Rectangle {
                             source: timelineDocument.previewSource
                             fillMode: root.programImageFillMode()
                             cache: false
-                            asynchronous: false
+                            asynchronous: true
                             visible: root.shouldShowTimelinePoster()
                             transformOrigin: Item.Center
                             scale: currentClip.frameScale ? currentClip.frameScale : 1
@@ -1640,7 +1640,7 @@ Rectangle {
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
                                 }
-                                
+
                                 ActionButton {
                                     Layout.alignment: Qt.AlignHCenter
                                     text: "Add Media"

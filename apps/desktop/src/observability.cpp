@@ -121,6 +121,62 @@ QString thread_id_string() {
       .arg(reinterpret_cast<quintptr>(QThread::currentThreadId()), 0, 16);
 }
 
+QString workflow_for_event(const QString& event_name) {
+  if (event_name.startsWith(QStringLiteral("preview."))) {
+    return QStringLiteral("preview");
+  }
+  if (event_name.startsWith(QStringLiteral("thumbnail.")) ||
+      event_name.startsWith(QStringLiteral("benchmark.thumbnail"))) {
+    return QStringLiteral("thumbnail");
+  }
+  if (event_name.startsWith(QStringLiteral("catalog.")) ||
+      event_name.startsWith(QStringLiteral("catalog_"))) {
+    return QStringLiteral("catalog");
+  }
+  if (event_name.startsWith(QStringLiteral("job."))) {
+    return QStringLiteral("jobs");
+  }
+  if (event_name.startsWith(QStringLiteral("desktop.startup"))) {
+    return QStringLiteral("startup");
+  }
+  if (event_name.startsWith(QStringLiteral("benchmark."))) {
+    return QStringLiteral("benchmark");
+  }
+  return {};
+}
+
+void add_if_missing(QJsonObject* fields, const QString& key, const QJsonValue& value) {
+  if (fields == nullptr || fields->contains(key) || value.isUndefined() || value.isNull()) {
+    return;
+  }
+  if (value.isString() && value.toString().trimmed().isEmpty()) {
+    return;
+  }
+  fields->insert(key, value);
+}
+
+void add_standard_event_fields(const QString& event_name, QJsonObject* fields) {
+  if (fields == nullptr) {
+    return;
+  }
+
+  add_if_missing(fields, QStringLiteral("workflow"), workflow_for_event(event_name));
+  add_if_missing(fields, QStringLiteral("thread"), thread_id_string());
+  add_if_missing(fields, QStringLiteral("reason"), fields->value(QStringLiteral("render_reason")));
+
+  if (!fields->contains(QStringLiteral("interactive")) &&
+      fields->contains(QStringLiteral("full_resolution"))) {
+    fields->insert(
+        QStringLiteral("interactive"),
+        !fields->value(QStringLiteral("full_resolution")).toBool());
+  }
+  add_if_missing(fields, QStringLiteral("interactive"), fields->value(QStringLiteral("draft_interactive")));
+
+  add_if_missing(fields, QStringLiteral("cache_hit"), fields->value(QStringLiteral("decoded_cache_hit")));
+  add_if_missing(fields, QStringLiteral("cache_hit"), fields->value(QStringLiteral("linear_cache_hit")));
+  add_if_missing(fields, QStringLiteral("cache_hit"), fields->value(QStringLiteral("decoded_cache_lookup")));
+}
+
 void cleanup_old_run_directories(const QString& logs_root_path) {
   QDir runs_root(QDir(logs_root_path).filePath(QStringLiteral("runs")));
   if (!runs_root.exists()) {
@@ -189,7 +245,13 @@ void observability_message_handler(
     const auto parsed_message =
         QJsonDocument::fromJson(trimmed_message.toUtf8(), &parse_error);
     if (parse_error.error == QJsonParseError::NoError && parsed_message.isObject()) {
-      record.insert(QStringLiteral("fields"), parsed_message.object());
+      auto fields = parsed_message.object();
+      const auto event_name = fields.value(QStringLiteral("event")).toString().trimmed();
+      if (!event_name.isEmpty()) {
+        record.insert(QStringLiteral("event"), event_name);
+      }
+      add_standard_event_fields(event_name, &fields);
+      record.insert(QStringLiteral("fields"), fields);
     } else {
       record.insert(QStringLiteral("message"), message);
     }
@@ -308,6 +370,7 @@ QString structuredMessage(const QString& event_name, const QVariantMap& fields) 
   for (auto iterator = fields.cbegin(); iterator != fields.cend(); ++iterator) {
     message_fields.insert(iterator.key(), QJsonValue::fromVariant(iterator.value()));
   }
+  add_standard_event_fields(event_name, &message_fields);
   return QString::fromUtf8(QJsonDocument(message_fields).toJson(QJsonDocument::Compact));
 }
 

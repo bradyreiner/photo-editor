@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
 #include <QCoreApplication>
+#include <QColorSpace>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -64,6 +66,35 @@ bool wait_for_job_id(
   return false;
 }
 
+bool issue_code_present(const QVariantList& issues, const QString& code) {
+  for (const auto& value : issues) {
+    if (value.toMap().value(QStringLiteral("code")).toString() == code) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int max_channel_delta(const QImage& left, const QImage& right) {
+  if (left.size() != right.size()) {
+    return 255;
+  }
+
+  auto max_delta = 0;
+  const auto left_argb = left.convertToFormat(QImage::Format_ARGB32);
+  const auto right_argb = right.convertToFormat(QImage::Format_ARGB32);
+  for (int y = 0; y < left_argb.height(); ++y) {
+    for (int x = 0; x < left_argb.width(); ++x) {
+      const auto lhs = left_argb.pixelColor(x, y);
+      const auto rhs = right_argb.pixelColor(x, y);
+      max_delta = std::max(max_delta, std::abs(lhs.red() - rhs.red()));
+      max_delta = std::max(max_delta, std::abs(lhs.green() - rhs.green()));
+      max_delta = std::max(max_delta, std::abs(lhs.blue() - rhs.blue()));
+    }
+  }
+  return max_delta;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -101,10 +132,83 @@ int main(int argc, char** argv) {
   crop_state.crop_rect_y = 0.0;
   crop_state.crop_rect_width = 0.5;
   crop_state.crop_rect_height = 1.0;
+  crop_state.output_color_space = QStringLiteral("Display P3");
   const auto recipe_json = photo_editor::desktop::serialize_edit_recipe_json(crop_state);
 
   photo_editor::desktop::JobRunner runner;
   photo_editor::desktop::ExportJobController controller;
+  photo_editor::desktop::EditRecipeState preflight_state;
+  preflight_state.output_color_space = QStringLiteral("Display P3");
+  preflight_state.soft_proof_enabled = true;
+  preflight_state.soft_proof_profile = QStringLiteral("sRGB");
+  preflight_state.crop_rect_width = 0.5;
+  preflight_state.crop_rect_height = 1.0;
+  const auto preflight = controller.exportPreflight(
+      QStringLiteral("photo"),
+      source_path,
+      QString(),
+      photo_editor::desktop::serialize_edit_recipe_json(preflight_state),
+      QStringLiteral("Web Proof"),
+      export_dir,
+      100,
+      3,
+      4,
+      80,
+      1,
+      0);
+  const auto preflight_issues = preflight.value(QStringLiteral("issues")).toList();
+  if (!preflight.value(QStringLiteral("ok")).toBool() ||
+      preflight.value(QStringLiteral("warningCount")).toInt() < 4 ||
+      preflight.value(QStringLiteral("outputColorSpace")).toString() != QStringLiteral("Display P3") ||
+      preflight.value(QStringLiteral("softProofProfile")).toString() != QStringLiteral("sRGB") ||
+      preflight.value(QStringLiteral("estimatedPixelWidth")).toInt() != 40 ||
+      !issue_code_present(preflight_issues, QStringLiteral("profile-web-wide-gamut")) ||
+      !issue_code_present(preflight_issues, QStringLiteral("soft-proof-mismatch")) ||
+      !issue_code_present(preflight_issues, QStringLiteral("preview-clipping")) ||
+      !issue_code_present(preflight_issues, QStringLiteral("raw-clipping"))) {
+    return fail("export preflight should catch profile, soft-proof, clipping, and size risks before queueing");
+  }
+
+  const auto missing_source_preflight = controller.exportPreflight(
+      QStringLiteral("photo"),
+      temp_dir.filePath(QStringLiteral("missing.png")),
+      QString(),
+      recipe_json,
+      QStringLiteral("Full Resolution"),
+      export_dir,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0);
+  if (missing_source_preflight.value(QStringLiteral("ok")).toBool() ||
+      !issue_code_present(
+          missing_source_preflight.value(QStringLiteral("issues")).toList(),
+          QStringLiteral("source-missing"))) {
+    return fail("export preflight should block missing rendered photo sources");
+  }
+
+  const auto missing_destination_preflight = controller.exportPreflight(
+      QStringLiteral("photo"),
+      source_path,
+      QString(),
+      recipe_json,
+      QStringLiteral("Full Resolution"),
+      QString(),
+      0,
+      0,
+      0,
+      0,
+      0,
+      0);
+  if (missing_destination_preflight.value(QStringLiteral("ok")).toBool() ||
+      !issue_code_present(
+          missing_destination_preflight.value(QStringLiteral("issues")).toList(),
+          QStringLiteral("destination-missing"))) {
+    return fail("export preflight should block missing destinations");
+  }
+
   const auto crop_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-crop"),
@@ -143,10 +247,186 @@ int main(int argc, char** argv) {
   if (!rendered_image.colorSpace().isValid()) {
     return fail("rendered photo export should preserve an output color profile");
   }
+  if (rendered_image.colorSpace() != QColorSpace(QColorSpace::DisplayP3)) {
+    return fail("rendered photo export should embed the requested Display P3 output profile");
+  }
+  if (rendered_image.format() != QImage::Format_RGBA64) {
+    return fail("full-resolution rendered PNG export should preserve a 16-bit image format");
+  }
 
   const auto sample = rendered_image.pixelColor(rendered_image.width() / 2, rendered_image.height() / 2);
   if (sample.blue() < 160 || sample.red() > 120) {
     return fail("rendered photo export should contain the cropped right-half content");
+  }
+
+  const auto crop_bounds_source_path = temp_dir.filePath(QStringLiteral("crop-bounds-source.png"));
+  QImage crop_bounds_source(11, 7, QImage::Format_ARGB32);
+  crop_bounds_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  for (int y = 0; y < crop_bounds_source.height(); ++y) {
+    for (int x = 0; x < crop_bounds_source.width(); ++x) {
+      crop_bounds_source.setPixelColor(
+          x,
+          y,
+          QColor(17 + x * 19, 23 + y * 27, 31 + x * 7 + y * 9, 255));
+    }
+  }
+  if (!crop_bounds_source.save(crop_bounds_source_path)) {
+    return fail("crop bounds source image should be written for export testing");
+  }
+  photo_editor::desktop::EditRecipeState crop_bounds_state;
+  crop_bounds_state.crop_rect_x = 2.0 / 11.0;
+  crop_bounds_state.crop_rect_y = 1.0 / 7.0;
+  crop_bounds_state.crop_rect_width = 6.0 / 11.0;
+  crop_bounds_state.crop_rect_height = 4.0 / 7.0;
+  crop_bounds_state.output_color_space = QStringLiteral("sRGB");
+  const auto expected_crop_rect =
+      photo_editor::desktop::crop_rect_for_image(crop_bounds_source.size(), crop_bounds_state);
+  const auto expected_crop_preview = photo_editor::desktop::render_output_image(
+      photo_editor::desktop::apply_crop(crop_bounds_source, crop_bounds_state),
+      crop_bounds_state,
+      QColorSpace(QColorSpace::SRgb),
+      QImage::Format_RGBA64);
+  if (expected_crop_rect != QRect(2, 1, 6, 4) || expected_crop_preview.size() != expected_crop_rect.size()) {
+    return fail("preview crop bounds proof should establish the exact expected crop rectangle");
+  }
+  const auto crop_bounds_job_index = controller.jobCount();
+  if (!controller.queueExport(
+          QStringLiteral("asset-crop-bounds"),
+          QStringLiteral("photo"),
+          QStringLiteral("Crop Bounds Check"),
+          crop_bounds_source_path,
+          QString(),
+          photo_editor::desktop::serialize_edit_recipe_json(crop_bounds_state),
+          QStringLiteral("Full Resolution"),
+          export_dir)) {
+    return fail("crop bounds export should queue successfully");
+  }
+  if (!wait_for_job(&controller, crop_bounds_job_index)) {
+    return fail("crop bounds export should finish");
+  }
+  const auto crop_bounds_job = controller.jobs().at(crop_bounds_job_index).toMap();
+  const QImage crop_bounds_exported(crop_bounds_job.value(QStringLiteral("outputPath")).toString());
+  if (crop_bounds_exported.size() != expected_crop_rect.size()) {
+    return fail("export crop bounds should match the preview crop rectangle size exactly");
+  }
+  if (max_channel_delta(expected_crop_preview, crop_bounds_exported) > 1) {
+    return fail("export crop result should match the preview crop bounds and pixels exactly");
+  }
+  const auto crop_bounds_diff = crop_bounds_job.value(QStringLiteral("previewExportDiff")).toMap();
+  if (!crop_bounds_diff.value(QStringLiteral("available")).toBool()) {
+    return fail("export crop proof should publish preview/export diff metadata");
+  }
+  if (crop_bounds_diff.value(QStringLiteral("width")).toInt() != expected_crop_rect.width() ||
+      crop_bounds_diff.value(QStringLiteral("height")).toInt() != expected_crop_rect.height()) {
+    return fail("export crop proof diff dimensions should match the exact preview crop bounds");
+  }
+  if (!crop_bounds_diff.value(QStringLiteral("withinTolerance")).toBool() ||
+      crop_bounds_diff.value(QStringLiteral("maxChannelDelta")).toInt() > 1 ||
+      crop_bounds_diff.value(QStringLiteral("tolerance")).toInt() != 1) {
+    return fail("export crop proof diff should verify written pixels are within lossless tolerance");
+  }
+  const auto crop_bounds_metadata = crop_bounds_job.value(QStringLiteral("metadata")).toMap();
+  if (crop_bounds_metadata.value(QStringLiteral("previewExportDiff")).toMap().isEmpty()) {
+    return fail("export crop proof diff should persist in job metadata");
+  }
+
+  const auto original_constraint_job_index = controller.jobCount();
+  if (!controller.queueExportWithCropConstraint(
+          QStringLiteral("asset-original-constraint"),
+          QStringLiteral("photo"),
+          QStringLiteral("Original Constraint"),
+          source_path,
+          QString(),
+          recipe_json,
+          QStringLiteral("Full Resolution"),
+          export_dir,
+          QStringLiteral("Original"),
+          0.0,
+          0.0,
+          0.0,
+          0.0)) {
+    return fail("export crop constraints should queue successfully");
+  }
+  const auto original_constraint_metadata =
+      controller.jobs().at(original_constraint_job_index).toMap().value(QStringLiteral("exportCrop")).toMap();
+  if (original_constraint_metadata.value(QStringLiteral("preset")).toString() != QStringLiteral("Original")) {
+    return fail("export crop constraints should be visible in queued job metadata");
+  }
+  if (!wait_for_job(&controller, original_constraint_job_index)) {
+    return fail("export crop constraint job should finish");
+  }
+  const QImage original_constraint_image(
+      controller.jobs()
+          .at(original_constraint_job_index)
+          .toMap()
+          .value(QStringLiteral("outputPath"))
+          .toString());
+  if (original_constraint_image.width() != 80 || original_constraint_image.height() != 40) {
+    return fail("export crop constraints should be able to clear the recipe crop for one export");
+  }
+
+  const auto square_constraint_job_index = controller.jobCount();
+  if (!controller.queueExportWithCropConstraint(
+          QStringLiteral("asset-square-constraint"),
+          QStringLiteral("photo"),
+          QStringLiteral("Square Constraint"),
+          source_path,
+          QString(),
+          QString(),
+          QStringLiteral("Full Resolution"),
+          export_dir,
+          QStringLiteral("1:1"),
+          0.0,
+          0.0,
+          0.0,
+          0.0)) {
+    return fail("square export crop constraints should queue successfully");
+  }
+  if (!wait_for_job(&controller, square_constraint_job_index)) {
+    return fail("square export crop constraint job should finish");
+  }
+  const QImage square_constraint_image(
+      controller.jobs()
+          .at(square_constraint_job_index)
+          .toMap()
+          .value(QStringLiteral("outputPath"))
+          .toString());
+  if (square_constraint_image.width() != 40 || square_constraint_image.height() != 40) {
+    return fail("export crop constraints should apply an export-only crop preset");
+  }
+
+  const auto archive_job_index = controller.jobCount();
+  if (!controller.queueExport(
+          QStringLiteral("asset-archive"),
+          QStringLiteral("photo"),
+          QStringLiteral("Archive Check"),
+          source_path,
+          QString(),
+          recipe_json,
+          QStringLiteral("Archive TIFF"),
+          export_dir)) {
+    return fail("archive TIFF export should queue successfully");
+  }
+  if (!wait_for_job(&controller, archive_job_index)) {
+    return fail("archive TIFF export should finish");
+  }
+  const auto archive_job = controller.jobs().at(archive_job_index).toMap();
+  if (archive_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
+    return fail("archive TIFF export should complete successfully");
+  }
+  const auto archive_path = archive_job.value(QStringLiteral("outputPath")).toString();
+  if (QFileInfo(archive_path).suffix().toLower() != QStringLiteral("tif")) {
+    return fail("archive export should write a TIFF artifact");
+  }
+  const QImage archive_image(archive_path);
+  if (archive_image.isNull()) {
+    return fail("archive TIFF export should produce a readable image");
+  }
+  if (archive_image.format() != QImage::Format_RGBA64) {
+    return fail("archive TIFF export should preserve a 16-bit image format");
+  }
+  if (archive_image.colorSpace() != QColorSpace(QColorSpace::DisplayP3)) {
+    return fail("archive TIFF export should embed the requested output profile");
   }
 
   const auto copy_job_index = controller.jobCount();

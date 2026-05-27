@@ -7,7 +7,10 @@
 #import <Vision/Vision.h>
 
 #include <algorithm>
+#include <cmath>
+#include <utility>
 
+#include <QColor>
 #include <QDebug>
 
 namespace photo_editor::desktop {
@@ -192,6 +195,69 @@ SegmentationResult segmentation_result_from_pixel_buffer(CVPixelBufferRef pixel_
   return result;
 }
 
+QString normalized_semantic_kind(const QString& semantic_kind) {
+  const auto normalized = semantic_kind.trimmed().toLower();
+  return normalized == QStringLiteral("person") ? QStringLiteral("people") : normalized;
+}
+
+SegmentationResult invert_segmentation_result(SegmentationResult result) {
+  if (!result.success) {
+    return result;
+  }
+  for (auto index = 0; index < result.mask_data.size(); ++index) {
+    const auto value = static_cast<unsigned char>(result.mask_data.at(index));
+    result.mask_data[index] = static_cast<char>(0xff - value);
+  }
+  return result;
+}
+
+SegmentationResult generate_sky_heuristic_mask(const QImage& source_image) {
+  SegmentationResult result;
+  if (source_image.isNull() || source_image.width() < 2 || source_image.height() < 2) {
+    result.error_message = QStringLiteral("Invalid source image");
+    return result;
+  }
+
+  const auto image = source_image.convertToFormat(QImage::Format_RGB32);
+  result.width = image.width();
+  result.height = image.height();
+  result.mask_data = QByteArray(result.width * result.height, '\0');
+
+  auto has_sky_pixels = false;
+  for (int y = 0; y < result.height; ++y) {
+    const auto vertical = result.height > 1
+                              ? static_cast<double>(y) / static_cast<double>(result.height - 1)
+                              : 0.0;
+    const auto top_bias = std::clamp((0.70 - vertical) / 0.70, 0.0, 1.0);
+    const auto* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+    for (int x = 0; x < result.width; ++x) {
+      const auto pixel = row[x];
+      const auto red = static_cast<double>(qRed(pixel)) / 255.0;
+      const auto green = static_cast<double>(qGreen(pixel)) / 255.0;
+      const auto blue = static_cast<double>(qBlue(pixel)) / 255.0;
+      const auto max_channel = std::max({red, green, blue});
+      const auto min_channel = std::min({red, green, blue});
+      const auto chroma = max_channel - min_channel;
+      const auto brightness = (red + green + blue) / 3.0;
+      const auto blue_dominance = std::clamp((blue - std::max(red, green) + 0.08) / 0.22, 0.0, 1.0);
+      const auto bright_sky = std::clamp((brightness - 0.38) / 0.40, 0.0, 1.0);
+      const auto low_texture_haze = std::clamp((0.36 - chroma) / 0.36, 0.0, 1.0);
+      const auto score = top_bias * std::max(blue_dominance, 0.55 * bright_sky * low_texture_haze);
+      const auto alpha = static_cast<int>(std::lround(std::clamp(score, 0.0, 1.0) * 255.0));
+      if (alpha > 0) {
+        result.mask_data[y * result.width + x] = static_cast<char>(alpha);
+        has_sky_pixels = true;
+      }
+    }
+  }
+
+  result.success = has_sky_pixels;
+  if (!result.success) {
+    result.error_message = QStringLiteral("No sky-like region detected");
+  }
+  return result;
+}
+
 }  // namespace
 
 SegmentationResult generate_subject_mask(const QImage& source_image) {
@@ -231,6 +297,22 @@ SegmentationResult generate_subject_mask(const QImage& source_image) {
 
   result.error_message = QStringLiteral("Vision segmentation requires macOS 14.0 or later");
   return result;
+}
+
+SegmentationResult generate_semantic_mask(const QImage& source_image, const QString& semantic_kind) {
+  const auto kind = normalized_semantic_kind(semantic_kind);
+  if (kind == QStringLiteral("sky")) {
+    return generate_sky_heuristic_mask(source_image);
+  }
+
+  auto foreground_result = generate_subject_mask(source_image);
+  if (!foreground_result.success) {
+    return foreground_result;
+  }
+  if (kind == QStringLiteral("background")) {
+    return invert_segmentation_result(std::move(foreground_result));
+  }
+  return foreground_result;
 }
 
 ForegroundInstanceMap generate_foreground_instance_map(const QImage& source_image) {

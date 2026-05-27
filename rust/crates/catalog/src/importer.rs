@@ -5,6 +5,7 @@ use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::thread;
 use std::time::SystemTime;
 
 use exif::{In, Reader, Tag, Value};
@@ -49,10 +50,10 @@ pub struct ExtractedMetadata {
 }
 
 pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
-    let mut assets = Vec::new();
     let mut skipped_unsupported = 0_usize;
 
     let mount_path_str = path_to_utf8(&request.mount_path)?;
+    let mut candidates = Vec::new();
 
     for path in candidate_file_paths(request)? {
         if !is_supported_photo_path(&path) {
@@ -60,12 +61,21 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
             continue;
         }
 
-        let metadata = extract_metadata(&path).unwrap_or_else(|_| fallback_metadata(&path));
         let relative_path = match path.strip_prefix(&request.mount_path) {
             Ok(relative) => path_to_utf8(relative)?.replace('\\', "/"),
             Err(_) => path_to_utf8(&path)?,
         };
+        candidates.push((path, relative_path));
+    }
 
+    let candidate_paths = candidates
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    let metadata = extract_metadata_parallel(&candidate_paths);
+
+    let mut assets = Vec::with_capacity(candidates.len());
+    for ((_, relative_path), metadata) in candidates.into_iter().zip(metadata.into_iter()) {
         assets.push(CatalogAssetRecord {
             asset_id: stable_asset_id(&request.drive_id, &relative_path),
             capture_year: metadata.capture_year,
@@ -99,6 +109,50 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
         assets,
         skipped_unsupported,
     })
+}
+
+fn extract_metadata_parallel(paths: &[PathBuf]) -> Vec<ExtractedMetadata> {
+    if paths.len() < 2 {
+        return paths
+            .iter()
+            .map(|path| extract_metadata(path).unwrap_or_else(|_| fallback_metadata(path)))
+            .collect();
+    }
+
+    let worker_count = thread::available_parallelism()
+        .map(|value| value.get())
+        .unwrap_or(1)
+        .clamp(1, paths.len());
+    let chunk_size = (paths.len() + worker_count - 1) / worker_count;
+    let mut indexed_metadata = thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(worker_count);
+        for (chunk_index, chunk) in paths.chunks(chunk_size).enumerate() {
+            let begin = chunk_index * chunk_size;
+            handles.push(scope.spawn(move || {
+                chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(offset, path)| {
+                        (
+                            begin + offset,
+                            extract_metadata(path).unwrap_or_else(|_| fallback_metadata(path)),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        let mut values = Vec::with_capacity(paths.len());
+        for handle in handles {
+            values.extend(handle.join().expect("metadata worker should not panic"));
+        }
+        values
+    });
+    indexed_metadata.sort_by_key(|(index, _)| *index);
+    indexed_metadata
+        .into_iter()
+        .map(|(_, metadata)| metadata)
+        .collect()
 }
 
 fn candidate_file_paths(request: &ImportRequest) -> std::io::Result<Vec<PathBuf>> {
@@ -381,6 +435,40 @@ mod tests {
         let summary = discover_assets(&request).expect("discovery should succeed");
         assert_eq!(summary.assets.len(), 1);
         assert_eq!(summary.assets[0].location.relative_path, "set-a/keep.NEF");
+    }
+
+    #[test]
+    fn discover_assets_preserves_selected_path_order_after_parallel_metadata() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        fs::create_dir_all(&root).expect("create dir should succeed");
+        for file_name in ["third.jpg", "first.jpg", "fourth.jpg", "second.jpg"] {
+            fs::write(root.join(file_name), b"not-real-jpeg").expect("write should succeed");
+        }
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root.clone(),
+            import_mode: ImportMode::Referenced,
+            selected_paths: vec![
+                root.join("third.jpg"),
+                root.join("first.jpg"),
+                root.join("fourth.jpg"),
+                root.join("second.jpg"),
+            ],
+        };
+
+        let summary = discover_assets(&request).expect("discovery should succeed");
+        let relative_paths = summary
+            .assets
+            .iter()
+            .map(|asset| asset.location.relative_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            relative_paths,
+            vec!["third.jpg", "first.jpg", "fourth.jpg", "second.jpg"]
+        );
     }
 
     #[test]

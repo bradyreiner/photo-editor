@@ -970,7 +970,7 @@ Rectangle {
                                                 source: delegateIsVideo ? "" : delegateFileUrl
                                                 fillMode: Image.PreserveAspectCrop
                                                 asynchronous: true
-                                                cache: false
+                                                cache: true
                                                 sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
                                                 sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
                                                 visible: !delegateIsVideo && status === Image.Ready

@@ -6,9 +6,88 @@
 
 namespace photo_editor::desktop {
 
-SegmentationResult generate_subject_mask(const QImage& /*source_image*/) {
+namespace {
+
+SegmentationResult fake_foreground_mask(const QImage& source_image) {
+  SegmentationResult result;
+  if (source_image.isNull() || source_image.width() < 2 || source_image.height() < 2) {
+    result.error_message = QStringLiteral("Invalid source image");
+    return result;
+  }
+
+  result.width = 8;
+  result.height = 8;
+  result.mask_data = QByteArray(result.width * result.height, '\0');
+  for (int y = 2; y <= 5; ++y) {
+    for (int x = 2; x <= 5; ++x) {
+      result.mask_data[y * result.width + x] = static_cast<char>(0xff);
+    }
+  }
+  result.success = true;
+  return result;
+}
+
+SegmentationResult inverted_mask(SegmentationResult result) {
+  if (!result.success) {
+    return result;
+  }
+  for (auto index = 0; index < result.mask_data.size(); ++index) {
+    const auto value = static_cast<unsigned char>(result.mask_data.at(index));
+    result.mask_data[index] = static_cast<char>(0xff - value);
+  }
+  return result;
+}
+
+SegmentationResult fake_sky_mask(const QImage& source_image) {
+  SegmentationResult result;
+  if (source_image.isNull() || source_image.width() < 2 || source_image.height() < 2) {
+    result.error_message = QStringLiteral("Invalid source image");
+    return result;
+  }
+
+  result.width = 8;
+  result.height = 8;
+  result.mask_data = QByteArray(result.width * result.height, '\0');
+  for (int y = 0; y < 3; ++y) {
+    for (int x = 0; x < result.width; ++x) {
+      result.mask_data[y * result.width + x] = static_cast<char>(0xff);
+    }
+  }
+  result.success = true;
+  return result;
+}
+
+QString normalized_semantic_kind(const QString& semantic_kind) {
+  const auto normalized = semantic_kind.trimmed().toLower();
+  return normalized == QStringLiteral("person") ? QStringLiteral("people") : normalized;
+}
+
+}  // namespace
+
+SegmentationResult generate_subject_mask(const QImage& source_image) {
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION")) {
+    return fake_foreground_mask(source_image);
+  }
+
   SegmentationResult result;
   result.error_message = QStringLiteral("AI subject masking is only available on macOS 14+");
+  return result;
+}
+
+SegmentationResult generate_semantic_mask(const QImage& source_image, const QString& semantic_kind) {
+  const auto kind = normalized_semantic_kind(semantic_kind);
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION")) {
+    if (kind == QStringLiteral("sky")) {
+      return fake_sky_mask(source_image);
+    }
+    if (kind == QStringLiteral("background")) {
+      return inverted_mask(fake_foreground_mask(source_image));
+    }
+    return fake_foreground_mask(source_image);
+  }
+
+  SegmentationResult result;
+  result.error_message = QStringLiteral("AI semantic masking is only available on macOS 14+");
   return result;
 }
 

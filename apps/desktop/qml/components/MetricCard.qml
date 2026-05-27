@@ -32,9 +32,9 @@ GlassSurface {
         Label {
             text: root.label
             color: theme.textMuted
-            font.family: theme.fontMono
+            font.family: theme.fontUi
             font.pixelSize: 10
-            font.letterSpacing: 0.8
+            font.letterSpacing: 0
         }
 
         Label {

@@ -11,6 +11,8 @@ namespace photo_editor::pipeline {
 enum class InputTransformKind {
   EmbeddedProfile,
   CameraNative,
+  CameraDcpProfile,
+  CameraIccProfile,
   RawDecoderDefault,
 };
 
@@ -68,6 +70,7 @@ struct DecodedImageMetadata final {
 struct CameraProfile final {
   bool valid = false;
   std::string profile_name = "Unknown Camera";
+  std::string profile_format = "Generic";
   std::string camera_make;
   std::string camera_model;
   std::array<double, 9> camera_to_xyz_d50 = {
@@ -75,6 +78,19 @@ struct CameraProfile final {
       0.0, 1.0, 0.0,
       0.0, 0.0, 1.0,
   };
+  std::array<double, 9> camera_to_xyz_d50_tungsten = {
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0,
+  };
+  std::array<double, 9> camera_to_xyz_d50_daylight = {
+      1.0, 0.0, 0.0,
+      0.0, 1.0, 0.0,
+      0.0, 0.0, 1.0,
+  };
+  bool dual_illuminant = false;
+  double tungsten_temperature = 2850.0;
+  double daylight_temperature = 6500.0;
   double reference_temperature = 5200.0;
   double reference_tint = 0.0;
 };
@@ -96,6 +112,10 @@ struct ColorPipelineConfig final {
   CameraProfile camera_profile;
   InputTransformRecipe input_transform_recipe;
   RenderIntent render_intent = RenderIntent::Perceptual;
+  double output_headroom = 1.0;
+  bool black_point_compensation_enabled = true;
+  double source_black_point = 0.0;
+  double output_black_point = 0.0;
 };
 
 [[nodiscard]] std::string normalize_input_color_profile_name(std::string_view value);
@@ -109,6 +129,9 @@ struct ColorPipelineConfig final {
 [[nodiscard]] RenderIntent render_intent_from_name(std::string_view value);
 [[nodiscard]] const char* render_intent_name(RenderIntent intent);
 [[nodiscard]] CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata);
+[[nodiscard]] CameraProfile resolve_camera_profile(
+    const DecodedImageMetadata& metadata,
+    const InputColorProfile& input_profile);
 [[nodiscard]] InputTransformRecipe resolve_input_transform_recipe(
     const InputColorProfile& input_profile,
     const CameraProfile& camera_profile,

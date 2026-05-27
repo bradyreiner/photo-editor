@@ -44,8 +44,51 @@ struct ExportImageOptions final {
   QImage::Format image_format = QImage::Format_RGBA64;
 };
 
+struct PreviewExportDiff final {
+  bool available = false;
+  bool within_tolerance = false;
+  int width = 0;
+  int height = 0;
+  int max_channel_delta = 0;
+  double mean_channel_delta = 0.0;
+  int tolerance = 1;
+  QString status;
+};
+
 QString iso_now() {
   return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+}
+
+qint64 queue_wait_msecs_since(const QString& created_at, const QDateTime& reference_time) {
+  const auto created = QDateTime::fromString(created_at.trimmed(), Qt::ISODate);
+  if (!created.isValid() || !reference_time.isValid()) {
+    return 0;
+  }
+  return qMax<qint64>(0, created.toUTC().msecsTo(reference_time.toUTC()));
+}
+
+qint64 queue_wait_msecs_for_job(const PersistentJobRecord& job) {
+  return queue_wait_msecs_since(job.created_at, QDateTime::currentDateTimeUtc());
+}
+
+QString cancellation_reason_for_job(const PersistentJobRecord& job) {
+  const auto explicit_reason =
+      job.metadata_json.value(QStringLiteral("cancellationReason")).toString().trimmed();
+  if (!explicit_reason.isEmpty()) {
+    return explicit_reason;
+  }
+  const auto cancel_action = job.metadata_json.value(QStringLiteral("cancelAction")).toString().trimmed();
+  if (!cancel_action.isEmpty()) {
+    return cancel_action;
+  }
+  if (job.metadata_json.value(QStringLiteral("cancellationRequested")).toBool() ||
+      job.status == QStringLiteral("Canceling")) {
+    return QStringLiteral("cooperative_cancel_requested");
+  }
+  if (job.status == QStringLiteral("Canceled")) {
+    return QStringLiteral("canceled");
+  }
+  return {};
 }
 
 QString normalized_local_path(const QString& path) {
@@ -104,6 +147,41 @@ bool should_render_photo_job(const PersistentJobRecord& job) {
   return is_photo_media(job.media_type) && !is_original_copy_preset(job.preset_name);
 }
 
+void apply_export_crop_constraint(EditRecipeState* state, const QJsonObject& metadata) {
+  if (state == nullptr) {
+    return;
+  }
+  const auto crop = metadata.value(QStringLiteral("exportCrop")).toObject();
+  if (crop.isEmpty() || !crop.value(QStringLiteral("enabled")).toBool(true)) {
+    return;
+  }
+
+  const auto preset = crop.value(QStringLiteral("preset")).toString().trimmed();
+  const auto has_rect = crop.value(QStringLiteral("width")).toDouble() > 0.0 &&
+                        crop.value(QStringLiteral("height")).toDouble() > 0.0;
+  if (!preset.isEmpty() && preset.compare(QStringLiteral("Current"), Qt::CaseInsensitive) != 0) {
+    state->crop_rect_x = 0.0;
+    state->crop_rect_y = 0.0;
+    state->crop_rect_width = 0.0;
+    state->crop_rect_height = 0.0;
+    state->crop_zoom = 1.0;
+    state->crop_preset = preset.compare(QStringLiteral("Original"), Qt::CaseInsensitive) == 0
+                             ? QStringLiteral("Original")
+                             : preset;
+  }
+
+  if (has_rect) {
+    const auto width = qBound(0.01, crop.value(QStringLiteral("width")).toDouble(), 1.0);
+    const auto height = qBound(0.01, crop.value(QStringLiteral("height")).toDouble(), 1.0);
+    state->crop_rect_x = qBound(0.0, crop.value(QStringLiteral("x")).toDouble(), 1.0 - width);
+    state->crop_rect_y = qBound(0.0, crop.value(QStringLiteral("y")).toDouble(), 1.0 - height);
+    state->crop_rect_width = width;
+    state->crop_rect_height = height;
+    state->crop_preset = QStringLiteral("Original");
+    state->crop_zoom = 1.0;
+  }
+}
+
 QString resolved_source_path(const PersistentJobRecord& job, bool* uses_preview) {
   const auto preview_path = normalized_local_path(job.edited_preview_source);
   const auto source_path = normalized_local_path(job.source_path);
@@ -151,6 +229,78 @@ ExportImageOptions export_image_options_for_preset(const QString& preset) {
   return {.max_edge = 0, .jpeg_quality = 100, .writer_format = "png", .image_format = QImage::Format_RGBA64};
 }
 
+int preview_export_diff_tolerance_for_preset(const QString& preset) {
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+    return 18;
+  }
+  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
+    return 12;
+  }
+  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+    return 10;
+  }
+  return 1;
+}
+
+QVariantMap preview_export_diff_to_map(const PreviewExportDiff& diff) {
+  QVariantMap value;
+  value.insert(QStringLiteral("available"), diff.available);
+  value.insert(QStringLiteral("withinTolerance"), diff.within_tolerance);
+  value.insert(QStringLiteral("width"), diff.width);
+  value.insert(QStringLiteral("height"), diff.height);
+  value.insert(QStringLiteral("maxChannelDelta"), diff.max_channel_delta);
+  value.insert(QStringLiteral("meanChannelDelta"), diff.mean_channel_delta);
+  value.insert(QStringLiteral("tolerance"), diff.tolerance);
+  value.insert(QStringLiteral("status"), diff.status);
+  return value;
+}
+
+PreviewExportDiff compare_preview_to_export(
+    const QImage& preview_image,
+    const QImage& exported_image,
+    int tolerance) {
+  PreviewExportDiff diff;
+  diff.tolerance = tolerance;
+  if (preview_image.isNull() || exported_image.isNull()) {
+    diff.status = QStringLiteral("unavailable");
+    return diff;
+  }
+
+  diff.available = true;
+  diff.width = exported_image.width();
+  diff.height = exported_image.height();
+  if (preview_image.size() != exported_image.size()) {
+    diff.max_channel_delta = 255;
+    diff.status = QStringLiteral("size-mismatch");
+    return diff;
+  }
+
+  const auto preview_argb = preview_image.convertToFormat(QImage::Format_ARGB32);
+  const auto exported_argb = exported_image.convertToFormat(QImage::Format_ARGB32);
+  qint64 total_delta = 0;
+  qint64 channel_count = 0;
+  for (int y = 0; y < preview_argb.height(); ++y) {
+    for (int x = 0; x < preview_argb.width(); ++x) {
+      const auto preview_pixel = preview_argb.pixelColor(x, y);
+      const auto exported_pixel = exported_argb.pixelColor(x, y);
+      const auto red_delta = qAbs(preview_pixel.red() - exported_pixel.red());
+      const auto green_delta = qAbs(preview_pixel.green() - exported_pixel.green());
+      const auto blue_delta = qAbs(preview_pixel.blue() - exported_pixel.blue());
+      diff.max_channel_delta = std::max(diff.max_channel_delta, red_delta);
+      diff.max_channel_delta = std::max(diff.max_channel_delta, green_delta);
+      diff.max_channel_delta = std::max(diff.max_channel_delta, blue_delta);
+      total_delta += red_delta + green_delta + blue_delta;
+      channel_count += 3;
+    }
+  }
+
+  diff.mean_channel_delta = channel_count > 0 ? static_cast<double>(total_delta) / static_cast<double>(channel_count) : 0.0;
+  diff.within_tolerance = diff.max_channel_delta <= diff.tolerance;
+  diff.status = diff.within_tolerance ? QStringLiteral("matched") : QStringLiteral("differs");
+  return diff;
+}
+
 QString output_suffix_for_preset(const QString& preset, bool rendered_output) {
   if (!rendered_output) {
     return {};
@@ -171,8 +321,12 @@ bool render_photo_export(
     const QString& source_path,
     const QString& recipe_json,
     const QString& preset,
-    const QString& output_path) {
-  const auto state = parse_edit_recipe_json(recipe_json);
+    const QJsonObject& export_metadata,
+    const QString& output_path,
+    RenderBackendTelemetry* telemetry = nullptr,
+    QImage* rendered_output = nullptr) {
+  auto state = parse_edit_recipe_json(recipe_json);
+  apply_export_crop_constraint(&state, export_metadata);
   QImage image;
   photo_editor::pipeline::DecodedImageMetadata metadata;
   if (!decode_source_image(source_path, &image, 0, state, &metadata)) {
@@ -186,12 +340,16 @@ bool render_photo_export(
       state,
       preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space)),
       options.image_format,
-      metadata.valid ? &metadata : nullptr);
+      metadata.valid ? &metadata : nullptr,
+      telemetry);
   if (image.isNull()) {
     return false;
   }
   if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
     image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+  }
+  if (rendered_output != nullptr) {
+    *rendered_output = image;
   }
 
   QImageWriter writer(output_path, options.writer_format);
@@ -244,6 +402,7 @@ QVariantMap run_export_work(
     const QString& source_path,
     const QString& recipe_json,
     const QString& preset_name,
+    const QJsonObject& export_metadata,
     const QString& output_path,
     bool render_photo) {
   QElapsedTimer timer;
@@ -251,13 +410,37 @@ QVariantMap run_export_work(
   QVariantMap result;
   result.insert(QStringLiteral("success"), false);
   result.insert(QStringLiteral("outputPath"), output_path);
+  result.insert(QStringLiteral("backend"), render_photo ? QStringLiteral("unknown") : QStringLiteral("copy"));
+  result.insert(QStringLiteral("fallbackReason"), QString());
 
   QDir().mkpath(QFileInfo(output_path).absolutePath());
   QFile::remove(output_path);
+  RenderBackendTelemetry telemetry;
+  QImage rendered_output;
   const auto success = render_photo
-                           ? render_photo_export(source_path, recipe_json, preset_name, output_path)
+                           ? render_photo_export(
+                                 source_path,
+                                 recipe_json,
+                                 preset_name,
+                                 export_metadata,
+                                 output_path,
+                                 &telemetry,
+                                 &rendered_output)
                            : QFile::copy(source_path, output_path);
+  if (render_photo) {
+    result.insert(
+        QStringLiteral("backend"),
+        telemetry.backend.isEmpty() ? QStringLiteral("unknown") : telemetry.backend);
+    result.insert(QStringLiteral("fallbackReason"), telemetry.fallback_reason);
+  }
   result.insert(QStringLiteral("success"), success);
+  if (success && render_photo) {
+    const auto preview_export_diff = compare_preview_to_export(
+        rendered_output,
+        QImage(output_path),
+        preview_export_diff_tolerance_for_preset(preset_name));
+    result.insert(QStringLiteral("previewExportDiff"), preview_export_diff_to_map(preview_export_diff));
+  }
   if (!success) {
     result.insert(
         QStringLiteral("errorMessage"),
@@ -579,6 +762,7 @@ void JobRunner::processNextJob() {
   const auto job = queued_jobs.front();
   active_job_id_ = job.job_id;
   active_job_kind_ = job.job_kind;
+  active_queue_wait_ms_ = queue_wait_msecs_for_job(job);
   active_job_timer_.restart();
   observability::logInfo(
       photoEditorJobsLog(),
@@ -588,6 +772,7 @@ void JobRunner::processNextJob() {
           {QStringLiteral("job_kind"), job.job_kind},
           {QStringLiteral("asset_id"), job.asset_id},
           {QStringLiteral("source_path"), job.source_path},
+          {QStringLiteral("queue_wait_ms"), active_queue_wait_ms_},
       });
   if (job.job_kind == QStringLiteral("catalog_import")) {
     QTimer::singleShot(0, this, [this, job_id = active_job_id_]() { runImportJob(job_id); });
@@ -610,6 +795,7 @@ void JobRunner::runExportJob(const QString& job_id) {
   if (job_it == records.cend()) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -618,6 +804,7 @@ void JobRunner::runExportJob(const QString& job_id) {
   if (job.status != QStringLiteral("Queued")) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -638,6 +825,7 @@ void JobRunner::runExportJob(const QString& job_id) {
     (void)upsertPersistedJobRecord(job, nullptr);
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -651,6 +839,7 @@ void JobRunner::runExportJob(const QString& job_id) {
     (void)upsertPersistedJobRecord(job, nullptr);
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -660,6 +849,7 @@ void JobRunner::runExportJob(const QString& job_id) {
       source_path,
       job.recipe_json,
       job.preset_name,
+      job.metadata_json,
       output_path,
       render_photo));
 }
@@ -667,9 +857,11 @@ void JobRunner::runExportJob(const QString& job_id) {
 void JobRunner::handleAsyncJobFinished() {
   const auto job_id = active_job_id_;
   const auto job_kind = active_job_kind_;
+  const auto queue_wait_ms = active_queue_wait_ms_;
   const auto total_elapsed_ms = active_job_timer_.isValid() ? active_job_timer_.elapsed() : 0;
   active_job_id_.clear();
   active_job_kind_.clear();
+  active_queue_wait_ms_ = 0;
 
   if (job_id.isEmpty()) {
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
@@ -694,6 +886,9 @@ void JobRunner::handleAsyncJobFinished() {
       job.metadata_json.value(QStringLiteral("cancellationRequested")).toBool();
   const auto success = result.value(QStringLiteral("success")).toBool();
   const auto worker_elapsed_ms = result.value(QStringLiteral("elapsedMs")).toLongLong();
+  const auto backend = result.value(QStringLiteral("backend")).toString().trimmed();
+  const auto fallback_reason = result.value(QStringLiteral("fallbackReason")).toString().trimmed();
+  const auto cancellation_reason = cancellation_reason_for_job(job);
   if (cancellation_requested) {
     const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
     if (!output_path.isEmpty()) {
@@ -708,8 +903,17 @@ void JobRunner::handleAsyncJobFinished() {
     job.progress = 0;
     job.metadata_json.insert(QStringLiteral("canceled"), true);
     job.metadata_json.insert(QStringLiteral("canceledAt"), iso_now());
+    job.metadata_json.insert(
+        QStringLiteral("cancellationReason"),
+        cancellation_reason.isEmpty() ? QStringLiteral("cooperative_cancel_requested") : cancellation_reason);
   } else if (success) {
     job.output_path = result.value(QStringLiteral("outputPath")).toString();
+    const auto preview_export_diff = result.value(QStringLiteral("previewExportDiff")).toMap();
+    if (!preview_export_diff.isEmpty()) {
+      job.metadata_json.insert(
+          QStringLiteral("previewExportDiff"),
+          QJsonObject::fromVariantMap(preview_export_diff));
+    }
     if (job.job_kind == QStringLiteral("catalog_import")) {
       const auto result_message = result.value(QStringLiteral("resultMessage")).toString().trimmed();
       if (!result_message.isEmpty()) {
@@ -762,6 +966,11 @@ void JobRunner::handleAsyncJobFinished() {
             {QStringLiteral("job_kind"), job_kind},
             {QStringLiteral("asset_id"), job.asset_id},
             {QStringLiteral("status"), job.status},
+            {QStringLiteral("backend"), backend},
+            {QStringLiteral("fallback_reason"), fallback_reason},
+            {QStringLiteral("queue_wait_ms"), queue_wait_ms},
+            {QStringLiteral("cancellation_requested"), cancellation_requested},
+            {QStringLiteral("cancellation_reason"), cancellation_reason},
             {QStringLiteral("worker_elapsed_ms"), worker_elapsed_ms},
             {QStringLiteral("elapsed_ms"), total_elapsed_ms},
             {QStringLiteral("output_path"), job.output_path},
@@ -776,6 +985,11 @@ void JobRunner::handleAsyncJobFinished() {
             {QStringLiteral("job_kind"), job_kind},
             {QStringLiteral("asset_id"), job.asset_id},
             {QStringLiteral("status"), job.status},
+            {QStringLiteral("backend"), backend},
+            {QStringLiteral("fallback_reason"), fallback_reason},
+            {QStringLiteral("queue_wait_ms"), queue_wait_ms},
+            {QStringLiteral("cancellation_requested"), cancellation_requested},
+            {QStringLiteral("cancellation_reason"), cancellation_reason},
             {QStringLiteral("worker_elapsed_ms"), worker_elapsed_ms},
             {QStringLiteral("elapsed_ms"), total_elapsed_ms},
             {QStringLiteral("output_path"), job.output_path},
@@ -795,6 +1009,7 @@ void JobRunner::runImportJob(const QString& job_id) {
   if (job_it == records.cend()) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -803,12 +1018,14 @@ void JobRunner::runImportJob(const QString& job_id) {
   if (job.status != QStringLiteral("Queued")) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
 
   const auto source_path = normalized_local_path(job.source_path);
   if (source_path.isEmpty() || !QFileInfo::exists(source_path)) {
+    const auto queue_wait_ms = active_queue_wait_ms_;
     job.status = QStringLiteral("Failed");
     job.error_message = QStringLiteral("The selected import source is unavailable.");
     job.progress = 0;
@@ -816,6 +1033,7 @@ void JobRunner::runImportJob(const QString& job_id) {
     (void)upsertPersistedJobRecord(job, nullptr);
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     observability::logWarning(
         photoEditorJobsLog(),
         QStringLiteral("job.failed"),
@@ -823,6 +1041,9 @@ void JobRunner::runImportJob(const QString& job_id) {
             {QStringLiteral("job_id"), job.job_id},
             {QStringLiteral("job_kind"), QStringLiteral("catalog_import")},
             {QStringLiteral("status"), job.status},
+            {QStringLiteral("queue_wait_ms"), queue_wait_ms},
+            {QStringLiteral("cancellation_requested"), false},
+            {QStringLiteral("cancellation_reason"), QString()},
             {QStringLiteral("elapsed_ms"), active_job_timer_.isValid() ? active_job_timer_.elapsed() : 0},
             {QStringLiteral("error"), job.error_message},
         });
@@ -851,6 +1072,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
   if (job_it == records.cend()) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -859,6 +1081,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
   if (job.status != QStringLiteral("Queued")) {
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -872,6 +1095,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
     (void)upsertPersistedJobRecord(job, nullptr);
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
@@ -885,6 +1109,7 @@ void JobRunner::runTimelineRenderJob(const QString& job_id) {
     (void)upsertPersistedJobRecord(job, nullptr);
     active_job_id_.clear();
     active_job_kind_.clear();
+    active_queue_wait_ms_ = 0;
     QTimer::singleShot(0, this, &JobRunner::processNextJob);
     return;
   }
