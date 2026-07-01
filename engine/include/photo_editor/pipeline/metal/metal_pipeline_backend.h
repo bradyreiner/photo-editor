@@ -3,6 +3,7 @@
 #include "photo_editor/pipeline/color_adjustments.h"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace photo_editor::pipeline::metal {
@@ -16,6 +17,7 @@ class MetalPipelineBackend final {
   MetalPipelineBackend& operator=(const MetalPipelineBackend&) = delete;
 
   [[nodiscard]] bool available() const;
+  [[nodiscard]] std::string unavailable_reason() const;
 
   void apply_color_lut(
       std::vector<ColorPixel>* pixels,
@@ -47,6 +49,8 @@ class MetalPipelineBackend final {
       int width,
       int height,
       double sharpen_strength,
+      double sharpen_radius,
+      double sharpen_detail,
       double sharpen_mask_strength,
       double luma_nr_strength,
       double color_nr_strength);
@@ -57,7 +61,9 @@ class MetalPipelineBackend final {
       int height,
       double texture_strength,
       double clarity_strength,
-      double dehaze_strength);
+      double dehaze_strength,
+      ColorAdjustmentTelemetry* telemetry = nullptr,
+      CancellationToken cancellation = {});
 
   [[nodiscard]] bool apply_post_color_effects(
       std::vector<ColorPixel>* pixels,
@@ -72,7 +78,8 @@ class MetalPipelineBackend final {
       const ColorAdjustmentState& state,
       const std::vector<float>* local_mask_weights = nullptr,
       double local_mask_exposure = 0.0,
-      double local_mask_temperature = 0.0);
+      double local_mask_temperature = 0.0,
+      CancellationToken cancellation = {});
 
  private:
   struct Impl;

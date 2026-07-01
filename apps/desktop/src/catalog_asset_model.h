@@ -297,6 +297,8 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE void deleteSelectedAssets();
   Q_INVOKABLE bool assetInProject(const QString& asset_id, const QString& project_name) const;
   Q_INVOKABLE int assetCountForProject(const QString& project_name) const;
+  Q_INVOKABLE QVariantList visibleAssets() const;
+  Q_INVOKABLE QVariantList assetsForProject(const QString& project_name) const;
   Q_INVOKABLE QVariantList timelinePickerAssets(const QString& project_name = QString()) const;
   Q_INVOKABLE QVariantMap assetAt(int index) const;
   Q_INVOKABLE QVariantList surveyAssets(int selected_index, int maximum_count = 6) const;
@@ -398,14 +400,15 @@ class CatalogAssetModel final : public QAbstractListModel {
       const QString& folder_path,
       const QString& project_name,
       const QStringList& selected_file_paths,
-      int selection_count);
+      int selection_count,
+      const QString& import_mode);
   void finishImportJob(bool success, const QString& message);
   void setDriveCount(int drive_count);
   void updateAssets(const QVector<CatalogAssetItem>& items);
   void removeDeletedAssets(const QStringList& asset_ids);
   void queueThumbnailRefreshes();
   void startNextThumbnailTask();
-  void applyThumbnailResult(const ThumbnailTaskResult& result);
+  bool applyThumbnailResult(const ThumbnailTaskResult& result);
   [[nodiscard]] QString thumbnailQueuePriorityForAssetId(const QString& asset_id) const;
   void setSelectedIndexInternal(int index);
   void startImport(const QString& folder_path);

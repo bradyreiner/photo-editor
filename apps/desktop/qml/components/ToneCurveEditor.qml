@@ -31,6 +31,8 @@ Item {
     readonly property int pointCount: currentPoints().length
     readonly property bool selectedPointDeletable: effectiveSelectedIndex() > 0 && effectiveSelectedIndex() < pointCount - 1
     readonly property string channelModeLabel: selectedChannel + " " + curveMode
+    signal editStarted()
+    signal editFinished()
     signal pointsEdited(var points)
     signal channelSelected(string channel)
     signal presetSelected(string preset)
@@ -784,6 +786,7 @@ Item {
                     property int selectedIndex: -1
 
                     onPressed: function (mouse) {
+                        root.editStarted();
                         root.clearPresetPreview();
                         const handleIndex = root.closestHandle(mouse.x, mouse.y);
                         if (handleIndex >= 0) {
@@ -815,8 +818,14 @@ Item {
                         }
                     }
 
-                    onReleased: draggingIndex = -1
-                    onCanceled: draggingIndex = -1
+                    onReleased: {
+                        draggingIndex = -1;
+                        root.editFinished();
+                    }
+                    onCanceled: {
+                        draggingIndex = -1;
+                        root.editFinished();
+                    }
                 }
             }
         }

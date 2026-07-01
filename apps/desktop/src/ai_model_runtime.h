@@ -12,6 +12,9 @@ namespace photo_editor::desktop {
 struct AiModelRuntimeStatus final {
   QString model_root;
   QString summary;
+  QString diagnostics;
+  QString smart_selection_runtime_label;
+  QString inpaint_runtime_label;
   bool smart_selection_available = false;
   bool inpaint_available = false;
 };
@@ -25,6 +28,13 @@ struct AiInpaintRequest final {
   QString prompt;
   QString quality_mode;
   int seed = 1;
+  double heal_texture_blend = 0.68;
+  double heal_color_blend = 0.46;
+  bool patch_source_set = false;
+  double patch_source_x = 0.5;
+  double patch_source_y = 0.5;
+  double patch_source_width = 0.18;
+  double patch_source_height = 0.18;
 };
 
 struct AiInpaintResult final {

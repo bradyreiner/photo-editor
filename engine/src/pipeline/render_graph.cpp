@@ -1,6 +1,7 @@
 #include "photo_editor/pipeline/render_graph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 #include <unordered_set>
 
@@ -55,6 +56,22 @@ namespace {
       .height = bottom - top,
       .full_frame = false,
   };
+}
+
+[[nodiscard]] bool rect_empty(const RenderPixelRect& rect) {
+  return rect.width <= 0 || rect.height <= 0;
+}
+
+[[nodiscard]] int rect_right(const RenderPixelRect& rect) { return rect.x + rect.width; }
+
+[[nodiscard]] int rect_bottom(const RenderPixelRect& rect) { return rect.y + rect.height; }
+
+[[nodiscard]] bool rect_intersects(const RenderPixelRect& lhs, const RenderPixelRect& rhs) {
+  if (rect_empty(lhs) || rect_empty(rhs)) {
+    return false;
+  }
+  return lhs.x < rect_right(rhs) && rect_right(lhs) > rhs.x &&
+         lhs.y < rect_bottom(rhs) && rect_bottom(lhs) > rhs.y;
 }
 
 [[nodiscard]] bool visit_stage(
@@ -560,6 +577,160 @@ std::vector<std::string> RenderGraph::invalidated_cache_nodes_for(
 }
 
 bool RenderGraph::valid() const noexcept { return valid_; }
+
+RenderPixelRect pixel_rect_for_dirty_region(
+    const RenderDirtyRegion& region,
+    int image_width,
+    int image_height) {
+  if (image_width <= 0 || image_height <= 0) {
+    return {};
+  }
+  const auto normalized = normalize_dirty_region(region);
+  if (normalized.full_frame) {
+    return RenderPixelRect{
+        .x = 0,
+        .y = 0,
+        .width = image_width,
+        .height = image_height,
+    };
+  }
+
+  const auto left = std::clamp(
+      static_cast<int>(std::floor(normalized.x * static_cast<double>(image_width))),
+      0,
+      image_width);
+  const auto top = std::clamp(
+      static_cast<int>(std::floor(normalized.y * static_cast<double>(image_height))),
+      0,
+      image_height);
+  const auto right = std::clamp(
+      static_cast<int>(std::ceil((normalized.x + normalized.width) *
+                                 static_cast<double>(image_width))),
+      0,
+      image_width);
+  const auto bottom = std::clamp(
+      static_cast<int>(std::ceil((normalized.y + normalized.height) *
+                                 static_cast<double>(image_height))),
+      0,
+      image_height);
+  if (right <= left || bottom <= top) {
+    return RenderPixelRect{
+        .x = 0,
+        .y = 0,
+        .width = image_width,
+        .height = image_height,
+    };
+  }
+  return RenderPixelRect{
+      .x = left,
+      .y = top,
+      .width = right - left,
+      .height = bottom - top,
+  };
+}
+
+RenderPixelRect expand_pixel_rect(
+    const RenderPixelRect& rect,
+    int padding_px,
+    int image_width,
+    int image_height) {
+  if (image_width <= 0 || image_height <= 0 || rect_empty(rect)) {
+    return {};
+  }
+  const auto padding = std::max(0, padding_px);
+  const auto left = std::clamp(rect.x - padding, 0, image_width);
+  const auto top = std::clamp(rect.y - padding, 0, image_height);
+  const auto right = std::clamp(rect_right(rect) + padding, 0, image_width);
+  const auto bottom = std::clamp(rect_bottom(rect) + padding, 0, image_height);
+  if (right <= left || bottom <= top) {
+    return {};
+  }
+  return RenderPixelRect{
+      .x = left,
+      .y = top,
+      .width = right - left,
+      .height = bottom - top,
+  };
+}
+
+std::vector<RenderTile> plan_render_tiles(const RenderTileRequest& request) {
+  if (request.image_width <= 0 || request.image_height <= 0 || request.tile_size <= 0) {
+    return {};
+  }
+
+  const auto dirty_rect = pixel_rect_for_dirty_region(
+      request.dirty_region,
+      request.image_width,
+      request.image_height);
+  if (rect_empty(dirty_rect)) {
+    return {};
+  }
+
+  auto visible_rect = RenderPixelRect{};
+  auto adjacent_rect = RenderPixelRect{};
+  if (request.prioritize_visible_region) {
+    visible_rect = pixel_rect_for_dirty_region(
+        request.visible_region,
+        request.image_width,
+        request.image_height);
+    adjacent_rect = expand_pixel_rect(
+        visible_rect,
+        request.tile_size,
+        request.image_width,
+        request.image_height);
+  }
+
+  const auto tile_count_x =
+      (request.image_width + request.tile_size - 1) / request.tile_size;
+  const auto tile_count_y =
+      (request.image_height + request.tile_size - 1) / request.tile_size;
+
+  std::vector<RenderTile> tiles;
+  for (int tile_y = 0; tile_y < tile_count_y; ++tile_y) {
+    for (int tile_x = 0; tile_x < tile_count_x; ++tile_x) {
+      const auto output_rect = RenderPixelRect{
+          .x = tile_x * request.tile_size,
+          .y = tile_y * request.tile_size,
+          .width = std::min(request.tile_size, request.image_width - tile_x * request.tile_size),
+          .height = std::min(request.tile_size, request.image_height - tile_y * request.tile_size),
+      };
+      if (!rect_intersects(output_rect, dirty_rect)) {
+        continue;
+      }
+
+      auto priority = RenderTilePriority::Background;
+      if (request.prioritize_visible_region && rect_intersects(output_rect, visible_rect)) {
+        priority = RenderTilePriority::Visible;
+      } else if (request.prioritize_visible_region && rect_intersects(output_rect, adjacent_rect)) {
+        priority = RenderTilePriority::Adjacent;
+      }
+
+      tiles.push_back(RenderTile{
+          .tile_x = tile_x,
+          .tile_y = tile_y,
+          .scale_level = request.scale_level,
+          .output_rect = output_rect,
+          .padded_rect = expand_pixel_rect(
+              output_rect,
+              request.padding_px,
+              request.image_width,
+              request.image_height),
+          .priority = priority,
+      });
+    }
+  }
+
+  std::ranges::sort(tiles, [](const RenderTile& left, const RenderTile& right) {
+    if (left.priority != right.priority) {
+      return static_cast<int>(left.priority) < static_cast<int>(right.priority);
+    }
+    if (left.tile_y != right.tile_y) {
+      return left.tile_y < right.tile_y;
+    }
+    return left.tile_x < right.tile_x;
+  });
+  return tiles;
+}
 
 RenderGraphDiagnostics::RenderGraphDiagnostics(const RenderGraph& graph) {
   stages_.reserve(graph.stages().size());

@@ -27,6 +27,7 @@ pub struct ImportRequest {
     pub mount_path: PathBuf,
     pub import_mode: ImportMode,
     pub selected_paths: Vec<PathBuf>,
+    pub managed_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,7 +53,6 @@ pub struct ExtractedMetadata {
 pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary> {
     let mut skipped_unsupported = 0_usize;
 
-    let mount_path_str = path_to_utf8(&request.mount_path)?;
     let mut candidates = Vec::new();
 
     for path in candidate_file_paths(request)? {
@@ -67,6 +67,25 @@ pub fn discover_assets(request: &ImportRequest) -> std::io::Result<ImportSummary
         };
         candidates.push((path, relative_path));
     }
+
+    let managed_drive_root = if request.import_mode == ImportMode::Managed {
+        Some(managed_drive_root(request)?)
+    } else {
+        None
+    };
+    if let Some(root) = &managed_drive_root {
+        std::fs::create_dir_all(root)?;
+        for (path, relative_path) in &mut candidates {
+            let destination = root.join(relative_path);
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&path, &destination)?;
+            *path = destination;
+        }
+    }
+    let catalog_root_path = managed_drive_root.as_ref().unwrap_or(&request.mount_path);
+    let mount_path_str = path_to_utf8(catalog_root_path)?;
 
     let candidate_paths = candidates
         .iter()
@@ -206,6 +225,32 @@ fn candidate_file_paths(request: &ImportRequest) -> std::io::Result<Vec<PathBuf>
     }
 
     Ok(paths)
+}
+
+fn managed_drive_root(request: &ImportRequest) -> std::io::Result<PathBuf> {
+    let managed_root = request
+        .managed_root
+        .clone()
+        .ok_or_else(|| std::io::Error::other("managed import requested without a managed root"))?;
+    Ok(managed_root.join(sanitize_path_segment(&request.drive_id)))
+}
+
+fn sanitize_path_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "drive".to_string()
+    } else {
+        sanitized
+    }
 }
 
 pub fn is_supported_photo_path(path: &Path) -> bool {
@@ -403,6 +448,7 @@ mod tests {
             mount_path: root.clone(),
             import_mode: ImportMode::Referenced,
             selected_paths: Vec::new(),
+            managed_root: None,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
@@ -430,11 +476,51 @@ mod tests {
             mount_path: root.clone(),
             import_mode: ImportMode::Referenced,
             selected_paths: vec![root.join("set-a").join("keep.NEF")],
+            managed_root: None,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");
         assert_eq!(summary.assets.len(), 1);
         assert_eq!(summary.assets[0].location.relative_path, "set-a/keep.NEF");
+    }
+
+    #[test]
+    fn managed_import_copies_assets_into_managed_root() {
+        let directory = tempdir().expect("tempdir should succeed");
+        let root = directory.path().join("card");
+        let managed_root = directory.path().join("managed");
+        fs::create_dir_all(root.join("dcim")).expect("create dir should succeed");
+        fs::write(root.join("dcim").join("frame.CR2"), b"raw-bytes").expect("write should succeed");
+
+        let request = ImportRequest {
+            drive_id: "drive-card".to_string(),
+            drive_name: "Card".to_string(),
+            mount_path: root.clone(),
+            import_mode: ImportMode::Managed,
+            selected_paths: Vec::new(),
+            managed_root: Some(managed_root.clone()),
+        };
+
+        let summary = discover_assets(&request).expect("discovery should succeed");
+        let copied_path = managed_root
+            .join("drive-card")
+            .join("dcim")
+            .join("frame.CR2");
+        assert_eq!(summary.assets.len(), 1);
+        assert!(copied_path.exists());
+        assert_eq!(
+            fs::read(&copied_path).expect("copy should be readable"),
+            b"raw-bytes"
+        );
+        assert_eq!(
+            summary.assets[0].location.root_path,
+            managed_root
+                .join("drive-card")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(summary.assets[0].location.relative_path, "dcim/frame.CR2");
+        assert_eq!(summary.assets[0].import_mode, ImportMode::Managed);
     }
 
     #[test]
@@ -457,6 +543,7 @@ mod tests {
                 root.join("fourth.jpg"),
                 root.join("second.jpg"),
             ],
+            managed_root: None,
         };
 
         let summary = discover_assets(&request).expect("discovery should succeed");

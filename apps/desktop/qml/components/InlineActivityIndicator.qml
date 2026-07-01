@@ -10,7 +10,9 @@ Rectangle {
     property real progressValue: -1
     property color accent: theme.accentWarm400
     property bool cancelable: false
+    property bool retryable: false
     signal cancelRequested()
+    signal retryRequested()
 
     readonly property string summaryText: {
         const titleText = title ? String(title) : ""
@@ -65,17 +67,17 @@ Rectangle {
         }
 
         Button {
-            id: cancelButton
+            id: actionButton
             objectName: "activityCancelButton"
-            visible: root.cancelable
-            text: "Cancel"
+            visible: root.cancelable || root.retryable
+            text: root.retryable ? "Retry" : "Cancel"
             flat: true
             padding: 4
             leftPadding: 6
             rightPadding: 6
             font.family: theme.fontUi
             font.pixelSize: 10
-            onClicked: root.cancelRequested()
+            onClicked: root.retryable ? root.retryRequested() : root.cancelRequested()
         }
     }
 }

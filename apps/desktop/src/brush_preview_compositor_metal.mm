@@ -202,7 +202,6 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
     [encoder dispatchThreads:threads threadsPerThreadgroup:group];
     [encoder endEncoding];
     [command_buffer commit];
-    [command_buffer waitUntilCompleted];
   }
 
   void compositePoints(
@@ -249,7 +248,9 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
       const auto uniforms = BrushUniforms{
           .center = simd_make_float2(static_cast<float>(point.x), static_cast<float>(point.y)),
           .size = static_cast<float>(clamped_size),
-          .flow = static_cast<float>(std::clamp(point.flow, 0.0, 1.0)),
+          .flow = static_cast<float>(
+              std::clamp(point.flow, 0.0, 1.0) *
+              std::clamp(point.opacity, 0.0, 1.0)),
           .feather = static_cast<float>(std::clamp(style.feather, 0.05, 1.0)),
           .hardness = static_cast<float>(std::clamp(style.hardness, 0.0, 0.98)),
           .opacity = static_cast<float>(std::clamp(style.opacity, 0.0, 1.0)),
@@ -279,7 +280,6 @@ class MetalBrushPreviewCompositor final : public BrushPreviewCompositor {
 
     [encoder endEncoding];
     [command_buffer commit];
-    [command_buffer waitUntilCompleted];
   }
 
   mutable id<MTLDevice> device_ = nil;

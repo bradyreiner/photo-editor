@@ -13,6 +13,8 @@ Item {
     property string valueInputMode: "raw"
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
     property real modifiedEpsilon: stepSize > 0 ? Math.max(stepSize / 2, 0.0001) : 0.0001
+    property int controlHeight: 34
+    readonly property real sliderScale: Math.max(1.0, controlHeight / 34)
     property alias from: control.from
     property alias to: control.to
     property alias stepSize: control.stepSize
@@ -27,12 +29,14 @@ Item {
     readonly property bool modified: Math.abs(control.value - defaultValue) > modifiedEpsilon
     readonly property int trackColorCount: Array.isArray(trackColors) ? trackColors.length : 0
     readonly property bool hasTrackGradient: trackColorCount > 1
+    signal interactionStarted()
+    signal interactionFinished()
     signal valueDragged(real value)
     signal resetRequested()
 
     Theme { id: theme }
 
-    implicitHeight: 34
+    implicitHeight: controlHeight
 
     function clamp(value, minimum, maximum) {
         return Math.max(minimum, Math.min(maximum, value))
@@ -91,12 +95,12 @@ Item {
             Layout.alignment: Qt.AlignVCenter
             text: root.label
             color: root.enabled
-                   ? (root.modified ? root.accent : (control.pressed ? theme.textStrong : theme.textMain))
+                   ? (root.modified ? root.accent : (control.pressed ? theme.textMain : theme.textMuted))
                    : theme.textFaint
             elide: Text.ElideRight
             font.family: theme.fontUi
             font.pixelSize: 10
-            font.weight: Font.DemiBold
+            font.weight: root.modified || control.pressed ? Font.DemiBold : Font.Medium
             font.letterSpacing: 0
 
             Rectangle {
@@ -115,7 +119,7 @@ Item {
         Item {
             Layout.fillWidth: true
             Layout.alignment: Qt.AlignVCenter
-            implicitHeight: 20
+            implicitHeight: Math.max(20, root.controlHeight - 14)
 
             Slider {
                 id: control
@@ -129,9 +133,9 @@ Item {
 
                 background: Item {
                     x: control.leftPadding
-                    y: control.topPadding + control.availableHeight / 2 - 1
+                    y: control.topPadding + control.availableHeight / 2 - height / 2
                     width: control.availableWidth
-                    height: 2
+                    height: Math.round(2 * root.sliderScale)
 
                     Rectangle {
                         anchors.fill: parent
@@ -174,7 +178,7 @@ Item {
                         visible: root.hasCenterMarker
                         x: Math.max(0, Math.min(parent.width - width, root.centerMarkerPosition * parent.width - width / 2))
                         width: 1
-                        height: 7
+                        height: Math.round(7 * root.sliderScale)
                         radius: 0
                         anchors.verticalCenter: parent.verticalCenter
                         color: theme.alpha(theme.polar, 0.34)
@@ -184,7 +188,7 @@ Item {
                         visible: root.modified
                         x: root.fillStartPosition * parent.width
                         width: Math.max(1, (root.fillEndPosition - root.fillStartPosition) * parent.width)
-                        height: 2
+                        height: Math.round(2 * root.sliderScale)
                         anchors.verticalCenter: parent.verticalCenter
                         radius: 0
                         color: root.accent
@@ -195,7 +199,7 @@ Item {
                 handle: Rectangle {
                     x: control.leftPadding + control.visualPosition * (control.availableWidth - width)
                     y: control.topPadding + control.availableHeight / 2 - height / 2
-                    width: control.pressed ? 11 : 9
+                    width: Math.round((control.pressed ? 13 : 11) * root.sliderScale)
                     height: width
                     radius: width / 2
                     color: control.pressed ? theme.polar : (root.modified ? root.accent : theme.alpha(theme.polar, 0.86))
@@ -216,6 +220,12 @@ Item {
                 }
 
                 onMoved: root.valueDragged(control.value)
+                onPressedChanged: {
+                    if (pressed)
+                        root.interactionStarted()
+                    else
+                        root.interactionFinished()
+                }
             }
         }
 

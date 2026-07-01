@@ -17,6 +17,9 @@ struct SegmentationResult final {
   QByteArray mask_data;
   int width = 0;
   int height = 0;
+  QByteArray confidence_data;
+  int confidence_width = 0;
+  int confidence_height = 0;
   bool success = false;
   QString error_message;
 };

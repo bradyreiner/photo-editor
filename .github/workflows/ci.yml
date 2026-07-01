@@ -28,6 +28,9 @@ jobs:
             '**/.DS_Store' \
             '**/__pycache__/**' \
             '*.pyc' \
+            'Testing/**' \
+            'perf-artifacts/**' \
+            'perf-corpora/preview-synthetic-v1/**' \
             '.agents/**' \
             '.claude/**' \
             '.mcp.json' \
@@ -44,6 +47,18 @@ jobs:
 
       - name: Validate release helper syntax
         run: bash -n scripts/*.sh
+
+      - name: Validate preview proof tooling
+        run: |
+          python3 -B -m py_compile scripts/perf/*.py
+          python3 -B scripts/perf/test-color-adjustment-gate.py
+          python3 -B scripts/perf/test-color-adjustment-sample-compare.py
+          python3 -B scripts/perf/test-desktop-preview-proof-capture.py
+          python3 -B scripts/perf/test-desktop-preview-proof-capture-manifest.py
+          python3 -B scripts/perf/test-metal-proof-gate.py
+          python3 -B scripts/perf/test-preview-release-proof-runner.py
+          python3 -B scripts/perf/test-preview-release-proof-report.py
+          python3 -B scripts/perf/test-desktop-preview-proof-gate.py
 
       - name: Validate GitHub workflows
         uses: raven-actions/actionlint@v2
@@ -193,7 +208,7 @@ jobs:
 
   desktop-macos:
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
@@ -217,6 +232,8 @@ jobs:
 
       - name: Run focused desktop smoke tests
         run: ctest --test-dir build/dev-macos-debug -R "desktop_shell_smoke_test|app_shell_controller_test|app_bootstrap_test" --output-on-failure
+        env:
+          PHOTO_EDITOR_VISUAL_PROOF_DIR: ${{ runner.temp }}/photo-editor-visual-proof
 
       - name: Create preview performance corpus
         run: python3 scripts/perf/create-preview-corpus.py --output "${RUNNER_TEMP}/preview-synthetic-v1" --count 8 --force
@@ -242,10 +259,82 @@ jobs:
             --min-count 8 \
             --p95-max 30000
           python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event preview.histogram.completed \
+            --field elapsed_ms \
+            --min-count 1 \
+            --p95-max 5000
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
             --event benchmark.preview_corpus.completed \
             --field elapsed_ms \
             --min-count 1 \
             --max 120000
+
+      - name: Run thumbnail performance smoke
+        run: |
+          python3 scripts/perf/run-benchmark.py \
+            --scenario perf-thumbnail-cold-warm \
+            --app build/dev-macos-debug/tests/thumbnail_benchmark_driver \
+            --output-root "${RUNNER_TEMP}/photo-editor-perf" \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --event benchmark.thumbnail_corpus.summary_completed \
+            --timeout 90 \
+            --settle-seconds 0 \
+            -- \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --limit 8 \
+            --window-size 6 \
+            --timeout-ms 30000
+
+      - name: Check thumbnail performance budgets
+        run: |
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event benchmark.thumbnail_corpus.completed \
+            --field elapsed_ms \
+            --where pass=cold \
+            --min-count 1 \
+            --max 30000
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event benchmark.thumbnail_corpus.completed \
+            --field elapsed_ms \
+            --where pass=warm \
+            --min-count 1 \
+            --max 500
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event thumbnail.completed \
+            --field elapsed_ms \
+            --min-count 6 \
+            --p95-max 5000
+          python3 scripts/perf/check-summary-thresholds.py "${RUNNER_TEMP}/photo-editor-perf" \
+            --event benchmark.thumbnail_corpus.summary_completed \
+            --field elapsed_ms \
+            --min-count 1 \
+            --max 30500 \
+            --metric-max warm_elapsed_ms=500
+
+      - name: Run preview pipeline performance gate
+        run: |
+          python3 scripts/perf/run-preview-pipeline-gate.py \
+            --app build/dev-macos-debug/tests/preview_benchmark_driver \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --output-root "${RUNNER_TEMP}/photo-editor-perf" \
+            --timeout 180
+
+      - name: Run color adjustment performance gate
+        run: |
+          python3 scripts/perf/run-color-adjustment-gate.py \
+            --app build/dev-macos-debug/tests/color_adjustment_benchmark_driver \
+            --output-root "${RUNNER_TEMP}/photo-editor-perf" \
+            --iterations 30 \
+            --timeout 120
+
+      - name: Run preview frontier performance gate
+        run: |
+          python3 scripts/perf/run-preview-frontier-gate.py \
+            --app build/dev-macos-debug/tests/preview_benchmark_driver \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --output-root "${RUNNER_TEMP}/photo-editor-perf" \
+            --iterations 30 \
+            --timeout 180
 
       - name: Upload performance smoke artifacts
         if: always()
@@ -253,6 +342,14 @@ jobs:
         with:
           name: photo-editor-preview-perf-smoke
           path: ${{ runner.temp }}/photo-editor-perf
+          if-no-files-found: ignore
+
+      - name: Upload desktop visual proof artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-editor-desktop-visual-proof
+          path: ${{ runner.temp }}/photo-editor-visual-proof
           if-no-files-found: ignore
 
   release-macos-build:

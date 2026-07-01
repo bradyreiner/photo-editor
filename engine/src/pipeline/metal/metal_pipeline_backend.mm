@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <numbers>
+#include <string>
 
 namespace photo_editor::pipeline::metal {
 
@@ -96,6 +97,8 @@ struct PostColorUniforms {
   float grading_hue[3];
   float grading_sat[3];
   float grading_lum[3];
+  float grading_amount;
+  float grading_balance;
   float mixer_hue[8];
   float mixer_sat[8];
   float mixer_lum[8];
@@ -110,7 +113,10 @@ struct PostColorUniforms {
   float color_replacement_source_hue;
   float color_replacement_target_hue;
   float color_replacement_range;
+  float color_replacement_softness;
   float color_replacement_strength;
+  int color_replacement_preserve_luminance;
+  int color_replacement_preserve_saturation;
   int skin_tone_protection_enabled;
   float skin_tone_line_hue;
   float skin_tone_protection_range;
@@ -126,6 +132,8 @@ struct PostColorUniforms {
   int use_blue_curve;
   int curve_lut_size;
   int color_mixer_model;
+  int highlight_chroma_compression_enabled;
+  float output_headroom;
   int width;
   int height;
 };
@@ -331,23 +339,55 @@ struct MetalPipelineBackend::Impl {
   id<MTLComputePipelineState> pre_tone_input_pipeline = nil;
   id<MTLComputePipelineState> pre_tone_output_pipeline = nil;
   bool is_available = false;
+  std::string unavailable_reason = "not_initialized";
+
+  void mark_unavailable(const char* reason) {
+    is_available = false;
+    unavailable_reason = reason != nullptr ? reason : "unknown";
+  }
+
+  void mark_unavailable(NSString* reason) {
+    is_available = false;
+    unavailable_reason = reason != nil ? [reason UTF8String] : "unknown";
+  }
+
+  void mark_error(const char* prefix, NSError* error) {
+    NSString* detail = error != nil ? [error localizedDescription] : nil;
+    if (detail != nil && [detail length] > 0) {
+      mark_unavailable([NSString stringWithFormat:@"%s: %@", prefix, detail]);
+      return;
+    }
+    mark_unavailable(prefix);
+  }
 
   Impl() {
     @autoreleasepool {
       device = MTLCreateSystemDefaultDevice();
-      if (!device) return;
+      if (!device) {
+        mark_unavailable("no_system_metal_device");
+        return;
+      }
 
       command_queue = [device newCommandQueue];
-      if (!command_queue) return;
+      if (!command_queue) {
+        mark_unavailable("command_queue_unavailable");
+        return;
+      }
 
       NSError* error = nil;
       NSString* shader_source = load_shader_source();
-      if (!shader_source) return;
+      if (!shader_source) {
+        mark_unavailable("shader_source_unavailable");
+        return;
+      }
 
       id<MTLLibrary> library = [device newLibraryWithSource:shader_source
                                                     options:nil
                                                       error:&error];
-      if (!library || error) return;
+      if (!library || error) {
+        mark_error("shader_library_compile_failed", error);
+        return;
+      }
 
       id<MTLFunction> lut_function = [library newFunctionWithName:@"apply_color_lut"];
       id<MTLFunction> mask_function = [library newFunctionWithName:@"apply_masks"];
@@ -368,61 +408,105 @@ struct MetalPipelineBackend::Impl {
           !luma_nr_function || !color_nr_function || !compose_detail_function ||
           !spatial_tone_function || !post_color_function ||
           !pre_tone_input_function || !pre_tone_output_function) {
+        mark_unavailable("shader_function_missing");
         return;
       }
 
       lut_pipeline = [device newComputePipelineStateWithFunction:lut_function error:&error];
-      if (!lut_pipeline || error) return;
+      if (!lut_pipeline || error) {
+        mark_error("lut_pipeline_unavailable", error);
+        return;
+      }
 
       mask_pipeline = [device newComputePipelineStateWithFunction:mask_function error:&error];
-      if (!mask_pipeline || error) return;
+      if (!mask_pipeline || error) {
+        mark_error("mask_pipeline_unavailable", error);
+        return;
+      }
 
       blur_horizontal_pipeline =
           [device newComputePipelineStateWithFunction:blur_horizontal_function error:&error];
-      if (!blur_horizontal_pipeline || error) return;
+      if (!blur_horizontal_pipeline || error) {
+        mark_error("blur_horizontal_pipeline_unavailable", error);
+        return;
+      }
 
       blur_vertical_pipeline =
           [device newComputePipelineStateWithFunction:blur_vertical_function error:&error];
-      if (!blur_vertical_pipeline || error) return;
+      if (!blur_vertical_pipeline || error) {
+        mark_error("blur_vertical_pipeline_unavailable", error);
+        return;
+      }
 
       extract_oklab_pipeline =
           [device newComputePipelineStateWithFunction:extract_oklab_function error:&error];
-      if (!extract_oklab_pipeline || error) return;
+      if (!extract_oklab_pipeline || error) {
+        mark_error("extract_oklab_pipeline_unavailable", error);
+        return;
+      }
 
       extract_luminance_pipeline =
           [device newComputePipelineStateWithFunction:extract_luminance_function error:&error];
-      if (!extract_luminance_pipeline || error) return;
+      if (!extract_luminance_pipeline || error) {
+        mark_error("extract_luminance_pipeline_unavailable", error);
+        return;
+      }
 
       sharpen_pipeline = [device newComputePipelineStateWithFunction:sharpen_function error:&error];
-      if (!sharpen_pipeline || error) return;
+      if (!sharpen_pipeline || error) {
+        mark_error("sharpen_pipeline_unavailable", error);
+        return;
+      }
 
       luma_nr_pipeline = [device newComputePipelineStateWithFunction:luma_nr_function error:&error];
-      if (!luma_nr_pipeline || error) return;
+      if (!luma_nr_pipeline || error) {
+        mark_error("luma_nr_pipeline_unavailable", error);
+        return;
+      }
 
       color_nr_pipeline = [device newComputePipelineStateWithFunction:color_nr_function error:&error];
-      if (!color_nr_pipeline || error) return;
+      if (!color_nr_pipeline || error) {
+        mark_error("color_nr_pipeline_unavailable", error);
+        return;
+      }
 
       compose_detail_pipeline =
           [device newComputePipelineStateWithFunction:compose_detail_function error:&error];
-      if (!compose_detail_pipeline || error) return;
+      if (!compose_detail_pipeline || error) {
+        mark_error("compose_detail_pipeline_unavailable", error);
+        return;
+      }
 
       spatial_tone_pipeline =
           [device newComputePipelineStateWithFunction:spatial_tone_function error:&error];
-      if (!spatial_tone_pipeline || error) return;
+      if (!spatial_tone_pipeline || error) {
+        mark_error("spatial_tone_pipeline_unavailable", error);
+        return;
+      }
 
       post_color_pipeline =
           [device newComputePipelineStateWithFunction:post_color_function error:&error];
-      if (!post_color_pipeline || error) return;
+      if (!post_color_pipeline || error) {
+        mark_error("post_color_pipeline_unavailable", error);
+        return;
+      }
 
       pre_tone_input_pipeline =
           [device newComputePipelineStateWithFunction:pre_tone_input_function error:&error];
-      if (!pre_tone_input_pipeline || error) return;
+      if (!pre_tone_input_pipeline || error) {
+        mark_error("pre_tone_input_pipeline_unavailable", error);
+        return;
+      }
 
       pre_tone_output_pipeline =
           [device newComputePipelineStateWithFunction:pre_tone_output_function error:&error];
-      if (!pre_tone_output_pipeline || error) return;
+      if (!pre_tone_output_pipeline || error) {
+        mark_error("pre_tone_output_pipeline_unavailable", error);
+        return;
+      }
 
       is_available = true;
+      unavailable_reason.clear();
     }
   }
 
@@ -565,6 +649,13 @@ MetalPipelineBackend::MetalPipelineBackend() : impl_(std::make_unique<Impl>()) {
 MetalPipelineBackend::~MetalPipelineBackend() = default;
 
 bool MetalPipelineBackend::available() const { return impl_ && impl_->is_available; }
+
+std::string MetalPipelineBackend::unavailable_reason() const {
+  if (!impl_) {
+    return "backend_not_constructed";
+  }
+  return impl_->unavailable_reason;
+}
 
 void MetalPipelineBackend::apply_color_lut(
     std::vector<ColorPixel>* pixels,
@@ -803,7 +894,9 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
     int height,
     double texture_strength,
     double clarity_strength,
-    double dehaze_strength) {
+    double dehaze_strength,
+    ColorAdjustmentTelemetry* telemetry,
+    CancellationToken cancellation) {
   if (!available() || pixels == nullptr || width <= 0 || height <= 0) {
     return false;
   }
@@ -817,6 +910,9 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
       std::abs(clarity_strength) <= 1e-6 &&
       std::abs(dehaze_strength) <= 1e-6) {
     return true;
+  }
+  if (cancellation.cancelled()) {
+    return false;
   }
 
   @autoreleasepool {
@@ -838,9 +934,20 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
         !haze_blur_buffer || !scratch_buffer) {
       return false;
     }
+    if (telemetry != nullptr) {
+      telemetry->gpu_cpu_to_gpu_bytes += static_cast<std::int64_t>(pixel_buffer_size);
+      telemetry->gpu_gpu_to_cpu_bytes += static_cast<std::int64_t>(pixel_buffer_size);
+      telemetry->gpu_command_buffer_count += 1;
+    }
 
+    if (cancellation.cancelled()) {
+      return false;
+    }
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
     copy_pixels_to_float_buffer(pixel_data, *pixels);
+    if (cancellation.cancelled()) {
+      return false;
+    }
 
     const SpatialToneUniforms uniforms{
         .texture_strength = static_cast<float>(texture_strength),
@@ -873,15 +980,25 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
       MTLSize group_size = MTLSizeMake(thread_group_size, 1, 1);
       [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
       [encoder endEncoding];
+      if (telemetry != nullptr) {
+        telemetry->gpu_kernel_dispatch_count += 1;
+      }
     };
 
     const auto copy_buffer = [&](id<MTLBuffer> source, id<MTLBuffer> destination) {
       id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
       [encoder copyFromBuffer:source sourceOffset:0 toBuffer:destination destinationOffset:0 size:scalar_buffer_size];
       [encoder endEncoding];
+      if (telemetry != nullptr) {
+        telemetry->gpu_blit_count += 1;
+      }
     };
 
-    const auto run_gaussian_blur = [&](id<MTLBuffer> source, id<MTLBuffer> output, int radius) {
+    const auto run_gaussian_blur = [&](
+                                       id<MTLBuffer> source,
+                                       id<MTLBuffer> output,
+                                       int radius,
+                                       std::int64_t* blur_dispatch_count) {
       copy_buffer(source, output);
       if (radius <= 0) {
         return;
@@ -903,12 +1020,18 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
             2,
             &blur_uniforms,
             sizeof(blur_uniforms));
+        if (blur_dispatch_count != nullptr) {
+          *blur_dispatch_count += 1;
+        }
         dispatch_pipeline(
             impl_->blur_vertical_pipeline,
             {scratch_buffer, output},
             2,
             &blur_uniforms,
             sizeof(blur_uniforms));
+        if (blur_dispatch_count != nullptr) {
+          *blur_dispatch_count += 1;
+        }
       }
     };
 
@@ -919,9 +1042,27 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
         &uniforms,
         sizeof(uniforms));
 
-    run_gaussian_blur(luminance_buffer, texture_blur_buffer, 2);
-    run_gaussian_blur(luminance_buffer, clarity_blur_buffer, 8);
-    run_gaussian_blur(luminance_buffer, haze_blur_buffer, 20);
+    if (std::abs(texture_strength) > 1e-6) {
+      run_gaussian_blur(
+          luminance_buffer,
+          texture_blur_buffer,
+          2,
+          telemetry != nullptr ? &telemetry->gpu_spatial_texture_blur_dispatch_count : nullptr);
+    }
+    if (std::abs(texture_strength) > 1e-6 || std::abs(clarity_strength) > 1e-6) {
+      run_gaussian_blur(
+          luminance_buffer,
+          clarity_blur_buffer,
+          8,
+          telemetry != nullptr ? &telemetry->gpu_spatial_clarity_blur_dispatch_count : nullptr);
+    }
+    if (std::abs(dehaze_strength) > 1e-6) {
+      run_gaussian_blur(
+          luminance_buffer,
+          haze_blur_buffer,
+          20,
+          telemetry != nullptr ? &telemetry->gpu_spatial_haze_blur_dispatch_count : nullptr);
+    }
 
     dispatch_pipeline(
         impl_->spatial_tone_pipeline,
@@ -933,6 +1074,9 @@ bool MetalPipelineBackend::apply_spatial_tone_effects(
     [command_buffer commit];
     [command_buffer waitUntilCompleted];
 
+    if (cancellation.cancelled()) {
+      return false;
+    }
     copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
@@ -983,35 +1127,6 @@ bool MetalPipelineBackend::apply_post_color_effects(
                std::abs(channel.selective_yellow) > 1e-6 ||
                std::abs(channel.selective_black) > 1e-6;
       });
-  const auto& rgb_mixer = state.rgb_channel_mixer;
-  const auto has_rgb_channel_mixer =
-      std::abs(rgb_mixer.red_from_red - 100.0) > 1e-6 ||
-      std::abs(rgb_mixer.red_from_green) > 1e-6 ||
-      std::abs(rgb_mixer.red_from_blue) > 1e-6 ||
-      std::abs(rgb_mixer.green_from_red) > 1e-6 ||
-      std::abs(rgb_mixer.green_from_green - 100.0) > 1e-6 ||
-      std::abs(rgb_mixer.green_from_blue) > 1e-6 ||
-      std::abs(rgb_mixer.blue_from_red) > 1e-6 ||
-      std::abs(rgb_mixer.blue_from_green) > 1e-6 ||
-      std::abs(rgb_mixer.blue_from_blue - 100.0) > 1e-6;
-
-  if (!use_master_curve && !use_luma_curve && !use_red_curve && !use_green_curve && !use_blue_curve &&
-      std::abs(state.saturation) <= 1e-6 && std::abs(state.vibrance) <= 1e-6 &&
-      std::abs(state.grading_shadows_hue) <= 1e-6 && std::abs(state.grading_shadows_saturation) <= 1e-6 &&
-      std::abs(state.grading_shadows_luminance) <= 1e-6 &&
-      std::abs(state.grading_midtones_hue) <= 1e-6 && std::abs(state.grading_midtones_saturation) <= 1e-6 &&
-      std::abs(state.grading_midtones_luminance) <= 1e-6 &&
-      std::abs(state.grading_highlights_hue) <= 1e-6 && std::abs(state.grading_highlights_saturation) <= 1e-6 &&
-      std::abs(state.grading_highlights_luminance) <= 1e-6 &&
-      !has_per_channel_mixer && !has_rgb_channel_mixer && !state.black_and_white_enabled &&
-      (!state.color_replacement_enabled || std::abs(state.color_replacement_strength) <= 1e-6) &&
-      (!state.color_harmony_enabled || std::abs(state.color_harmony_strength) <= 1e-6) &&
-      (std::abs(state.hue_adjustment) <= 1e-6 || state.color_mixer_channel.empty()) &&
-      std::abs(state.saturation_adjustment) <= 1e-6 &&
-      std::abs(state.luminance_adjustment) <= 1e-6) {
-    return true;
-  }
-
   if (!use_master_curve) {
     master_curve_lut = build_identity_curve();
   }
@@ -1070,6 +1185,8 @@ bool MetalPipelineBackend::apply_post_color_effects(
     uniforms.grading_lum[0] = static_cast<float>(state.grading_shadows_luminance);
     uniforms.grading_lum[1] = static_cast<float>(state.grading_midtones_luminance);
     uniforms.grading_lum[2] = static_cast<float>(state.grading_highlights_luminance);
+    uniforms.grading_amount = static_cast<float>(clamp_unit(state.grading_amount / 100.0));
+    uniforms.grading_balance = static_cast<float>(clamp_signed_percent(state.grading_balance) / 100.0);
     for (int channel = 0; channel < kColorMixerChannelCount; ++channel) {
       auto mixer = state.color_mixer_channels[static_cast<std::size_t>(channel)];
       if (!has_per_channel_mixer &&
@@ -1106,7 +1223,12 @@ bool MetalPipelineBackend::apply_post_color_effects(
     uniforms.color_replacement_source_hue = static_cast<float>(state.color_replacement_source_hue);
     uniforms.color_replacement_target_hue = static_cast<float>(state.color_replacement_target_hue);
     uniforms.color_replacement_range = static_cast<float>(state.color_replacement_range);
+    uniforms.color_replacement_softness = static_cast<float>(state.color_replacement_softness);
     uniforms.color_replacement_strength = static_cast<float>(state.color_replacement_strength);
+    uniforms.color_replacement_preserve_luminance =
+        state.color_replacement_preserve_luminance ? 1 : 0;
+    uniforms.color_replacement_preserve_saturation =
+        state.color_replacement_preserve_saturation ? 1 : 0;
     uniforms.skin_tone_protection_enabled = state.skin_tone_protection_enabled ? 1 : 0;
     uniforms.skin_tone_line_hue = static_cast<float>(state.skin_tone_line_hue);
     uniforms.skin_tone_protection_range = static_cast<float>(state.skin_tone_protection_range);
@@ -1140,6 +1262,14 @@ bool MetalPipelineBackend::apply_post_color_effects(
     } else {
       uniforms.color_mixer_model = 0;
     }
+    uniforms.highlight_chroma_compression_enabled =
+        (std::abs(effective_input_exposure(state)) > 1e-9 ||
+         std::abs(state.filmic_shoulder) > 1e-9 ||
+         std::abs(state.hdr_local_tone_mapping) > 1e-9)
+            ? 1
+            : 0;
+    uniforms.output_headroom =
+        static_cast<float>(std::clamp(state.color_pipeline.output_headroom, 1.0, 16.0));
     uniforms.width = width;
     uniforms.height = height;
 
@@ -1175,7 +1305,8 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     const ColorAdjustmentState& state,
     const std::vector<float>* local_mask_weights,
     double local_mask_exposure,
-    double local_mask_temperature) {
+    double local_mask_temperature,
+    CancellationToken cancellation) {
   if (!available() || pixels == nullptr || width <= 0 || height <= 0) {
     return false;
   }
@@ -1188,6 +1319,9 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
     return false;
   }
   if (local_mask_weights != nullptr && local_mask_weights->size() != pixel_count) {
+    return false;
+  }
+  if (cancellation.cancelled()) {
     return false;
   }
 
@@ -1225,8 +1359,14 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
       return false;
     }
 
+    if (cancellation.cancelled()) {
+      return false;
+    }
     auto* pixel_data = static_cast<float*>([pixel_buffer contents]);
     copy_pixels_to_float_buffer(pixel_data, *pixels);
+    if (cancellation.cancelled()) {
+      return false;
+    }
     std::copy(parametric_curve_lut.begin(), parametric_curve_lut.end(), static_cast<float*>([curve_buffer contents]));
     auto* local_mask_data = static_cast<float*>([local_mask_buffer contents]);
     if (local_mask_weights != nullptr) {
@@ -1326,9 +1466,15 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
         &uniforms,
         sizeof(uniforms));
 
+    if (cancellation.cancelled()) {
+      return false;
+    }
     const auto* target_luminance = static_cast<const float*>([target_luminance_buffer contents]);
     auto max_target_luminance = 0.0;
     for (std::size_t index = 0; index < pixel_count; ++index) {
+      if ((index & 0xFFFU) == 0U && cancellation.cancelled()) {
+        return false;
+      }
       max_target_luminance = std::max(max_target_luminance, static_cast<double>(target_luminance[index]));
     }
     const auto shoulder_control = clamp_signed_percent(state.filmic_shoulder) / 100.0;
@@ -1350,6 +1496,9 @@ bool MetalPipelineBackend::apply_pre_tone_effects(
         &uniforms,
         sizeof(uniforms));
 
+    if (cancellation.cancelled()) {
+      return false;
+    }
     copy_pixels_from_float_buffer(pixels, pixel_data);
     return true;
   }
@@ -1360,6 +1509,8 @@ bool MetalPipelineBackend::apply_detail_effects(
     int width,
     int height,
     double sharpen_strength,
+    double sharpen_radius,
+    double sharpen_detail,
     double sharpen_mask_strength,
     double luma_nr_strength,
     double color_nr_strength) {
@@ -1376,6 +1527,9 @@ bool MetalPipelineBackend::apply_detail_effects(
       std::abs(luma_nr_strength) <= 1e-6 &&
       std::abs(color_nr_strength) <= 1e-6) {
     return true;
+  }
+  if (std::abs(sharpen_radius - 1.0) > 1e-6 || std::abs(sharpen_detail) > 1e-6) {
+    return false;
   }
 
   @autoreleasepool {

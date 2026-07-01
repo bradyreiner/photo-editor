@@ -133,6 +133,23 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.build_preset }}
 
+      - name: Materialize real-image QA corpus
+        if: runner.os == 'macOS'
+        id: real-image-corpus
+        shell: bash
+        run: |
+          corpus_dir="${RUNNER_TEMP}/photo-editor-real-image-corpus"
+          python3 scripts/perf/fetch-real-image-corpus.py --output "${corpus_dir}" --force
+          printf 'manifest=%s\n' "${corpus_dir}/manifest.json" >> "${GITHUB_OUTPUT}"
+
+      - name: Run mask release gate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          scripts/run-mask-release-gate.sh \
+            --build-dir "build/${{ matrix.configure_preset }}" \
+            --real-image-manifest "${{ steps.real-image-corpus.outputs.manifest }}"
+
       - name: Package macOS
         if: runner.os == 'macOS'
         shell: bash

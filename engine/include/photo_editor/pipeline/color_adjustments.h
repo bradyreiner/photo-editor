@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <array>
+#include <cstdint>
 #include <cmath>
 #include <span>
 #include <string>
@@ -29,6 +30,9 @@ struct BrushPoint final {
   double y = 0.5;
   double size = 0.08;
   double flow = 1.0;
+  double opacity = 1.0;
+  double auto_mask_anchor_x = 0.5;
+  double auto_mask_anchor_y = 0.5;
   double pressure = 1.0;
   double tilt_x = 0.0;
   double tilt_y = 0.0;
@@ -44,6 +48,7 @@ struct LocalMask final {
   std::string operation = "add";
   std::string blend_mode = "normal";
   std::string retouch_mode;
+  int retouch_order = 0;
   bool enabled = true;
   bool reusable_output = false;
   bool invert = false;
@@ -57,6 +62,29 @@ struct LocalMask final {
   double blacks = 0.0;
   double temperature = 0.0;
   double tint = 0.0;
+  double texture = 0.0;
+  double clarity = 0.0;
+  double dehaze = 0.0;
+  double sharpening = 0.0;
+  double sharpen_radius = 1.0;
+  double sharpen_detail = 0.0;
+  double sharpen_masking = 0.0;
+  double luminance_nr = 0.0;
+  double color_nr = 0.0;
+  double lens_distortion = 0.0;
+  double lens_vignette = 0.0;
+  double chromatic_aberration = 0.0;
+  double perspective_vertical = 0.0;
+  double perspective_horizontal = 0.0;
+  double global_transform_rotation = 0.0;
+  double global_transform_scale = 1.0;
+  double transform_skew_x = 0.0;
+  double transform_skew_y = 0.0;
+  double liquify_center_x = 0.5;
+  double liquify_center_y = 0.5;
+  double liquify_radius = 0.25;
+  double liquify_strength = 0.0;
+  bool content_aware_crop_fill = false;
   double vibrance = 0.0;
   double saturation = 0.0;
   double hue_shift = 0.0;
@@ -64,12 +92,22 @@ struct LocalMask final {
   double colorize_hue = 0.0;
   double colorize_strength = 0.0;
   double remove_strength = 0.0;
+  double heal_texture_blend = 0.68;
+  double heal_color_blend = 0.46;
   bool selection_invert = false;
   double selection_expand = 0.0;
   double selection_smooth = 0.0;
   double selection_fine_edge = 0.0;
   double selection_edge_contrast = 0.0;
   double selection_decontaminate = 0.0;
+  double selection_grow = 0.0;
+  double selection_shrink = 0.0;
+  double selection_feather = 0.0;
+  double selection_blur = 0.0;
+  double selection_harden = 0.0;
+  double selection_despeckle = 0.0;
+  double selection_fill_holes = 0.0;
+  double selection_remove_islands = 0.0;
   double feather = 0.22;
   double position = 0.5;
   double rotation = 0.0;
@@ -88,6 +126,7 @@ struct LocalMask final {
   double clone_offset_y = 0.0;
   double clone_scale = 1.0;
   double clone_rotation = 0.0;
+  bool clone_aligned = true;
   std::vector<BrushPoint> brush_points;
   std::vector<CurvePoint> polygon_points;
   double luminance_min = 0.2;
@@ -122,6 +161,8 @@ struct LocalMask final {
   int inpaint_patch_height = 0;
   std::string inpaint_model_name;
   double inpaint_blend_amount = 1.0;
+  double inpaint_seam_feather = 4.0;
+  double inpaint_color_match = 0.75;
 };
 
 struct LocalMaskSet final {
@@ -136,49 +177,43 @@ struct LocalMaskSet final {
   double blacks = 0.0;
   double temperature = 0.0;
   double tint = 0.0;
+  double texture = 0.0;
+  double clarity = 0.0;
+  double dehaze = 0.0;
+  double sharpening = 0.0;
+  double sharpen_radius = 1.0;
+  double sharpen_detail = 0.0;
+  double sharpen_masking = 0.0;
+  double luminance_nr = 0.0;
+  double color_nr = 0.0;
+  double lens_distortion = 0.0;
+  double lens_vignette = 0.0;
+  double chromatic_aberration = 0.0;
+  double perspective_vertical = 0.0;
+  double perspective_horizontal = 0.0;
+  double global_transform_rotation = 0.0;
+  double global_transform_scale = 1.0;
+  double transform_skew_x = 0.0;
+  double transform_skew_y = 0.0;
+  double liquify_center_x = 0.5;
+  double liquify_center_y = 0.5;
+  double liquify_radius = 0.25;
+  double liquify_strength = 0.0;
+  bool content_aware_crop_fill = false;
   double vibrance = 0.0;
   double saturation = 0.0;
   double hue_shift = 0.0;
   double saturation_shift = 0.0;
   double colorize_hue = 0.0;
   double colorize_strength = 0.0;
-  std::vector<LocalMask> sources;
-};
-
-struct PhotoLayer final {
-  std::string id;
-  std::string name;
-  std::string kind = "adjustment";
-  std::string blend_mode = "normal";
-  bool enabled = true;
+  bool selection_invert = false;
+  double selection_expand = 0.0;
+  double selection_smooth = 0.0;
+  double selection_fine_edge = 0.0;
+  double selection_edge_contrast = 0.0;
   double opacity = 1.0;
-  bool clipping_mask = false;
-  double exposure = 0.0;
-  double contrast = 0.0;
-  double highlights = 0.0;
-  double shadows = 0.0;
-  double whites = 0.0;
-  double blacks = 0.0;
-  double temperature = 0.0;
-  double tint = 0.0;
-  double vibrance = 0.0;
-  double saturation = 0.0;
-  double hue_shift = 0.0;
-  double saturation_shift = 0.0;
-  double colorize_hue = 0.0;
-  double colorize_strength = 0.0;
-  ColorPixel fill_color = {0.5F, 0.5F, 0.5F, 1.0F};
-  std::vector<uint8_t> mask_data;
-  int mask_width = 0;
-  int mask_height = 0;
-  bool mask_inverted = false;
-  std::vector<ColorPixel> pixels;
-  int pixel_width = 0;
-  int pixel_height = 0;
-  int x = 0;
-  int y = 0;
-  double transform_scale = 1.0;
-  double transform_rotation = 0.0;
+  double density = 1.0;
+  std::vector<LocalMask> sources;
 };
 
 struct ColorMixerChannelAdjustment final {
@@ -215,6 +250,137 @@ struct LutAdjustment final {
   std::string output_color_space = "sRGB";
 };
 
+constexpr int kColorMixerChannelCount = 8;
+constexpr std::array<const char*, kColorMixerChannelCount> kColorMixerChannelNames = {
+    "Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas",
+};
+
+struct PhotoLayer final {
+  std::string id;
+  std::string name;
+  std::string kind = "adjustment";
+  std::string blend_mode = "normal";
+  bool enabled = true;
+  double opacity = 1.0;
+  bool clipping_mask = false;
+  double exposure = 0.0;
+  double contrast = 0.0;
+  double highlights = 0.0;
+  double shadows = 0.0;
+  double whites = 0.0;
+  double blacks = 0.0;
+  double temperature = 0.0;
+  double tint = 0.0;
+  double texture = 0.0;
+  double clarity = 0.0;
+  double dehaze = 0.0;
+  double sharpening = 0.0;
+  double sharpen_radius = 1.0;
+  double sharpen_detail = 0.0;
+  double sharpen_masking = 0.0;
+  double luminance_nr = 0.0;
+  double color_nr = 0.0;
+  double lens_distortion = 0.0;
+  double lens_vignette = 0.0;
+  double chromatic_aberration = 0.0;
+  double perspective_vertical = 0.0;
+  double perspective_horizontal = 0.0;
+  double global_transform_rotation = 0.0;
+  double global_transform_scale = 1.0;
+  double transform_skew_x = 0.0;
+  double transform_skew_y = 0.0;
+  double liquify_center_x = 0.5;
+  double liquify_center_y = 0.5;
+  double liquify_radius = 0.25;
+  double liquify_strength = 0.0;
+  bool content_aware_crop_fill = false;
+  double vibrance = 0.0;
+  double saturation = 0.0;
+  double hue_shift = 0.0;
+  double saturation_shift = 0.0;
+  double colorize_hue = 0.0;
+  double colorize_strength = 0.0;
+  double brightness = 0.0;
+  double filmic_shoulder = 0.0;
+  double filmic_toe = 0.0;
+  double adaptive_contrast = 0.0;
+  double levels_black_point = 0.0;
+  double levels_gamma = 0.0;
+  double levels_white_point = 0.0;
+  double zone_deep_shadows = 0.0;
+  double zone_shadows = 0.0;
+  double zone_midtones = 0.0;
+  double zone_lights = 0.0;
+  double zone_highlights = 0.0;
+  double curve_shadows = 0.0;
+  double curve_darks = 0.0;
+  double curve_lights = 0.0;
+  double curve_highlights = 0.0;
+  std::vector<CurvePoint> master_curve_points;
+  std::vector<CurvePoint> luma_curve_points;
+  std::vector<CurvePoint> red_curve_points;
+  std::vector<CurvePoint> green_curve_points;
+  std::vector<CurvePoint> blue_curve_points;
+  std::string color_mixer_model = "OKLab";
+  std::string color_mixer_channel = "Reds";
+  double hue_adjustment = 0.0;
+  double saturation_adjustment = 0.0;
+  double luminance_adjustment = 0.0;
+  std::array<ColorMixerChannelAdjustment, kColorMixerChannelCount> color_mixer_channels{};
+  RgbChannelMixerAdjustment rgb_channel_mixer;
+  bool black_and_white_enabled = false;
+  std::array<double, kColorMixerChannelCount> black_and_white_mixer{};
+  bool color_replacement_enabled = false;
+  double color_replacement_source_hue = 0.0;
+  double color_replacement_target_hue = 0.33;
+  double color_replacement_range = 35.0;
+  double color_replacement_softness = 100.0;
+  double color_replacement_strength = 0.0;
+  bool color_replacement_preserve_luminance = true;
+  bool color_replacement_preserve_saturation = true;
+  bool skin_tone_protection_enabled = false;
+  double skin_tone_line_hue = 0.08;
+  double skin_tone_protection_range = 30.0;
+  double skin_tone_protection_strength = 0.0;
+  bool color_harmony_enabled = false;
+  std::string color_harmony_mode = "Complementary";
+  double color_harmony_base_hue = 0.0;
+  double color_harmony_strength = 0.0;
+  double grading_shadows_hue = 0.0;
+  double grading_shadows_saturation = 0.0;
+  double grading_shadows_luminance = 0.0;
+  double grading_midtones_hue = 0.0;
+  double grading_midtones_saturation = 0.0;
+  double grading_midtones_luminance = 0.0;
+  double grading_highlights_hue = 0.0;
+  double grading_highlights_saturation = 0.0;
+  double grading_highlights_luminance = 0.0;
+  double grading_amount = 100.0;
+  double grading_balance = 0.0;
+  bool lut_enabled = false;
+  double lut_strength = 100.0;
+  std::string lut_name;
+  std::vector<ColorPixel> lut_table;
+  int lut_size = 0;
+  std::array<double, 3> lut_domain_min = {0.0, 0.0, 0.0};
+  std::array<double, 3> lut_domain_max = {1.0, 1.0, 1.0};
+  std::string lut_input_color_space = "sRGB";
+  std::string lut_output_color_space = "sRGB";
+  std::vector<LutAdjustment> lut_stack;
+  ColorPixel fill_color = {0.5F, 0.5F, 0.5F, 1.0F};
+  std::vector<uint8_t> mask_data;
+  int mask_width = 0;
+  int mask_height = 0;
+  bool mask_inverted = false;
+  std::vector<ColorPixel> pixels;
+  int pixel_width = 0;
+  int pixel_height = 0;
+  int x = 0;
+  int y = 0;
+  double transform_scale = 1.0;
+  double transform_rotation = 0.0;
+};
+
 struct InputTransformSettings final {
   std::string input_profile_name = "Embedded";
   double exposure = 0.0;
@@ -240,11 +406,6 @@ struct InputTransformSettings final {
   double green_primary_saturation = 0.0;
   double blue_primary_hue = 0.0;
   double blue_primary_saturation = 0.0;
-};
-
-constexpr int kColorMixerChannelCount = 8;
-constexpr std::array<const char*, kColorMixerChannelCount> kColorMixerChannelNames = {
-    "Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas",
 };
 
 struct ColorAdjustmentState final {
@@ -275,6 +436,8 @@ struct ColorAdjustmentState final {
   double clarity = 0.0;
   double dehaze = 0.0;
   double sharpening = 0.0;
+  double sharpen_radius = 1.0;
+  double sharpen_detail = 0.0;
   double sharpen_masking = 0.0;
   double luminance_nr = 0.0;
   double color_nr = 0.0;
@@ -316,7 +479,10 @@ struct ColorAdjustmentState final {
   double color_replacement_source_hue = 0.0;
   double color_replacement_target_hue = 0.33;
   double color_replacement_range = 35.0;
+  double color_replacement_softness = 100.0;
   double color_replacement_strength = 0.0;
+  bool color_replacement_preserve_luminance = true;
+  bool color_replacement_preserve_saturation = true;
   bool skin_tone_protection_enabled = false;
   double skin_tone_line_hue = 0.08;
   double skin_tone_protection_range = 30.0;
@@ -344,6 +510,8 @@ struct ColorAdjustmentState final {
   double grading_highlights_hue = 0.0;
   double grading_highlights_saturation = 0.0;
   double grading_highlights_luminance = 0.0;
+  double grading_amount = 100.0;
+  double grading_balance = 0.0;
   bool linear_mask_enabled = false;
   double linear_mask_exposure = 0.0;
   double linear_mask_temperature = 0.0;
@@ -485,12 +653,74 @@ struct CancellationToken final {
 [[nodiscard]] std::vector<LutLibraryEntry> search_lut_entries(
     std::span<const LutLibraryEntry> entries,
     std::string_view query);
+struct ColorAdjustmentTelemetry final {
+  std::int64_t fast_global_ms = 0;
+  std::int64_t tone_mask_ms = 0;
+  std::int64_t spatial_ms = 0;
+  std::int64_t spatial_luminance_ms = 0;
+  std::int64_t spatial_texture_blur_ms = 0;
+  std::int64_t spatial_clarity_blur_ms = 0;
+  std::int64_t spatial_haze_blur_ms = 0;
+  std::int64_t spatial_apply_ms = 0;
+  std::int64_t post_color_ms = 0;
+  std::int64_t retouch_ms = 0;
+  std::int64_t user_lut_ms = 0;
+  std::int64_t detail_ms = 0;
+  std::int64_t detail_oklab_ms = 0;
+  std::int64_t detail_sharpen_ms = 0;
+  std::int64_t detail_luminance_nr_ms = 0;
+  std::int64_t detail_color_nr_ms = 0;
+  std::int64_t detail_output_ms = 0;
+  std::int64_t final_output_ms = 0;
+  std::int64_t final_output_black_point_ms = 0;
+  std::int64_t final_output_headroom_ms = 0;
+  std::int64_t gpu_command_buffer_count = 0;
+  std::int64_t gpu_kernel_dispatch_count = 0;
+  std::int64_t gpu_blit_count = 0;
+  std::int64_t gpu_cpu_to_gpu_bytes = 0;
+  std::int64_t gpu_gpu_to_cpu_bytes = 0;
+  std::int64_t gpu_spatial_texture_blur_dispatch_count = 0;
+  std::int64_t gpu_spatial_clarity_blur_dispatch_count = 0;
+  std::int64_t gpu_spatial_haze_blur_dispatch_count = 0;
+};
 void apply_color_adjustments(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const ColorAdjustmentState& state,
     RemovalQuality removal_quality = RemovalQuality::Interactive,
+    CancellationToken cancellation = {},
+    ColorAdjustmentTelemetry* telemetry = nullptr);
+
+struct LocalAdjustmentCoordinateMapping final {
+  int source_x = 0;
+  int source_y = 0;
+  int source_width = 0;
+  int source_height = 0;
+};
+
+[[nodiscard]] bool apply_local_adjustments_to_adjusted_pixels(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const ColorAdjustmentState& state,
     CancellationToken cancellation = {});
+[[nodiscard]] bool apply_local_adjustments_to_adjusted_pixels(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const ColorAdjustmentState& state,
+    const LocalAdjustmentCoordinateMapping& coordinate_mapping,
+    CancellationToken cancellation = {});
+[[nodiscard]] std::uint64_t refined_local_mask_hash(
+    const LocalMask& mask,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels = {});
+[[nodiscard]] std::uint64_t refined_local_mask_set_hash(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels = {});
 
 }  // namespace photo_editor::pipeline

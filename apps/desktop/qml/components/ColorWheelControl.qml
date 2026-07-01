@@ -28,16 +28,16 @@ Item {
     }
 
     function normalizedHue(value) {
-        return ((value + 100) / 200 + 1) % 1
+        return ((value % 1) + 1) % 1
     }
 
-    function wheelHue(value) {
-        return (normalizedHue(value) * 200) - 100
-    }
-
-    function displayNumber(value) {
+    function displaySignedNumber(value) {
         const rounded = Math.round(value)
         return (rounded > 0 ? "+" : "") + rounded
+    }
+
+    function displayHue(value) {
+        return Math.round(normalizedHue(value) * 360) % 360
     }
 
     ColumnLayout {
@@ -148,7 +148,7 @@ Item {
                     const angle = Math.atan2(dy, dx) + Math.PI / 2
                     const normalizedHue = ((angle / (Math.PI * 2)) + 1) % 1
                     const radius = Math.sqrt(dx * dx + dy * dy) / (Math.min(width, height) * 0.44)
-                    const nextHue = (normalizedHue * 200) - 100
+                    const nextHue = normalizedHue
                     const nextSat = root.clamp(radius * root.maxSaturation, 0, root.maxSaturation)
                     if (pressedButtons & Qt.RightButton) {
                         root.hueEdited(root.hue + (nextHue - root.hue) * 0.18)
@@ -168,7 +168,7 @@ Item {
             Label {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 28
-                text: "H " + root.displayNumber(root.hue)
+                text: "H " + root.displayHue(root.hue) + "\u00B0"
                 color: theme.textMain
                 font.family: theme.fontMono
                 font.pixelSize: 8
@@ -177,7 +177,7 @@ Item {
             Label {
                 Layout.fillWidth: true
                 Layout.minimumWidth: 28
-                text: "S " + root.displayNumber(root.saturation)
+                text: "S " + root.displaySignedNumber(root.saturation)
                 color: theme.textMain
                 font.family: theme.fontMono
                 font.pixelSize: 8

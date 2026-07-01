@@ -265,6 +265,11 @@ cmake "${configure_args[@]}"
 log "Building ${build_preset}"
 cmake --build --preset "${build_preset}"
 
+if [ "${run_tests}" -eq 1 ]; then
+  log "Running mask release gate"
+  "${REPO_ROOT}/scripts/run-mask-release-gate.sh" --build-dir "${build_dir}"
+fi
+
 log "Packaging release artifacts into ${package_dir}"
 mkdir -p "${package_dir}"
 find "${package_dir}" -maxdepth 1 -type f -name "PhotoEditor-${release_version}-*" -delete

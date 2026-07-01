@@ -1,13 +1,16 @@
 #include "catalog_asset_model.h"
+#include "app_bootstrap.h"
 #include "edit_recipe_state.h"
 #include "job_runner.h"
 #include "job_store.h"
+#include "raw_image_decoder.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -75,6 +78,13 @@ bool write_ppm_fixture(const QString& file_path) {
 
   file.write(kPpmBytes);
   return file.flush();
+}
+
+QString test_thumbnail_cache_path(const QString& file_path, const QString& recipe_json = {}) {
+  const auto key = QStringLiteral("photo-v2:%1:%2").arg(file_path, recipe_json.trimmed());
+  const auto hash = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex();
+  return QDir(photo_editor::desktop::AppBootstrap::cacheLocation())
+      .filePath(QStringLiteral("thumbnails/%1.jpg").arg(QString::fromLatin1(hash)));
 }
 
 bool wait_for_thumbnail(
@@ -293,6 +303,32 @@ int main(int argc, char** argv) {
     }
 
     model.setMinimumRatingFilter(0);
+
+    const auto visible_assets = model.visibleAssets();
+    if (visible_assets.size() != 3 ||
+        visible_assets.at(0).toMap().value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1")) {
+      return fail("visible asset helper should expose the current filtered gallery order");
+    }
+
+    model.addAssetToProject(QStringLiteral("asset-1"), QStringLiteral("Shoot A"));
+    model.addAssetToProject(QStringLiteral("asset-3"), QStringLiteral("Shoot A"));
+    const auto project_assets = model.assetsForProject(QStringLiteral("Shoot A"));
+    const auto unassigned_assets = model.assetsForProject(QStringLiteral("unassigned"));
+    if (project_assets.size() != 2 ||
+        project_assets.at(0).toMap().value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-1") ||
+        project_assets.at(1).toMap().value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-3") ||
+        unassigned_assets.size() != 1 ||
+        unassigned_assets.at(0).toMap().value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-2")) {
+      return fail("project asset helper should expose album/project and unassigned scopes");
+    }
+
+    model.setSearchFilter(QStringLiteral("IMG_0003"));
+    const auto filtered_assets = model.visibleAssets();
+    if (filtered_assets.size() != 1 ||
+        filtered_assets.first().toMap().value(QStringLiteral("assetId")).toString() != QStringLiteral("asset-3")) {
+      return fail("visible asset helper should honor the current search filter");
+    }
+    model.setSearchFilter(QString());
   }
 
   {
@@ -422,6 +458,52 @@ int main(int argc, char** argv) {
   }
 
   {
+    const auto raw_path = runtime_root.filePath(QStringLiteral("thumbs/BROKEN_RAW.CR3"));
+    if (!write_file(raw_path)) {
+      return fail("raw thumbnail fallback source file should be created");
+    }
+
+    if (photo_editor::desktop::raw_image_supported(raw_path)) {
+      const auto corrupt_cache_path = test_thumbnail_cache_path(raw_path);
+      if (!QDir().mkpath(QFileInfo(corrupt_cache_path).dir().absolutePath())) {
+        return fail("raw thumbnail corrupt cache directory should be created");
+      }
+      QFile corrupt_cache(corrupt_cache_path);
+      if (!corrupt_cache.open(QIODevice::WriteOnly)) {
+        return fail("raw thumbnail corrupt cache file should be writable");
+      }
+      corrupt_cache.write("not a readable thumbnail");
+      corrupt_cache.close();
+
+      auto raw_asset = make_asset(QStringLiteral("asset-raw-thumb"), QStringLiteral("BROKEN_RAW.CR3"));
+      raw_asset.file_path = raw_path;
+      raw_asset.location_path = raw_path;
+
+      photo_editor::desktop::CatalogAssetModel raw_thumbnail_model;
+      raw_thumbnail_model.replaceAssetsForTesting({raw_asset});
+
+      if (!wait_for_thumbnail(&raw_thumbnail_model, 0)) {
+        return fail("RAW thumbnail generation should surface a placeholder instead of staying empty");
+      }
+
+      const auto raw_thumbnail =
+          raw_thumbnail_model.data(
+              raw_thumbnail_model.index(0, 0),
+              photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole).toString();
+      const QUrl raw_thumbnail_url(raw_thumbnail);
+      if (!raw_thumbnail_url.hasQuery()) {
+        return fail("RAW fallback thumbnails should include immutable version query parameters");
+      }
+
+      const QImage raw_thumbnail_image(raw_thumbnail_url.toLocalFile());
+      if (raw_thumbnail_image.isNull() || raw_thumbnail_image.width() < 200 ||
+          raw_thumbnail_image.height() < 150) {
+        return fail("RAW thumbnail fallback should replace bad cache entries with a readable error thumbnail");
+      }
+    }
+  }
+
+  {
     const auto image_path = runtime_root.filePath(QStringLiteral("thumbs/IMG_recipe.ppm"));
     if (!write_ppm_fixture(image_path)) {
       return fail("recipe thumbnail source image should be created");
@@ -477,6 +559,48 @@ int main(int argc, char** argv) {
     const auto edited_value = qGray(edited_image.pixel(0, 0));
     if (edited_value <= initial_value) {
       return fail("edited thumbnail should reflect brighter exposure");
+    }
+  }
+
+  {
+    const auto image_path = runtime_root.filePath(QStringLiteral("thumbs/IMG_recipe_race.ppm"));
+    if (!write_ppm_fixture(image_path)) {
+      return fail("recipe race thumbnail source image should be created");
+    }
+
+    auto thumbnail_asset = make_asset(QStringLiteral("asset-recipe-race-thumb"), QStringLiteral("IMG_recipe_race.ppm"));
+    thumbnail_asset.file_path = image_path;
+    thumbnail_asset.location_path = image_path;
+
+    photo_editor::desktop::CatalogAssetModel thumbnail_model;
+    thumbnail_model.replaceAssetsForTesting({thumbnail_asset});
+
+    photo_editor::desktop::EditRecipeState edited_state;
+    edited_state.exposure = 1.0;
+    const auto edited_recipe = photo_editor::desktop::serialize_edit_recipe_json(edited_state);
+    if (thumbnail_model.applyRecipeJsonToAssetIds(
+            {QStringLiteral("asset-recipe-race-thumb")},
+            edited_recipe,
+            {QStringLiteral("tone")}) != 1) {
+      return fail("recipe apply should update an asset with an active thumbnail task");
+    }
+
+    if (!wait_for_thumbnail(&thumbnail_model, 0)) {
+      return fail("stale in-flight thumbnail results should schedule the current recipe thumbnail");
+    }
+
+    const auto edited_thumbnail =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailSourceRole).toString();
+    const QUrl edited_thumbnail_url(edited_thumbnail);
+    if (edited_thumbnail_url.toLocalFile() != test_thumbnail_cache_path(image_path, edited_recipe)) {
+      return fail("thumbnail cache path should be keyed by the current edited recipe");
+    }
+
+    const QImage edited_image(edited_thumbnail_url.toLocalFile());
+    if (edited_image.isNull() || qGray(edited_image.pixel(0, 0)) <= 93) {
+      return fail("active-task recipe thumbnail should reflect the edited exposure");
     }
   }
 
@@ -698,8 +822,8 @@ int main(int argc, char** argv) {
     if (import_job.metadata_json.value(QStringLiteral("selectionCount")).toInt() != 0) {
       return fail("folder imports should persist a zero selection count");
     }
-    if (import_job.metadata_json.value(QStringLiteral("importMode")).toString() != QStringLiteral("referenced")) {
-      return fail("import jobs should persist the referenced import mode");
+    if (import_job.metadata_json.value(QStringLiteral("importMode")).toString() != QStringLiteral("managed")) {
+      return fail("import jobs should persist the managed import mode");
     }
   }
 

@@ -70,8 +70,51 @@ ApplicationWindow {
                                            || catalogAssets.deleting
                                            || editorPreview.processing
                                            || (jobQueue && (jobQueue.activeJobCountForKind("catalog_import") > 0
-                                                            || jobQueue.activeJobCountForKind("timeline_render") > 0
-                                                            || jobQueue.activeJobCountForKind("asset_export") > 0))
+                                                             || jobQueue.activeJobCountForKind("timeline_render") > 0
+                                                             || jobQueue.activeJobCountForKind("asset_export") > 0))
+    readonly property bool blockingActivityVisible: anyAppActivity && primaryActivityKind !== "preview_render"
+    readonly property bool previewUpdateVisible: editorPreview.processing
+                                               && primaryActivityKind === "preview_render"
+    readonly property string primaryFailureKind: {
+        if (!jobQueue)
+            return "none"
+        jobQueue.jobCount
+        jobQueue.status
+        if (currentWorkspace === timelineWorkspaceIndex && jobQueue.failedJobCountForKind("timeline_render") > 0)
+            return "timeline_render"
+        if (currentWorkspace === exportWorkspaceIndex && jobQueue.failedJobCountForKind("asset_export") > 0)
+            return "asset_export"
+        if (currentWorkspace === libraryWorkspaceIndex && jobQueue.failedJobCountForKind("catalog_import") > 0)
+            return "catalog_import"
+        if (jobQueue.failedJobCountForKind("asset_export") > 0)
+            return "asset_export"
+        if (jobQueue.failedJobCountForKind("timeline_render") > 0)
+            return "timeline_render"
+        if (jobQueue.failedJobCountForKind("catalog_import") > 0)
+            return "catalog_import"
+        return "none"
+    }
+    readonly property var latestFailureJob: jobQueue && primaryFailureKind !== "none"
+                                            ? (jobQueue.jobCount, jobQueue.status, jobQueue.latestFailedJobForKind(primaryFailureKind))
+                                            : ({})
+    readonly property bool primaryFailureRetryable: primaryFailureKind === "asset_export"
+                                                 || primaryFailureKind === "timeline_render"
+    readonly property string primaryFailureTitle: {
+        if (primaryFailureKind === "asset_export")
+            return "Export failed"
+        if (primaryFailureKind === "timeline_render")
+            return "Timeline render failed"
+        if (primaryFailureKind === "catalog_import")
+            return "Import failed"
+        return ""
+    }
+    readonly property string primaryFailureDetail: {
+        const error = latestFailureJob && latestFailureJob.errorMessage ? String(latestFailureJob.errorMessage) : ""
+        if (error.length > 0)
+            return error
+        const label = latestFailureJob && latestFailureJob.displayLabel ? String(latestFailureJob.displayLabel) : ""
+        return label.length > 0 ? label : "Open Export for details."
+    }
     readonly property color primaryActivityAccent: {
         if (catalogAssets.deleting)
             return theme.error
@@ -155,8 +198,18 @@ ApplicationWindow {
             return "asset_export"
         return "none"
     }
-    readonly property bool primaryActivityCancelable: supportsLongOperationCancel(primaryActivityKind)
+    readonly property bool primaryActivityCancelable: canCancelActivityKind(primaryActivityKind)
     readonly property int activityIndicatorBottomMargin: currentWorkspace === editWorkspaceIndex ? 104 : 12
+    readonly property int activityIndicatorRightMargin: {
+        const workspace = workspaceLoader.item
+        if (currentWorkspace === editWorkspaceIndex &&
+                workspace &&
+                workspace.editingChromeVisible &&
+                workspace.editInspectorPanelVisible) {
+            return Math.max(12, Number(workspace.editInspectorPanelWidth || 0) + 24)
+        }
+        return 12
+    }
 
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
@@ -164,6 +217,21 @@ ApplicationWindow {
 
     function primaryShiftShortcut(key) {
         return (macStyle ? "Meta+Shift+" : "Ctrl+Shift+") + key
+    }
+
+    function primaryAltShortcut(key) {
+        return (macStyle ? "Meta+Alt+" : "Ctrl+Alt+") + key
+    }
+
+    function coreWorkflowShortcutSignature() {
+        return [
+            "adjust:" + adjustToolAction.shortcut,
+            "crop:" + cropToolAction.shortcut,
+            "masks:" + masksToolAction.shortcut,
+            "brush:" + brushToolAction.shortcut,
+            "compare:" + compareToolAction.shortcut,
+            "export:" + exportToolAction.shortcut
+        ].join("|")
     }
 
     function workspaceAccent(index) {
@@ -192,19 +260,80 @@ ApplicationWindow {
     }
 
     function supportsLongOperationCancel(kind) {
-        return ["catalog_import", "timeline_render", "asset_export"].indexOf(String(kind || "")) >= 0
+        const normalizedKind = String(kind || "")
+        return longOperationCancellationMode(normalizedKind, "Queued") !== "unsupported"
+                || longOperationCancellationMode(normalizedKind, "Running") === "cooperative"
     }
 
     function cancellableActivityKinds() {
-        return ["catalog_import", "timeline_render", "asset_export"]
+        return ["catalog_import", "timeline_render", "asset_export", "ai_model_inference"]
+    }
+
+    function knownLongOperationKind(kind) {
+        return cancellableActivityKinds().indexOf(String(kind || "")) >= 0
+    }
+
+    function longOperationCancellationMode(kind, status) {
+        const normalizedKind = String(kind || "")
+        const normalizedStatus = String(status || "")
+        if (!knownLongOperationKind(normalizedKind))
+            return "unsupported"
+        if (normalizedStatus === "Queued")
+            return "queued-drop"
+        if (normalizedStatus === "Running"
+                && (normalizedKind === "asset_export" || normalizedKind === "timeline_render"))
+            return "cooperative"
+        if (normalizedStatus === "Canceling")
+            return "already-canceling"
+        return "unsupported"
+    }
+
+    function longOperationCancellationPolicySignature(kind, status) {
+        const normalizedKind = String(kind || "")
+        const normalizedStatus = String(status || "")
+        const mode = longOperationCancellationMode(normalizedKind, normalizedStatus)
+        const cancelable = mode === "queued-drop" || mode === "cooperative"
+        return normalizedKind + "|" + normalizedStatus
+                + "|cancel:" + String(cancelable)
+                + "|mode:" + mode
+    }
+
+    function canCancelActivityKind(kind) {
+        if (!jobQueue)
+            return false
+        const normalizedKind = String(kind || "")
+        if (!supportsLongOperationCancel(normalizedKind))
+            return false
+        const latestJob = jobQueue.latestJobForKind(normalizedKind)
+        const jobId = latestJob && latestJob.jobId ? String(latestJob.jobId) : ""
+        if (jobId.length === 0)
+            return false
+        if (jobQueue.canCancelJob)
+            return jobQueue.canCancelJob(jobId)
+        const status = latestJob && latestJob.status ? String(latestJob.status) : ""
+        const mode = longOperationCancellationMode(normalizedKind, status)
+        return mode === "queued-drop" || mode === "cooperative"
     }
 
     function primaryActivityControlSignature() {
         return primaryActivityKind + "|" + String(primaryActivityProgress) + "|" + String(primaryActivityCancelable)
     }
 
+    function activityPresentationSignature(kind, progress, cancelable, failedCount) {
+        const normalizedKind = String(kind || "none")
+        const blocking = normalizedKind !== "none" && normalizedKind !== "preview_render"
+        const retryable = failedCount > 0 && (normalizedKind === "asset_export" || normalizedKind === "timeline_render")
+        const boundedProgress = Number(progress)
+        const progressState = boundedProgress >= 0 ? Math.max(0, Math.min(1, boundedProgress)).toFixed(3) : "indeterminate"
+        return normalizedKind
+                + "|blocking:" + String(blocking)
+                + "|progress:" + progressState
+                + "|cancel:" + String(Boolean(cancelable) && blocking)
+                + "|retry:" + String(retryable)
+    }
+
     function cancelJobForKind(kind) {
-        if (!jobQueue || !supportsLongOperationCancel(kind))
+        if (!jobQueue || !canCancelActivityKind(kind))
             return false
         const latestJob = jobQueue.latestJobForKind(kind)
         const jobId = latestJob && latestJob.jobId ? String(latestJob.jobId) : ""
@@ -215,6 +344,15 @@ ApplicationWindow {
 
     function cancelPrimaryActivity() {
         return cancelJobForKind(primaryActivityKind)
+    }
+
+    function retryPrimaryFailure() {
+        if (!jobQueue || !primaryFailureRetryable)
+            return false
+        const jobId = latestFailureJob && latestFailureJob.jobId ? String(latestFailureJob.jobId) : ""
+        if (jobId.length === 0)
+            return false
+        return jobQueue.retryJob(jobId)
     }
 
     function workspaceBadgeCount(index) {
@@ -273,6 +411,22 @@ ApplicationWindow {
 
     function activeCarouselView() {
         return currentWorkspace === carouselWorkspaceIndex ? activeWorkspaceItem() : null
+    }
+
+    function activatePrimaryEditTool(toolName) {
+        const cleanTool = String(toolName || "").trim().toLowerCase()
+        if (cleanTool === "export") {
+            currentWorkspace = exportWorkspaceIndex
+            return true
+        }
+        if (cleanTool.length === 0)
+            return false
+        editWorkspaceMode = cleanTool
+        currentWorkspace = editWorkspaceIndex
+        const workspace = activeWorkspaceItem()
+        if (workspace && typeof workspace.activateEditTool === "function")
+            workspace.activateEditTool(cleanTool)
+        return true
     }
 
     function switchToWorkspaceIndex(index) {
@@ -552,6 +706,7 @@ ApplicationWindow {
     function beginImportWorkspace() {
         libraryWorkspaceMode = "import"
         currentWorkspace = libraryWorkspaceIndex
+        catalogAssets.refreshImportSources()
     }
 
     function openSelectedPhotoInEdit() {
@@ -697,7 +852,7 @@ ApplicationWindow {
     Action {
         id: undoEditAction
         text: "Undo"
-        shortcut: StandardKey.Undo
+        shortcut: window.primaryShortcut("Z")
         enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canUndo)
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canUndo)
         onTriggered: {
@@ -711,7 +866,7 @@ ApplicationWindow {
     Action {
         id: redoEditAction
         text: "Redo"
-        shortcut: StandardKey.Redo
+        shortcut: window.primaryShiftShortcut("Z")
         enabled: (window.currentWorkspace === window.editWorkspaceIndex && editorPreview.canRedo)
                  || (window.currentWorkspace === window.timelineWorkspaceIndex && timelineDocument.canRedo)
         onTriggered: {
@@ -773,6 +928,54 @@ ApplicationWindow {
         checked: editorPreview.cropEditing
         enabled: editorPreview.hasAsset
         onTriggered: editorPreview.cropEditing = !editorPreview.cropEditing
+    }
+
+    Action {
+        id: adjustToolAction
+        text: "Adjust Tool"
+        shortcut: window.primaryAltShortcut("A")
+        enabled: editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("adjust")
+    }
+
+    Action {
+        id: cropToolAction
+        text: "Crop Tool"
+        shortcut: window.primaryAltShortcut("C")
+        enabled: editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("crop")
+    }
+
+    Action {
+        id: masksToolAction
+        text: "Masks Tool"
+        shortcut: window.primaryAltShortcut("M")
+        enabled: editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("masks")
+    }
+
+    Action {
+        id: brushToolAction
+        text: "Brush Tool"
+        shortcut: window.primaryAltShortcut("B")
+        enabled: editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("brush")
+    }
+
+    Action {
+        id: compareToolAction
+        text: "Compare Tool"
+        shortcut: window.primaryAltShortcut("P")
+        enabled: editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("compare")
+    }
+
+    Action {
+        id: exportToolAction
+        text: "Export Tool"
+        shortcut: window.primaryAltShortcut("E")
+        enabled: catalogAssets.selectedAssetId.length > 0 || editorPreview.hasAsset
+        onTriggered: window.activatePrimaryEditTool("export")
     }
 
     Action {
@@ -1259,6 +1462,13 @@ ApplicationWindow {
             MenuItem { action: toggleCompareAction }
             MenuItem { action: toggleCropAction }
             MenuSeparator {}
+            MenuItem { action: adjustToolAction }
+            MenuItem { action: cropToolAction }
+            MenuItem { action: masksToolAction }
+            MenuItem { action: brushToolAction }
+            MenuItem { action: compareToolAction }
+            MenuItem { action: exportToolAction }
+            MenuSeparator {}
             MenuItem { action: addSequenceMarkerAction }
             MenuItem { action: splitAtPlayheadAction }
             MenuItem { action: removeSelectedClipAction }
@@ -1558,12 +1768,13 @@ ApplicationWindow {
             InlineActivityIndicator {
                 id: floatingActivityIndicator
                 objectName: "floatingActivityIndicator"
-                visible: window.anyAppActivity
+                visible: window.blockingActivityVisible
                 width: Math.min(320, Math.max(190, parent.width * 0.26))
+                height: implicitHeight
                 z: 2
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                anchors.rightMargin: 12
+                anchors.rightMargin: window.activityIndicatorRightMargin
                 anchors.bottomMargin: window.activityIndicatorBottomMargin
                 title: window.primaryActivityTitle
                 detail: window.primaryActivityDetail
@@ -1571,6 +1782,25 @@ ApplicationWindow {
                 accent: window.primaryActivityAccent
                 cancelable: window.primaryActivityCancelable
                 onCancelRequested: window.cancelPrimaryActivity()
+            }
+
+            InlineActivityIndicator {
+                id: failureActivityIndicator
+                objectName: "failureActivityIndicator"
+                visible: !window.blockingActivityVisible && window.primaryFailureKind !== "none"
+                width: Math.min(340, Math.max(210, parent.width * 0.28))
+                height: implicitHeight
+                z: 2
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                anchors.rightMargin: window.activityIndicatorRightMargin
+                anchors.bottomMargin: window.activityIndicatorBottomMargin
+                title: window.primaryFailureTitle
+                detail: window.primaryFailureDetail
+                progressValue: 0
+                accent: theme.error
+                retryable: window.primaryFailureRetryable
+                onRetryRequested: window.retryPrimaryFailure()
             }
 
             RowLayout {
@@ -1639,6 +1869,35 @@ ApplicationWindow {
         id: commandPaletteDialog
         objectName: "commandPaletteDialog"
         parent: Overlay.overlay
+        requiredCommandLabels: [
+            "Library",
+            "Edit",
+            "Carousel",
+            "Timeline",
+            "Export",
+            "Adjust Tool",
+            "Crop Tool",
+            "Masks Tool",
+            "Brush Tool",
+            "Compare Tool",
+            "Export Tool",
+            "New Import",
+            "New Timeline",
+            "New Carousel",
+            "Open Selected In Edit",
+            "Queue Export...",
+            "Reset Adjustments",
+            "Compare View",
+            "Crop Overlay",
+            "Select Tool",
+            "Razor Tool",
+            "Slip Tool",
+            "Roll Tool",
+            "Add Slide",
+            "Export Carousel...",
+            "Keyboard Shortcuts",
+            "Command Palette"
+        ]
         commands: [
             { action: switchToLibraryAction, category: "Navigate", shortcutHint: macStyle ? "⌘1" : "Ctrl+1" },
             { action: switchToEditAction, category: "Navigate", shortcutHint: macStyle ? "⌘2" : "Ctrl+2" },
@@ -1661,6 +1920,12 @@ ApplicationWindow {
             { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
             { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
             { action: toggleCropAction, category: "Edit", shortcutHint: "" },
+            { action: adjustToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘A" : "Ctrl+Alt+A" },
+            { action: cropToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘C" : "Ctrl+Alt+C" },
+            { action: masksToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘M" : "Ctrl+Alt+M" },
+            { action: brushToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘B" : "Ctrl+Alt+B" },
+            { action: compareToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘P" : "Ctrl+Alt+P" },
+            { action: exportToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘E" : "Ctrl+Alt+E" },
             { action: addSequenceMarkerAction, category: "Timeline", shortcutHint: "M" },
             { action: splitAtPlayheadAction, category: "Timeline", shortcutHint: macStyle ? "⌘\\" : "Ctrl+\\" },
             { action: removeSelectedClipAction, category: "Timeline", shortcutHint: "" },
@@ -1694,6 +1959,7 @@ ApplicationWindow {
             { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
             { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
             { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
+            { action: commandPaletteAction, category: "View", shortcutHint: macStyle ? "⌘K" : "Ctrl+K" },
             { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
             { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
             { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
@@ -1828,6 +2094,8 @@ ApplicationWindow {
             catalogAssets: window.catalogAssetModel
             editTool: window.editWorkspaceMode === "compare" ? "compare"
                       : window.editWorkspaceMode === "masks" ? "masks"
+                      : window.editWorkspaceMode === "crop" ? "crop"
+                      : window.editWorkspaceMode === "brush" ? "brush"
                       : "adjust"
             onAssetActivated: function(destination) {
                 if (destination === "library") {

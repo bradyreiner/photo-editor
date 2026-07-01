@@ -197,7 +197,30 @@ SegmentationResult segmentation_result_from_pixel_buffer(CVPixelBufferRef pixel_
 
 QString normalized_semantic_kind(const QString& semantic_kind) {
   const auto normalized = semantic_kind.trimmed().toLower();
-  return normalized == QStringLiteral("person") ? QStringLiteral("people") : normalized;
+  if (normalized == QStringLiteral("person")) {
+    return QStringLiteral("people");
+  }
+  if (normalized == QStringLiteral("mountain")) {
+    return QStringLiteral("mountains");
+  }
+  if (normalized == QStringLiteral("facial hair") ||
+      normalized == QStringLiteral("facial_hair")) {
+    return QStringLiteral("facial-hair");
+  }
+  return normalized;
+}
+
+bool is_supported_semantic_kind(const QString& kind) {
+  return kind == QStringLiteral("subject") ||
+         kind == QStringLiteral("sky") ||
+         kind == QStringLiteral("background");
+}
+
+SegmentationResult unsupported_semantic_result(const QString& kind) {
+  SegmentationResult result;
+  result.error_message =
+      QStringLiteral("No semantic segmentation model is available for %1").arg(kind);
+  return result;
 }
 
 SegmentationResult invert_segmentation_result(SegmentationResult result) {
@@ -301,6 +324,9 @@ SegmentationResult generate_subject_mask(const QImage& source_image) {
 
 SegmentationResult generate_semantic_mask(const QImage& source_image, const QString& semantic_kind) {
   const auto kind = normalized_semantic_kind(semantic_kind);
+  if (!is_supported_semantic_kind(kind)) {
+    return unsupported_semantic_result(kind);
+  }
   if (kind == QStringLiteral("sky")) {
     return generate_sky_heuristic_mask(source_image);
   }

@@ -27,6 +27,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QPainter>
 #include <QPointer>
 #include <QProcessEnvironment>
 #include <QSaveFile>
@@ -457,6 +458,70 @@ QString photo_thumbnail_cache_key(const QString& file_path, const QString& recip
   return QStringLiteral("photo-v2:%1:%2").arg(file_path, recipe_json.trimmed());
 }
 
+bool cached_thumbnail_is_readable(const QString& cache_path) {
+  QImageReader reader(cache_path);
+  if (!reader.canRead()) {
+    return false;
+  }
+  const auto size = reader.size();
+  return size.isValid() && size.width() > 0 && size.height() > 0;
+}
+
+QImage raw_thumbnail_error_placeholder(const QFileInfo& source_info, const QSize& source_size) {
+  Q_UNUSED(source_info);
+  const QSize canvas_size = source_size.isValid()
+                                ? source_size.scaled(kThumbnailEdge, kThumbnailEdge, Qt::KeepAspectRatio)
+                                : QSize(360, 240);
+  QImage image(canvas_size.expandedTo(QSize(280, 180)), QImage::Format_RGB32);
+  image.fill(QColor(QStringLiteral("#10161A")));
+
+  QPainter painter(&image);
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor(QStringLiteral("#182227")));
+  painter.drawRoundedRect(image.rect().adjusted(6, 6, -6, -6), 10, 10);
+  painter.setBrush(QColor(QStringLiteral("#27E0C0")));
+  painter.drawRoundedRect(QRectF(18.0, 18.0, 74.0, 28.0), 6.0, 6.0);
+  painter.setBrush(QColor(QStringLiteral("#10161A")));
+  painter.drawRect(QRectF(31.0, 27.0, 8.0, 10.0));
+  painter.drawRect(QRectF(45.0, 27.0, 8.0, 10.0));
+  painter.drawRect(QRectF(59.0, 27.0, 8.0, 10.0));
+  painter.drawRect(QRectF(73.0, 27.0, 8.0, 10.0));
+
+  painter.setBrush(QColor(QStringLiteral("#2B3A40")));
+  const auto detail_rect = QRectF(18.0, 62.0, std::max(120, image.width() - 36), 10.0);
+  painter.drawRoundedRect(detail_rect, 4.0, 4.0);
+  painter.drawRoundedRect(detail_rect.translated(0.0, 20.0), 4.0, 4.0);
+  painter.setBrush(QColor(QStringLiteral("#27E0C0")));
+  painter.drawRoundedRect(QRectF(18.0, image.height() - 28.0, image.width() - 36.0, 4.0), 2.0, 2.0);
+  painter.end();
+  return image;
+}
+
+RawDecodeSettings thumbnail_raw_decode_settings_for_state(const RenderEditState& state) {
+  return RawDecodeSettings{
+      .input_transform_enabled = state.raw_input_transform_enabled,
+      .input_color_profile = state.input_color_profile,
+      .highlight_reconstruction_mode = state.highlight_reconstruction_mode,
+      .chromatic_adaptation_method = state.chromatic_adaptation_method,
+      .demosaic_quality = state.raw_demosaic_quality,
+      .exposure = state.raw_exposure,
+      .boost_amount = state.raw_boost,
+      .boost_shadow_amount = state.raw_shadow_boost,
+      .detail_amount = state.raw_detail,
+      .chroma_noise_reduction_amount = state.raw_chroma_noise_reduction,
+      .moire_reduction_amount = state.raw_moire_reduction,
+      .hot_dead_pixel_cleanup_amount = state.raw_hot_dead_pixel_cleanup,
+      .false_color_suppression_amount = state.raw_false_color_suppression,
+      .highlight_recovery_enabled = state.raw_highlight_recovery,
+      .gamut_mapping_enabled = state.raw_gamut_mapping,
+      .lens_correction_enabled = state.raw_lens_correction,
+      .white_balance_override_enabled = state.raw_white_balance_override,
+      .white_balance_temperature = state.raw_white_balance_temperature,
+      .white_balance_tint = state.raw_white_balance_tint,
+  };
+}
+
 QString cached_video_poster(const QString& file_path) {
   const QFileInfo source_info(file_path);
   if (!source_info.exists() || !source_info.isReadable()) {
@@ -542,26 +607,62 @@ QString ensure_thumbnail(const QString& file_path, const QString& recipe_json) {
   const QFileInfo cache_info(cache_path);
 
   if (cache_info.exists() && cache_info.lastModified() >= source_info.lastModified()) {
-    return versioned_local_file_url(cache_path);
+    if (cached_thumbnail_is_readable(cache_path)) {
+      return versioned_local_file_url(cache_path);
+    }
+    QFile::remove(cache_path);
   }
 
   QDir().mkpath(thumbnail_cache_root());
 
   const auto state = parse_edit_recipe_json(recipe_json);
   const auto decode_edge = std::min(kThumbnailDecodeCeiling, kThumbnailEdge + 256);
+  const auto raw_supported = raw_image_supported(file_path);
   auto image = QImage{};
-  if (!decode_source_image(file_path, &image, decode_edge, state)) {
-    return {};
+  auto raw_placeholder = false;
+  if (recipe_json.trimmed().isEmpty() && raw_supported) {
+    if (!decode_raw_preview_image(file_path, &image, decode_edge)) {
+      observability::logInfo(
+          photoEditorCatalogLog(),
+          QStringLiteral("thumbnail.raw_preview_failed"),
+          {
+              {QStringLiteral("file_path"), file_path},
+              {QStringLiteral("fallback"), QStringLiteral("draft_decode")},
+          });
+    }
+  }
+  if (image.isNull()) {
+    if (!decode_source_image(file_path, &image, decode_edge, state)) {
+      if (raw_supported) {
+        auto draft_state = state;
+        draft_state.raw_demosaic_quality = QStringLiteral("Preview");
+        if (!decode_raw_image(file_path, &image, decode_edge, thumbnail_raw_decode_settings_for_state(draft_state))) {
+          observability::logInfo(
+              photoEditorCatalogLog(),
+              QStringLiteral("thumbnail.raw_decode_failed"),
+              {
+                  {QStringLiteral("file_path"), file_path},
+                  {QStringLiteral("fallback"), QStringLiteral("error_placeholder")},
+              });
+          image = raw_thumbnail_error_placeholder(source_info, raw_image_size(file_path));
+          raw_placeholder = true;
+        }
+      } else {
+        return {};
+      }
+    }
   }
 
   if (image.isNull()) {
     return {};
   }
 
-  image = apply_crop(image, state);
-  apply_color_adjustments(&image, state);
-  if (image.isNull()) {
-    return {};
+  if (!raw_placeholder) {
+    image = apply_crop(image, state);
+    apply_color_adjustments(&image, state);
+    if (image.isNull()) {
+      return {};
+    }
   }
 
   const auto target_size = scaled_size_for_edge(image.size(), kThumbnailEdge);
@@ -1857,11 +1958,13 @@ void CatalogAssetModel::startImport(
       normalized_project_name.isEmpty() && import_preset_recipe_json_.isEmpty()
           ? QStringList{}
           : (selected_file_paths.isEmpty() ? collect_importable_file_paths(normalized_path) : selected_file_paths);
+  const auto import_mode = QStringLiteral("managed");
   beginImportJob(
       normalized_path,
       normalized_project_name,
       selected_file_paths,
-      static_cast<int>(selected_file_paths.size()));
+      static_cast<int>(selected_file_paths.size()),
+      import_mode);
 
   setImporting(true);
   setErrorMessage({});
@@ -2113,6 +2216,39 @@ int CatalogAssetModel::assetCountForProject(const QString& project_name) const {
   }
 
   return count;
+}
+
+QVariantList CatalogAssetModel::visibleAssets() const {
+  QVariantList items;
+  items.reserve(assets_.size());
+  for (const auto& item : assets_) {
+    items.push_back(assetMap(item));
+  }
+  return items;
+}
+
+QVariantList CatalogAssetModel::assetsForProject(const QString& project_name) const {
+  QVariantList items;
+  const auto normalized_name = normalizedProjectName(project_name);
+  items.reserve(all_assets_.size());
+
+  for (const auto& item : all_assets_) {
+    if (normalized_name == QStringLiteral("all")) {
+      items.push_back(assetMap(item));
+      continue;
+    }
+    if (normalized_name == QStringLiteral("unassigned")) {
+      if (item.project_names.isEmpty()) {
+        items.push_back(assetMap(item));
+      }
+      continue;
+    }
+    if (item.project_names.contains(normalized_name)) {
+      items.push_back(assetMap(item));
+    }
+  }
+
+  return items;
 }
 
 void CatalogAssetModel::setSelectedRating(int rating) {
@@ -2729,7 +2865,7 @@ void CatalogAssetModel::setReviewFilter(const QString& review_filter) {
 
   if (next_filter != QStringLiteral("all") && next_filter != QStringLiteral("picked") &&
       next_filter != QStringLiteral("rejected") && next_filter != QStringLiteral("unmarked") &&
-      next_filter != QStringLiteral("rated")) {
+      next_filter != QStringLiteral("rated") && next_filter != QStringLiteral("unrated")) {
     next_filter = QStringLiteral("all");
   }
 
@@ -3083,7 +3219,8 @@ void CatalogAssetModel::beginImportJob(
     const QString& folder_path,
     const QString& project_name,
     const QStringList& selected_file_paths,
-    int selection_count) {
+    int selection_count,
+    const QString& import_mode) {
   active_import_job_ = PersistentJobRecord{};
   active_import_job_.job_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
   active_import_job_.job_kind = QStringLiteral("catalog_import");
@@ -3091,7 +3228,7 @@ void CatalogAssetModel::beginImportJob(
                                          ? folder_path
                                          : QFileInfo(folder_path).fileName().trimmed();
   active_import_job_.source_path = folder_path;
-  active_import_job_.preset_name = QStringLiteral("referenced");
+  active_import_job_.preset_name = import_mode;
   active_import_job_.status = QStringLiteral("Queued");
   active_import_job_.progress = 0;
   active_import_job_.created_at = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -3103,7 +3240,7 @@ void CatalogAssetModel::beginImportJob(
   active_import_job_.metadata_json = QJsonObject{
       {QStringLiteral("projectName"), project_name},
       {QStringLiteral("selectionCount"), selection_count},
-      {QStringLiteral("importMode"), QStringLiteral("referenced")},
+      {QStringLiteral("importMode"), import_mode},
       {QStringLiteral("selectedPaths"), selected_paths},
   };
   (void)upsertPersistedJobRecord(active_import_job_, nullptr);
@@ -3432,9 +3569,9 @@ void CatalogAssetModel::startNextThumbnailTask() {
   }
 }
 
-void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) {
+bool CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) {
   if (result.asset_id.isEmpty()) {
-    return;
+    return false;
   }
 
   auto selected_changed = false;
@@ -3443,13 +3580,13 @@ void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
   const auto all_index =
       all_index_iterator == all_asset_index_by_id_.cend() ? qsizetype{-1} : all_index_iterator.value();
   if (all_index < 0 || all_index >= all_assets_.size()) {
-    return;
+    return false;
   }
 
   auto& all_item = all_assets_[all_index];
   if (all_item.file_path != result.file_path || all_item.recipe_json != result.recipe_json ||
       result.thumbnail_source.isEmpty()) {
-    return;
+    return false;
   }
   all_item.thumbnail_source = result.thumbnail_source;
 
@@ -3459,7 +3596,7 @@ void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
     if (index >= 0 && index < assets_.size()) {
       auto& item = assets_[index];
       if (item.file_path != result.file_path || item.recipe_json != result.recipe_json) {
-        return;
+        return false;
       }
       item.thumbnail_source = result.thumbnail_source;
       visible_index = static_cast<int>(index);
@@ -3478,6 +3615,7 @@ void CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
   if (selected_changed) {
     emit selectedAssetChanged();
   }
+  return true;
 }
 
 QString CatalogAssetModel::thumbnailQueuePriorityForAssetId(const QString& asset_id) const {
@@ -3522,7 +3660,7 @@ void CatalogAssetModel::handleThumbnailFinished() {
   const auto result = watcher->result();
   active_thumbnail_asset_by_watcher_.remove(watcher);
   active_thumbnail_asset_ids_.remove(result.asset_id);
-  applyThumbnailResult(result);
+  const auto applied = applyThumbnailResult(result);
   observability::logInfo(
       photoEditorCatalogLog(),
       QStringLiteral("thumbnail.completed"),
@@ -3535,8 +3673,12 @@ void CatalogAssetModel::handleThumbnailFinished() {
           {QStringLiteral("queue_priority"), result.queue_priority},
           {QStringLiteral("active_worker_count"), active_thumbnail_asset_ids_.size()},
           {QStringLiteral("worker_limit"), kMaxConcurrentThumbnailTasks},
-          {QStringLiteral("cancellation_reason"), QString()},
+          {QStringLiteral("cancellation_reason"), applied ? QString() : QStringLiteral("stale_result")},
       });
+  if (!applied && !result.thumbnail_source.isEmpty()) {
+    queueThumbnailRefreshes();
+    return;
+  }
   startNextThumbnailTask();
 }
 
@@ -4370,6 +4512,10 @@ bool CatalogAssetModel::matchesReviewFilter(const CatalogAssetItem& item) const 
     return item.rating > 0;
   }
 
+  if (review_filter_ == QStringLiteral("unrated")) {
+    return item.rating == 0;
+  }
+
   return true;
 }
 
@@ -4554,7 +4700,7 @@ QString CatalogAssetModel::importProgram() const {
 QStringList CatalogAssetModel::importArguments(const QString& folder_path) const {
   const auto drive_id = derive_drive_id(folder_path);
   const auto drive_name = derive_drive_name(folder_path);
-  const auto import_mode = QStringLiteral("referenced");
+  const auto import_mode = QStringLiteral("managed");
 
   QStringList arguments = AppBootstrap::helperArguments(
       QStringLiteral("import_catalog"),

@@ -83,9 +83,16 @@ Canvas {
         case "minus":
             line(ctx, w * 0.18, midY, w * 0.82, midY)
             break
+        case "close":
+            line(ctx, w * 0.24, h * 0.24, w * 0.76, h * 0.76)
+            line(ctx, w * 0.76, h * 0.24, w * 0.24, h * 0.76)
+            break
         case "check":
             line(ctx, w * 0.18, midY, w * 0.42, h * 0.74)
             line(ctx, w * 0.42, h * 0.74, w * 0.82, h * 0.28)
+            break
+        case "swatch":
+            circle(ctx, midX, midY, w * 0.30, true)
             break
         case "star":
             poly(ctx, [
@@ -199,6 +206,25 @@ Canvas {
             line(ctx, w * 0.54, h * 0.28, w * 0.7, midY)
             line(ctx, w * 0.54, h * 0.72, w * 0.7, midY)
             line(ctx, w * 0.24, h * 0.24, w * 0.24, h * 0.76)
+            break
+        case "move-up":
+            line(ctx, midX, h * 0.72, midX, h * 0.3)
+            line(ctx, w * 0.3, h * 0.46, midX, h * 0.3)
+            line(ctx, w * 0.7, h * 0.46, midX, h * 0.3)
+            line(ctx, w * 0.24, h * 0.76, w * 0.76, h * 0.76)
+            break
+        case "move-down":
+            line(ctx, midX, h * 0.28, midX, h * 0.7)
+            line(ctx, w * 0.3, h * 0.54, midX, h * 0.7)
+            line(ctx, w * 0.7, h * 0.54, midX, h * 0.7)
+            line(ctx, w * 0.24, h * 0.24, w * 0.76, h * 0.24)
+            break
+        case "lock":
+            rect(ctx, w * 0.24, h * 0.44, w * 0.52, h * 0.36, false)
+            ctx.beginPath()
+            ctx.arc(midX, h * 0.44, w * 0.18, Math.PI, 0, false)
+            ctx.stroke()
+            line(ctx, midX, h * 0.58, midX, h * 0.68)
             break
         case "delete":
             line(ctx, w * 0.3, h * 0.28, w * 0.7, h * 0.28)
@@ -392,6 +418,34 @@ Canvas {
             line(ctx, w * 0.34, h * 0.2, w * 0.48, h * 0.2)
             line(ctx, w * 0.48, h * 0.2, w * 0.48, h * 0.34)
             break
+        case "undo":
+            ctx.beginPath()
+            ctx.arc(midX, midY, w * 0.25, Math.PI * 1.05, Math.PI * 0.12, false)
+            ctx.stroke()
+            line(ctx, w * 0.27, h * 0.32, w * 0.45, h * 0.26)
+            line(ctx, w * 0.27, h * 0.32, w * 0.34, h * 0.50)
+            break
+        case "redo":
+            ctx.beginPath()
+            ctx.arc(midX, midY, w * 0.25, Math.PI * 0.95, Math.PI * 1.88, true)
+            ctx.stroke()
+            line(ctx, w * 0.73, h * 0.32, w * 0.55, h * 0.26)
+            line(ctx, w * 0.73, h * 0.32, w * 0.66, h * 0.50)
+            break
+        case "fit":
+            rect(ctx, w * 0.16, h * 0.20, w * 0.68, h * 0.60, false)
+            rect(ctx, w * 0.30, h * 0.34, w * 0.40, h * 0.32, false)
+            break
+        case "fill":
+            rect(ctx, w * 0.20, h * 0.20, w * 0.60, h * 0.60, false)
+            rect(ctx, w * 0.32, h * 0.32, w * 0.36, h * 0.36, true)
+            break
+        case "zoom":
+            circle(ctx, w * 0.42, h * 0.42, w * 0.22, false)
+            line(ctx, w * 0.58, h * 0.58, w * 0.80, h * 0.80)
+            line(ctx, w * 0.34, h * 0.42, w * 0.50, h * 0.42)
+            line(ctx, w * 0.42, h * 0.34, w * 0.42, h * 0.50)
+            break
         case "crop":
             line(ctx, w * 0.22, h * 0.18, w * 0.22, h * 0.64)
             line(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.22)
@@ -436,6 +490,67 @@ Canvas {
         case "compare":
             rect(ctx, w * 0.16, h * 0.2, w * 0.3, h * 0.6, false)
             rect(ctx, w * 0.54, h * 0.2, w * 0.3, h * 0.6, false)
+            break
+        case "visible":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.14, midY)
+            ctx.quadraticCurveTo(midX, h * 0.22, w * 0.86, midY)
+            ctx.quadraticCurveTo(midX, h * 0.78, w * 0.14, midY)
+            ctx.stroke()
+            circle(ctx, midX, midY, w * 0.13, false)
+            circle(ctx, midX, midY, w * 0.035, true)
+            break
+        case "hidden":
+            ctx.beginPath()
+            ctx.moveTo(w * 0.14, midY)
+            ctx.quadraticCurveTo(midX, h * 0.24, w * 0.86, midY)
+            ctx.quadraticCurveTo(midX, h * 0.76, w * 0.14, midY)
+            ctx.stroke()
+            circle(ctx, midX, midY, w * 0.12, false)
+            line(ctx, w * 0.22, h * 0.82, w * 0.78, h * 0.18)
+            break
+        case "panel-left":
+            rect(ctx, w * 0.16, h * 0.20, w * 0.68, h * 0.60, false)
+            line(ctx, w * 0.40, h * 0.22, w * 0.40, h * 0.78)
+            line(ctx, w * 0.24, h * 0.34, w * 0.32, h * 0.34)
+            line(ctx, w * 0.24, midY, w * 0.32, midY)
+            line(ctx, w * 0.24, h * 0.66, w * 0.32, h * 0.66)
+            break
+        case "panel-right":
+            rect(ctx, w * 0.16, h * 0.20, w * 0.68, h * 0.60, false)
+            line(ctx, w * 0.60, h * 0.22, w * 0.60, h * 0.78)
+            line(ctx, w * 0.68, h * 0.34, w * 0.76, h * 0.34)
+            line(ctx, w * 0.68, midY, w * 0.76, midY)
+            line(ctx, w * 0.68, h * 0.66, w * 0.76, h * 0.66)
+            break
+        case "density":
+            line(ctx, w * 0.20, h * 0.30, w * 0.80, h * 0.30)
+            line(ctx, w * 0.20, midY, w * 0.68, midY)
+            line(ctx, w * 0.20, h * 0.70, w * 0.56, h * 0.70)
+            circle(ctx, w * 0.80, h * 0.30, w * 0.035, true)
+            circle(ctx, w * 0.68, midY, w * 0.035, true)
+            circle(ctx, w * 0.56, h * 0.70, w * 0.035, true)
+            break
+        case "fullscreen":
+            line(ctx, w * 0.20, h * 0.40, w * 0.20, h * 0.20)
+            line(ctx, w * 0.20, h * 0.20, w * 0.40, h * 0.20)
+            line(ctx, w * 0.60, h * 0.20, w * 0.80, h * 0.20)
+            line(ctx, w * 0.80, h * 0.20, w * 0.80, h * 0.40)
+            line(ctx, w * 0.80, h * 0.60, w * 0.80, h * 0.80)
+            line(ctx, w * 0.80, h * 0.80, w * 0.60, h * 0.80)
+            line(ctx, w * 0.40, h * 0.80, w * 0.20, h * 0.80)
+            line(ctx, w * 0.20, h * 0.80, w * 0.20, h * 0.60)
+            break
+        case "focus-frame":
+            line(ctx, w * 0.20, h * 0.36, w * 0.20, h * 0.20)
+            line(ctx, w * 0.20, h * 0.20, w * 0.36, h * 0.20)
+            line(ctx, w * 0.64, h * 0.20, w * 0.80, h * 0.20)
+            line(ctx, w * 0.80, h * 0.20, w * 0.80, h * 0.36)
+            line(ctx, w * 0.80, h * 0.64, w * 0.80, h * 0.80)
+            line(ctx, w * 0.80, h * 0.80, w * 0.64, h * 0.80)
+            line(ctx, w * 0.36, h * 0.80, w * 0.20, h * 0.80)
+            line(ctx, w * 0.20, h * 0.80, w * 0.20, h * 0.64)
+            circle(ctx, midX, midY, w * 0.10, false)
             break
         case "split-view":
             rect(ctx, w * 0.18, h * 0.22, w * 0.64, h * 0.56, false)

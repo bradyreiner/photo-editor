@@ -135,6 +135,10 @@ Relevant code:
 - `engine/src/pipeline/color_adjustments.cpp`
 - `engine/src/pipeline/metal/metal_pipeline_backend.mm`
 
+Detailed execution plan:
+
+- `docs/max-resolution-preview-rendering-plan.md`
+
 TODO:
 
 - [x] Unify duplicated decoded-image cache logic between `editor_preview_controller.cpp` and `photo_render_utils.cpp`.

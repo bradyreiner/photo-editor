@@ -69,6 +69,206 @@ bool should_render_photo_job(const QString& media_type, const QString& preset) {
   return is_photo_media(media_type) && !is_original_copy_preset(preset);
 }
 
+bool export_generated_mask_kind(const QString& kind) {
+  const auto normalized = kind.trimmed().toLower();
+  return normalized == QStringLiteral("subject") || normalized == QStringLiteral("sky") ||
+         normalized == QStringLiteral("background") || normalized == QStringLiteral("people") ||
+         normalized == QStringLiteral("object");
+}
+
+QString mask_display_name(const QVariantMap& mask) {
+  const auto name = mask.value(QStringLiteral("name")).toString().simplified();
+  if (!name.isEmpty()) {
+    return name;
+  }
+  const auto kind = mask.value(QStringLiteral("kind")).toString().simplified();
+  return kind.isEmpty() ? QStringLiteral("Selection") : kind;
+}
+
+bool generated_mask_missing_export_provenance(const QVariantMap& mask) {
+  const auto metadata = mask.value(QStringLiteral("generatedMaskMetadata")).toMap();
+  const QStringList required_keys = {
+      QStringLiteral("schemaVersion"),
+      QStringLiteral("sourceSchemaVersion"),
+      QStringLiteral("rasterSchemaVersion"),
+      QStringLiteral("generatedOutputSchemaVersion"),
+      QStringLiteral("kind"),
+      QStringLiteral("promptType"),
+      QStringLiteral("sourceWidth"),
+      QStringLiteral("sourceHeight"),
+      QStringLiteral("sourceResolution"),
+      QStringLiteral("cropX"),
+      QStringLiteral("cropY"),
+      QStringLiteral("cropW"),
+      QStringLiteral("cropH"),
+      QStringLiteral("cropZoom"),
+      QStringLiteral("cropPreset"),
+      QStringLiteral("transformRotation"),
+      QStringLiteral("runtime"),
+      QStringLiteral("modelName"),
+      QStringLiteral("modelVersion"),
+      QStringLiteral("dependencies"),
+  };
+  for (const auto& key : required_keys) {
+    if (!metadata.contains(key)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool generated_mask_export_geometry_stale(
+    const QVariantMap& mask,
+    const EditRecipeState& state,
+    const QSize& source_size) {
+  const auto metadata = mask.value(QStringLiteral("generatedMaskMetadata")).toMap();
+  if (source_size.isValid() &&
+      (metadata.value(QStringLiteral("sourceWidth")).toInt() != source_size.width() ||
+       metadata.value(QStringLiteral("sourceHeight")).toInt() != source_size.height())) {
+    return true;
+  }
+
+  const auto crop_width = state.crop_rect_width > 0.0 ? state.crop_rect_width : 1.0;
+  const auto crop_height = state.crop_rect_height > 0.0 ? state.crop_rect_height : 1.0;
+  const auto stale_double = [&](const QString& key, double current) {
+    return std::abs(metadata.value(key).toDouble() - current) > 1e-6;
+  };
+  return stale_double(QStringLiteral("cropX"), state.crop_rect_x) ||
+         stale_double(QStringLiteral("cropY"), state.crop_rect_y) ||
+         stale_double(QStringLiteral("cropW"), crop_width) ||
+         stale_double(QStringLiteral("cropH"), crop_height) ||
+         stale_double(QStringLiteral("cropZoom"), state.crop_zoom) ||
+         stale_double(QStringLiteral("transformRotation"), state.transform_rotation);
+}
+
+QStringList stale_generated_mask_names_for_export(
+    const EditRecipeState& state,
+    const QSize& source_size) {
+  QStringList names;
+  for (const auto& value : state.mask_stack) {
+    const auto mask = value.toMap();
+    if (!export_generated_mask_kind(mask.value(QStringLiteral("kind")).toString())) {
+      continue;
+    }
+    if (mask.value(QStringLiteral("generatedMaskStale"), false).toBool() ||
+        generated_mask_missing_export_provenance(mask) ||
+        generated_mask_export_geometry_stale(mask, state, source_size)) {
+      names.push_back(mask_display_name(mask));
+    }
+  }
+  names.removeDuplicates();
+  return names;
+}
+
+QStringList final_inpaint_required_names_for_export(const EditRecipeState& state) {
+  QStringList names;
+  for (const auto& value : state.mask_stack) {
+    const auto mask = value.toMap();
+    if (mask.value(QStringLiteral("inpaintFinalRequired"), false).toBool()) {
+      names.push_back(mask_display_name(mask));
+    }
+  }
+  names.removeDuplicates();
+  return names;
+}
+
+bool retouch_has_brush_points(const QVariantMap& mask) {
+  return !mask.value(QStringLiteral("brushPoints")).toList().isEmpty();
+}
+
+bool retouch_has_clone_source(const QVariantMap& mask) {
+  return mask.value(QStringLiteral("cloneSourceSet"), false).toBool() ||
+         !mask.value(QStringLiteral("cloneSources")).toList().isEmpty();
+}
+
+bool retouch_has_patch_source(const QVariantMap& mask) {
+  return mask.value(QStringLiteral("patchSourceSet"), false).toBool() &&
+         mask.value(QStringLiteral("patchSourceWidth")).toDouble() > 0.0 &&
+         mask.value(QStringLiteral("patchSourceHeight")).toDouble() > 0.0;
+}
+
+bool retouch_has_inpaint_artifact(const QVariantMap& mask) {
+  return !mask.value(QStringLiteral("inpaintPatchData")).toByteArray().isEmpty() &&
+         mask.value(QStringLiteral("inpaintPatchWidth")).toInt() > 0 &&
+         mask.value(QStringLiteral("inpaintPatchHeight")).toInt() > 0 &&
+         !mask.value(QStringLiteral("inpaintModelName")).toString().trimmed().isEmpty();
+}
+
+QStringList missing_retouch_provenance_names_for_export(const EditRecipeState& state) {
+  QStringList names;
+  for (const auto& value : state.mask_stack) {
+    const auto mask = value.toMap();
+    const auto mode = mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower();
+    if (mode.isEmpty()) {
+      continue;
+    }
+
+    auto missing = false;
+    if (mode == QStringLiteral("clone")) {
+      missing = !retouch_has_brush_points(mask) || !retouch_has_clone_source(mask);
+    } else if (mode == QStringLiteral("heal")) {
+      missing = !retouch_has_brush_points(mask);
+    } else if (mode == QStringLiteral("patch")) {
+      missing = !retouch_has_brush_points(mask) || !retouch_has_patch_source(mask);
+    } else if (mode == QStringLiteral("remove")) {
+      missing = !retouch_has_inpaint_artifact(mask);
+    }
+
+    if (missing) {
+      names.push_back(mask_display_name(mask));
+    }
+  }
+  names.removeDuplicates();
+  return names;
+}
+
+QStringList preview_export_parity_risk_groups(const EditRecipeState& state) {
+  QStringList groups;
+  if (state.crop_rect_width > 0.0 || state.crop_rect_height > 0.0 ||
+      std::abs(state.perspective_vertical) > 1e-6 ||
+      std::abs(state.perspective_horizontal) > 1e-6 ||
+      std::abs(state.transform_rotation) > 1e-6 ||
+      std::abs(state.lens_distortion) > 1e-6 ||
+      std::abs(state.lens_vignette) > 1e-6) {
+    groups.append(QStringLiteral("crop-transform-optics"));
+  }
+  if (state.linear_mask_enabled || state.radial_mask_enabled || !state.mask_stack.isEmpty()) {
+    groups.append(QStringLiteral("masks-local-adjustments"));
+  }
+  for (const auto& value : state.mask_stack) {
+    const auto mask = value.toMap();
+    if (!mask.value(QStringLiteral("retouchMode")).toString().trimmed().isEmpty() ||
+        mask.value(QStringLiteral("toolRole")).toString() == QStringLiteral("retouch")) {
+      groups.append(QStringLiteral("retouch-inpaint"));
+      break;
+    }
+  }
+  if (!state.layers.isEmpty()) {
+    groups.append(QStringLiteral("layers-luts"));
+  }
+  if (state.soft_proof_enabled ||
+      state.output_color_space.compare(QStringLiteral("sRGB"), Qt::CaseInsensitive) != 0 ||
+      std::abs(state.output_headroom - 1.0) > 1e-6) {
+    groups.append(QStringLiteral("output-profile-proofing"));
+  }
+  groups.removeDuplicates();
+  return groups;
+}
+
+int preview_export_parity_tolerance_for_preset(const QString& preset) {
+  const auto normalized = preset.trimmed();
+  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
+    return 18;
+  }
+  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
+    return 12;
+  }
+  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+    return 10;
+  }
+  return 1;
+}
+
 QVariantMap preflight_issue(const QString& severity, const QString& code, const QString& message) {
   QVariantMap issue;
   issue.insert(QStringLiteral("severity"), severity);
@@ -433,6 +633,48 @@ QVariantMap ExportJobController::exportPreflight(
   }
 
   const auto recipe_state = parse_edit_recipe_json(recipe_json);
+  const auto stale_generated_masks =
+      stale_generated_mask_names_for_export(recipe_state, source_size);
+  if (!stale_generated_masks.isEmpty()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("stale-generated-mask"),
+        QStringLiteral("%1 generated selection%2 need update before export: %3.")
+            .arg(stale_generated_masks.size())
+            .arg(stale_generated_masks.size() == 1 ? QString() : QStringLiteral("s"))
+            .arg(stale_generated_masks.join(QStringLiteral(", "))));
+  }
+  const auto final_inpaint_required =
+      final_inpaint_required_names_for_export(recipe_state);
+  if (!final_inpaint_required.isEmpty()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("final-inpaint-required"),
+        QStringLiteral("%1 retouch patch%2 still need final-resolution inpaint before export: %3.")
+            .arg(final_inpaint_required.size())
+            .arg(final_inpaint_required.size() == 1 ? QString() : QStringLiteral("es"))
+            .arg(final_inpaint_required.join(QStringLiteral(", "))));
+  }
+  const auto missing_retouch_provenance =
+      missing_retouch_provenance_names_for_export(recipe_state);
+  if (!missing_retouch_provenance.isEmpty()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("retouch-provenance-missing"),
+        QStringLiteral("%1 retouch edit%2 lack source or inpaint provenance before export: %3.")
+            .arg(missing_retouch_provenance.size())
+            .arg(missing_retouch_provenance.size() == 1 ? QString() : QStringLiteral("s"))
+            .arg(missing_retouch_provenance.join(QStringLiteral(", "))));
+  }
+  const auto parity_risk_groups =
+      render_photo ? preview_export_parity_risk_groups(recipe_state) : QStringList{};
+  if (!parity_risk_groups.isEmpty()) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("preview-export-parity-required"),
+        QStringLiteral("Preview/export parity proof is required for high-risk edit groups before final delivery: %1.")
+            .arg(parity_risk_groups.join(QStringLiteral(", "))));
+  }
   const auto estimated_size = estimated_export_size(source_size, recipe_state, normalized_preset);
   if (render_photo && estimated_size.isValid() &&
       (estimated_size.width() < 512 || estimated_size.height() < 512)) {
@@ -503,10 +745,24 @@ QVariantMap ExportJobController::exportPreflight(
   result.insert(QStringLiteral("preset"), normalized_preset);
   result.insert(QStringLiteral("format"), preset_format(normalized_preset));
   result.insert(QStringLiteral("outputColorSpace"), output_profile);
+  result.insert(QStringLiteral("outputHeadroom"), qBound(1.0, recipe_state.output_headroom, 16.0));
   result.insert(QStringLiteral("softProofEnabled"), recipe_state.soft_proof_enabled);
   result.insert(QStringLiteral("softProofProfile"), recipe_state.soft_proof_profile);
   result.insert(QStringLiteral("estimatedPixelWidth"), estimated_size.isValid() ? estimated_size.width() : 0);
   result.insert(QStringLiteral("estimatedPixelHeight"), estimated_size.isValid() ? estimated_size.height() : 0);
+  result.insert(
+      QStringLiteral("previewExportParity"),
+      QVariantMap{
+          {QStringLiteral("required"), !parity_risk_groups.isEmpty()},
+          {QStringLiteral("status"),
+           parity_risk_groups.isEmpty()
+               ? QStringLiteral("not-required")
+               : QStringLiteral("required-at-export")},
+          {QStringLiteral("highRiskGroups"), parity_risk_groups},
+          {QStringLiteral("proofStage"), QStringLiteral("export_preview_diff")},
+          {QStringLiteral("expectedTolerance"),
+           preview_export_parity_tolerance_for_preset(normalized_preset)},
+      });
   return result;
 }
 
@@ -583,6 +839,12 @@ QVariantMap ExportJobController::jobMap(const ExportJob& job) const {
   value.insert(
       QStringLiteral("previewExportDiff"),
       job.metadata_json.value(QStringLiteral("previewExportDiff")).toObject().toVariantMap());
+  value.insert(
+      QStringLiteral("exportRenderJob"),
+      job.metadata_json.value(QStringLiteral("exportRenderJob")).toObject().toVariantMap());
+  value.insert(
+      QStringLiteral("exportPreviewJob"),
+      job.metadata_json.value(QStringLiteral("exportPreviewJob")).toObject().toVariantMap());
   value.insert(QStringLiteral("destinationDirectory"), job.destination_directory);
   value.insert(QStringLiteral("outputPath"), job.output_path);
   value.insert(QStringLiteral("status"), job.status);

@@ -27,6 +27,9 @@ Item {
             id: histogramCanvas
             anchors.fill: parent
             anchors.margins: 2
+            onWidthChanged: requestPaint()
+            onHeightChanged: requestPaint()
+            onVisibleChanged: requestPaint()
 
             onPaint: {
                 var ctx = getContext("2d");

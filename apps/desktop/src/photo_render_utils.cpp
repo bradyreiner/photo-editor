@@ -13,13 +13,17 @@
 
 #include <QColor>
 #include <QColorSpace>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QGuiApplication>
 #include <QHash>
 #include <QImageReader>
 #include <QPainter>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 
 namespace photo_editor::desktop {
@@ -29,6 +33,10 @@ namespace {
 QImage normalize_preview_color_space(QImage image);
 QColorSpace preview_target_color_space() {
   return preview_color_space();
+}
+
+bool gui_application_available() {
+  return qobject_cast<QGuiApplication*>(QCoreApplication::instance()) != nullptr;
 }
 
 QColorSpace output_color_space_for_name(const QString& name) {
@@ -48,14 +56,78 @@ bool render_state_requires_cpu_pipeline(const RenderEditState& state) {
   return std::abs(state.texture) > 1e-6 || std::abs(state.clarity) > 1e-6 ||
          std::abs(state.dehaze) > 1e-6 || std::abs(state.hdr_local_tone_mapping) > 1e-6 ||
          std::abs(state.sharpening) > 1e-6 ||
-         std::abs(state.sharpen_masking) > 1e-6 || std::abs(state.luminance_nr) > 1e-6 ||
-         std::abs(state.color_nr) > 1e-6 || std::abs(state.lens_distortion) > 1e-6 ||
+        std::abs(state.sharpen_masking) > 1e-6 || std::abs(state.luminance_nr) > 1e-6 ||
+        std::abs(state.color_nr) > 1e-6 || std::abs(state.lens_distortion) > 1e-6 ||
          std::abs(state.lens_vignette) > 1e-6 || std::abs(state.chromatic_aberration) > 1e-6 ||
          std::abs(state.perspective_vertical) > 1e-6 || std::abs(state.perspective_horizontal) > 1e-6 ||
          !state.layers.isEmpty() ||
          std::abs(state.transform_rotation) > 1e-6 || std::abs(state.transform_scale - 1.0) > 1e-6 ||
          std::abs(state.transform_skew_x) > 1e-6 || std::abs(state.transform_skew_y) > 1e-6 ||
          std::abs(state.liquify_strength) > 1e-6;
+}
+
+bool render_state_requires_exact_global_tone(const RenderEditState& state) {
+  return std::abs(state.exposure) > 1e-6 || std::abs(state.contrast) > 1e-6 ||
+         std::abs(state.highlights) > 1e-6 || std::abs(state.shadows) > 1e-6 ||
+         std::abs(state.whites) > 1e-6 || std::abs(state.blacks) > 1e-6 ||
+         std::abs(state.brightness) > 1e-6 || std::abs(state.filmic_shoulder) > 1e-6 ||
+         std::abs(state.filmic_toe) > 1e-6 || std::abs(state.adaptive_contrast) > 1e-6 ||
+         std::abs(state.levels_black_point) > 1e-6 || std::abs(state.levels_gamma) > 1e-6 ||
+         std::abs(state.levels_white_point) > 1e-6 ||
+         std::abs(state.zone_deep_shadows) > 1e-6 || std::abs(state.zone_shadows) > 1e-6 ||
+         std::abs(state.zone_midtones) > 1e-6 || std::abs(state.zone_lights) > 1e-6 ||
+         std::abs(state.zone_highlights) > 1e-6 || std::abs(state.curve_shadows) > 1e-6 ||
+         std::abs(state.curve_darks) > 1e-6 || std::abs(state.curve_lights) > 1e-6 ||
+         std::abs(state.curve_highlights) > 1e-6 || !state.master_curve_points.isEmpty() ||
+         !state.luma_curve_points.isEmpty();
+}
+
+bool render_state_requires_exact_post_color(const RenderEditState& state) {
+  const auto has_mixer_channel_adjustments = std::any_of(
+      state.mixer_channels.cbegin(),
+      state.mixer_channels.cend(),
+      [](const auto& channel) {
+        return std::abs(channel.hue) > 1e-6 || std::abs(channel.saturation) > 1e-6 ||
+               std::abs(channel.luminance) > 1e-6 ||
+               std::abs(channel.selective_cyan) > 1e-6 ||
+               std::abs(channel.selective_magenta) > 1e-6 ||
+               std::abs(channel.selective_yellow) > 1e-6 ||
+               std::abs(channel.selective_black) > 1e-6;
+      });
+  const auto& rgb_mixer = state.rgb_channel_mixer;
+  const auto has_rgb_mixer_adjustments =
+      std::abs(rgb_mixer.red_from_red - 100.0) > 1e-6 ||
+      std::abs(rgb_mixer.red_from_green) > 1e-6 ||
+      std::abs(rgb_mixer.red_from_blue) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_red) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_green - 100.0) > 1e-6 ||
+      std::abs(rgb_mixer.green_from_blue) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_red) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_green) > 1e-6 ||
+      std::abs(rgb_mixer.blue_from_blue - 100.0) > 1e-6;
+  const auto has_black_and_white_mixer_adjustments = std::any_of(
+      state.black_and_white_mixer.cbegin(),
+      state.black_and_white_mixer.cend(),
+      [](double value) { return std::abs(value) > 1e-6; });
+  return std::abs(state.saturation) > 1e-6 || std::abs(state.vibrance) > 1e-6 ||
+         std::abs(state.hue_adjustment) > 1e-6 ||
+         std::abs(state.saturation_adjustment) > 1e-6 ||
+         std::abs(state.luminance_adjustment) > 1e-6 ||
+         has_mixer_channel_adjustments || has_rgb_mixer_adjustments ||
+         state.black_and_white_enabled || has_black_and_white_mixer_adjustments ||
+         (state.color_replacement_enabled &&
+          std::abs(state.color_replacement_strength) > 1e-6) ||
+         (state.skin_tone_protection_enabled &&
+          std::abs(state.skin_tone_protection_strength) > 1e-6) ||
+         (state.color_harmony_enabled && std::abs(state.color_harmony_strength) > 1e-6) ||
+         std::abs(state.grading_shadows_saturation) > 1e-6 ||
+          std::abs(state.grading_midtones_saturation) > 1e-6 ||
+          std::abs(state.grading_highlights_saturation) > 1e-6 ||
+          std::abs(state.grading_shadows_luminance) > 1e-6 ||
+          std::abs(state.grading_midtones_luminance) > 1e-6 ||
+          std::abs(state.grading_highlights_luminance) > 1e-6 ||
+          std::abs(state.grading_amount - 100.0) > 1e-6 ||
+          std::abs(state.grading_balance) > 1e-6;
 }
 
 QString gpu_fallback_reason(
@@ -78,6 +150,12 @@ QString gpu_fallback_reason(
   }
   if (has_extended_range_pixels(pixels)) {
     return QStringLiteral("extended_range_pixels");
+  }
+  if (render_state_requires_exact_global_tone(state)) {
+    return QStringLiteral("exact_global_tone");
+  }
+  if (render_state_requires_exact_post_color(state)) {
+    return QStringLiteral("exact_post_color");
   }
   if (render_state_requires_cpu_pipeline(state)) {
     return QStringLiteral("cpu_required_stages");
@@ -167,12 +245,85 @@ double clamp_unit(double value) {
   return qBound(0.0, value, 1.0);
 }
 
+double smoothstep(double edge0, double edge1, double x) {
+  if (edge0 >= edge1) {
+    return x < edge0 ? 0.0 : 1.0;
+  }
+  const auto t = clamp_unit((x - edge0) / (edge1 - edge0));
+  return t * t * (3.0 - 2.0 * t);
+}
+
 double map_double_value(const QVariantMap& map, const QString& key, double fallback) {
   return map.contains(key) ? map.value(key).toDouble() : fallback;
 }
 
 bool map_bool_value(const QVariantMap& map, const QString& key, bool fallback) {
   return map.contains(key) ? map.value(key).toBool() : fallback;
+}
+
+enum class MaskRasterPolicy {
+  UseStoredRaster,
+  RebuildEditableAtOutputResolution,
+};
+
+double brush_point_weight_for_mask(
+    double normalized_x,
+    double normalized_y,
+    const photo_editor::pipeline::LocalMask& mask,
+    const photo_editor::pipeline::BrushPoint& point) {
+  const auto brush_size = std::max(0.01, point.size);
+  const auto dx = normalized_x - point.x;
+  const auto dy = normalized_y - point.y;
+  const auto distance = std::sqrt(dx * dx + dy * dy) / brush_size;
+  const auto inner_scale = std::clamp(mask.brush_hardness, 0.0, 0.98);
+  return clamp_unit(point.flow) * clamp_unit(point.opacity) *
+         (1.0 - smoothstep(inner_scale, 1.0, distance));
+}
+
+void rebuild_brush_segmentation_at_output_resolution(
+    photo_editor::pipeline::LocalMask* mask,
+    int width,
+    int height) {
+  if (mask == nullptr || width <= 0 || height <= 0 || mask->brush_points.empty()) {
+    return;
+  }
+
+  std::vector<unsigned char> rebuilt(static_cast<std::size_t>(width) * static_cast<std::size_t>(height), 0);
+  for (const auto& point : mask->brush_points) {
+    const auto radius_x =
+        std::max(1, static_cast<int>(std::ceil(std::max(0.01, point.size) * static_cast<double>(std::max(1, width - 1)))));
+    const auto radius_y =
+        std::max(1, static_cast<int>(std::ceil(std::max(0.01, point.size) * static_cast<double>(std::max(1, height - 1)))));
+    const auto center_x = clamp_unit(point.x) * static_cast<double>(std::max(1, width - 1));
+    const auto center_y = clamp_unit(point.y) * static_cast<double>(std::max(1, height - 1));
+    const auto min_x = std::max(0, static_cast<int>(std::floor(center_x)) - radius_x);
+    const auto max_x = std::min(width - 1, static_cast<int>(std::ceil(center_x)) + radius_x);
+    const auto min_y = std::max(0, static_cast<int>(std::floor(center_y)) - radius_y);
+    const auto max_y = std::min(height - 1, static_cast<int>(std::ceil(center_y)) + radius_y);
+    for (int y = min_y; y <= max_y; ++y) {
+      const auto normalized_y = height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
+      for (int x = min_x; x <= max_x; ++x) {
+        const auto normalized_x = width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
+        const auto point_weight = brush_point_weight_for_mask(normalized_x, normalized_y, *mask, point);
+        if (point_weight <= 1e-6) {
+          continue;
+        }
+        auto weight = static_cast<double>(rebuilt[static_cast<std::size_t>(y * width + x)]) / 255.0;
+        if (point.erase) {
+          weight *= (1.0 - point_weight);
+        } else {
+          weight = mask->brush_buildup ? 1.0 - (1.0 - weight) * (1.0 - point_weight)
+                                       : std::max(weight, point_weight);
+        }
+        rebuilt[static_cast<std::size_t>(y * width + x)] =
+            static_cast<unsigned char>(std::lround(clamp_unit(weight) * 255.0));
+      }
+    }
+  }
+
+  mask->segmentation_mask = std::move(rebuilt);
+  mask->segmentation_width = width;
+  mask->segmentation_height = height;
 }
 
 QString pipeline_mask_tool_role(const QVariantMap& mask) {
@@ -244,7 +395,12 @@ void populate_inpaint_patch(
     return;
   }
   if (!patch_image.colorSpace().isValid()) {
-    patch_image.setColorSpace(preview_target_color_space());
+    auto patch_color_space = output_color_space_for_name(
+        mask.value(QStringLiteral("inpaintPatchColorSpace"), QStringLiteral("sRGB")).toString());
+    if (!patch_color_space.isValid()) {
+      patch_color_space = preview_target_color_space();
+    }
+    patch_image.setColorSpace(patch_color_space);
   }
 
   const auto working_patch = working_image_from_qimage(patch_image);
@@ -259,9 +415,18 @@ void populate_inpaint_patch(
   local_mask->inpaint_patch_height = working_patch.height;
   local_mask->inpaint_model_name =
       mask.value(QStringLiteral("inpaintModelName")).toString().toStdString();
+  local_mask->inpaint_blend_amount =
+      qBound(0.0, mask.value(QStringLiteral("inpaintBlendAmount"), 1.0).toDouble(), 1.0);
+  local_mask->inpaint_seam_feather =
+      qBound(0.0, mask.value(QStringLiteral("inpaintSeamFeather"), 4.0).toDouble(), 24.0);
+  local_mask->inpaint_color_match =
+      qBound(0.0, mask.value(QStringLiteral("inpaintColorMatch"), 0.75).toDouble(), 1.0);
 }
 
-photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
+photo_editor::pipeline::LocalMask pipeline_local_mask(
+    const QVariantMap& mask,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size) {
   photo_editor::pipeline::LocalMask local_mask;
   local_mask.id = mask.value(QStringLiteral("id")).toString().toStdString();
   local_mask.parent_id = mask.value(QStringLiteral("parentId")).toString().toStdString();
@@ -273,6 +438,7 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   local_mask.blend_mode =
       normalized_mask_blend_mode(mask.value(QStringLiteral("blendMode")).toString()).toStdString();
   local_mask.retouch_mode = mask.value(QStringLiteral("retouchMode")).toString().trimmed().toLower().toStdString();
+  local_mask.retouch_order = std::max(0, mask.value(QStringLiteral("retouchOrder")).toInt());
   local_mask.enabled = mask.contains(QStringLiteral("enabled"))
                            ? mask.value(QStringLiteral("enabled")).toBool()
                            : true;
@@ -298,6 +464,10 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   local_mask.colorize_hue = map_double_value(mask, QStringLiteral("colorizeHue"), 0.0);
   local_mask.colorize_strength = map_double_value(mask, QStringLiteral("colorizeStrength"), 0.0);
   local_mask.remove_strength = map_double_value(mask, QStringLiteral("removeStrength"), 0.0);
+  local_mask.heal_texture_blend =
+      std::clamp(map_double_value(mask, QStringLiteral("healTextureBlend"), 0.68), 0.0, 1.0);
+  local_mask.heal_color_blend =
+      std::clamp(map_double_value(mask, QStringLiteral("healColorBlend"), 0.46), 0.0, 1.0);
   local_mask.selection_invert = map_bool_value(mask, QStringLiteral("selectionInvert"), local_mask.invert);
   local_mask.selection_expand = map_double_value(mask, QStringLiteral("selectionExpand"), 0.0);
   local_mask.selection_smooth = map_double_value(mask, QStringLiteral("selectionSmooth"), 0.0);
@@ -306,6 +476,15 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
       map_double_value(mask, QStringLiteral("selectionEdgeContrast"), 0.0);
   local_mask.selection_decontaminate =
       map_double_value(mask, QStringLiteral("selectionDecontaminate"), 0.0);
+  local_mask.selection_grow = map_double_value(mask, QStringLiteral("selectionGrow"), 0.0);
+  local_mask.selection_shrink = map_double_value(mask, QStringLiteral("selectionShrink"), 0.0);
+  local_mask.selection_feather = map_double_value(mask, QStringLiteral("selectionFeather"), 0.0);
+  local_mask.selection_blur = map_double_value(mask, QStringLiteral("selectionBlur"), 0.0);
+  local_mask.selection_harden = map_double_value(mask, QStringLiteral("selectionHarden"), 0.0);
+  local_mask.selection_despeckle = map_double_value(mask, QStringLiteral("selectionDespeckle"), 0.0);
+  local_mask.selection_fill_holes = map_double_value(mask, QStringLiteral("selectionFillHoles"), 0.0);
+  local_mask.selection_remove_islands =
+      map_double_value(mask, QStringLiteral("selectionRemoveIslands"), 0.0);
   local_mask.refine_luminance_min = map_double_value(mask, QStringLiteral("refineLuminanceMin"), 0.0);
   local_mask.refine_luminance_max = map_double_value(mask, QStringLiteral("refineLuminanceMax"), 1.0);
   local_mask.refine_hue_center = map_double_value(mask, QStringLiteral("refineHueCenter"), 0.0);
@@ -318,14 +497,21 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
       map_double_value(mask, QStringLiteral("refineEdgeConfidenceMin"), 0.0);
   local_mask.refine_range_feather = map_double_value(mask, QStringLiteral("refineRangeFeather"), 0.05);
   local_mask.feather = map_double_value(
-      mask, QStringLiteral("feather"), local_mask.kind == "radial" ? 0.25 : 0.22);
+      mask,
+      QStringLiteral("feather"),
+      local_mask.kind == "radial" ? 0.25
+      : local_mask.kind == "ellipse" || local_mask.kind == "rectangle" ? 0.08
+      : 0.22);
   local_mask.rotation = map_double_value(mask, QStringLiteral("rotation"), 0.0);
 
-  if (local_mask.kind == "radial") {
+  if (local_mask.kind == "radial" || local_mask.kind == "ellipse" ||
+      local_mask.kind == "rectangle") {
     local_mask.center_x = map_double_value(mask, QStringLiteral("centerX"), 0.5);
     local_mask.center_y = map_double_value(mask, QStringLiteral("centerY"), 0.5);
-    local_mask.radius_x = map_double_value(mask, QStringLiteral("radiusX"), 0.25);
-    local_mask.radius_y = map_double_value(mask, QStringLiteral("radiusY"), 0.25);
+    local_mask.radius_x = map_double_value(
+        mask, QStringLiteral("radiusX"), local_mask.kind == "rectangle" ? 0.30 : 0.25);
+    local_mask.radius_y = map_double_value(
+        mask, QStringLiteral("radiusY"), local_mask.kind == "rectangle" ? 0.20 : 0.25);
   } else if (local_mask.kind == "linear") {
     local_mask.position = map_double_value(mask, QStringLiteral("position"), 0.5);
   } else if (local_mask.kind == "brush") {
@@ -341,6 +527,7 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
     local_mask.clone_offset_y = map_double_value(mask, QStringLiteral("cloneOffsetY"), 0.0);
     local_mask.clone_scale = map_double_value(mask, QStringLiteral("cloneScale"), 1.0);
     local_mask.clone_rotation = map_double_value(mask, QStringLiteral("cloneRotation"), 0.0);
+    local_mask.clone_aligned = map_bool_value(mask, QStringLiteral("cloneAligned"), true);
     const auto points = mask.value(QStringLiteral("brushPoints")).toList();
     local_mask.brush_points.reserve(static_cast<std::size_t>(points.size()));
     for (const auto& point_value : points) {
@@ -350,6 +537,15 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
           .y = map_double_value(point, QStringLiteral("y"), 0.5),
           .size = map_double_value(point, QStringLiteral("size"), local_mask.brush_size),
           .flow = map_double_value(point, QStringLiteral("flow"), local_mask.brush_flow),
+          .opacity = map_double_value(point, QStringLiteral("opacity"), 1.0),
+          .auto_mask_anchor_x = map_double_value(
+              point,
+              QStringLiteral("autoMaskAnchorX"),
+              map_double_value(point, QStringLiteral("x"), 0.5)),
+          .auto_mask_anchor_y = map_double_value(
+              point,
+              QStringLiteral("autoMaskAnchorY"),
+              map_double_value(point, QStringLiteral("y"), 0.5)),
           .pressure = map_double_value(point, QStringLiteral("pressure"), 1.0),
           .tilt_x = map_double_value(point, QStringLiteral("tiltX"), 0.0),
           .tilt_y = map_double_value(point, QStringLiteral("tiltY"), 0.0),
@@ -359,7 +555,10 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
     const auto seg_data = mask.value(QStringLiteral("segmentationData")).toByteArray();
     const auto seg_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
     const auto seg_height = mask.value(QStringLiteral("segmentationHeight")).toInt();
-    if (valid_segmentation_payload(seg_data, seg_width, seg_height)) {
+    if (raster_policy == MaskRasterPolicy::RebuildEditableAtOutputResolution &&
+        !local_mask.brush_points.empty() && output_size.isValid()) {
+      rebuild_brush_segmentation_at_output_resolution(&local_mask, output_size.width(), output_size.height());
+    } else if (valid_segmentation_payload(seg_data, seg_width, seg_height)) {
       local_mask.segmentation_mask.resize(static_cast<std::size_t>(seg_data.size()));
       std::memcpy(local_mask.segmentation_mask.data(),
                   seg_data.constData(),
@@ -421,7 +620,10 @@ photo_editor::pipeline::LocalMask pipeline_local_mask(const QVariantMap& mask) {
   return local_mask;
 }
 
-std::vector<photo_editor::pipeline::LocalMaskSet> pipeline_local_mask_sets(const QVariantList& masks) {
+std::vector<photo_editor::pipeline::LocalMaskSet> pipeline_local_mask_sets(
+    const QVariantList& masks,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size) {
   std::vector<photo_editor::pipeline::LocalMaskSet> mask_sets;
   QHash<QString, int> indices_by_id;
   auto selection_solo_active = false;
@@ -446,7 +648,7 @@ std::vector<photo_editor::pipeline::LocalMaskSet> pipeline_local_mask_sets(const
       continue;
     }
 
-    auto source = pipeline_local_mask(mask);
+    auto source = pipeline_local_mask(mask, raster_policy, output_size);
     source.exposure = 0.0;
     source.contrast = 0.0;
     source.highlights = 0.0;
@@ -496,7 +698,10 @@ std::vector<photo_editor::pipeline::LocalMaskSet> pipeline_local_mask_sets(const
   return mask_sets;
 }
 
-std::vector<photo_editor::pipeline::LocalMask> pipeline_retouch_masks(const QVariantList& masks) {
+std::vector<photo_editor::pipeline::LocalMask> pipeline_retouch_masks(
+    const QVariantList& masks,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size) {
   std::vector<photo_editor::pipeline::LocalMask> retouch_masks;
   retouch_masks.reserve(static_cast<std::size_t>(masks.size()));
   auto retouch_solo_active = false;
@@ -520,8 +725,14 @@ std::vector<photo_editor::pipeline::LocalMask> pipeline_retouch_masks(const QVar
         (retouch_solo_active && !mask.value(QStringLiteral("solo")).toBool())) {
       continue;
     }
-    retouch_masks.push_back(pipeline_local_mask(mask));
+    retouch_masks.push_back(pipeline_local_mask(mask, raster_policy, output_size));
   }
+  std::stable_sort(
+      retouch_masks.begin(),
+      retouch_masks.end(),
+      [](const auto& left, const auto& right) {
+        return left.retouch_order < right.retouch_order;
+      });
   return retouch_masks;
 }
 
@@ -531,6 +742,216 @@ double layer_adjustment_value(const QVariantMap& layer, const QString& key) {
     return adjustments.value(key).toDouble();
   }
   return layer.value(key).toDouble();
+}
+
+QVariantList layer_adjustment_curve_points(const QVariantMap& layer, const QString& key) {
+  const auto adjustments = layer.value(QStringLiteral("adjustments")).toMap();
+  if (adjustments.contains(key)) {
+    return adjustments.value(key).toList();
+  }
+  return layer.value(key).toList();
+}
+
+QVariantMap layer_adjustment_object(const QVariantMap& layer, const QString& key) {
+  const auto adjustments = layer.value(QStringLiteral("adjustments")).toMap();
+  const auto value = adjustments.contains(key) ? adjustments.value(key) : layer.value(key);
+  return value.toMap();
+}
+
+double layer_object_double(const QVariantMap& object, const QString& key, double fallback = 0.0) {
+  return object.contains(key) ? object.value(key).toDouble() : fallback;
+}
+
+bool layer_object_bool(const QVariantMap& object, const QString& key, bool fallback = false) {
+  return object.contains(key) ? object.value(key).toBool() : fallback;
+}
+
+QString layer_object_string(const QVariantMap& object, const QString& key, const QString& fallback) {
+  return object.contains(key) ? object.value(key).toString() : fallback;
+}
+
+std::array<double, 3> layer_lut_domain_array(
+    const QVariant& value,
+    const std::array<double, 3>& fallback) {
+  auto domain = fallback;
+  const auto list = value.toList();
+  if (list.size() >= 3) {
+    for (int index = 0; index < 3; ++index) {
+      domain[static_cast<std::size_t>(index)] = list.at(index).toDouble();
+    }
+  }
+  return domain;
+}
+
+std::vector<photo_editor::pipeline::ColorPixel> layer_lut_table(const QVariant& value) {
+  std::vector<photo_editor::pipeline::ColorPixel> table;
+  const auto list = value.toList();
+  table.reserve(static_cast<std::size_t>(list.size()));
+  for (const auto& entry : list) {
+    const auto object = entry.toMap();
+    if (object.isEmpty()) {
+      const auto row = entry.toList();
+      if (row.size() >= 3) {
+        table.push_back(photo_editor::pipeline::ColorPixel{
+            .red = static_cast<float>(qBound(0.0, row.at(0).toDouble(), 1.0)),
+            .green = static_cast<float>(qBound(0.0, row.at(1).toDouble(), 1.0)),
+            .blue = static_cast<float>(qBound(0.0, row.at(2).toDouble(), 1.0)),
+            .alpha = static_cast<float>(qBound(0.0, row.value(3, 1.0).toDouble(), 1.0)),
+        });
+      }
+      continue;
+    }
+    table.push_back(photo_editor::pipeline::ColorPixel{
+        .red = static_cast<float>(qBound(0.0, object.value(QStringLiteral("red")).toDouble(), 1.0)),
+        .green = static_cast<float>(qBound(0.0, object.value(QStringLiteral("green")).toDouble(), 1.0)),
+        .blue = static_cast<float>(qBound(0.0, object.value(QStringLiteral("blue")).toDouble(), 1.0)),
+        .alpha = static_cast<float>(qBound(0.0, object.value(QStringLiteral("alpha"), 1.0).toDouble(), 1.0)),
+    });
+  }
+  return table;
+}
+
+photo_editor::pipeline::LutAdjustment layer_lut_adjustment_from_object(const QVariantMap& object) {
+  return photo_editor::pipeline::LutAdjustment{
+      .enabled = layer_object_bool(object, QStringLiteral("enabled"), true),
+      .strength = qBound(0.0, layer_object_double(object, QStringLiteral("strength"), 100.0), 100.0),
+      .name = object.value(QStringLiteral("name")).toString().toStdString(),
+      .table = layer_lut_table(object.value(QStringLiteral("table"))),
+      .size = qBound(0, object.value(QStringLiteral("size")).toInt(), 256),
+      .domain_min = layer_lut_domain_array(
+          object.value(QStringLiteral("domainMin")),
+          std::array<double, 3>{0.0, 0.0, 0.0}),
+      .domain_max = layer_lut_domain_array(
+          object.value(QStringLiteral("domainMax")),
+          std::array<double, 3>{1.0, 1.0, 1.0}),
+      .input_color_space = object.value(QStringLiteral("inputColorSpace"), QStringLiteral("sRGB"))
+                               .toString()
+                               .toStdString(),
+      .output_color_space = object.value(QStringLiteral("outputColorSpace"), QStringLiteral("sRGB"))
+                                .toString()
+                                .toStdString(),
+  };
+}
+
+std::vector<photo_editor::pipeline::LutAdjustment> layer_lut_stack(const QVariantMap& layer) {
+  const auto adjustments = layer.value(QStringLiteral("adjustments")).toMap();
+  const auto lut_object = adjustments.contains(QStringLiteral("lut"))
+                              ? adjustments.value(QStringLiteral("lut")).toMap()
+                              : layer.value(QStringLiteral("lut")).toMap();
+  const auto stack_value = adjustments.contains(QStringLiteral("lutStack"))
+                               ? adjustments.value(QStringLiteral("lutStack"))
+                               : layer.value(QStringLiteral("lutStack"));
+  std::vector<photo_editor::pipeline::LutAdjustment> stack;
+  for (const auto& value : stack_value.toList()) {
+    const auto object = value.toMap();
+    if (!object.isEmpty()) {
+      stack.push_back(layer_lut_adjustment_from_object(object));
+    }
+  }
+  if (!lut_object.isEmpty()) {
+    stack.insert(stack.begin(), layer_lut_adjustment_from_object(lut_object));
+  }
+  return stack;
+}
+
+QString layer_nested_adjustment_string(
+    const QVariantMap& layer,
+    const QString& object_key,
+    const QString& key,
+    const QString& flat_key,
+    const QString& fallback) {
+  const auto object = layer_adjustment_object(layer, object_key);
+  if (object.contains(key)) {
+    return object.value(key).toString();
+  }
+  const auto adjustments = layer.value(QStringLiteral("adjustments")).toMap();
+  if (adjustments.contains(flat_key)) {
+    return adjustments.value(flat_key).toString();
+  }
+  return layer.value(flat_key, fallback).toString();
+}
+
+double layer_nested_adjustment_value(
+    const QVariantMap& layer,
+    const QString& object_key,
+    const QString& key,
+    const QString& flat_key,
+    double fallback = 0.0) {
+  const auto object = layer_adjustment_object(layer, object_key);
+  if (object.contains(key)) {
+    return object.value(key).toDouble();
+  }
+  const auto adjustments = layer.value(QStringLiteral("adjustments")).toMap();
+  if (adjustments.contains(flat_key)) {
+    return adjustments.value(flat_key).toDouble();
+  }
+  return layer.value(flat_key, fallback).toDouble();
+}
+
+std::array<photo_editor::pipeline::ColorMixerChannelAdjustment,
+           photo_editor::pipeline::kColorMixerChannelCount>
+layer_color_mixer_channels(const QVariantMap& layer) {
+  std::array<photo_editor::pipeline::ColorMixerChannelAdjustment,
+             photo_editor::pipeline::kColorMixerChannelCount> channels{};
+  const auto color_mixer = layer_adjustment_object(layer, QStringLiteral("colorMixer"));
+  const auto mixer_channels = color_mixer.value(QStringLiteral("channels")).toMap();
+  for (std::size_t index = 0; index < channels.size(); ++index) {
+    const auto name = QString::fromUtf8(
+        photo_editor::pipeline::kColorMixerChannelNames[index]);
+    const auto channel = mixer_channels.value(name).toMap();
+    if (channel.isEmpty()) {
+      continue;
+    }
+    channels[index].hue = channel.value(QStringLiteral("hue")).toDouble();
+    channels[index].saturation = channel.value(QStringLiteral("saturation")).toDouble();
+    channels[index].luminance = channel.value(QStringLiteral("luminance")).toDouble();
+    channels[index].selective_cyan = channel.value(QStringLiteral("selectiveCyan")).toDouble();
+    channels[index].selective_magenta = channel.value(QStringLiteral("selectiveMagenta")).toDouble();
+    channels[index].selective_yellow = channel.value(QStringLiteral("selectiveYellow")).toDouble();
+    channels[index].selective_black = channel.value(QStringLiteral("selectiveBlack")).toDouble();
+  }
+  return channels;
+}
+
+photo_editor::pipeline::RgbChannelMixerAdjustment layer_rgb_channel_mixer(const QVariantMap& layer) {
+  photo_editor::pipeline::RgbChannelMixerAdjustment mixer;
+  const auto color_mixer = layer_adjustment_object(layer, QStringLiteral("colorMixer"));
+  const auto object = color_mixer.value(QStringLiteral("rgbChannelMixer")).toMap();
+  if (object.isEmpty()) {
+    return mixer;
+  }
+  mixer.red_from_red = layer_object_double(object, QStringLiteral("redFromRed"), 100.0);
+  mixer.red_from_green = object.value(QStringLiteral("redFromGreen")).toDouble();
+  mixer.red_from_blue = object.value(QStringLiteral("redFromBlue")).toDouble();
+  mixer.green_from_red = object.value(QStringLiteral("greenFromRed")).toDouble();
+  mixer.green_from_green = layer_object_double(object, QStringLiteral("greenFromGreen"), 100.0);
+  mixer.green_from_blue = object.value(QStringLiteral("greenFromBlue")).toDouble();
+  mixer.blue_from_red = object.value(QStringLiteral("blueFromRed")).toDouble();
+  mixer.blue_from_green = object.value(QStringLiteral("blueFromGreen")).toDouble();
+  mixer.blue_from_blue = layer_object_double(object, QStringLiteral("blueFromBlue"), 100.0);
+  return mixer;
+}
+
+std::array<double, photo_editor::pipeline::kColorMixerChannelCount> layer_black_and_white_mixer(
+    const QVariantMap& layer) {
+  std::array<double, photo_editor::pipeline::kColorMixerChannelCount> mixer{};
+  const auto color_mixer = layer_adjustment_object(layer, QStringLiteral("colorMixer"));
+  const auto black_and_white = color_mixer.value(QStringLiteral("blackAndWhite")).toMap();
+  const auto channels = black_and_white.value(QStringLiteral("channels")).toMap();
+  for (std::size_t index = 0; index < mixer.size(); ++index) {
+    const auto name = QString::fromUtf8(
+        photo_editor::pipeline::kColorMixerChannelNames[index]);
+    mixer[index] = channels.value(name).toDouble();
+  }
+  return mixer;
+}
+
+QVariantMap layer_color_mixer_child(const QVariantMap& layer, const QString& key) {
+  return layer_adjustment_object(layer, QStringLiteral("colorMixer")).value(key).toMap();
+}
+
+QVariantMap layer_color_grading_child(const QVariantMap& layer, const QString& key) {
+  return layer_adjustment_object(layer, QStringLiteral("colorGrading")).value(key).toMap();
 }
 
 photo_editor::pipeline::ColorPixel layer_fill_color(const QVariantMap& layer) {
@@ -546,6 +967,17 @@ photo_editor::pipeline::ColorPixel layer_fill_color(const QVariantMap& layer) {
   };
 }
 
+Qt::Alignment text_alignment_flag(const QVariantMap& layer) {
+  const auto alignment = layer.value(QStringLiteral("textAlignment")).toString().trimmed().toLower();
+  if (alignment == QStringLiteral("center")) {
+    return Qt::AlignHCenter;
+  }
+  if (alignment == QStringLiteral("right")) {
+    return Qt::AlignRight;
+  }
+  return Qt::AlignLeft;
+}
+
 QImage rasterized_text_layer_image(const QVariantMap& layer) {
   const auto text = layer.value(QStringLiteral("text"), QStringLiteral("Text")).toString();
   const auto width = qBound(16, layer.value(QStringLiteral("pixelWidth"), 512).toInt(), 8192);
@@ -557,6 +989,9 @@ QImage rasterized_text_layer_image(const QVariantMap& layer) {
 
   QImage image(width, height, QImage::Format_RGBA8888);
   image.fill(Qt::transparent);
+  if (!gui_application_available()) {
+    return image;
+  }
   QPainter painter(&image);
   painter.setRenderHint(QPainter::Antialiasing, true);
   painter.setRenderHint(QPainter::TextAntialiasing, true);
@@ -566,7 +1001,13 @@ QImage rasterized_text_layer_image(const QVariantMap& layer) {
                QStringLiteral("bold"));
   painter.setFont(font);
   painter.setPen(color);
-  painter.drawText(image.rect().adjusted(8, 4, -8, -4), Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap, text);
+  const auto text_flags = static_cast<int>(text_alignment_flag(layer)) |
+                          static_cast<int>(Qt::AlignVCenter) |
+                          static_cast<int>(Qt::TextWordWrap);
+  painter.drawText(
+      image.rect().adjusted(8, 4, -8, -4),
+      text_flags,
+      text);
   return image;
 }
 
@@ -671,14 +1112,170 @@ std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(const QVar
         .shadows = layer_adjustment_value(layer, QStringLiteral("shadows")),
         .whites = layer_adjustment_value(layer, QStringLiteral("whites")),
         .blacks = layer_adjustment_value(layer, QStringLiteral("blacks")),
+        .brightness = layer_adjustment_value(layer, QStringLiteral("brightness")),
+        .filmic_shoulder = layer_adjustment_value(layer, QStringLiteral("filmicShoulder")),
+        .filmic_toe = layer_adjustment_value(layer, QStringLiteral("filmicToe")),
+        .adaptive_contrast = layer_adjustment_value(layer, QStringLiteral("adaptiveContrast")),
+        .levels_black_point = layer_adjustment_value(layer, QStringLiteral("levelsBlackPoint")),
+        .levels_gamma = layer_adjustment_value(layer, QStringLiteral("levelsGamma")),
+        .levels_white_point = layer_adjustment_value(layer, QStringLiteral("levelsWhitePoint")),
+        .zone_deep_shadows = layer_adjustment_value(layer, QStringLiteral("zoneDeepShadows")),
+        .zone_shadows = layer_adjustment_value(layer, QStringLiteral("zoneShadows")),
+        .zone_midtones = layer_adjustment_value(layer, QStringLiteral("zoneMidtones")),
+        .zone_lights = layer_adjustment_value(layer, QStringLiteral("zoneLights")),
+        .zone_highlights = layer_adjustment_value(layer, QStringLiteral("zoneHighlights")),
         .temperature = layer_adjustment_value(layer, QStringLiteral("temperature")),
         .tint = layer_adjustment_value(layer, QStringLiteral("tint")),
+        .texture = layer_adjustment_value(layer, QStringLiteral("texture")),
+        .clarity = layer_adjustment_value(layer, QStringLiteral("clarity")),
+        .dehaze = layer_adjustment_value(layer, QStringLiteral("dehaze")),
+        .sharpening = layer_adjustment_value(layer, QStringLiteral("sharpening")),
+        .sharpen_radius = layer.contains(QStringLiteral("sharpenRadius")) ||
+                                  layer.value(QStringLiteral("adjustments")).toMap().contains(
+                                      QStringLiteral("sharpenRadius"))
+                              ? layer_adjustment_value(layer, QStringLiteral("sharpenRadius"))
+                              : 1.0,
+        .sharpen_detail = layer_adjustment_value(layer, QStringLiteral("sharpenDetail")),
+        .sharpen_masking = layer_adjustment_value(layer, QStringLiteral("sharpenMasking")),
+        .luminance_nr = layer_adjustment_value(layer, QStringLiteral("luminanceNr")),
+        .color_nr = layer_adjustment_value(layer, QStringLiteral("colorNr")),
+        .lens_distortion = layer_adjustment_value(layer, QStringLiteral("lensDistortion")),
+        .lens_vignette = layer_adjustment_value(layer, QStringLiteral("lensVignette")),
+        .chromatic_aberration =
+            layer_adjustment_value(layer, QStringLiteral("chromaticAberration")),
+        .perspective_vertical = layer_adjustment_value(layer, QStringLiteral("perspectiveVertical")),
+        .perspective_horizontal =
+            layer_adjustment_value(layer, QStringLiteral("perspectiveHorizontal")),
+        .global_transform_rotation =
+            layer_adjustment_value(layer, QStringLiteral("transformRotation")),
+        .global_transform_scale = layer.contains(QStringLiteral("transformScale")) ||
+                                          layer.value(QStringLiteral("adjustments")).toMap().contains(
+                                              QStringLiteral("transformScale"))
+                                      ? layer_adjustment_value(layer, QStringLiteral("transformScale"))
+                                      : 1.0,
+        .transform_skew_x = layer_adjustment_value(layer, QStringLiteral("transformSkewX")),
+        .transform_skew_y = layer_adjustment_value(layer, QStringLiteral("transformSkewY")),
+        .liquify_center_x = layer.contains(QStringLiteral("liquifyCenterX")) ||
+                                    layer.value(QStringLiteral("adjustments")).toMap().contains(
+                                        QStringLiteral("liquifyCenterX"))
+                                ? layer_adjustment_value(layer, QStringLiteral("liquifyCenterX"))
+                                : 0.5,
+        .liquify_center_y = layer.contains(QStringLiteral("liquifyCenterY")) ||
+                                    layer.value(QStringLiteral("adjustments")).toMap().contains(
+                                        QStringLiteral("liquifyCenterY"))
+                                ? layer_adjustment_value(layer, QStringLiteral("liquifyCenterY"))
+                                : 0.5,
+        .liquify_radius = layer.contains(QStringLiteral("liquifyRadius")) ||
+                                  layer.value(QStringLiteral("adjustments")).toMap().contains(
+                                      QStringLiteral("liquifyRadius"))
+                              ? layer_adjustment_value(layer, QStringLiteral("liquifyRadius"))
+                              : 0.25,
+        .liquify_strength = layer_adjustment_value(layer, QStringLiteral("liquifyStrength")),
+        .content_aware_crop_fill =
+            layer.value(QStringLiteral("adjustments")).toMap().contains(
+                QStringLiteral("contentAwareCropFill"))
+                ? layer.value(QStringLiteral("adjustments")).toMap()
+                      .value(QStringLiteral("contentAwareCropFill"))
+                      .toBool()
+                : layer.value(QStringLiteral("contentAwareCropFill")).toBool(),
         .vibrance = layer_adjustment_value(layer, QStringLiteral("vibrance")),
         .saturation = layer_adjustment_value(layer, QStringLiteral("saturation")),
         .hue_shift = layer_adjustment_value(layer, QStringLiteral("hueShift")),
         .saturation_shift = layer_adjustment_value(layer, QStringLiteral("saturationShift")),
         .colorize_hue = layer_adjustment_value(layer, QStringLiteral("colorizeHue")),
         .colorize_strength = layer_adjustment_value(layer, QStringLiteral("colorizeStrength")),
+        .curve_shadows = layer_adjustment_value(layer, QStringLiteral("curveShadows")),
+        .curve_darks = layer_adjustment_value(layer, QStringLiteral("curveDarks")),
+        .curve_lights = layer_adjustment_value(layer, QStringLiteral("curveLights")),
+        .curve_highlights = layer_adjustment_value(layer, QStringLiteral("curveHighlights")),
+        .master_curve_points =
+            pipeline_curve_points(layer_adjustment_curve_points(layer, QStringLiteral("masterCurvePoints"))),
+        .luma_curve_points =
+            pipeline_curve_points(layer_adjustment_curve_points(layer, QStringLiteral("lumaCurvePoints"))),
+        .red_curve_points =
+            pipeline_curve_points(layer_adjustment_curve_points(layer, QStringLiteral("redCurvePoints"))),
+        .green_curve_points =
+            pipeline_curve_points(layer_adjustment_curve_points(layer, QStringLiteral("greenCurvePoints"))),
+        .blue_curve_points =
+            pipeline_curve_points(layer_adjustment_curve_points(layer, QStringLiteral("blueCurvePoints"))),
+        .color_mixer_model = layer_nested_adjustment_string(
+            layer,
+            QStringLiteral("colorMixer"),
+            QStringLiteral("model"),
+            QStringLiteral("colorMixerModel"),
+            QStringLiteral("OKLab")).toStdString(),
+        .color_mixer_channel = layer_nested_adjustment_string(
+            layer,
+            QStringLiteral("colorMixer"),
+            QStringLiteral("channel"),
+            QStringLiteral("hslChannel"),
+            QStringLiteral("Reds")).toStdString(),
+        .hue_adjustment = layer_nested_adjustment_value(
+            layer, QStringLiteral("colorMixer"), QStringLiteral("hue"), QStringLiteral("hueAdjustment")),
+        .saturation_adjustment = layer_nested_adjustment_value(
+            layer, QStringLiteral("colorMixer"), QStringLiteral("saturation"), QStringLiteral("saturationAdjustment")),
+        .luminance_adjustment = layer_nested_adjustment_value(
+            layer, QStringLiteral("colorMixer"), QStringLiteral("luminance"), QStringLiteral("luminanceAdjustment")),
+        .color_mixer_channels = layer_color_mixer_channels(layer),
+        .rgb_channel_mixer = layer_rgb_channel_mixer(layer),
+        .black_and_white_enabled = layer_color_mixer_child(
+            layer, QStringLiteral("blackAndWhite")).value(QStringLiteral("enabled")).toBool(),
+        .black_and_white_mixer = layer_black_and_white_mixer(layer),
+        .color_replacement_enabled = layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")).value(QStringLiteral("enabled")).toBool(),
+        .color_replacement_source_hue = layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")).value(QStringLiteral("sourceHue")).toDouble(),
+        .color_replacement_target_hue = layer_object_double(layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")), QStringLiteral("targetHue"), 0.33),
+        .color_replacement_range = layer_object_double(layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")), QStringLiteral("range"), 35.0),
+        .color_replacement_softness = layer_object_double(layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")), QStringLiteral("softness"), 100.0),
+        .color_replacement_strength = layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")).value(QStringLiteral("strength")).toDouble(),
+        .color_replacement_preserve_luminance = layer_object_bool(layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")), QStringLiteral("preserveLuminance"), true),
+        .color_replacement_preserve_saturation = layer_object_bool(layer_color_mixer_child(
+            layer, QStringLiteral("colorReplacement")), QStringLiteral("preserveSaturation"), true),
+        .skin_tone_protection_enabled = layer_color_mixer_child(
+            layer, QStringLiteral("skinToneProtection")).value(QStringLiteral("enabled")).toBool(),
+        .skin_tone_line_hue = layer_object_double(layer_color_mixer_child(
+            layer, QStringLiteral("skinToneProtection")), QStringLiteral("lineHue"), 0.08),
+        .skin_tone_protection_range = layer_object_double(layer_color_mixer_child(
+            layer, QStringLiteral("skinToneProtection")), QStringLiteral("range"), 30.0),
+        .skin_tone_protection_strength = layer_color_mixer_child(
+            layer, QStringLiteral("skinToneProtection")).value(QStringLiteral("strength")).toDouble(),
+        .color_harmony_enabled = layer_color_mixer_child(
+            layer, QStringLiteral("colorHarmony")).value(QStringLiteral("enabled")).toBool(),
+        .color_harmony_mode = layer_object_string(layer_color_mixer_child(
+            layer, QStringLiteral("colorHarmony")), QStringLiteral("mode"), QStringLiteral("Complementary")).toStdString(),
+        .color_harmony_base_hue = layer_color_mixer_child(
+            layer, QStringLiteral("colorHarmony")).value(QStringLiteral("baseHue")).toDouble(),
+        .color_harmony_strength = layer_color_mixer_child(
+            layer, QStringLiteral("colorHarmony")).value(QStringLiteral("strength")).toDouble(),
+        .grading_shadows_hue = layer_color_grading_child(
+            layer, QStringLiteral("shadows")).value(QStringLiteral("hue")).toDouble(),
+        .grading_shadows_saturation = layer_color_grading_child(
+            layer, QStringLiteral("shadows")).value(QStringLiteral("saturation")).toDouble(),
+        .grading_shadows_luminance = layer_color_grading_child(
+            layer, QStringLiteral("shadows")).value(QStringLiteral("luminance")).toDouble(),
+        .grading_midtones_hue = layer_color_grading_child(
+            layer, QStringLiteral("midtones")).value(QStringLiteral("hue")).toDouble(),
+        .grading_midtones_saturation = layer_color_grading_child(
+            layer, QStringLiteral("midtones")).value(QStringLiteral("saturation")).toDouble(),
+        .grading_midtones_luminance = layer_color_grading_child(
+            layer, QStringLiteral("midtones")).value(QStringLiteral("luminance")).toDouble(),
+        .grading_highlights_hue = layer_color_grading_child(
+            layer, QStringLiteral("highlights")).value(QStringLiteral("hue")).toDouble(),
+        .grading_highlights_saturation = layer_color_grading_child(
+            layer, QStringLiteral("highlights")).value(QStringLiteral("saturation")).toDouble(),
+        .grading_highlights_luminance = layer_color_grading_child(
+            layer, QStringLiteral("highlights")).value(QStringLiteral("luminance")).toDouble(),
+        .grading_amount = layer_object_double(layer_adjustment_object(
+            layer, QStringLiteral("colorGrading")), QStringLiteral("amount"), 100.0),
+        .grading_balance = layer_adjustment_object(
+            layer, QStringLiteral("colorGrading")).value(QStringLiteral("balance")).toDouble(),
+        .lut_stack = layer_lut_stack(layer),
         .fill_color = layer_fill_color(layer),
     };
     populate_photo_layer_mask(&photo_layer, layer);
@@ -726,7 +1323,11 @@ photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(
 
 photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
     const RenderEditState& state,
-    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr) {
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
+    MaskRasterPolicy raster_policy = MaskRasterPolicy::UseStoredRaster,
+    const QSize& output_size = {}) {
+  const auto raw_input_transform_enabled =
+      metadata != nullptr && metadata->valid && metadata->is_raw && state.raw_input_transform_enabled;
   return photo_editor::pipeline::ColorAdjustmentState{
       .input_transform =
           photo_editor::pipeline::InputTransformSettings{
@@ -734,29 +1335,36 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
               .exposure = state.exposure,
               .temperature = state.temperature,
               .tint = state.tint,
-              .raw_input_transform_enabled = state.raw_input_transform_enabled,
-              .highlight_recovery_enabled = state.raw_highlight_recovery,
+              .raw_input_transform_enabled = raw_input_transform_enabled,
+              .highlight_recovery_enabled = raw_input_transform_enabled && state.raw_highlight_recovery,
               .highlight_reconstruction_mode =
                   normalized_highlight_reconstruction_mode_name(state.highlight_reconstruction_mode).toStdString(),
               .chromatic_adaptation_method =
                   normalized_chromatic_adaptation_method_name(state.chromatic_adaptation_method).toStdString(),
-              .gamut_mapping_enabled = state.raw_gamut_mapping,
-              .lens_correction_enabled = state.raw_lens_correction,
-              .raw_white_balance_override_enabled = state.raw_white_balance_override,
+              .gamut_mapping_enabled = raw_input_transform_enabled && state.raw_gamut_mapping,
+              .lens_correction_enabled = raw_input_transform_enabled && state.raw_lens_correction,
+              .raw_white_balance_override_enabled =
+                  raw_input_transform_enabled && state.raw_white_balance_override,
               .camera_matching_look =
-                  normalized_camera_matching_look_name(state.raw_camera_matching_look).toStdString(),
+                  raw_input_transform_enabled
+                      ? normalized_camera_matching_look_name(state.raw_camera_matching_look).toStdString()
+                      : std::string("Standard"),
               .raw_white_balance_temperature = state.raw_white_balance_temperature,
               .raw_white_balance_tint = state.raw_white_balance_tint,
-              .raw_black_level = state.raw_black_level,
-              .raw_white_level = state.raw_white_level,
-              .calibration_hue = state.raw_calibration_hue,
-              .calibration_saturation = state.raw_calibration_saturation,
-              .red_primary_hue = state.raw_red_primary_hue,
-              .red_primary_saturation = state.raw_red_primary_saturation,
-              .green_primary_hue = state.raw_green_primary_hue,
-              .green_primary_saturation = state.raw_green_primary_saturation,
-              .blue_primary_hue = state.raw_blue_primary_hue,
-              .blue_primary_saturation = state.raw_blue_primary_saturation,
+              .raw_black_level = raw_input_transform_enabled ? state.raw_black_level : 0.0,
+              .raw_white_level = raw_input_transform_enabled ? state.raw_white_level : 1.0,
+              .calibration_hue = raw_input_transform_enabled ? state.raw_calibration_hue : 0.0,
+              .calibration_saturation =
+                  raw_input_transform_enabled ? state.raw_calibration_saturation : 0.0,
+              .red_primary_hue = raw_input_transform_enabled ? state.raw_red_primary_hue : 0.0,
+              .red_primary_saturation =
+                  raw_input_transform_enabled ? state.raw_red_primary_saturation : 0.0,
+              .green_primary_hue = raw_input_transform_enabled ? state.raw_green_primary_hue : 0.0,
+              .green_primary_saturation =
+                  raw_input_transform_enabled ? state.raw_green_primary_saturation : 0.0,
+              .blue_primary_hue = raw_input_transform_enabled ? state.raw_blue_primary_hue : 0.0,
+              .blue_primary_saturation =
+                  raw_input_transform_enabled ? state.raw_blue_primary_saturation : 0.0,
           },
       .color_pipeline = color_pipeline_config_for_state(state, metadata),
       .exposure = state.exposure,
@@ -784,6 +1392,8 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .clarity = state.clarity,
       .dehaze = state.dehaze,
       .sharpening = state.sharpening,
+      .sharpen_radius = state.sharpen_radius,
+      .sharpen_detail = state.sharpen_detail,
       .sharpen_masking = state.sharpen_masking,
       .luminance_nr = state.luminance_nr,
       .color_nr = state.color_nr,
@@ -848,7 +1458,10 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .color_replacement_source_hue = state.color_replacement_source_hue,
       .color_replacement_target_hue = state.color_replacement_target_hue,
       .color_replacement_range = state.color_replacement_range,
+      .color_replacement_softness = state.color_replacement_softness,
       .color_replacement_strength = state.color_replacement_strength,
+      .color_replacement_preserve_luminance = state.color_replacement_preserve_luminance,
+      .color_replacement_preserve_saturation = state.color_replacement_preserve_saturation,
       .skin_tone_protection_enabled = state.skin_tone_protection_enabled,
       .skin_tone_line_hue = state.skin_tone_line_hue,
       .skin_tone_protection_range = state.skin_tone_protection_range,
@@ -857,6 +1470,17 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .color_harmony_mode = state.color_harmony_mode.toStdString(),
       .color_harmony_base_hue = state.color_harmony_base_hue,
       .color_harmony_strength = state.color_harmony_strength,
+      .grading_shadows_hue = state.grading_shadows_hue,
+      .grading_shadows_saturation = state.grading_shadows_saturation,
+      .grading_shadows_luminance = state.grading_shadows_luminance,
+      .grading_midtones_hue = state.grading_midtones_hue,
+      .grading_midtones_saturation = state.grading_midtones_saturation,
+      .grading_midtones_luminance = state.grading_midtones_luminance,
+      .grading_highlights_hue = state.grading_highlights_hue,
+      .grading_highlights_saturation = state.grading_highlights_saturation,
+      .grading_highlights_luminance = state.grading_highlights_luminance,
+      .grading_amount = state.grading_amount,
+      .grading_balance = state.grading_balance,
       .linear_mask_enabled = state.linear_mask_enabled,
       .linear_mask_exposure = state.linear_mask_exposure,
       .linear_mask_temperature = state.linear_mask_temperature,
@@ -872,8 +1496,8 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .radial_mask_radius_x = state.radial_mask_radius_x,
       .radial_mask_radius_y = state.radial_mask_radius_y,
       .radial_mask_rotation = state.radial_mask_rotation,
-      .local_mask_sets = pipeline_local_mask_sets(state.mask_stack),
-      .retouch_masks = pipeline_retouch_masks(state.mask_stack),
+      .local_mask_sets = pipeline_local_mask_sets(state.mask_stack, raster_policy, output_size),
+      .retouch_masks = pipeline_retouch_masks(state.mask_stack, raster_policy, output_size),
       .photo_layers = pipeline_photo_layers(state.layers),
   };
 }
@@ -886,6 +1510,23 @@ photo_editor::pipeline::metal::MetalPipelineBackend& metal_backend() {
 #endif
 
 }  // namespace
+
+QString render_backend_unavailable_reason(RenderBackendPreference backend_preference) {
+  switch (backend_preference) {
+    case RenderBackendPreference::Auto:
+    case RenderBackendPreference::CpuOnly:
+      return {};
+    case RenderBackendPreference::GpuOnly:
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
+      return metal_backend().available()
+                 ? QString{}
+                 : QString::fromStdString(metal_backend().unavailable_reason());
+#else
+      return QStringLiteral("metal_not_compiled");
+#endif
+  }
+  return QStringLiteral("unknown_backend_preference");
+}
 
 bool preview_supported(const QString& file_path) {
   const QFileInfo file_info(file_path);
@@ -931,7 +1572,7 @@ bool decode_source_image(
   const auto qt_supported =
       !native_supported &&
       QImageReader::supportedImageFormats().contains(source_info.suffix().toLower().toUtf8());
-  const auto should_cache = max_edge > 0;
+  const auto should_cache = max_edge >= 0;
   auto cache_key = should_cache ? decoded_image_cache_key(source_info, max_edge) : QString{};
   if (should_cache && !qt_supported) {
     cache_key += QStringLiteral("|raw|") + raw_decode_settings_key(state);
@@ -1119,7 +1760,14 @@ void apply_color_adjustments(QImage* image, const RenderEditState& state) {
   if (image == nullptr) {
     return;
   }
-  *image = render_output_image(*image, state, output_color_space_for_name(state.output_color_space));
+  *image = render_output_image(
+      *image,
+      state,
+      output_color_space_for_name(state.output_color_space),
+      QImage::Format_ARGB32,
+      nullptr,
+      nullptr,
+      RenderMaskOptions{.rebuild_editable_masks_at_output_resolution = true});
 }
 
 QImage render_output_image(
@@ -1128,7 +1776,9 @@ QImage render_output_image(
     const QColorSpace& target_color_space,
     QImage::Format output_format,
     const photo_editor::pipeline::DecodedImageMetadata* metadata,
-    RenderBackendTelemetry* telemetry) {
+    RenderBackendTelemetry* telemetry,
+    RenderMaskOptions mask_options,
+    photo_editor::pipeline::RemovalQuality removal_quality) {
   return render_output_image_with_backend(
       image,
       state,
@@ -1136,7 +1786,9 @@ QImage render_output_image(
       output_format,
       RenderBackendPreference::Auto,
       metadata,
-      telemetry);
+      telemetry,
+      mask_options,
+      removal_quality);
 }
 
 QImage render_output_image_with_backend(
@@ -1146,7 +1798,9 @@ QImage render_output_image_with_backend(
     QImage::Format output_format,
     RenderBackendPreference backend_preference,
     const photo_editor::pipeline::DecodedImageMetadata* metadata,
-    RenderBackendTelemetry* telemetry) {
+    RenderBackendTelemetry* telemetry,
+    RenderMaskOptions mask_options,
+    photo_editor::pipeline::RemovalQuality removal_quality) {
   if (telemetry != nullptr) {
     *telemetry = {};
   }
@@ -1171,7 +1825,10 @@ QImage render_output_image_with_backend(
   const auto width = working.width;
   const auto height = working.height;
 
-  const auto pipeline_state = to_pipeline_state(state, metadata);
+  const auto raster_policy = mask_options.rebuild_editable_masks_at_output_resolution
+                                 ? MaskRasterPolicy::RebuildEditableAtOutputResolution
+                                 : MaskRasterPolicy::UseStoredRaster;
+  const auto pipeline_state = to_pipeline_state(state, metadata, raster_policy, QSize(width, height));
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   auto& metal = metal_backend();
   const auto fallback_reason = gpu_fallback_reason(state, pipeline_state, pixels, metal.available());
@@ -1200,7 +1857,7 @@ QImage render_output_image_with_backend(
               : fallback_reason;
     }
     photo_editor::pipeline::apply_color_adjustments(
-        &pixels, width, height, pipeline_state, photo_editor::pipeline::RemovalQuality::Final);
+        &pixels, width, height, pipeline_state, removal_quality);
   }
 #else
   if (backend_preference == RenderBackendPreference::GpuOnly) {
@@ -1218,7 +1875,7 @@ QImage render_output_image_with_backend(
             : QStringLiteral("metal_not_compiled");
   }
   photo_editor::pipeline::apply_color_adjustments(
-      &pixels, width, height, pipeline_state, photo_editor::pipeline::RemovalQuality::Final);
+      &pixels, width, height, pipeline_state, removal_quality);
 #endif
 
   auto output_image = qimage_from_working_image(

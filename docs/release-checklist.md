@@ -24,11 +24,13 @@ The release workflow now validates that the Git tag matches `VERSION`.
 - macOS package: `cpack --config build/release-macos/CPackConfig.cmake -B build/release-macos/package`
 - Windows: `cmake --preset release-windows -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD\\rust\\target\\release"`
 - Windows package: stage install root, then generate `.msix` and optional `.appinstaller`
+- Masking release gate: `PHOTO_EDITOR_REAL_IMAGE_CORPUS_MANIFEST=/path/to/manifest.json ./scripts/run-mask-release-gate.sh --build-dir build/release-macos`
 
 ## Before Tagging
 
 - `cargo test --workspace`
 - Relevant native tests pass
+- `./scripts/run-mask-release-gate.sh --build-dir build/release-macos --real-image-manifest /path/to/materialized/manifest.json`
 - Clean-machine smoke test for install, launch, import, edit, export, relaunch
 - Verify Rust helpers are bundled
 - Verify managed local Postgres bootstraps in packaged builds

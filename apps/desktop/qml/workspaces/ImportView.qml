@@ -253,7 +253,7 @@ Rectangle {
     }
 
     function confirmSelectedImport() {
-        if (!canImportSelection || projectTarget.length === 0)
+        if (!canImportSelection)
             return
         importProjectChooserOpen = false
         catalogAssets.importSelection(sourceRootPath, selectedFilePaths, projectTarget)
@@ -304,6 +304,13 @@ Rectangle {
     Component.onCompleted: {
         catalogAssets.refreshImportSources()
         syncProjectTarget()
+        ensureDefaultSource()
+    }
+
+    onVisibleChanged: {
+        if (!visible)
+            return
+        catalogAssets.refreshImportSources()
         ensureDefaultSource()
     }
 
@@ -678,133 +685,79 @@ Rectangle {
 
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 112
+                    Layout.preferredHeight: 82
                     radius: theme.radiusSurface
                     color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
                     border.color: theme.alpha(theme.lineSoft, 0.3)
 
-                    ColumnLayout {
+                    RowLayout {
                         anchors.fill: parent
-                        anchors.margins: theme.space16
-                        spacing: theme.space10
+                        anchors.margins: theme.space12
+                        spacing: theme.space12
 
-                        RowLayout {
+                        ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: theme.space14
+                            spacing: theme.space4
 
-                            ColumnLayout {
+                            Label {
                                 Layout.fillWidth: true
-                                spacing: theme.space4
-
-                                Label {
-                                    text: "Import"
-                                    color: theme.textStrong
-                                    font.family: theme.fontDisplay
-                                    font.pixelSize: 30
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    text: root.hasSource
-                                          ? root.sourceLabel + "  •  " + root.filteredFileCount
-                                          : "Pick a source"
-                                    color: theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    elide: Text.ElideRight
-                                    Layout.fillWidth: true
-                                }
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    implicitHeight: pathRow.implicitHeight + (theme.space8 * 2)
-                                    radius: theme.radius8
-                                    color: theme.alpha(theme.ink950, 0.18)
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.14)
-
-                                    RowLayout {
-                                        id: pathRow
-                                        anchors.fill: parent
-                                        anchors.margins: theme.space8
-                                        spacing: theme.space8
-
-                                        Label {
-                                            id: folderPathLabel
-                                            Layout.fillWidth: true
-                                            text: root.currentFolderPath.length > 0 ? root.currentFolderPath : "Select a source from the left rail."
-                                            color: theme.accentWarm300
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 10
-                                            elide: Text.ElideMiddle
-                                        }
-
-                                        Rectangle {
-                                            implicitWidth: filterSummaryLabel.implicitWidth + (theme.space8 * 2)
-                                            implicitHeight: filterSummaryLabel.implicitHeight + theme.space6
-                                            radius: 999
-                                            color: theme.alpha(theme.ink800, 0.92)
-                                            border.width: 1
-                                            border.color: theme.alpha(theme.lineSoft, 0.18)
-
-                                            Label {
-                                                id: filterSummaryLabel
-                                                anchors.centerIn: parent
-                                                text: root.mediaFilterLabel()
-                                                color: theme.textMuted
-                                                font.family: theme.fontUi
-                                                font.pixelSize: 9
-                                                font.weight: Font.Medium
-                                            }
-                                        }
-
-                                        Label {
-                                            text: String(root.filteredFileCount)
-                                            color: theme.textFaint
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 10
-                                        }
-                                    }
-                                }
+                                text: root.hasSource ? root.sourceLabel : "Pick a source"
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 22
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
                             }
 
-                            Rectangle {
-                                Layout.alignment: Qt.AlignTop
-                                implicitWidth: importUtilityRow.implicitWidth + (theme.space8 * 2)
-                                implicitHeight: importUtilityRow.implicitHeight + (theme.space8 * 2)
-                                radius: theme.radius12
-                                color: theme.alpha(theme.ink950, 0.24)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.22)
-
-                                RowLayout {
-                                    id: importUtilityRow
-                                    anchors.fill: parent
-                                    anchors.margins: theme.space8
-                                    spacing: theme.gapControl
-
-                                    ActionButton {
-                                        iconName: "plus"
-                                        showText: false
-                                        tooltipText: "Select visible"
-                                        compact: true
-                                        embedded: true
-                                        enabled: root.filteredFileCount > 0
-                                        onClicked: root.selectAllVisible()
-                                    }
-
-                                    ActionButton {
-                                        iconName: "delete"
-                                        showText: false
-                                        tooltipText: "Clear selection"
-                                        compact: true
-                                        embedded: true
-                                        enabled: root.selectedFileCount > 0
-                                        onClicked: root.clearSelection()
-                                    }
-                                }
+                            Label {
+                                Layout.fillWidth: true
+                                text: root.currentFolderPath.length > 0 ? root.currentFolderPath : "Choose a mounted drive or folder."
+                                color: root.currentFolderPath.length > 0 ? theme.accentWarm300 : theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                elide: Text.ElideMiddle
                             }
+                        }
+
+                        Label {
+                            text: String(root.filteredFileCount) + " media"
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                        }
+
+                        Label {
+                            text: String(root.selectedFileCount) + " selected"
+                            color: root.hasStagedSelection ? theme.success : theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                        }
+
+                        ActionButton {
+                            iconName: "plus"
+                            text: "Select Visible"
+                            compact: true
+                            enabled: root.filteredFileCount > 0
+                            onClicked: root.selectAllVisible()
+                        }
+
+                        ActionButton {
+                            iconName: "delete"
+                            showText: false
+                            tooltipText: "Clear selection"
+                            compact: true
+                            enabled: root.selectedFileCount > 0
+                            onClicked: root.clearSelection()
+                        }
+
+                        ActionButton {
+                            text: root.hasActiveImportJobs() ? "Importing..." : "Import Selected"
+                            iconName: "media"
+                            tone: "primary"
+                            enabled: root.canImportSelection
+                            onClicked: root.importSelected()
                         }
                     }
                 }
@@ -853,21 +806,21 @@ Rectangle {
                                         }
 
                                         FilterChip {
-                                            text: "Photo"
+                                            text: "Photos"
                                             accent: theme.accentCool400
                                             active: root.mediaQuickFilter === "photos"
                                             onClicked: root.mediaQuickFilter = "photos"
                                         }
 
                                         FilterChip {
-                                            text: "Video"
+                                            text: "Videos"
                                             accent: theme.warning
                                             active: root.mediaQuickFilter === "videos"
                                             onClicked: root.mediaQuickFilter = "videos"
                                         }
 
                                         FilterChip {
-                                            text: "Sel"
+                                            text: "Selected"
                                             accent: theme.success
                                             active: root.mediaQuickFilter === "selected"
                                             onClicked: root.mediaQuickFilter = "selected"
@@ -876,7 +829,7 @@ Rectangle {
                                         Item { Layout.fillWidth: true }
 
                                         Label {
-                                            text: root.filteredFileCount + " / " + root.selectedFileCount
+                                            text: root.mediaFilterLabel() + " · " + root.filteredFileCount + " shown"
                                             color: theme.textFaint
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
@@ -1190,101 +1143,13 @@ Rectangle {
         }
 
         BrandPanel {
-            Layout.preferredWidth: 232
+            visible: root.importProjectChooserOpen
+            Layout.preferredWidth: visible ? 260 : 0
             Layout.fillHeight: true
-            title: "Import"
+            title: "Destination"
             subtitle: ""
             accent: theme.accentWarm400
             headerVisible: false
-
-            Rectangle {
-                Layout.fillWidth: true
-                implicitHeight: importSummaryColumn.implicitHeight + (theme.space12 * 2)
-                radius: theme.radius12
-                color: theme.alpha(theme.ink950, 0.22)
-                border.width: 1
-                border.color: theme.alpha(theme.lineSoft, 0.18)
-
-                ColumnLayout {
-                    id: importSummaryColumn
-                    anchors.fill: parent
-                    anchors.margins: theme.space12
-                    spacing: theme.space10
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: theme.space10
-
-                        ColumnLayout {
-                            spacing: 2
-
-                            Label {
-                                text: "Selected"
-                                color: theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.Medium
-                            }
-
-                            Label {
-                                text: root.selectedFileCount > 0 ? (String(root.selectedFileCount) + " files") : "Nothing picked"
-                                color: theme.textStrong
-                                font.family: theme.fontDisplay
-                                font.pixelSize: 18
-                                font.weight: Font.DemiBold
-                            }
-                        }
-
-                        Item { Layout.fillWidth: true }
-
-                        Rectangle {
-                            implicitWidth: 42
-                            implicitHeight: 42
-                            radius: 12
-                            color: root.hasStagedSelection ? theme.alpha(theme.success, 0.16) : theme.alpha(theme.ink800, 0.92)
-                            border.width: 1
-                            border.color: root.hasStagedSelection ? theme.alpha(theme.success, 0.28) : theme.alpha(theme.lineSoft, 0.16)
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: String(root.selectedFileCount)
-                                color: root.hasStagedSelection ? theme.success : theme.textMain
-                                font.family: theme.fontDisplay
-                                font.pixelSize: 18
-                                font.weight: Font.DemiBold
-                            }
-                        }
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.currentFolderName
-                        color: theme.textFaint
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                        elide: Text.ElideRight
-                    }
-
-                    ActionButton {
-                        Layout.fillWidth: true
-                        text: root.hasActiveImportJobs() ? "Importing..." : "Import Selected"
-                        iconName: "media"
-                        tone: "primary"
-                        enabled: root.canImportSelection
-                        onClicked: root.importSelected()
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        visible: !root.importProjectChooserOpen
-                        text: root.selectedFileCount > 0 ? "Choose a destination after you click import." : "Pick files from the grid."
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
 
             Rectangle {
                 Layout.fillWidth: true
@@ -1306,7 +1171,7 @@ Rectangle {
                         spacing: 2
 
                         Label {
-                            text: "Add to"
+                            text: "Destination"
                             color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 12
@@ -1360,6 +1225,14 @@ Rectangle {
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: theme.space6
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            text: "VIREL Vault"
+                            iconName: "library"
+                            active: root.projectTarget.length === 0
+                            onClicked: root.projectTarget = ""
+                        }
 
                         Label {
                             visible: catalogAssets.projectNames.length > 0
@@ -1455,7 +1328,7 @@ Rectangle {
                             text: "Import"
                             iconName: "save"
                             tone: "primary"
-                            enabled: root.canImportSelection && root.projectTarget.length > 0
+                            enabled: root.canImportSelection
                             onClicked: root.confirmSelectedImport()
                         }
                     }
@@ -1465,7 +1338,7 @@ Rectangle {
             Item {
                 Layout.fillHeight: true
             }
-            }
         }
     }
+}
 }

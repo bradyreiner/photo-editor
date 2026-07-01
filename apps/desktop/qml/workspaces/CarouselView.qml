@@ -24,12 +24,67 @@ Rectangle {
         "#8b6548", "#c49a6c", "#d45a62", "#dd8a39",
         "#d7bd42", "#61b56f", "#4e86d9", "#8b6be3"
     ]
+    readonly property var backgroundColorPresets: [
+        "#fbf7f1", "#ffffff", "#f5f0e8", "#101418",
+        "#1e1a17", "#36f2a6", "#69cad8", "#f0b35d",
+        "#ff453a", "#0a84ff", "#8b6be3", "#d7bd42"
+    ]
+    readonly property var backgroundGradientButtons: [
+        { label: "Solid", value: "solid" },
+        { label: "H Grad", value: "linear-horizontal" },
+        { label: "V Grad", value: "linear-vertical" }
+    ]
+    readonly property var shapeFillKindButtons: [
+        { label: "Solid", value: "solid" },
+        { label: "H Grad", value: "linear-horizontal" },
+        { label: "V Grad", value: "linear-vertical" }
+    ]
     readonly property var textSizePresets: [
         { label: "S", value: 36 },
         { label: "M", value: 64 },
         { label: "L", value: 96 },
         { label: "XL", value: 144 },
         { label: "2XL", value: 200 }
+    ]
+    readonly property var textHorizontalAlignmentButtons: [
+        { label: "Left", value: "left" },
+        { label: "Center", value: "center" },
+        { label: "Right", value: "right" }
+    ]
+    readonly property var textVerticalAlignmentButtons: [
+        { label: "Top", value: "top" },
+        { label: "Middle", value: "middle" },
+        { label: "Bottom", value: "bottom" }
+    ]
+    readonly property var textWeightButtons: [
+        { label: "Regular", value: "normal" },
+        { label: "Demi", value: "demibold" },
+        { label: "Bold", value: "bold" },
+        { label: "Black", value: "black" }
+    ]
+    readonly property var textFontFamilyButtons: [
+        { label: "Display", value: "display" },
+        { label: "Serif", value: "serif" },
+        { label: "Mono", value: "mono" },
+        { label: "System", value: "system" }
+    ]
+    readonly property var shapeButtons: [
+        { label: "Rect", value: "rectangle" },
+        { label: "Oval", value: "ellipse" },
+        { label: "Line", value: "line" },
+        { label: "Arrow", value: "arrow" }
+    ]
+    readonly property var blendModeButtons: [
+        { label: "Normal", value: "normal" },
+        { label: "Multiply", value: "multiply" },
+        { label: "Screen", value: "screen" },
+        { label: "Overlay", value: "overlay" }
+    ]
+    readonly property var formatButtons: [
+        { label: "4:5", value: "4x5", size: "1080 x 1350" },
+        { label: "1:1", value: "1x1", size: "1080 x 1080" },
+        { label: "9:16", value: "9x16", size: "1080 x 1920" },
+        { label: "5:4", value: "5x4", size: "1350 x 1080" }
     ]
     property bool snappingEnabled: true
     property bool guidesEnabled: true
@@ -44,6 +99,8 @@ Rectangle {
     property real globalDragOffsetX: 0
     property real globalDragOffsetY: 0
     property bool anyItemDragging: false
+    property bool transformAspectLocked: true
+    readonly property int quickLibraryLimit: 8
 
     property string setupCarouselName: ""
     property string setupFormat: "4x5"
@@ -77,7 +134,8 @@ Rectangle {
         { value: "select", label: "Select", key: "V", cursor: Qt.ArrowCursor },
         { value: "hand", label: "Pan", key: "H", cursor: Qt.OpenHandCursor },
         { value: "text", label: "Text", key: "T", cursor: Qt.IBeamCursor },
-        { value: "media", label: "Media", key: "M", cursor: Qt.PointingHandCursor }
+        { value: "media", label: "Media", key: "M", cursor: Qt.PointingHandCursor },
+        { value: "shape", label: "Shape", key: "U", cursor: Qt.CrossCursor }
     ]
 
     function slideWidthOnStrip() {
@@ -86,6 +144,73 @@ Rectangle {
 
     function clampZoom(value) {
         return Math.max(0.5, Math.min(3.0, value))
+    }
+
+    function textHorizontalAlignment(value) {
+        const normalized = String(value || "center")
+        if (normalized === "left")
+            return Text.AlignLeft
+        if (normalized === "right")
+            return Text.AlignRight
+        return Text.AlignHCenter
+    }
+
+    function textVerticalAlignment(value) {
+        const normalized = String(value || "middle")
+        if (normalized === "top")
+            return Text.AlignTop
+        if (normalized === "bottom")
+            return Text.AlignBottom
+        return Text.AlignVCenter
+    }
+
+    function textFontWeight(value) {
+        const normalized = String(value || "demibold")
+        if (normalized === "normal")
+            return Font.Normal
+        if (normalized === "bold")
+            return Font.Bold
+        if (normalized === "black")
+            return Font.Black
+        return Font.DemiBold
+    }
+
+    function textFontFamily(value) {
+        const normalized = String(value || "display")
+        if (normalized === "serif")
+            return "Georgia"
+        if (normalized === "mono")
+            return theme.fontMono
+        if (normalized === "system")
+            return theme.fontUi
+        return Qt.platform.os === "osx" ? "Avenir Next" : theme.fontDisplay
+    }
+
+    function clampedMediaLayerScale(value) {
+        return Math.max(0.6, Math.min(3.5, Number(value || 1)))
+    }
+
+    function clampedMediaLayerOffset(value) {
+        return Math.max(-1, Math.min(1, Number(value || 0)))
+    }
+
+    function layerMediaDrawRect(item, frameWidth, frameHeight) {
+        const sourceWidth = Math.max(1, Number(item.sourceWidth || frameWidth || 1))
+        const sourceHeight = Math.max(1, Number(item.sourceHeight || frameHeight || 1))
+        const fitMode = String(item.fitMode || "cover")
+        const baseScale = fitMode === "contain"
+                ? Math.min(frameWidth / sourceWidth, frameHeight / sourceHeight)
+                : Math.max(frameWidth / sourceWidth, frameHeight / sourceHeight)
+        const drawWidth = Math.max(1, sourceWidth * baseScale * root.clampedMediaLayerScale(item.mediaScale))
+        const drawHeight = Math.max(1, sourceHeight * baseScale * root.clampedMediaLayerScale(item.mediaScale))
+        const freeX = frameWidth - drawWidth
+        const freeY = frameHeight - drawHeight
+        return {
+            x: freeX * ((root.clampedMediaLayerOffset(item.mediaOffsetX) + 1) / 2),
+            y: freeY * ((root.clampedMediaLayerOffset(item.mediaOffsetY) + 1) / 2),
+            width: drawWidth,
+            height: drawHeight
+        }
     }
 
     function zoomIn() {
@@ -104,6 +229,30 @@ Rectangle {
         if (!selection.hasSelection || !selection.hasUnlockedSelection)
             return
         carouselDocument.moveSelectedItemByPixels(dx, dy)
+    }
+
+    function resizeSelectedFromTransformField(axis, value) {
+        if (!selection.hasSelection || selection.hasMultipleSelection || !selection.hasUnlockedSelection)
+            return
+        if (!Number.isFinite(value))
+            return
+
+        const currentWidth = Math.max(1, Number(selection.width || 1))
+        const currentHeight = Math.max(1, Number(selection.height || 1))
+        let nextWidth = currentWidth
+        let nextHeight = currentHeight
+
+        if (axis === "width") {
+            nextWidth = Math.max(1, value)
+            if (transformAspectLocked)
+                nextHeight = Math.max(1, nextWidth / (currentWidth / currentHeight))
+        } else {
+            nextHeight = Math.max(1, value)
+            if (transformAspectLocked)
+                nextWidth = Math.max(1, nextHeight * (currentWidth / currentHeight))
+        }
+
+        carouselDocument.setSelectedItemSize(nextWidth, nextHeight)
     }
 
     function clamp(value, minimum, maximum) {
@@ -149,7 +298,7 @@ Rectangle {
     }
 
     function setActiveTool(toolName) {
-        const normalized = toolName === "hand" || toolName === "text" || toolName === "media" ? toolName : "select"
+        const normalized = toolName === "hand" || toolName === "text" || toolName === "media" || toolName === "shape" ? toolName : "select"
         activeTool = normalized
     }
 
@@ -160,6 +309,8 @@ Rectangle {
             return Qt.IBeamCursor
         if (activeTool === "media")
             return Qt.PointingHandCursor
+        if (activeTool === "shape")
+            return Qt.CrossCursor
         return Qt.ArrowCursor
     }
 
@@ -183,6 +334,14 @@ Rectangle {
             root.clearSnapGuides()
             openMediaPicker("slot")
             root.setActiveTool("select")
+            return
+        }
+
+        if (activeTool === "shape") {
+            carouselDocument.addShapeItem("rectangle")
+            carouselDocument.setSelectedItemCenter(mouse.x / root.stripScale, mouse.y / root.stripScale)
+            root.setActiveTool("select")
+            root.clearSnapGuides()
             return
         }
 
@@ -390,6 +549,49 @@ Rectangle {
             carouselDocument.addVideoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel)
         else
             carouselDocument.addPhotoItem(catalogAssets.selectedFilePath, catalogAssets.selectedCameraLabel, catalogAssets.selectedRecipeJson)
+    }
+
+    function placeLibraryAsset(asset, intent) {
+        if (!asset || !asset.online)
+            return
+
+        const mediaType = String(asset.mediaType || "")
+        const filePath = String(asset.filePath || "")
+        const displayLabel = String(asset.cameraLabel || asset.assetId || "")
+        const recipeJson = String(asset.recipeJson || "")
+        if (filePath.length === 0)
+            return
+
+        if (intent === "layer") {
+            if (mediaType === "video")
+                carouselDocument.addVideoItem(filePath, displayLabel)
+            else if (mediaType === "photo")
+                carouselDocument.addPhotoItem(filePath, displayLabel, recipeJson)
+            return
+        }
+
+        if (intent === "replace" && selection.hasSelection && !selection.isText) {
+            if (mediaType === "video")
+                carouselDocument.replaceSelectedVideoItem(filePath, displayLabel)
+            else if (mediaType === "photo")
+                carouselDocument.replaceSelectedPhotoItem(filePath, displayLabel, recipeJson)
+            return
+        }
+
+        if (mediaType === "video") {
+            if (root.canPlaceVideo())
+                carouselDocument.assignPrimaryVideo(filePath, displayLabel)
+            return
+        }
+
+        if (mediaType !== "photo")
+            return
+        if (selection.canUseTertiary && selection.activeSlot === "tertiary")
+            carouselDocument.assignTertiaryImage(filePath, displayLabel, recipeJson)
+        else if (selection.canUseSecondary && selection.activeSlot === "secondary")
+            carouselDocument.assignSecondaryImage(filePath, displayLabel, recipeJson)
+        else
+            carouselDocument.assignPrimaryImage(filePath, displayLabel, recipeJson)
     }
 
     function preferredMediaPickerProject() {
@@ -820,8 +1022,18 @@ Rectangle {
     }
 
     Shortcut {
+        sequence: "U"
+        onActivated: root.setActiveTool("shape")
+    }
+
+    Shortcut {
         sequence: "Shift+T"
         onActivated: carouselDocument.addTextItem("New Text")
+    }
+
+    Shortcut {
+        sequence: "Shift+U"
+        onActivated: carouselDocument.addShapeItem("rectangle")
     }
 
     Shortcut {
@@ -1224,9 +1436,9 @@ Rectangle {
                         }
 
                         Label {
-                            visible: modelData.value === "hand" || modelData.value === "text"
+                            visible: modelData.value === "hand" || modelData.value === "text" || modelData.value === "shape"
                             anchors.centerIn: parent
-                            text: modelData.value === "hand" ? "H" : "T"
+                            text: modelData.value === "hand" ? "H" : modelData.value === "shape" ? "U" : "T"
                             color: root.activeTool === modelData.value ? theme.accentWarm300 : theme.textMain
                             font.family: theme.fontMono
                             font.pixelSize: 13
@@ -1489,7 +1701,21 @@ Rectangle {
 
                                     Rectangle {
                                         anchors.fill: parent
-                                        color: index % 2 === 0 ? "#fffdf8" : "#fff9f2"
+                                        color: String(modelData.backgroundColor || "#fbf7f1")
+                                        gradient: Gradient {
+                                            orientation: String(modelData.backgroundKind || "solid") === "linear-horizontal"
+                                                         ? Gradient.Horizontal : Gradient.Vertical
+                                            GradientStop {
+                                                position: 0
+                                                color: String(modelData.backgroundColor || "#fbf7f1")
+                                            }
+                                            GradientStop {
+                                                position: 1
+                                                color: String(modelData.backgroundKind || "solid") === "solid"
+                                                       ? String(modelData.backgroundColor || "#fbf7f1")
+                                                       : String(modelData.backgroundSecondaryColor || "#ffffff")
+                                            }
+                                        }
                                         border.width: index < carouselDocument.slideCount - 1 ? 1 : 0
                                         border.color: theme.alpha("#cdb9a4", 0.84)
                                     }
@@ -1569,13 +1795,25 @@ Rectangle {
                                                 font.pixelSize: 10
                                             }
 
-                                            Label {
+                                            Rectangle {
                                                 anchors.centerIn: parent
                                                 visible: !modelData.hasMedia
-                                                text: "Click to add media"
-                                                color: theme.alpha(theme.textMuted, 0.92)
-                                                font.family: theme.fontUi
-                                                font.pixelSize: 12
+                                                width: emptySlotPrompt.implicitWidth + 22
+                                                height: emptySlotPrompt.implicitHeight + 14
+                                                radius: 8
+                                                color: theme.alpha(theme.ink950, 0.08)
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.accentWarm500, 0.42)
+
+                                                Label {
+                                                    id: emptySlotPrompt
+                                                    anchors.centerIn: parent
+                                                    text: "+ Add media"
+                                                    color: theme.alpha(theme.ink900, 0.86)
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                }
                                             }
 
                                             Item {
@@ -1956,7 +2194,7 @@ Rectangle {
                                         ? layerItem.localHeight : Number(modelData.height || 0)) * root.stripScale)
                                     z: layerItem.index + 10
                                     visible: !Boolean(modelData.hidden)
-                                    opacity: Boolean(modelData.locked) ? 0.82 : 1.0
+                                    opacity: (Boolean(modelData.locked) ? 0.82 : 1.0) * Number(modelData.opacity || 1.0)
 
                                     onModelDataChanged: {
                                         if (!layerItem.interacting) {
@@ -1975,30 +2213,129 @@ Rectangle {
                                     Item {
                                         id: layerBody
                                         anchors.fill: parent
+                                        transform: Scale {
+                                            origin.x: layerBody.width / 2
+                                            origin.y: layerBody.height / 2
+                                            xScale: Boolean(modelData.flippedHorizontal) ? -1 : 1
+                                            yScale: Boolean(modelData.flippedVertical) ? -1 : 1
+                                        }
+
+                                        Rectangle {
+                                            x: Number(modelData.shadowOffsetX || 0) * root.stripScale
+                                            y: Number(modelData.shadowOffsetY || 0) * root.stripScale
+                                            width: layerBody.width
+                                            height: layerBody.height
+                                            visible: Number(modelData.shadowOpacity || 0) > 0
+                                            radius: (modelData.type === "image" || modelData.type === "video")
+                                                    && String(modelData.mediaMaskShape || "rectangle") === "ellipse"
+                                                    ? Math.min(width, height) / 2
+                                                    : (modelData.type === "image" || modelData.type === "video")
+                                                    ? Number(modelData.cornerRadius || 0) * root.stripScale
+                                                    : 0
+                                            color: theme.alpha(String(modelData.shadowColor || "#000000"),
+                                                               Math.max(0, Math.min(1, Number(modelData.shadowOpacity || 0))))
+                                        }
 
                                         Rectangle {
                                             anchors.fill: parent
-                                            radius: modelData.type === "image" ? 2 : 0
+                                            radius: (modelData.type === "image" || modelData.type === "video")
+                                                    && String(modelData.mediaMaskShape || "rectangle") === "ellipse"
+                                                    ? Math.min(width, height) / 2
+                                                    : (modelData.type === "image" || modelData.type === "video")
+                                                    ? Number(modelData.cornerRadius || 0) * root.stripScale
+                                                    : 0
                                             color: modelData.type === "image" ? theme.alpha(theme.ink950, 0.05) : "transparent"
                                             border.width: layerItem.primarySelected ? 2 : layerItem.selected ? 1 : 0
                                             border.color: theme.alpha(theme.accentWarm500, 0.96)
                                             clip: true
 
                                             Image {
-                                                anchors.fill: parent
+                                                property var cropRect: root.layerMediaDrawRect(modelData, parent.width, parent.height)
+                                                x: cropRect.x
+                                                y: cropRect.y
+                                                width: cropRect.width
+                                                height: cropRect.height
                                                 visible: modelData.type === "image"
                                                 source: modelData.sourceUrl
-                                                fillMode: modelData.fitMode === "contain" ? Image.PreserveAspectFit : Image.PreserveAspectCrop
+                                                fillMode: Image.Stretch
                                                 cache: true
                                                 asynchronous: true
                                                 smooth: true
                                                 mipmap: true
-                                                sourceSize.width: Math.max(1, Math.round(layerItem.stableSourceW))
-                                                sourceSize.height: Math.max(1, Math.round(layerItem.stableSourceH))
+                                                sourceSize.width: Math.max(1, Math.round(width))
+                                                sourceSize.height: Math.max(1, Math.round(height))
                                             }
 
                                             Rectangle {
                                                 anchors.fill: parent
+                                                visible: modelData.type === "shape"
+                                                         && (String(modelData.shapeKind || "rectangle") === "rectangle"
+                                                             || String(modelData.shapeKind || "rectangle") === "ellipse")
+                                                radius: String(modelData.shapeKind || "rectangle") === "ellipse"
+                                                        ? Math.min(width, height) / 2
+                                                        : Number(modelData.cornerRadius || 0) * root.stripScale
+                                                color: String(modelData.fillColor || "#ffffff")
+                                                gradient: Gradient {
+                                                    orientation: String(modelData.fillKind || "solid") === "linear-horizontal"
+                                                                 ? Gradient.Horizontal : Gradient.Vertical
+                                                    GradientStop { position: 0.0; color: String(modelData.fillColor || "#ffffff") }
+                                                    GradientStop {
+                                                        position: 1.0
+                                                        color: String(modelData.fillKind || "solid") === "solid"
+                                                               ? String(modelData.fillColor || "#ffffff")
+                                                               : String(modelData.fillSecondaryColor || "#69cad8")
+                                                    }
+                                                }
+                                                border.width: Math.max(0, Number(modelData.strokeWidth || 0) * root.stripScale)
+                                                border.color: String(modelData.strokeColor || "#1e1a17")
+                                            }
+
+                                            Canvas {
+                                                id: shapeLineCanvas
+                                                anchors.fill: parent
+                                                visible: modelData.type === "shape"
+                                                         && (String(modelData.shapeKind || "") === "line"
+                                                             || String(modelData.shapeKind || "") === "arrow")
+                                                onPaint: {
+                                                    const ctx = getContext("2d")
+                                                    ctx.reset()
+                                                    const lineWidth = Math.max(1, Number(modelData.strokeWidth || 4) * root.stripScale)
+                                                    const y = height / 2
+                                                    const startX = lineWidth / 2
+                                                    const endX = Math.max(startX, width - lineWidth / 2)
+                                                    ctx.strokeStyle = String(modelData.strokeColor || "#36f2a6")
+                                                    ctx.fillStyle = String(modelData.strokeColor || "#36f2a6")
+                                                    ctx.lineWidth = lineWidth
+                                                    ctx.lineCap = "round"
+                                                    ctx.lineJoin = "round"
+                                                    ctx.beginPath()
+                                                    ctx.moveTo(startX, y)
+                                                    ctx.lineTo(endX, y)
+                                                    ctx.stroke()
+                                                    if (String(modelData.shapeKind || "") === "arrow") {
+                                                        const head = Math.max(8, Math.min(width, height) * 0.38)
+                                                        ctx.beginPath()
+                                                        ctx.moveTo(endX, y)
+                                                        ctx.lineTo(endX - head, y - head * 0.48)
+                                                        ctx.lineTo(endX - head, y + head * 0.48)
+                                                        ctx.closePath()
+                                                        ctx.fill()
+                                                    }
+                                                }
+                                                onWidthChanged: requestPaint()
+                                                onHeightChanged: requestPaint()
+                                                Connections {
+                                                    target: carouselDocument
+                                                    function onItemsChanged() { shapeLineCanvas.requestPaint() }
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                property var cropRect: root.layerMediaDrawRect(modelData, parent.width, parent.height)
+                                                x: cropRect.x
+                                                y: cropRect.y
+                                                width: cropRect.width
+                                                height: cropRect.height
                                                 visible: modelData.type === "video"
                                                 color: "#0f1820"
                                                 border.width: 2
@@ -2044,17 +2381,41 @@ Rectangle {
                                                 }
                                             }
 
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: modelData.type === "text"
+                                                         && Number(modelData.textBackgroundOpacity || 0) > 0
+                                                color: theme.alpha(String(modelData.textBackgroundColor || "#ffffff"),
+                                                                   Math.max(0, Math.min(1, Number(modelData.textBackgroundOpacity || 0))))
+                                            }
+
                                             Text {
                                                 anchors.fill: parent
                                                 visible: modelData.type === "text"
                                                 text: modelData.text
                                                 color: modelData.textColor
-                                                font.family: theme.fontDisplay
+                                                font.family: root.textFontFamily(modelData.textFontFamily)
                                                 font.pixelSize: Math.max(10, Number(modelData.textPointSize || 0) * root.stripScale)
-                                                font.weight: Font.DemiBold
+                                                font.weight: root.textFontWeight(modelData.textWeight)
+                                                font.italic: Boolean(modelData.textItalic)
+                                                font.letterSpacing: Math.max(0, Number(modelData.textLetterSpacing || 0) * root.stripScale)
                                                 wrapMode: Text.WordWrap
-                                                horizontalAlignment: Text.AlignHCenter
-                                                verticalAlignment: Text.AlignVCenter
+                                                horizontalAlignment: root.textHorizontalAlignment(modelData.textHorizontalAlignment)
+                                                verticalAlignment: root.textVerticalAlignment(modelData.textVerticalAlignment)
+                                                style: Number(modelData.textStrokeWidth || 0) > 0 ? Text.Outline : Text.Normal
+                                                styleColor: String(modelData.textStrokeColor || "#000000")
+                                            }
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: (modelData.type === "image" || modelData.type === "video")
+                                                         && Number(modelData.frameWidth || 0) > 0
+                                                radius: String(modelData.mediaMaskShape || "rectangle") === "ellipse"
+                                                        ? Math.min(width, height) / 2
+                                                        : Number(modelData.cornerRadius || 0) * root.stripScale
+                                                color: "transparent"
+                                                border.width: Math.max(1, Number(modelData.frameWidth || 0) * root.stripScale)
+                                                border.color: String(modelData.frameColor || "#ffffff")
                                             }
                                         }
 
@@ -2316,6 +2677,172 @@ Rectangle {
                         }
                     }
                 }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 104
+                    radius: theme.radius8
+                    color: theme.alpha(theme.ink950, 0.68)
+                    border.width: 1
+                    border.color: theme.alpha(theme.lineSoft, 0.32)
+                    clip: true
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 8
+
+                        ColumnLayout {
+                            Layout.preferredWidth: 64
+                            Layout.fillHeight: true
+                            spacing: 4
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Boards"
+                                color: theme.textStrong
+                                font.family: theme.fontDisplay
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: carouselDocument.slideCount + " total"
+                                color: theme.textFaint
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "+"
+                                enabled: carouselDocument.canAddSlide
+                                onClicked: carouselDocument.addSlide()
+                            }
+                        }
+
+                        ListView {
+                            id: boardFilmstrip
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            orientation: ListView.Horizontal
+                            spacing: 8
+                            clip: true
+                            model: carouselDocument.slides
+                            boundsBehavior: Flickable.StopAtBounds
+
+                            delegate: Rectangle {
+                                id: boardThumb
+                                required property int index
+                                required property var modelData
+
+                                width: 76
+                                height: boardFilmstrip.height
+                                radius: 7
+                                color: modelData.selected
+                                       ? theme.alpha(theme.accentWarm500, 0.18)
+                                       : thumbHover.containsMouse ? theme.alpha(theme.ink850, 0.96) : theme.alpha(theme.ink900, 0.78)
+                                border.width: modelData.selected ? 2 : 1
+                                border.color: modelData.selected
+                                              ? theme.accentWarm400
+                                              : theme.alpha(theme.lineSoft, 0.38)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 5
+                                    spacing: 4
+
+                                    Rectangle {
+                                        Layout.alignment: Qt.AlignHCenter
+                                        Layout.preferredWidth: 50
+                                        Layout.preferredHeight: 62
+                                        radius: 4
+                                        color: String(modelData.backgroundColor || "#fbf7f1")
+                                        gradient: Gradient {
+                                            orientation: String(modelData.backgroundKind || "solid") === "linear-horizontal"
+                                                         ? Gradient.Horizontal : Gradient.Vertical
+                                            GradientStop {
+                                                position: 0
+                                                color: String(modelData.backgroundColor || "#fbf7f1")
+                                            }
+                                            GradientStop {
+                                                position: 1
+                                                color: String(modelData.backgroundKind || "solid") === "solid"
+                                                       ? String(modelData.backgroundColor || "#fbf7f1")
+                                                       : String(modelData.backgroundSecondaryColor || "#ffffff")
+                                            }
+                                        }
+                                        border.width: 1
+                                        border.color: theme.alpha("#c5b6a6", 0.75)
+                                        clip: true
+
+                                        Image {
+                                            anchors.fill: parent
+                                            source: modelData.previewSource
+                                            fillMode: Image.PreserveAspectCrop
+                                            asynchronous: true
+                                            cache: true
+                                            smooth: true
+                                            visible: String(modelData.previewSource || "").length > 0
+                                        }
+
+                                        Label {
+                                            anchors.centerIn: parent
+                                            visible: String(modelData.previewSource || "").length === 0
+                                            text: modelData.slideNumber
+                                            color: theme.alpha(theme.textFaint, 0.8)
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 12
+                                        }
+
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            height: 14
+                                            color: theme.alpha(theme.ink950, 0.7)
+
+                                            Label {
+                                                anchors.centerIn: parent
+                                                text: modelData.slideNumber
+                                                color: theme.textStrong
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 9
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: String(modelData.label || "")
+                                        color: modelData.selected ? theme.textStrong : theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: thumbHover
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: carouselDocument.selectSlide(boardThumb.index)
+                                    onDoubleClicked: carouselDocument.duplicateCurrentSlide()
+                                }
+
+                                ToolTip {
+                                    visible: thumbHover.containsMouse
+                                    text: "Board " + modelData.slideNumber + " - " + String(modelData.label || "")
+                                    delay: 500
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2367,6 +2894,14 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
+                                text: "Dup"
+                                enabled: carouselDocument.canAddSlide
+                                onClicked: carouselDocument.duplicateCurrentSlide()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
                                 iconName: "chevron-left"
                                 showText: false
                                 enabled: carouselDocument.slideCount > 1
@@ -2405,18 +2940,27 @@ Rectangle {
                             Layout.fillWidth: true
                             spacing: 4
 
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "4:5"
-                                active: carouselDocument.documentFormat === "4x5"
-                                onClicked: carouselDocument.documentFormat = "4x5"
-                            }
+                            Repeater {
+                                model: root.formatButtons
 
-                            FilterChip {
-                                Layout.fillWidth: true
-                                text: "5:4"
-                                active: carouselDocument.documentFormat === "5x4"
-                                onClicked: carouselDocument.documentFormat = "5x4"
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: carouselDocument.documentFormat === modelData.value
+                                    onClicked: carouselDocument.documentFormat = modelData.value
+                                    ToolTip.visible: formatHover.containsMouse
+                                    ToolTip.text: modelData.size
+                                    ToolTip.delay: 400
+
+                                    MouseArea {
+                                        id: formatHover
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        acceptedButtons: Qt.NoButton
+                                    }
+                                }
                             }
                         }
 
@@ -2435,6 +2979,139 @@ Rectangle {
                                     onClicked: carouselDocument.applyTemplateToCurrent(modelData.value)
                                 }
                             }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Background"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.backgroundColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.backgroundColor === modelData ? 2 : 1
+                                    border.color: selection.backgroundColor === modelData
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (selection.backgroundKind === "solid") {
+                                                carouselDocument.setCurrentSlideBackgroundColor(modelData)
+                                            } else {
+                                                carouselDocument.setCurrentSlideBackgroundGradient(
+                                                            selection.backgroundKind,
+                                                            modelData,
+                                                            selection.backgroundSecondaryColor)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.backgroundGradientButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.backgroundKind === modelData.value
+                                    onClicked: {
+                                        if (modelData.value === "solid") {
+                                            carouselDocument.setCurrentSlideBackgroundColor(selection.backgroundColor)
+                                        } else {
+                                            carouselDocument.setCurrentSlideBackgroundGradient(
+                                                        modelData.value,
+                                                        selection.backgroundColor,
+                                                        selection.backgroundSecondaryColor)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        TextField {
+                            id: boardBackgroundField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
+                            placeholderText: "#fbf7f1"
+                            background: Rectangle {
+                                radius: 4
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: {
+                                if (selection.backgroundKind === "solid") {
+                                    carouselDocument.setCurrentSlideBackgroundColor(text)
+                                } else {
+                                    carouselDocument.setCurrentSlideBackgroundGradient(
+                                                selection.backgroundKind,
+                                                text,
+                                                selection.backgroundSecondaryColor)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: boardBackgroundField
+                            property: "text"
+                            value: selection.backgroundColor
+                            when: !selection.hasSelection && !boardBackgroundField.activeFocus
+                        }
+
+                        TextField {
+                            id: boardBackgroundSecondaryField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            visible: selection.backgroundKind !== "solid"
+                            color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
+                            placeholderText: "#ffffff"
+                            background: Rectangle {
+                                radius: 4
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: {
+                                carouselDocument.setCurrentSlideBackgroundGradient(
+                                            selection.backgroundKind,
+                                            selection.backgroundColor,
+                                            text)
+                            }
+                        }
+
+                        Binding {
+                            target: boardBackgroundSecondaryField
+                            property: "text"
+                            value: selection.backgroundSecondaryColor
+                            when: !selection.hasSelection && !boardBackgroundSecondaryField.activeFocus
                         }
                     }
 
@@ -2501,6 +3178,101 @@ Rectangle {
                                         carouselDocument.clearCurrentGroup()
                                     else
                                         carouselDocument.clearCurrentSlot()
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 5
+                            visible: root.mediaPickerAssets.length > 0
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Edited Library"
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+
+                                ActionButton {
+                                    compact: true
+                                    text: "More"
+                                    onClicked: root.openMediaPicker("slot")
+                                }
+                            }
+
+                            ListView {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 78
+                                orientation: ListView.Horizontal
+                                spacing: 6
+                                clip: true
+                                boundsBehavior: Flickable.StopAtBounds
+                                model: root.mediaPickerAssets.slice(0, root.quickLibraryLimit)
+
+                                delegate: Rectangle {
+                                    id: libraryThumb
+                                    required property var modelData
+
+                                    width: 60
+                                    height: 76
+                                    radius: 6
+                                    color: libraryHover.containsMouse
+                                           ? theme.alpha(theme.ink850, 0.95)
+                                           : theme.alpha(theme.ink900, 0.78)
+                                    border.width: 1
+                                    border.color: theme.alpha(theme.lineSoft, 0.36)
+                                    opacity: Boolean(modelData.online) ? 1 : 0.48
+                                    clip: true
+
+                                    Image {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        height: 54
+                                        source: String(modelData.thumbnailSource || "")
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true
+                                        cache: true
+                                        smooth: true
+                                        visible: source.length > 0
+                                    }
+
+                                    Label {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: 4
+                                        text: String(modelData.mediaType || "") === "video" ? "Video" : "Photo"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                    }
+
+                                    MouseArea {
+                                        id: libraryHover
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Boolean(modelData.online) ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                        onClicked: function(mouse) {
+                                            root.placeLibraryAsset(modelData, root.hasMultiSelectModifier(mouse.modifiers) ? "layer" : "slot")
+                                        }
+                                        onDoubleClicked: root.placeLibraryAsset(modelData, "layer")
+                                    }
+
+                                    ToolTip {
+                                        visible: libraryHover.containsMouse
+                                        text: String(modelData.cameraLabel || modelData.assetId || "Library asset")
+                                        delay: 500
+                                    }
                                 }
                             }
                         }
@@ -2706,6 +3478,7 @@ Rectangle {
                                             Layout.preferredWidth: 12
                                             Layout.preferredHeight: 12
                                             name: modelData.type === "text" ? "edit"
+                                                  : modelData.type === "shape" ? "grid"
                                                   : modelData.type === "video" ? "source" : "media"
                                             color: Boolean(modelData.hidden) ? theme.textFaint : theme.textMuted
                                         }
@@ -2777,6 +3550,13 @@ Rectangle {
                                 onClicked: carouselDocument.addTextItem("New Text")
                             }
 
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Shape"
+                                onClicked: carouselDocument.addShapeItem("rectangle")
+                            }
+
                             ConfirmActionButton {
                                 Layout.fillWidth: true
                                 compact: true
@@ -2812,12 +3592,29 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            Label {
+                            TextField {
+                                id: transformXField
                                 Layout.fillWidth: true
-                                text: Math.round(selection.x).toString()
-                                color: theme.textMain
+                                Layout.preferredHeight: 26
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
+                                horizontalAlignment: Text.AlignRight
+                                selectByMouse: true
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator { decimals: 1 }
+                                background: Rectangle {
+                                    radius: 4
+                                    color: theme.alpha(theme.ink850, 0.9)
+                                    border.width: 1
+                                    border.color: transformXField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
+                                }
+                                onEditingFinished: {
+                                    const value = Number(text)
+                                    if (Number.isFinite(value))
+                                        carouselDocument.setSelectedItemCenter(value + Number(selection.width || 0) / 2, Number(selection.centerY || 0))
+                                }
                             }
 
                             Label {
@@ -2827,12 +3624,29 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            Label {
+                            TextField {
+                                id: transformYField
                                 Layout.fillWidth: true
-                                text: Math.round(selection.y).toString()
-                                color: theme.textMain
+                                Layout.preferredHeight: 26
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
+                                horizontalAlignment: Text.AlignRight
+                                selectByMouse: true
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator { decimals: 1 }
+                                background: Rectangle {
+                                    radius: 4
+                                    color: theme.alpha(theme.ink850, 0.9)
+                                    border.width: 1
+                                    border.color: transformYField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
+                                }
+                                onEditingFinished: {
+                                    const value = Number(text)
+                                    if (Number.isFinite(value))
+                                        carouselDocument.setSelectedItemCenter(Number(selection.centerX || 0), value + Number(selection.height || 0) / 2)
+                                }
                             }
 
                             Label {
@@ -2842,11 +3656,29 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            Label {
-                                text: Math.round(selection.rotation) + "\u00B0"
-                                color: theme.textMain
+                            TextField {
+                                id: transformRotationField
+                                Layout.preferredWidth: 54
+                                Layout.preferredHeight: 26
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
+                                horizontalAlignment: Text.AlignRight
+                                selectByMouse: true
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator { decimals: 1 }
+                                background: Rectangle {
+                                    radius: 4
+                                    color: theme.alpha(theme.ink850, 0.9)
+                                    border.width: 1
+                                    border.color: transformRotationField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
+                                }
+                                onEditingFinished: {
+                                    const value = Number(text)
+                                    if (Number.isFinite(value))
+                                        carouselDocument.setSelectedItemRotation(value)
+                                }
                             }
                         }
 
@@ -2861,12 +3693,40 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            Label {
+                            TextField {
+                                id: transformWidthField
                                 Layout.fillWidth: true
-                                text: Math.round(selection.width).toString()
-                                color: theme.textMain
+                                Layout.preferredHeight: 26
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
+                                horizontalAlignment: Text.AlignRight
+                                selectByMouse: true
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator { bottom: 1; decimals: 1 }
+                                background: Rectangle {
+                                    radius: 4
+                                    color: theme.alpha(theme.ink850, 0.9)
+                                    border.width: 1
+                                    border.color: transformWidthField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
+                                }
+                                onEditingFinished: {
+                                    const value = Number(text)
+                                    root.resizeSelectedFromTransformField("width", value)
+                                }
+                            }
+
+                            ActionButton {
+                                Layout.preferredWidth: 28
+                                Layout.preferredHeight: 26
+                                compact: true
+                                iconName: "link"
+                                showText: false
+                                active: root.transformAspectLocked
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                tooltipText: root.transformAspectLocked ? "Aspect ratio locked" : "Aspect ratio unlocked"
+                                onClicked: root.transformAspectLocked = !root.transformAspectLocked
                             }
 
                             Label {
@@ -2876,12 +3736,278 @@ Rectangle {
                                 font.pixelSize: 10
                             }
 
-                            Label {
+                            TextField {
+                                id: transformHeightField
                                 Layout.fillWidth: true
-                                text: Math.round(selection.height).toString()
-                                color: theme.textMain
+                                Layout.preferredHeight: 26
+                                enabled: selection.hasSelection && !selection.hasMultipleSelection && selection.hasUnlockedSelection
+                                color: theme.textStrong
                                 font.family: theme.fontMono
                                 font.pixelSize: 11
+                                horizontalAlignment: Text.AlignRight
+                                selectByMouse: true
+                                inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                validator: DoubleValidator { bottom: 1; decimals: 1 }
+                                background: Rectangle {
+                                    radius: 4
+                                    color: theme.alpha(theme.ink850, 0.9)
+                                    border.width: 1
+                                    border.color: transformHeightField.activeFocus ? theme.accentCool400 : theme.alpha(theme.lineSoft, 0.4)
+                                }
+                                onEditingFinished: {
+                                    const value = Number(text)
+                                    root.resizeSelectedFromTransformField("height", value)
+                                }
+                            }
+                        }
+
+                        Binding {
+                            target: transformXField
+                            property: "text"
+                            value: Math.round(selection.x).toString()
+                            when: selection.hasSelection && !transformXField.activeFocus
+                        }
+
+                        Binding {
+                            target: transformYField
+                            property: "text"
+                            value: Math.round(selection.y).toString()
+                            when: selection.hasSelection && !transformYField.activeFocus
+                        }
+
+                        Binding {
+                            target: transformRotationField
+                            property: "text"
+                            value: Math.round(selection.rotation).toString()
+                            when: selection.hasSelection && !transformRotationField.activeFocus
+                        }
+
+                        Binding {
+                            target: transformWidthField
+                            property: "text"
+                            value: Math.round(selection.width).toString()
+                            when: selection.hasSelection && !transformWidthField.activeFocus
+                        }
+
+                        Binding {
+                            target: transformHeightField
+                            property: "text"
+                            value: Math.round(selection.height).toString()
+                            when: selection.hasSelection && !transformHeightField.activeFocus
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Flip H"
+                                active: Boolean(selection.flippedHorizontal)
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.setSelectedItemFlippedHorizontal(!Boolean(selection.flippedHorizontal))
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Flip V"
+                                active: Boolean(selection.flippedVertical)
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.setSelectedItemFlippedVertical(!Boolean(selection.flippedVertical))
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+                            visible: selection.isImage || selection.isVideo
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Fill"
+                                active: selection.itemFitMode === "cover"
+                                enabled: selection.hasUnlockedSelection
+                                onClicked: carouselDocument.setCurrentFitMode("cover")
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Fit"
+                                active: selection.itemFitMode === "contain"
+                                enabled: selection.hasUnlockedSelection
+                                onClicked: carouselDocument.setCurrentFitMode("contain")
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: selection.isImage || selection.isVideo
+                            label: "Radius"
+                            valueText: Math.round(selection.cornerRadius) + " px"
+                            from: 0
+                            to: 360
+                            stepSize: 1
+                            value: selection.cornerRadius
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedItemCornerRadius(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedItemCornerRadius(0)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: selection.isImage || selection.isVideo
+                            label: "Frame"
+                            valueText: Math.round(selection.frameWidth) + " px"
+                            from: 0
+                            to: 160
+                            stepSize: 1
+                            value: selection.frameWidth
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedItemFrameWidth(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedItemFrameWidth(0)
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: selection.isImage || selection.isVideo
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.frameColor === modelData ? 2 : 1
+                                    border.color: selection.frameColor === modelData
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedItemFrameColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Shadow"
+                            valueText: Math.round(selection.shadowOpacity * 100) + "%"
+                            from: 0
+                            to: 1
+                            stepSize: 0.01
+                            value: selection.shadowOpacity
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedItemShadowOpacity(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedItemShadowOpacity(0)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Shadow X"
+                                valueText: Math.round(selection.shadowOffsetX) + " px"
+                                from: -160
+                                to: 160
+                                stepSize: 1
+                                value: selection.shadowOffsetX
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedItemShadowOffset(value, selection.shadowOffsetY)
+                                }
+                                onResetRequested: carouselDocument.setSelectedItemShadowOffset(32, selection.shadowOffsetY)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Shadow Y"
+                                valueText: Math.round(selection.shadowOffsetY) + " px"
+                                from: -160
+                                to: 160
+                                stepSize: 1
+                                value: selection.shadowOffsetY
+                                accent: theme.accentWarm400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedItemShadowOffset(selection.shadowOffsetX, value)
+                                }
+                                onResetRequested: carouselDocument.setSelectedItemShadowOffset(selection.shadowOffsetX, 32)
+                            }
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.shadowColor === modelData ? 2 : 1
+                                    border.color: selection.shadowColor === modelData
+                                                  ? theme.accentCool400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedItemShadowColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Opacity"
+                            valueText: Math.round(selection.opacity * 100) + "%"
+                            from: 0
+                            to: 1
+                            stepSize: 0.01
+                            value: selection.opacity
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedItemOpacity(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedItemOpacity(1.0)
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: root.blendModeButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.blendMode === modelData.value
+                                    enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                    onClicked: carouselDocument.setSelectedItemBlendMode(modelData.value)
+                                }
                             }
                         }
 
@@ -2938,13 +4064,75 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 3
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Top"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionTop()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Mid"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionVerticalCenter()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Btm"
+                                enabled: selection.hasSelection && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.alignSelectionBottom()
+                            }
+
+                            Rectangle {
+                                Layout.preferredWidth: 1
+                                Layout.preferredHeight: 18
+                                color: theme.alpha(theme.lineSoft, 0.24)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Dist H"
+                                enabled: selection.selectedCount > 2 && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.distributeSelectionHorizontally()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Dist V"
+                                enabled: selection.selectedCount > 2 && selection.hasUnlockedSelection
+                                onClicked: carouselDocument.distributeSelectionVertically()
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
                             visible: selection.hasSelection && selection.hasUnlockedSelection
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                iconText: "B"
+                                showText: false
+                                tooltipText: "Send to Back"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.sendSelectedToBack()
+                            }
 
                             ActionButton {
                                 Layout.fillWidth: true
                                 compact: true
                                 iconName: "move-back"
                                 showText: false
+                                tooltipText: "Send Backward"
                                 enabled: selection.hasSelection
                                 onClicked: carouselDocument.sendSelectedBackward()
                             }
@@ -2954,8 +4142,19 @@ Rectangle {
                                 compact: true
                                 iconName: "move-forward"
                                 showText: false
+                                tooltipText: "Bring Forward"
                                 enabled: selection.hasSelection
                                 onClicked: carouselDocument.bringSelectedForward()
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                iconText: "F"
+                                showText: false
+                                tooltipText: "Bring to Front"
+                                enabled: selection.hasSelection
+                                onClicked: carouselDocument.bringSelectedToFront()
                             }
 
                             Rectangle {
@@ -2984,8 +4183,241 @@ Rectangle {
 
                     InspectorSection {
                         width: parent.width
-                        visible: selection.isImage && !selection.hasMultipleSelection
-                        title: "Photo"
+                        visible: selection.isShape && !selection.hasMultipleSelection
+                        title: "Shape"
+                        showAccentMarker: false
+                        uppercaseTitle: false
+                        titleFontFamily: theme.fontDisplay
+                        titlePixelSize: 15
+                        titleWeight: Font.Bold
+                        titleLetterSpacing: 0
+                        expandable: true
+                        expanded: true
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: root.shapeButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.shapeKind === modelData.value
+                                    onClicked: carouselDocument.setSelectedShapeKind(modelData.value)
+                                }
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: "Fill"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Repeater {
+                                model: root.shapeFillKindButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: String(selection.fillKind || "solid") === modelData.value
+                                    onClicked: carouselDocument.setSelectedShapeFillKind(modelData.value)
+                                }
+                            }
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.fillColor === modelData ? 2 : 1
+                                    border.color: selection.fillColor === modelData
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedShapeFillColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        TextField {
+                            id: shapeFillField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
+                            placeholderText: "#ffffff"
+                            background: Rectangle {
+                                radius: 4
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: {
+                                if (selection.isShape)
+                                    carouselDocument.setSelectedShapeFillColor(text)
+                            }
+                        }
+
+                        Binding {
+                            target: shapeFillField
+                            property: "text"
+                            value: selection.fillColor
+                            when: selection.isShape && !shapeFillField.activeFocus
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            visible: String(selection.fillKind || "solid") !== "solid"
+                            text: "Second"
+                            color: theme.textFaint
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            visible: String(selection.fillKind || "solid") !== "solid"
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.fillSecondaryColor === modelData ? 2 : 1
+                                    border.color: selection.fillSecondaryColor === modelData
+                                                  ? theme.accentCool400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedShapeSecondaryFillColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        TextField {
+                            id: shapeSecondaryFillField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            visible: String(selection.fillKind || "solid") !== "solid"
+                            color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
+                            placeholderText: "#69cad8"
+                            background: Rectangle {
+                                radius: 4
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: {
+                                if (selection.isShape)
+                                    carouselDocument.setSelectedShapeSecondaryFillColor(text)
+                            }
+                        }
+
+                        Binding {
+                            target: shapeSecondaryFillField
+                            property: "text"
+                            value: selection.fillSecondaryColor
+                            when: selection.isShape && !shapeSecondaryFillField.activeFocus
+                        }
+
+                        TextField {
+                            id: shapeStrokeField
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            color: theme.textStrong
+                            font.pixelSize: 11
+                            font.family: theme.fontMono
+                            placeholderText: "#1e1a17"
+                            background: Rectangle {
+                                radius: 4
+                                color: theme.alpha(theme.ink850, 0.9)
+                                border.width: 1
+                                border.color: theme.alpha(theme.lineSoft, 0.4)
+                            }
+                            onEditingFinished: {
+                                if (selection.isShape)
+                                    carouselDocument.setSelectedShapeStrokeColor(text)
+                            }
+                        }
+
+                        Binding {
+                            target: shapeStrokeField
+                            property: "text"
+                            value: selection.strokeColor
+                            when: selection.isShape && !shapeStrokeField.activeFocus
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Stroke"
+                            valueText: Math.round(selection.strokeWidth) + " px"
+                            from: 0
+                            to: 96
+                            stepSize: 1
+                            value: selection.strokeWidth
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedShapeStrokeWidth(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedShapeStrokeWidth(0)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: selection.shapeKind === "rectangle"
+                            label: "Radius"
+                            valueText: Math.round(selection.cornerRadius) + " px"
+                            from: 0
+                            to: 240
+                            stepSize: 1
+                            value: selection.cornerRadius
+                            accent: theme.success
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedShapeCornerRadius(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedShapeCornerRadius(0)
+                        }
+                    }
+
+                    InspectorSection {
+                        width: parent.width
+                        visible: (selection.isImage || selection.isVideo) && !selection.hasMultipleSelection
+                        title: selection.isVideo ? "Video" : "Photo"
                         showAccentMarker: false
                         uppercaseTitle: false
                         titleFontFamily: theme.fontDisplay
@@ -3011,6 +4443,100 @@ Rectangle {
                                 text: "Fit"
                                 active: selection.fitMode === "contain"
                                 onClicked: carouselDocument.setCurrentFitMode("contain")
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Rect"
+                                active: String(selection.mediaMaskShape || "rectangle") === "rectangle"
+                                onClicked: carouselDocument.setSelectedItemMediaMaskShape("rectangle")
+                            }
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Oval"
+                                active: String(selection.mediaMaskShape || "rectangle") === "ellipse"
+                                onClicked: carouselDocument.setSelectedItemMediaMaskShape("ellipse")
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Crop"
+                            valueText: Number(selection.mediaScale || 1).toFixed(2) + "x"
+                            from: 0.6
+                            to: 3.5
+                            stepSize: 0.01
+                            value: selection.mediaScale
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedItemMediaScale(value)
+                            }
+                            onResetRequested: carouselDocument.resetSelectedItemMediaCrop()
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Pan X"
+                                valueText: Math.round(Number(selection.mediaOffsetX || 0) * 100) + "%"
+                                from: -1
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.mediaOffsetX
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedItemMediaOffset(value, selection.mediaOffsetY)
+                                }
+                                onResetRequested: carouselDocument.setSelectedItemMediaOffset(0, selection.mediaOffsetY)
+                            }
+
+                            InspectorSlider {
+                                Layout.fillWidth: true
+                                label: "Pan Y"
+                                valueText: Math.round(Number(selection.mediaOffsetY || 0) * 100) + "%"
+                                from: -1
+                                to: 1
+                                stepSize: 0.01
+                                value: selection.mediaOffsetY
+                                accent: theme.accentCool400
+                                onValueDragged: function(value) {
+                                    carouselDocument.setSelectedItemMediaOffset(selection.mediaOffsetX, value)
+                                }
+                                onResetRequested: carouselDocument.setSelectedItemMediaOffset(selection.mediaOffsetX, 0)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Replace"
+                                tone: "primary"
+                                enabled: selection.hasSelection && !selection.isText
+                                onClicked: root.openMediaPicker("replace")
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                compact: true
+                                text: "Reset Fit"
+                                enabled: selection.hasSelection && !selection.isText
+                                onClicked: {
+                                    carouselDocument.setCurrentFitMode("cover")
+                                    carouselDocument.resetSelectedItemMediaCrop()
+                                }
                             }
                         }
                     }
@@ -3114,6 +4640,48 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
+                            label: "Box"
+                            valueText: Math.round(selection.textBackgroundOpacity * 100) + "%"
+                            from: 0
+                            to: 1
+                            stepSize: 0.01
+                            value: selection.textBackgroundOpacity
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedTextBackgroundOpacity(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedTextBackgroundOpacity(0)
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.textBackgroundColor === modelData ? 2 : 1
+                                    border.color: selection.textBackgroundColor === modelData
+                                                  ? theme.accentWarm400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedTextBackgroundColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
                             label: "Size"
                             valueText: Math.round(selection.textPointSize) + " pt"
                             from: 16
@@ -3140,6 +4708,143 @@ Rectangle {
                                     compact: true
                                     active: Math.abs(selection.textPointSize - modelData.value) < 2
                                     onClicked: carouselDocument.setSelectedTextPointSize(modelData.value)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textFontFamilyButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.textFontFamily === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextFontFamily(modelData.value)
+                                }
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Tracking"
+                            valueText: Math.round(selection.textLetterSpacing) + " px"
+                            from: 0
+                            to: 80
+                            stepSize: 1
+                            value: selection.textLetterSpacing
+                            accent: theme.accentCool400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedTextLetterSpacing(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedTextLetterSpacing(0)
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Stroke"
+                            valueText: Math.round(selection.textStrokeWidth) + " px"
+                            from: 0
+                            to: 32
+                            stepSize: 1
+                            value: selection.textStrokeWidth
+                            accent: theme.accentWarm400
+                            onValueDragged: function(value) {
+                                carouselDocument.setSelectedTextStrokeWidth(value)
+                            }
+                            onResetRequested: carouselDocument.setSelectedTextStrokeWidth(0)
+                        }
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textColorPresets
+
+                                delegate: Rectangle {
+                                    required property string modelData
+                                    width: 20
+                                    height: 20
+                                    radius: 4
+                                    color: modelData
+                                    border.width: selection.textStrokeColor === modelData ? 2 : 1
+                                    border.color: selection.textStrokeColor === modelData
+                                                  ? theme.accentCool400
+                                                  : theme.alpha(theme.lineSoft, 0.36)
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: carouselDocument.setSelectedTextStrokeColor(modelData)
+                                    }
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textWeightButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.textWeight === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextWeight(modelData.value)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            FilterChip {
+                                Layout.fillWidth: true
+                                text: "Italic"
+                                active: selection.textItalic
+                                onClicked: carouselDocument.setSelectedTextItalic(!selection.textItalic)
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textHorizontalAlignmentButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.textHorizontalAlignment === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextHorizontalAlignment(modelData.value)
+                                }
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+
+                            Repeater {
+                                model: root.textVerticalAlignmentButtons
+
+                                delegate: FilterChip {
+                                    required property var modelData
+                                    Layout.fillWidth: true
+                                    text: modelData.label
+                                    active: selection.textVerticalAlignment === modelData.value
+                                    onClicked: carouselDocument.setSelectedTextVerticalAlignment(modelData.value)
                                 }
                             }
                         }

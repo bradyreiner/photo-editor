@@ -266,12 +266,13 @@ CGImageRef decode_native_cgimage(CGImageSourceRef source, int max_edge) {
   }
 
   auto target_edge = max_edge;
+  const QSize source_size = image_source_size(source);
+  const auto source_long_edge = std::max(source_size.width(), source_size.height());
   if (target_edge <= 0) {
-    const QSize source_size = image_source_size(source);
     target_edge = std::max(source_size.width(), source_size.height());
   }
 
-  if (target_edge > 0) {
+  if (target_edge > 0 && source_long_edge > target_edge) {
     NSDictionary* options = @{
       (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
       (__bridge NSString*)kCGImageSourceCreateThumbnailWithTransform : @YES,
@@ -322,16 +323,22 @@ bool configure_raw_filter(
                      QStringLiteral("Camera Default"), Qt::CaseInsensitive) == 0
                  ? 1
                  : 2);
+  const auto decode_boost = std::clamp(settings.boost_amount, 0.0, 2.0);
+  const auto shadow_boost = std::clamp(settings.boost_shadow_amount, 0.0, 2.0);
+  const auto edr_amount =
+      input_transform_enabled ? std::clamp(0.45 + decode_boost * 0.25, 0.0, 1.0) : 0.0;
+  const auto local_tone_amount = std::clamp((shadow_boost - 1.0) * 0.65, 0.0, 1.0);
+
   filter.exposure = static_cast<float>(input_transform_enabled ? settings.exposure : 0.0);
-  filter.boostAmount = static_cast<float>(settings.boost_amount);
-  filter.boostShadowAmount = static_cast<float>(settings.boost_shadow_amount);
-  filter.extendedDynamicRangeAmount = 0.0f;
+  filter.boostAmount = static_cast<float>(decode_boost);
+  filter.boostShadowAmount = static_cast<float>(shadow_boost);
+  filter.extendedDynamicRangeAmount = static_cast<float>(edr_amount);
   filter.gamutMappingEnabled = settings.gamut_mapping_enabled ? YES : NO;
   if (filter.isLensCorrectionSupported) {
     filter.lensCorrectionEnabled = settings.lens_correction_enabled ? YES : NO;
   }
   if (filter.isLocalToneMapSupported) {
-    filter.localToneMapAmount = 0.0f;
+    filter.localToneMapAmount = static_cast<float>(local_tone_amount);
   }
   if (filter.isDetailSupported) {
     filter.detailAmount = static_cast<float>(settings.detail_amount);
@@ -610,6 +617,34 @@ bool decode_raw_image(
 
   *image = finalize_output_image(std::move(linear_image), preview_color_space());
   return !image->isNull();
+}
+
+bool decode_raw_preview_image(const QString& file_path, QImage* image, int max_edge) {
+  if (image == nullptr || !has_raw_extension(file_path)) {
+    return false;
+  }
+
+  const QFileInfo source_info(file_path);
+  if (!source_info.exists() || !source_info.isReadable()) {
+    return false;
+  }
+
+  @autoreleasepool {
+    CGImageSourceRef source = image_source_for_path(file_path);
+    if (source == nullptr) {
+      return false;
+    }
+
+    CGImageRef cg_image = decode_native_cgimage(source, max_edge);
+    CFRelease(source);
+    if (cg_image == nullptr) {
+      return false;
+    }
+
+    *image = qimage_from_cgimage(cg_image);
+    CGImageRelease(cg_image);
+    return !image->isNull();
+  }
 }
 
 bool decode_raw_linear_image(

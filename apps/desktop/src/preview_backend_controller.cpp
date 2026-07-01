@@ -3,7 +3,10 @@
 #include <QProcess>
 #include <QSettings>
 #include <QStandardPaths>
-#include <QSysInfo>
+
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
+#include "photo_editor/pipeline/metal/metal_pipeline_backend.h"
+#endif
 
 namespace photo_editor::desktop {
 
@@ -13,6 +16,13 @@ using photo_editor::pipeline::PreviewBackendKind;
 using photo_editor::pipeline::PreviewBackendPreference;
 
 const auto kPreviewBackendPreferenceKey = "preview/backendPreference";
+
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
+photo_editor::pipeline::metal::MetalPipelineBackend& metal_probe_backend() {
+  static photo_editor::pipeline::metal::MetalPipelineBackend backend;
+  return backend;
+}
+#endif
 
 PreviewBackendPreference preference_from_string(const QString& value) {
   const auto normalized = value.trimmed().toLower();
@@ -135,15 +145,15 @@ PreviewBackendController::ProbeResult PreviewBackendController::probeMetal() con
   ProbeResult result;
 #if defined(Q_OS_MACOS)
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
-  const auto architecture = QSysInfo::currentCpuArchitecture().toLower();
-  if (architecture.contains(QStringLiteral("arm")) || architecture.contains(QStringLiteral("aarch64"))) {
+  auto& backend = metal_probe_backend();
+  if (backend.available()) {
     result.available = true;
     return result;
   }
-
-  // Intel Macs also have Metal support
-  result.available = true;
-  return result;
+  const auto reason = QString::fromStdString(backend.unavailable_reason()).trimmed();
+  result.reason = reason.isEmpty()
+                      ? QStringLiteral("Metal preview backend is unavailable.")
+                      : QStringLiteral("Metal preview backend is unavailable: %1").arg(reason);
 #else
   result.reason = QStringLiteral("Metal preview backend was not compiled into this build.");
 #endif

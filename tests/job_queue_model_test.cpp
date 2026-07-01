@@ -162,6 +162,44 @@ int main(int argc, char** argv) {
     return fail("retrying a failed export should requeue it and increment retry metadata");
   }
 
+  auto failed_timeline = make_job(
+      QStringLiteral("timeline-failed"),
+      QStringLiteral("timeline_render"),
+      QStringLiteral("Failed"));
+  failed_timeline.error_message = QStringLiteral("Render interrupted");
+  auto failed_import = make_job(
+      QStringLiteral("import-failed"),
+      QStringLiteral("catalog_import"),
+      QStringLiteral("Failed"));
+  failed_import.error_message = QStringLiteral("Import interrupted");
+  if (!photo_editor::desktop::upsertPersistedJobRecord(failed_timeline, nullptr) ||
+      !photo_editor::desktop::upsertPersistedJobRecord(failed_import, nullptr)) {
+    return fail("retry policy test jobs should be persisted");
+  }
+  model.refresh();
+  if (!model.retryJob(QStringLiteral("timeline-failed"))) {
+    return fail("failed timeline render jobs should be retryable");
+  }
+  if (model.retryJob(QStringLiteral("import-failed"))) {
+    return fail("failed import jobs should not be advertised as retryable until import replay exists");
+  }
+  model.refresh();
+  auto timeline_queued_after_retry = false;
+  auto import_still_failed_after_retry = false;
+  for (int row = 0; row < model.rowCount(); ++row) {
+    const auto index = model.index(row, 0);
+    const auto job_id = model.data(index, photo_editor::desktop::JobQueueModel::JobIdRole).toString();
+    const auto status = model.data(index, photo_editor::desktop::JobQueueModel::StatusRole).toString();
+    if (job_id == QStringLiteral("timeline-failed")) {
+      timeline_queued_after_retry = status == QStringLiteral("Queued");
+    } else if (job_id == QStringLiteral("import-failed")) {
+      import_still_failed_after_retry = status == QStringLiteral("Failed");
+    }
+  }
+  if (!timeline_queued_after_retry || !import_still_failed_after_retry) {
+    return fail("retry should requeue supported failed jobs and leave unsupported failures unchanged");
+  }
+
   auto queued_timeline = make_job(
       QStringLiteral("timeline-queued"),
       QStringLiteral("timeline_render"),
@@ -170,22 +208,76 @@ int main(int argc, char** argv) {
       QStringLiteral("export-running-two"),
       QStringLiteral("asset_export"),
       QStringLiteral("Running"));
+  auto queued_import = make_job(
+      QStringLiteral("import-queued"),
+      QStringLiteral("catalog_import"),
+      QStringLiteral("Queued"));
+  auto running_import_two = make_job(
+      QStringLiteral("import-running-two"),
+      QStringLiteral("catalog_import"),
+      QStringLiteral("Running"));
+  auto queued_model = make_job(
+      QStringLiteral("model-queued"),
+      QStringLiteral("ai_model_inference"),
+      QStringLiteral("Queued"));
+  auto running_model = make_job(
+      QStringLiteral("model-running"),
+      QStringLiteral("ai_model_inference"),
+      QStringLiteral("Running"));
   if (!photo_editor::desktop::upsertPersistedJobRecord(queued_timeline, nullptr) ||
-      !photo_editor::desktop::upsertPersistedJobRecord(running_export_two, nullptr)) {
+      !photo_editor::desktop::upsertPersistedJobRecord(running_export_two, nullptr) ||
+      !photo_editor::desktop::upsertPersistedJobRecord(queued_import, nullptr) ||
+      !photo_editor::desktop::upsertPersistedJobRecord(running_import_two, nullptr) ||
+      !photo_editor::desktop::upsertPersistedJobRecord(queued_model, nullptr) ||
+      !photo_editor::desktop::upsertPersistedJobRecord(running_model, nullptr)) {
     return fail("cancel test jobs should be persisted");
   }
 
   model.refresh();
+  if (!model.canCancelJob(QStringLiteral("timeline-queued")) ||
+      !model.canCancelJob(QStringLiteral("export-running-two")) ||
+      !model.canCancelJob(QStringLiteral("import-queued")) ||
+      !model.canCancelJob(QStringLiteral("model-queued")) ||
+      model.canCancelJob(QStringLiteral("import-running-two")) ||
+      model.canCancelJob(QStringLiteral("model-running")) ||
+      model.cancellationPolicySignature(
+          QStringLiteral("asset_export"),
+          QStringLiteral("Running")) !=
+          QStringLiteral("asset_export|Running|cancel:true|mode:cooperative") ||
+      model.cancellationPolicySignature(
+          QStringLiteral("catalog_import"),
+          QStringLiteral("Running")) !=
+          QStringLiteral("catalog_import|Running|cancel:false|mode:unsupported") ||
+      model.cancellationPolicySignature(
+          QStringLiteral("ai_model_inference"),
+          QStringLiteral("Queued")) !=
+          QStringLiteral("ai_model_inference|Queued|cancel:true|mode:queued-drop")) {
+    return fail("job cancellation policy should match queued and cooperative-running support exactly");
+  }
   if (!model.cancelJob(QStringLiteral("timeline-queued"))) {
     return fail("queued timeline jobs should be cancelable");
   }
   if (!model.cancelJob(QStringLiteral("export-running-two"))) {
     return fail("running export jobs should accept cooperative cancellation");
   }
+  if (!model.cancelJob(QStringLiteral("import-queued"))) {
+    return fail("queued import jobs should be cancelable");
+  }
+  if (!model.cancelJob(QStringLiteral("model-queued"))) {
+    return fail("queued model jobs should be cancelable");
+  }
+  if (model.cancelJob(QStringLiteral("import-running-two")) ||
+      model.cancelJob(QStringLiteral("model-running"))) {
+    return fail("running import and model jobs should not show unsupported cancellation as available");
+  }
 
   model.refresh();
   auto canceled_timeline_ok = false;
   auto canceling_export_ok = false;
+  auto canceled_import_ok = false;
+  auto canceled_model_ok = false;
+  auto running_import_not_cancelable_ok = false;
+  auto running_model_not_cancelable_ok = false;
   for (int row = 0; row < model.rowCount(); ++row) {
     const auto index = model.index(row, 0);
     const auto job_id = model.data(index, photo_editor::desktop::JobQueueModel::JobIdRole).toString();
@@ -194,6 +286,14 @@ int main(int argc, char** argv) {
       canceled_timeline_ok = status == QStringLiteral("Canceled");
     } else if (job_id == QStringLiteral("export-running-two")) {
       canceling_export_ok = status == QStringLiteral("Canceling");
+    } else if (job_id == QStringLiteral("import-queued")) {
+      canceled_import_ok = status == QStringLiteral("Canceled");
+    } else if (job_id == QStringLiteral("model-queued")) {
+      canceled_model_ok = status == QStringLiteral("Canceled");
+    } else if (job_id == QStringLiteral("import-running-two")) {
+      running_import_not_cancelable_ok = status == QStringLiteral("Running");
+    } else if (job_id == QStringLiteral("model-running")) {
+      running_model_not_cancelable_ok = status == QStringLiteral("Running");
     }
   }
 
@@ -203,10 +303,16 @@ int main(int argc, char** argv) {
   if (!canceling_export_ok) {
     return fail("running export jobs should transition to canceling");
   }
+  if (!canceled_import_ok || !canceled_model_ok ||
+      !running_import_not_cancelable_ok || !running_model_not_cancelable_ok) {
+    return fail("queued import/model jobs should cancel while unsupported running work stays running");
+  }
+  model.removeJob(QStringLiteral("import-running-two"));
+  model.removeJob(QStringLiteral("model-running"));
 
   model.clearFinishedJobs();
   model.refresh();
-  if (model.jobCount() != 3 || model.failedJobCount() != 0 || model.completedJobCount() != 0) {
+  if (model.jobCount() != 4 || model.failedJobCount() != 0 || model.completedJobCount() != 0) {
     return fail("clearing finished jobs should leave only active queued/canceling work behind");
   }
 

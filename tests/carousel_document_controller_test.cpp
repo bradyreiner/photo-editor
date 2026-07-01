@@ -40,6 +40,26 @@ QImage split_image(const QSize& size, const QColor& left, const QColor& right) {
   return image;
 }
 
+QImage quadrant_image(
+    const QSize& size,
+    const QColor& top_left,
+    const QColor& top_right,
+    const QColor& bottom_left,
+    const QColor& bottom_right) {
+  QImage image(size, QImage::Format_ARGB32);
+  image.fill(Qt::black);
+  for (int y = 0; y < size.height(); ++y) {
+    for (int x = 0; x < size.width(); ++x) {
+      if (x < size.width() / 2) {
+        image.setPixelColor(x, y, y < size.height() / 2 ? top_left : bottom_left);
+      } else {
+        image.setPixelColor(x, y, y < size.height() / 2 ? top_right : bottom_right);
+      }
+    }
+  }
+  return image;
+}
+
 bool color_matches(const QColor& actual, const QColor& expected) {
   return actual.red() == expected.red() && actual.green() == expected.green() &&
          actual.blue() == expected.blue();
@@ -58,6 +78,20 @@ bool region_contains_non_background(
     }
   }
   return false;
+}
+
+QRect non_background_bounds(const QImage& image, const QRect& region, const QColor& background) {
+  const auto bounded = region.intersected(image.rect());
+  QRect bounds;
+  for (int y = bounded.top(); y <= bounded.bottom(); ++y) {
+    for (int x = bounded.left(); x <= bounded.right(); ++x) {
+      if (!color_matches(image.pixelColor(x, y), background)) {
+        const QPoint point(x, y);
+        bounds = bounds.isNull() ? QRect(point, QSize(1, 1)) : bounds.united(QRect(point, QSize(1, 1)));
+      }
+    }
+  }
+  return bounds;
 }
 
 }  // namespace
@@ -186,6 +220,714 @@ int main(int argc, char** argv) {
     if (!color_matches(slide.pixelColor(slide.width() / 4, slide.height() / 2), QColor(QStringLiteral("#34c759"))) ||
         !color_matches(slide.pixelColor((slide.width() * 3) / 4, slide.height() / 2), QColor(QStringLiteral("#ffd60a")))) {
       return fail("split template export should preserve left and right slot media");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addTextItem(QStringLiteral("Duplicate me"));
+    controller.setSelectedItemCenter(540.0, 220.0);
+    controller.duplicateCurrentSlide();
+
+    if (controller.slideCount() != 2 || controller.currentIndex() != 1) {
+      return fail("duplicating the current canvas should insert a new selected canvas after it");
+    }
+
+    const auto duplicated_items = controller.canvasItems();
+    if (duplicated_items.size() != 2) {
+      return fail("duplicating a canvas should copy freeform layers that intersect that canvas");
+    }
+
+    int copied_selected_items = 0;
+    int copied_items_on_second_slide = 0;
+    for (const auto& value : duplicated_items) {
+      const auto item = value.toMap();
+      if (item.value(QStringLiteral("slideIndex")).toInt() == 1) {
+        ++copied_items_on_second_slide;
+      }
+      if (item.value(QStringLiteral("selected")).toBool()) {
+        ++copied_selected_items;
+      }
+    }
+    if (copied_items_on_second_slide != 1 || copied_selected_items != 1) {
+      return fail("duplicating a canvas should select the copied layers on the new canvas");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setDocumentFormat(QStringLiteral("1x1"));
+    if (controller.documentPixelWidth() != 1080 || controller.documentPixelHeight() != 1080) {
+      return fail("square carousel format should use a 1080 by 1080 export canvas");
+    }
+
+    controller.setDocumentFormat(QStringLiteral("9x16"));
+    if (controller.documentPixelWidth() != 1080 || controller.documentPixelHeight() != 1920) {
+      return fail("story carousel format should use a 1080 by 1920 export canvas");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-story-format"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("story format carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (slide.size() != QSize(1080, 1920)) {
+      return fail("story format export should write the requested pixel size");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#0a84ff"));
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0a84ff")) {
+      return fail("board background color should update selection metadata");
+    }
+    const auto slides = controller.slides();
+    if (slides.isEmpty() ||
+        slides.at(0).toMap().value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0a84ff")) {
+      return fail("board background color should update slide metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-background-color"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("background color carousel should export");
+    }
+
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(4, 4), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("empty exported boards should reveal the chosen background color");
+    }
+
+    controller.setDocumentName(QStringLiteral("Background Color Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("background color carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("background color carousel should load");
+    }
+    selection = restored.selectionDetails();
+    if (selection.value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#0a84ff")) {
+      return fail("saved carousel documents should restore board background colors");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundGradient(
+        QStringLiteral("linear-horizontal"),
+        QStringLiteral("#ff0000"),
+        QStringLiteral("#0000ff"));
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("backgroundKind")).toString() != QStringLiteral("linear-horizontal") ||
+        selection.value(QStringLiteral("backgroundColor")).toString() != QStringLiteral("#ff0000") ||
+        selection.value(QStringLiteral("backgroundSecondaryColor")).toString() != QStringLiteral("#0000ff")) {
+      return fail("board gradient controls should update selection metadata");
+    }
+    const auto slides = controller.slides();
+    if (slides.isEmpty() ||
+        slides.at(0).toMap().value(QStringLiteral("backgroundKind")).toString() !=
+            QStringLiteral("linear-horizontal")) {
+      return fail("board gradient controls should update slide metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-background-gradient"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("gradient background carousel should export");
+    }
+
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    const QColor left = slide.pixelColor(4, slide.height() / 2);
+    const QColor right = slide.pixelColor(slide.width() - 5, slide.height() / 2);
+    if (left.red() <= left.blue() || right.blue() <= right.red()) {
+      return fail("horizontal gradient backgrounds should render across exported boards");
+    }
+
+    controller.setDocumentName(QStringLiteral("Gradient Background Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("gradient background carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("gradient background carousel should load");
+    }
+    selection = restored.selectionDetails();
+    if (selection.value(QStringLiteral("backgroundKind")).toString() != QStringLiteral("linear-horizontal") ||
+        selection.value(QStringLiteral("backgroundSecondaryColor")).toString() != QStringLiteral("#0000ff")) {
+      return fail("saved carousel documents should restore board gradient settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(640.0, 180.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#ff453a"));
+    controller.setSelectedShapeStrokeColor(QStringLiteral("#0a84ff"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+    controller.setSelectedShapeCornerRadius(32.0);
+    controller.setSelectedItemOpacity(1.0);
+
+    auto selection = controller.selectionDetails();
+    if (!selection.value(QStringLiteral("isShape")).toBool() ||
+        selection.value(QStringLiteral("itemType")).toString() != QStringLiteral("shape")) {
+      return fail("adding a shape layer should select it as a shape item");
+    }
+    if (selection.value(QStringLiteral("width")).toDouble() != 640.0 ||
+        selection.value(QStringLiteral("height")).toDouble() != 180.0) {
+      return fail("shape layers should resize freely without photo aspect locking");
+    }
+    if (selection.value(QStringLiteral("fillColor")).toString() != QStringLiteral("#ff453a") ||
+        selection.value(QStringLiteral("cornerRadius")).toDouble() != 32.0) {
+      return fail("shape layer style controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-shape-layer"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("shape layer export should succeed");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#ff453a")))) {
+      return fail("shape layers should render into exported slides");
+    }
+
+    controller.setDocumentName(QStringLiteral("Shape Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("shape layer carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("shape layer carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("type")).toString() != QStringLiteral("shape") ||
+        restored_items.at(0).toMap().value(QStringLiteral("fillColor")).toString() != QStringLiteral("#ff453a")) {
+      return fail("saved carousel documents should restore shape layers and style");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(640.0, 220.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#ff0000"));
+    controller.setSelectedShapeSecondaryFillColor(QStringLiteral("#0000ff"));
+    controller.setSelectedShapeFillKind(QStringLiteral("linear-horizontal"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("fillKind")).toString() != QStringLiteral("linear-horizontal") ||
+        selection.value(QStringLiteral("fillSecondaryColor")).toString() != QStringLiteral("#0000ff")) {
+      return fail("shape gradient controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-shape-gradient"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("gradient shape carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    const QColor left = slide.pixelColor(250, 675);
+    const QColor right = slide.pixelColor(830, 675);
+    if (left.red() <= left.blue() || right.blue() <= right.red()) {
+      return fail("horizontal shape gradients should render across exported shape layers");
+    }
+
+    controller.setDocumentName(QStringLiteral("Shape Gradient Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("shape gradient carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("shape gradient carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("fillKind")).toString() !=
+            QStringLiteral("linear-horizontal") ||
+        restored_items.at(0).toMap().value(QStringLiteral("fillSecondaryColor")).toString() !=
+            QStringLiteral("#0000ff")) {
+      return fail("saved carousel documents should restore shape gradient settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(520.0, 520.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#ff0000"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(520.0, 520.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#0000ff"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+    controller.setSelectedItemBlendMode(QStringLiteral("multiply"));
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("blendMode")).toString() != QStringLiteral("multiply")) {
+      return fail("layer blend mode controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-blend-mode"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("blend mode carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#000000")))) {
+      return fail("multiply blend mode should affect exported layer pixels");
+    }
+
+    controller.setDocumentName(QStringLiteral("Blend Mode Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("blend mode carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("blend mode carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 2 ||
+        restored_items.at(1).toMap().value(QStringLiteral("blendMode")).toString() != QStringLiteral("multiply")) {
+      return fail("saved carousel documents should restore layer blend modes");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    const auto flip_source_path = write_image(
+        dir,
+        QStringLiteral("flip-source.png"),
+        quadrant_image(
+            QSize(400, 400),
+            QColor(QStringLiteral("#ff453a")),
+            QColor(QStringLiteral("#34c759")),
+            QColor(QStringLiteral("#0a84ff")),
+            QColor(QStringLiteral("#ffcc00"))));
+    if (flip_source_path.isEmpty()) {
+      return fail("flip source image should save");
+    }
+
+    controller.addPhotoItem(flip_source_path, QStringLiteral("flip source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.setSelectedItemFlippedHorizontal(true);
+    controller.setSelectedItemFlippedVertical(true);
+
+    auto selection = controller.selectionDetails();
+    if (!selection.value(QStringLiteral("flippedHorizontal")).toBool() ||
+        !selection.value(QStringLiteral("flippedVertical")).toBool()) {
+      return fail("layer flip controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-flipped-layer"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("flipped layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(390, 525), QColor(QStringLiteral("#ffcc00"))) ||
+        !color_matches(slide.pixelColor(690, 825), QColor(QStringLiteral("#ff453a")))) {
+      return fail("flipped layer export should mirror source pixels horizontally and vertically");
+    }
+
+    controller.setDocumentName(QStringLiteral("Flipped Layer Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("flipped layer carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("flipped layer carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        !restored_items.at(0).toMap().value(QStringLiteral("flippedHorizontal")).toBool() ||
+        !restored_items.at(0).toMap().value(QStringLiteral("flippedVertical")).toBool()) {
+      return fail("saved carousel documents should restore layer flip state");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#000000"));
+    QImage square_source(QSize(400, 400), QImage::Format_ARGB32);
+    square_source.fill(QColor(QStringLiteral("#34c759")));
+    const auto square_source_path = write_image(dir, QStringLiteral("fit-square-source.png"), square_source);
+    QImage wide_source(QSize(800, 400), QImage::Format_ARGB32);
+    wide_source.fill(QColor(QStringLiteral("#ff453a")));
+    const auto wide_source_path = write_image(dir, QStringLiteral("fit-wide-source.png"), wide_source);
+    if (square_source_path.isEmpty() || wide_source_path.isEmpty()) {
+      return fail("fit mode source images should save");
+    }
+
+    controller.addPhotoItem(square_source_path, QStringLiteral("square source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.replaceSelectedPhotoItem(wide_source_path, QStringLiteral("wide source"), QString{});
+    controller.setCurrentFitMode(QStringLiteral("contain"));
+
+    const auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("itemFitMode")).toString() != QStringLiteral("contain")) {
+      return fail("selected layer fit mode should be exposed in selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-fit-mode"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("layer fit mode carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 525), QColor(QStringLiteral("#000000"))) ||
+        !color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#ff453a")))) {
+      return fail("contain fit mode should letterbox replaced media inside a selected layer frame");
+    }
+
+    controller.setDocumentName(QStringLiteral("Layer Fit Mode Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("layer fit mode carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("layer fit mode carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("fitMode")).toString() != QStringLiteral("contain")) {
+      return fail("saved carousel documents should restore selected layer fit mode");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#000000"));
+    QImage square_source(QSize(400, 400), QImage::Format_ARGB32);
+    square_source.fill(QColor(QStringLiteral("#34c759")));
+    const auto square_source_path = write_image(dir, QStringLiteral("crop-square-source.png"), square_source);
+    const auto wide_source_path = write_image(
+        dir,
+        QStringLiteral("crop-wide-source.png"),
+        split_image(QSize(800, 400), QColor(QStringLiteral("#ff453a")), QColor(QStringLiteral("#0a84ff"))));
+    if (square_source_path.isEmpty() || wide_source_path.isEmpty()) {
+      return fail("layer crop source images should save");
+    }
+
+    controller.addPhotoItem(square_source_path, QStringLiteral("crop square source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.replaceSelectedPhotoItem(wide_source_path, QStringLiteral("crop wide source"), QString{});
+    controller.setCurrentFitMode(QStringLiteral("cover"));
+    controller.setSelectedItemMediaScale(1.0);
+    controller.setSelectedItemMediaOffset(1.0, 0.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("mediaScale")).toDouble() != 1.0 ||
+        selection.value(QStringLiteral("mediaOffsetX")).toDouble() != 1.0 ||
+        selection.value(QStringLiteral("mediaOffsetY")).toDouble() != 0.0) {
+      return fail("layer media crop controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-media-crop"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("cropped layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("layer media pan should shift the exported crop inside the selected frame");
+    }
+
+    controller.setDocumentName(QStringLiteral("Layer Media Crop Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("layer media crop carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("layer media crop carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("mediaScale")).toDouble() != 1.0 ||
+        restored_items.at(0).toMap().value(QStringLiteral("mediaOffsetX")).toDouble() != 1.0 ||
+        restored_items.at(0).toMap().value(QStringLiteral("mediaOffsetY")).toDouble() != 0.0) {
+      return fail("saved carousel documents should restore layer media crop settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    QImage mask_source(QSize(400, 400), QImage::Format_ARGB32);
+    mask_source.fill(QColor(QStringLiteral("#0a84ff")));
+    const auto mask_source_path = write_image(dir, QStringLiteral("ellipse-mask-source.png"), mask_source);
+    if (mask_source_path.isEmpty()) {
+      return fail("ellipse mask source image should save");
+    }
+
+    controller.addPhotoItem(mask_source_path, QStringLiteral("ellipse mask source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.setSelectedItemMediaMaskShape(QStringLiteral("ellipse"));
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("mediaMaskShape")).toString() != QStringLiteral("ellipse")) {
+      return fail("layer media mask control should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-media-mask"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("masked layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(350, 485), QColor(QStringLiteral("#ffffff"))) ||
+        !color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("ellipse media mask should clip exported photo corners without removing the content center");
+    }
+
+    controller.setDocumentName(QStringLiteral("Layer Media Mask Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("layer media mask carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("layer media mask carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("mediaMaskShape")).toString() !=
+            QStringLiteral("ellipse")) {
+      return fail("saved carousel documents should restore layer media mask settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    QImage frame_source(QSize(400, 400), QImage::Format_ARGB32);
+    frame_source.fill(QColor(QStringLiteral("#0a84ff")));
+    const auto frame_source_path = write_image(dir, QStringLiteral("frame-source.png"), frame_source);
+    if (frame_source_path.isEmpty()) {
+      return fail("frame source image should save");
+    }
+
+    controller.addPhotoItem(frame_source_path, QStringLiteral("frame source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.setSelectedItemFrameColor(QStringLiteral("#ff453a"));
+    controller.setSelectedItemFrameWidth(40.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("frameColor")).toString() != QStringLiteral("#ff453a") ||
+        selection.value(QStringLiteral("frameWidth")).toDouble() != 40.0) {
+      return fail("layer frame controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-frame"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("framed layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 490), QColor(QStringLiteral("#ff453a"))) ||
+        !color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("layer frame should render over exported image edges without covering the content center");
+    }
+
+    controller.setDocumentName(QStringLiteral("Layer Frame Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("layer frame carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("layer frame carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("frameColor")).toString() != QStringLiteral("#ff453a") ||
+        restored_items.at(0).toMap().value(QStringLiteral("frameWidth")).toDouble() != 40.0) {
+      return fail("saved carousel documents should restore layer frame settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    QImage radius_source(QSize(400, 400), QImage::Format_ARGB32);
+    radius_source.fill(QColor(QStringLiteral("#0a84ff")));
+    const auto radius_source_path = write_image(dir, QStringLiteral("radius-source.png"), radius_source);
+    if (radius_source_path.isEmpty()) {
+      return fail("rounded corner source image should save");
+    }
+
+    controller.addPhotoItem(radius_source_path, QStringLiteral("radius source"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(400.0, 400.0);
+    controller.setSelectedItemCornerRadius(140.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("cornerRadius")).toDouble() != 140.0) {
+      return fail("layer radius control should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-radius"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("rounded layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(350, 485), QColor(QStringLiteral("#ffffff"))) ||
+        !color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#0a84ff")))) {
+      return fail("rounded layer radius should clip exported photo corners without removing the content center");
+    }
+
+    controller.setDocumentName(QStringLiteral("Rounded Layer Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("rounded layer carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("rounded layer carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("cornerRadius")).toDouble() != 140.0) {
+      return fail("saved carousel documents should restore layer radius settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    const auto red_id = controller.selectedItemId();
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(420.0, 420.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#ff453a"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(420.0, 420.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#0a84ff"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    const auto green_id = controller.selectedItemId();
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(420.0, 420.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#34c759"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+
+    controller.selectItem(red_id);
+    controller.bringSelectedToFront();
+    auto items = controller.canvasItems();
+    if (items.size() != 3 || items.back().toMap().value(QStringLiteral("itemId")).toString() != red_id) {
+      return fail("bring to front should move the selected layer to the top of the layer stack");
+    }
+
+    auto export_dir_path = dir.filePath(QStringLiteral("export-arrange-front"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("front-arranged carousel should export");
+    }
+    QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#ff453a")))) {
+      return fail("bring to front should affect exported layer compositing order");
+    }
+
+    controller.sendSelectedToBack();
+    items = controller.canvasItems();
+    if (items.size() != 3 || items.front().toMap().value(QStringLiteral("itemId")).toString() != red_id) {
+      return fail("send to back should move the selected layer to the bottom of the layer stack");
+    }
+
+    export_dir_path = dir.filePath(QStringLiteral("export-arrange-back"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("back-arranged carousel should export");
+    }
+    slide = QImage(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#34c759"))) ||
+        items.back().toMap().value(QStringLiteral("itemId")).toString() != green_id) {
+      return fail("send to back should leave later layers composited above the selected layer");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    controller.addShapeItem(QStringLiteral("rectangle"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(300.0, 300.0);
+    controller.setSelectedShapeFillColor(QStringLiteral("#0a84ff"));
+    controller.setSelectedShapeStrokeWidth(0.0);
+    controller.setSelectedItemShadowColor(QStringLiteral("#000000"));
+    controller.setSelectedItemShadowOpacity(1.0);
+    controller.setSelectedItemShadowOffset(80.0, 80.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("shadowColor")).toString() != QStringLiteral("#000000") ||
+        selection.value(QStringLiteral("shadowOpacity")).toDouble() != 1.0 ||
+        selection.value(QStringLiteral("shadowOffsetX")).toDouble() != 80.0 ||
+        selection.value(QStringLiteral("shadowOffsetY")).toDouble() != 80.0) {
+      return fail("layer shadow controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-layer-shadow"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("shadowed layer carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(540, 675), QColor(QStringLiteral("#0a84ff"))) ||
+        !color_matches(slide.pixelColor(740, 860), QColor(QStringLiteral("#000000")))) {
+      return fail("layer shadow should render behind exported content at the configured offset");
+    }
+
+    controller.setDocumentName(QStringLiteral("Layer Shadow Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("layer shadow carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("layer shadow carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("shadowColor")).toString() != QStringLiteral("#000000") ||
+        restored_items.at(0).toMap().value(QStringLiteral("shadowOpacity")).toDouble() != 1.0 ||
+        restored_items.at(0).toMap().value(QStringLiteral("shadowOffsetX")).toDouble() != 80.0 ||
+        restored_items.at(0).toMap().value(QStringLiteral("shadowOffsetY")).toDouble() != 80.0) {
+      return fail("saved carousel documents should restore layer shadow settings");
     }
   }
 
@@ -421,6 +1163,282 @@ int main(int argc, char** argv) {
     }
     if (selection.value(QStringLiteral("height")).toDouble() <= resized_height) {
       return fail("narrowing a text layer should recompute its wrapped text height");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.addTextItem(QStringLiteral("STYLE"));
+    controller.setSelectedItemCenter(540.0, 240.0);
+    controller.setSelectedItemSize(720.0, 220.0);
+    controller.setSelectedTextColor(QStringLiteral("#000000"));
+    controller.setSelectedTextPointSize(128.0);
+    controller.setSelectedTextFontFamily(QStringLiteral("serif"));
+    controller.setSelectedTextWeight(QStringLiteral("black"));
+    controller.setSelectedTextItalic(true);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("textFontFamily")).toString() != QStringLiteral("serif") ||
+        selection.value(QStringLiteral("textWeight")).toString() != QStringLiteral("black") ||
+        !selection.value(QStringLiteral("textItalic")).toBool()) {
+      return fail("text typography controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-text-typography"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("text typography carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!region_contains_non_background(
+            slide,
+            QRect(180, 100, 720, 300),
+            QColor(QStringLiteral("#fbf7f1")))) {
+      return fail("styled text should render into exported slides");
+    }
+
+    controller.setDocumentName(QStringLiteral("Text Typography Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("text typography carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("text typography carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("textFontFamily")).toString() != QStringLiteral("serif") ||
+        restored_items.at(0).toMap().value(QStringLiteral("textWeight")).toString() != QStringLiteral("black") ||
+        !restored_items.at(0).toMap().value(QStringLiteral("textItalic")).toBool()) {
+      return fail("saved carousel documents should restore text typography settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    controller.addTextItem(QStringLiteral("OUTLINE"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(820.0, 260.0);
+    controller.setSelectedTextColor(QStringLiteral("#ffffff"));
+    controller.setSelectedTextPointSize(150.0);
+    controller.setSelectedTextWeight(QStringLiteral("black"));
+    controller.setSelectedTextStrokeColor(QStringLiteral("#000000"));
+    controller.setSelectedTextStrokeWidth(10.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("textStrokeColor")).toString() != QStringLiteral("#000000") ||
+        selection.value(QStringLiteral("textStrokeWidth")).toDouble() != 10.0) {
+      return fail("text stroke controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-text-stroke"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("text stroke carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!region_contains_non_background(
+            slide,
+            QRect(100, 500, 880, 350),
+            QColor(QStringLiteral("#ffffff")))) {
+      return fail("text stroke should render visible outline pixels into exported slides");
+    }
+
+    controller.setDocumentName(QStringLiteral("Text Stroke Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("text stroke carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("text stroke carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("textStrokeColor")).toString() != QStringLiteral("#000000") ||
+        restored_items.at(0).toMap().value(QStringLiteral("textStrokeWidth")).toDouble() != 10.0) {
+      return fail("saved carousel documents should restore text stroke settings");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    controller.setCurrentSlideBackgroundColor(QStringLiteral("#ffffff"));
+    controller.addTextItem(QStringLiteral("BOX"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(720.0, 280.0);
+    controller.setSelectedTextColor(QStringLiteral("#000000"));
+    controller.setSelectedTextPointSize(150.0);
+    controller.setSelectedTextWeight(QStringLiteral("black"));
+    controller.setSelectedTextBackgroundColor(QStringLiteral("#ff453a"));
+    controller.setSelectedTextBackgroundOpacity(1.0);
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("textBackgroundColor")).toString() != QStringLiteral("#ff453a") ||
+        selection.value(QStringLiteral("textBackgroundOpacity")).toDouble() != 1.0) {
+      return fail("text background controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-text-background"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("text background carousel should export");
+    }
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    if (!color_matches(slide.pixelColor(220, 555), QColor(QStringLiteral("#ff453a"))) ||
+        !region_contains_non_background(
+            slide,
+            QRect(180, 535, 720, 280),
+            QColor(QStringLiteral("#ffffff")))) {
+      return fail("text background should render behind exported text frame");
+    }
+
+    controller.setDocumentName(QStringLiteral("Text Background Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("text background carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("text background carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("textBackgroundColor")).toString() !=
+            QStringLiteral("#ff453a") ||
+        restored_items.at(0).toMap().value(QStringLiteral("textBackgroundOpacity")).toDouble() != 1.0) {
+      return fail("saved carousel documents should restore text background settings");
+    }
+  }
+
+  {
+    const auto export_text_bounds = [&](double tracking, const QString& export_name) {
+      CarouselDocumentController controller;
+      const auto white_path = write_image(
+          dir,
+          export_name + QStringLiteral("-background.png"),
+          QImage(QSize(1080, 1350), QImage::Format_ARGB32));
+      if (white_path.isEmpty()) {
+        return QRect();
+      }
+
+      QImage white_image(white_path);
+      white_image.fill(QColor(QStringLiteral("#ffffff")));
+      if (!white_image.save(white_path)) {
+        return QRect();
+      }
+
+      controller.assignPrimaryImage(white_path, QStringLiteral("white"));
+      controller.addTextItem(QStringLiteral("AAAA"));
+      controller.setSelectedItemCenter(540.0, 675.0);
+      controller.setSelectedItemSize(860.0, 260.0);
+      controller.setSelectedTextColor(QStringLiteral("#000000"));
+      controller.setSelectedTextPointSize(160.0);
+      controller.setSelectedTextLetterSpacing(tracking);
+
+      const auto export_dir_path = dir.filePath(export_name);
+      QDir().mkpath(export_dir_path);
+      if (!controller.exportCarouselToDirectory(export_dir_path)) {
+        return QRect();
+      }
+      const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+      return non_background_bounds(slide, QRect(110, 545, 860, 260), QColor(QStringLiteral("#ffffff")));
+    };
+
+    const QRect normal_bounds = export_text_bounds(0.0, QStringLiteral("export-text-tracking-normal"));
+    const QRect tracked_bounds = export_text_bounds(36.0, QStringLiteral("export-text-tracking-wide"));
+    if (normal_bounds.isNull() || tracked_bounds.isNull() ||
+        tracked_bounds.width() <= normal_bounds.width() + 60) {
+      return fail("text tracking should increase exported text width");
+    }
+
+    CarouselDocumentController controller;
+    controller.addTextItem(QStringLiteral("Tracked"));
+    controller.setSelectedTextLetterSpacing(24.0);
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("textLetterSpacing")).toDouble() != 24.0) {
+      return fail("text tracking controls should update selection metadata");
+    }
+
+    controller.setDocumentName(QStringLiteral("Text Tracking Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("text tracking carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("text tracking carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("textLetterSpacing")).toDouble() != 24.0) {
+      return fail("saved carousel documents should restore text tracking");
+    }
+  }
+
+  {
+    CarouselDocumentController controller;
+    const auto white_path = write_image(
+        dir,
+        QStringLiteral("text-alignment-background.png"),
+        QImage(QSize(1080, 1350), QImage::Format_ARGB32));
+    if (white_path.isEmpty()) {
+      return fail("text alignment background image should save");
+    }
+
+    QImage white_image(white_path);
+    white_image.fill(QColor(QStringLiteral("#ffffff")));
+    if (!white_image.save(white_path)) {
+      return fail("text alignment background image should save after fill");
+    }
+
+    controller.assignPrimaryImage(white_path, QStringLiteral("white"));
+    controller.addTextItem(QStringLiteral("X"));
+    controller.setSelectedItemCenter(540.0, 675.0);
+    controller.setSelectedItemSize(720.0, 600.0);
+    controller.setSelectedTextColor(QStringLiteral("#000000"));
+    controller.setSelectedTextPointSize(180.0);
+    controller.setSelectedTextHorizontalAlignment(QStringLiteral("right"));
+    controller.setSelectedTextVerticalAlignment(QStringLiteral("bottom"));
+
+    auto selection = controller.selectionDetails();
+    if (selection.value(QStringLiteral("textHorizontalAlignment")).toString() != QStringLiteral("right") ||
+        selection.value(QStringLiteral("textVerticalAlignment")).toString() != QStringLiteral("bottom")) {
+      return fail("text alignment controls should update selection metadata");
+    }
+
+    const auto export_dir_path = dir.filePath(QStringLiteral("export-text-alignment"));
+    QDir().mkpath(export_dir_path);
+    if (!controller.exportCarouselToDirectory(export_dir_path)) {
+      return fail("text alignment carousel should export");
+    }
+
+    const QImage slide(QDir(export_dir_path).filePath(QStringLiteral("carousel-01.png")));
+    const QRect text_frame(180, 375, 720, 600);
+    const QRect ink_bounds = non_background_bounds(slide, text_frame, QColor(QStringLiteral("#ffffff")));
+    if (ink_bounds.isNull() || ink_bounds.center().x() <= text_frame.center().x() ||
+        ink_bounds.center().y() <= text_frame.center().y()) {
+      return fail("right and bottom text alignment should affect exported text placement");
+    }
+
+    controller.setDocumentName(QStringLiteral("Text Alignment Carousel"));
+    if (!controller.saveDocument()) {
+      return fail("text alignment carousel should save");
+    }
+
+    CarouselDocumentController restored;
+    if (!restored.loadDocument(controller.savedDocumentId())) {
+      return fail("text alignment carousel should load");
+    }
+    const auto restored_items = restored.canvasItems();
+    if (restored_items.size() != 1 ||
+        restored_items.at(0).toMap().value(QStringLiteral("textHorizontalAlignment")).toString() !=
+            QStringLiteral("right") ||
+        restored_items.at(0).toMap().value(QStringLiteral("textVerticalAlignment")).toString() !=
+            QStringLiteral("bottom")) {
+      return fail("saved carousel documents should restore text alignment settings");
     }
   }
 

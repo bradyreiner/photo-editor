@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import "../components"
 
@@ -9,6 +10,9 @@ Column {
     required property var editRoot
     Theme { id: theme }
     property string maskSearchQuery: ""
+    property bool diagnosticMaskPreviewModesVisible: false
+    readonly property string normalMaskDisplayContract: "normal-mask-display|overlay|outline|marching-ants|hidden|single-color-overlay|diagnostics-collapsed:v2"
+    readonly property string diagnosticMaskDisplayContract: "diagnostic-mask-display|grayscale-alpha|isolated-mask|advanced-toggle|required-for-matte-inspection:v2"
 
     component MaskSection: InspectorSection {
         showAccentMarker: false
@@ -20,11 +24,91 @@ Column {
     }
 
     readonly property var activeMaskData: editorPreview.hasActiveMask &&
-                                          editorPreview.activeMaskIndex >= 0 &&
-                                          editorPreview.activeMaskIndex < editorPreview.maskStack.length
-                                          ? editorPreview.maskStack[editorPreview.activeMaskIndex]
-                                          : null
+                                           editorPreview.activeMaskIndex >= 0 &&
+                                           editorPreview.activeMaskIndex < editorPreview.maskStack.length
+                                           ? editorPreview.maskStack[editorPreview.activeMaskIndex]
+                                           : null
     readonly property color activeMaskAccent: activeMaskData ? editRoot.maskAccent(activeMaskData) : theme.accentCool400
+    readonly property color maskPreviewOverlayResolvedColor:
+        String(editorPreview.maskPreviewOverlayColor || "").length > 0
+        ? editorPreview.maskPreviewOverlayColor
+        : root.activeMaskAccent
+
+    ColorDialog {
+        id: maskPreviewOverlayColorDialog
+        objectName: "maskPreviewOverlayColorDialog"
+        title: "Selection Overlay Color"
+        selectedColor: root.maskPreviewOverlayResolvedColor
+        onAccepted: editorPreview.maskPreviewOverlayColor = selectedColor
+    }
+
+    function smartSelectionRuntimeLabel() {
+        return String(editorPreview.smartSelectionRuntimeLabel || "Local Smart Select")
+    }
+
+    function inpaintRuntimeLabel() {
+        return String(editorPreview.inpaintRuntimeLabel || "Local CPU Fill")
+    }
+
+    function maskCompareGroupActive(groupKey) {
+        return editorPreview.maskCompareAdjustmentGroups.indexOf(groupKey) >= 0
+    }
+
+    function toggleMaskCompareGroup(groupKey) {
+        const groups = editorPreview.maskCompareAdjustmentGroups.slice(0)
+        const existingIndex = groups.indexOf(groupKey)
+        if (existingIndex >= 0)
+            groups.splice(existingIndex, 1)
+        else
+            groups.push(groupKey)
+        editorPreview.maskCompareAdjustmentGroups = groups
+    }
+
+    function renameMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        activeMaskNameField.forceActiveFocus()
+        activeMaskNameField.selectAll()
+    }
+
+    function toggleMaskRowEnabled(flatIndex, enabled) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskEnabled = !enabled
+    }
+
+    function toggleMaskRowSolo(flatIndex, solo) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskSolo = !solo
+    }
+
+    function toggleMaskRowLocked(flatIndex, locked) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskLocked = !locked
+    }
+
+    function moveMaskRow(flatIndex, offset) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.moveActiveMask(offset)
+    }
+
+    function duplicateMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.duplicateActiveMask()
+    }
+
+    function deleteMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.removeActiveMask()
+    }
+
+    function applyRetouchRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.applyActiveRetouch()
+    }
+
+    function cancelRetouchRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.cancelActiveRetouch()
+    }
 
     function retouchAccent(mode) {
         if (mode === "clone")
@@ -100,6 +184,111 @@ Column {
         return searchable.indexOf(query) >= 0
     }
 
+    function maskSearchText() {
+        return root.maskSearchQuery.trim().toLowerCase()
+    }
+
+    function maskSearchMatches(text) {
+        const query = root.maskSearchText()
+        return query.length === 0 || String(text || "").toLowerCase().indexOf(query) >= 0
+    }
+
+    function maskSetMatchesSearch(maskSet) {
+        if (root.maskSearchText().length === 0)
+            return true
+        if (root.maskSearchMatches((maskSet.name || "") + " " + (maskSet.id || "")))
+            return true
+        const sources = maskSet.sources || []
+        for (let index = 0; index < sources.length; ++index) {
+            if (root.maskMatchesSearch(sources[index]))
+                return true
+        }
+        return false
+    }
+
+    function maskSearchToolItems() {
+        return [
+            { category: "Tool", label: "Smart Select", detail: "Create or refine with object selection", keywords: "smart select object subject ai local runtime", action: "smart" },
+            { category: "Tool", label: "Brush Add", detail: "Paint an additive brush component", keywords: "brush add paint selection", action: "brush-add" },
+            { category: "Tool", label: "Brush Subtract", detail: "Paint an erasing brush component", keywords: "brush subtract erase remove paint", action: "brush-subtract" },
+            { category: "Tool", label: "Lasso", detail: "Draw a freeform selection", keywords: "lasso freeform manual selection", action: "lasso" },
+            { category: "Tool", label: "Polygon", detail: "Click editable polygon points", keywords: "polygon manual points selection", action: "polygon" },
+            { category: "Tool", label: "Linear", detail: "Create a linear gradient selection", keywords: "linear gradient mask", action: "linear" },
+            { category: "Tool", label: "Radial", detail: "Create a radial selection", keywords: "radial ellipse circular selection", action: "radial" },
+            { category: "Tool", label: "Luma Range", detail: "Select by luminance", keywords: "luma luminance range brightness", action: "luminance" },
+            { category: "Tool", label: "Color Range", detail: "Select by sampled color", keywords: "color range hue saturation sample eyedropper", action: "color" },
+            { category: "Tool", label: "Depth Range", detail: "Select by depth metadata", keywords: "depth range portrait", action: "depth" },
+            { category: "Tool", label: "Subject", detail: "Create a subject selection", keywords: "subject foreground smart select generated", action: "subject" }
+        ]
+    }
+
+    function maskSearchAdjustmentItems() {
+        return [
+            { category: "Control", label: "Exposure", detail: "Tone adjustment", keywords: "exposure tone ev light local adjustment" },
+            { category: "Control", label: "Contrast", detail: "Tone adjustment", keywords: "contrast tone local adjustment" },
+            { category: "Control", label: "Highlights", detail: "Tone adjustment", keywords: "highlights tone local adjustment" },
+            { category: "Control", label: "Shadows", detail: "Tone adjustment", keywords: "shadows tone local adjustment" },
+            { category: "Control", label: "Temperature", detail: "Color adjustment", keywords: "temperature warmth color white balance local adjustment" },
+            { category: "Control", label: "Tint", detail: "Color adjustment", keywords: "tint color local adjustment" },
+            { category: "Control", label: "Vibrance", detail: "Presence adjustment", keywords: "vibrance presence local adjustment" },
+            { category: "Control", label: "Overall Saturation", detail: "Presence adjustment", keywords: "saturation chroma presence local adjustment" },
+            { category: "Control", label: "Hue Shift", detail: "Presence adjustment", keywords: "hue shift color local adjustment" },
+            { category: "Control", label: "Chroma Shift", detail: "Presence adjustment", keywords: "chroma saturation shift local adjustment" },
+            { category: "Control", label: "Remove", detail: "Effects adjustment", keywords: "remove strength effects retouch local adjustment" },
+            { category: "Control", label: "Heal Texture", detail: "Detail adjustment", keywords: "heal texture detail retouch local adjustment" },
+            { category: "Control", label: "Heal Color", detail: "Detail adjustment", keywords: "heal color detail retouch local adjustment" }
+        ]
+    }
+
+    function maskSearchResults() {
+        const query = root.maskSearchText()
+        if (query.length === 0)
+            return []
+        const results = []
+        const addIfMatch = function(item) {
+            if (root.maskSearchMatches(item.label + " " + item.detail + " " + item.keywords))
+                results.push(item)
+        }
+        root.maskSearchToolItems().forEach(addIfMatch)
+        const sets = editorPreview.maskSets || []
+        for (let setIndex = 0; setIndex < sets.length; ++setIndex) {
+            const sources = sets[setIndex].sources || []
+            if (root.maskSearchMatches((sets[setIndex].name || "") + " mask components")) {
+                results.push({ category: "Mask", label: sets[setIndex].name, detail: sources.length + " components", flatIndex: sources.length > 0 ? sources[0].flatIndex : -1 })
+            }
+            for (let sourceIndex = 0; sourceIndex < sources.length; ++sourceIndex) {
+                const source = sources[sourceIndex]
+                if (root.maskMatchesSearch(source)) {
+                    results.push({ category: "Mask", label: source.name || source.kind, detail: (source.maskSetName || sets[setIndex].name || "Mask") + " · " + (source.operationBadge || source.operation || "add"), flatIndex: source.flatIndex })
+                }
+            }
+        }
+        root.maskSearchAdjustmentItems().forEach(addIfMatch)
+        return results.slice(0, 12)
+    }
+
+    function activateMaskSearchResult(result) {
+        if (result.flatIndex !== undefined && result.flatIndex >= 0) {
+            editorPreview.activeMaskIndex = result.flatIndex
+            return
+        }
+        if (result.action === "smart") {
+            editorPreview.addMask("object")
+        } else if (result.action === "brush-add") {
+            editorPreview.startSelectionBrush(false)
+        } else if (result.action === "brush-subtract") {
+            editorPreview.startSelectionBrush(true)
+        } else if (result.action === "lasso") {
+            editorPreview.startLassoSelection(false)
+        } else if (result.action === "polygon") {
+            editorPreview.startPolygonSelection(false)
+        } else if (result.action === "subject") {
+            editorPreview.addAIMask("subject")
+        } else if (result.action && result.action.length > 0) {
+            editorPreview.addMask(result.action)
+        }
+    }
+
     function retouchModeLabel(modeName) {
         const mode = String(modeName || "").trim().toLowerCase()
         if (mode === "remove")
@@ -115,7 +304,7 @@ Column {
         if (mode === "red-eye")
             return "Red Eye"
         if (mode === "skin-cleanup")
-            return "Skin Cleanup"
+            return "Skin Cleanup (Heuristic)"
         if (mode === "frequency-smoothing")
             return "Frequency Smoothing"
         return "Retouch"
@@ -154,11 +343,17 @@ Column {
         if (kind === "subject")
             return "Subject source"
         if (kind === "sky")
-            return "Sky source"
+            return "Sky heuristic source"
         if (kind === "background")
-            return "Background source"
+            return "Background derived source"
         if (kind === "people")
-            return "People source"
+            return "People foreground source"
+        if (kind === "face")
+            return "Face source unsupported"
+        if (kind === "hair")
+            return "Hair source unsupported"
+        if (kind === "clothing")
+            return "Clothing source unsupported"
         if (kind === "polygon")
             return "Polygon source"
         if (kind === "lasso")
@@ -170,7 +365,7 @@ Column {
         if (kind === "depth")
             return "Depth range"
         if (kind.length === 0)
-            return "Mask source"
+            return "Selection source"
         return kind.charAt(0).toUpperCase() + kind.slice(1) + " source"
     }
 
@@ -189,13 +384,43 @@ Column {
         return "Add"
     }
 
+    function maskOutlineQualityLabel(tierName) {
+        const tier = String(tierName || "hidden").trim().toLowerCase()
+        if (tier === "live-vector")
+            return "Outline: Live"
+        if (tier === "preview-alpha")
+            return "Outline: Preview alpha"
+        if (tier === "vector-path")
+            return "Outline: Vector"
+        if (tier === "settled-alpha")
+            return "Outline: Alpha"
+        if (tier === "unavailable")
+            return "Outline: Unavailable"
+        return "Outline: Hidden"
+    }
+
+    function maskPreviewQualityLabel(tierName) {
+        const tier = String(tierName || "hidden").trim().toLowerCase()
+        if (tier === "full")
+            return "Preview: Full Res"
+        if (tier === "high")
+            return "Preview: High Res"
+        if (tier === "draft")
+            return "Preview: Draft"
+        if (tier === "outline")
+            return "Preview: Outline Only"
+        return "Preview: Hidden"
+    }
+
     function maskStateSummary(mask) {
         if (!mask)
-            return "No active mask"
+            return "No active selection"
         const parts = []
         parts.push(root.maskKindLabel(mask.kind))
         parts.push(root.maskOperationLabel(mask.operation))
         parts.push((mask.invert || mask.selectionInvert) ? "Inverted" : "Normal")
+        parts.push(root.maskPreviewQualityLabel(editorPreview.activeMaskPreviewQualityTier))
+        parts.push(root.maskOutlineQualityLabel(editorPreview.activeMaskOutlineQualityTier))
         if (!(mask.enabled !== false))
             parts.push("Off")
         if (mask.solo)
@@ -218,7 +443,7 @@ Column {
         return [
             {
                 "key": "expand",
-                "label": editorPreview.activeMaskSelectionExpand < 0 ? "Contract" : "Expand",
+                "label": "Shift",
                 "value": Math.min(1, Math.abs(editorPreview.activeMaskSelectionExpand) / 100),
                 "accent": editorPreview.activeMaskSelectionExpand < 0 ? "#d98962" : root.activeMaskAccent
             },
@@ -242,7 +467,7 @@ Column {
             },
             {
                 "key": "edge",
-                "label": "Edge",
+                "label": "Contrast",
                 "value": Math.min(1, editorPreview.activeMaskSelectionEdgeContrast / 100),
                 "accent": "#f2c56b"
             },
@@ -326,7 +551,7 @@ Column {
                           ? (editorPreview.activeMaskToolRole === "retouch"
                              ? editRoot.activeToolLabel()
                              : "Editing " + editorPreview.activeMaskName)
-                          : "No active mask"
+                          : "No active selection"
                     color: "#f2f4f6"
                     font.family: theme.fontDisplay
                     font.pixelSize: 13
@@ -359,56 +584,22 @@ Column {
         }
 
         Flow {
+            objectName: "normalMaskPreviewModeFlow"
+            readonly property string displayContract: root.normalMaskDisplayContract
             Layout.fillWidth: true
             width: parent.width
             spacing: 6
 
             ActionButton {
                 objectName: "maskPreviewOverlayButton"
-                text: "Overlay"
+                text: "Color Overlay"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "overlay"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Show a colored mask overlay on the image."
+                tooltipText: "Show a colored selection overlay on the image."
                 onClicked: editorPreview.maskPreviewMode = "overlay"
-            }
-
-            ActionButton {
-                objectName: "maskPreviewMatteButton"
-                text: "Matte"
-                compact: true
-                accent: root.activeMaskAccent
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.maskPreviewMode === "grayscale"
-                enabled: editorPreview.hasAsset
-                tooltipText: "Show a neutral matte without the tinted overlay."
-                onClicked: editorPreview.maskPreviewMode = "grayscale"
-            }
-
-            ActionButton {
-                objectName: "maskPreviewLightButton"
-                text: "On Light"
-                compact: true
-                accent: root.activeMaskAccent
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.maskPreviewMode === "black-on-white"
-                enabled: editorPreview.hasAsset
-                tooltipText: "Show the mask against a light matte."
-                onClicked: editorPreview.maskPreviewMode = "black-on-white"
-            }
-
-            ActionButton {
-                objectName: "maskPreviewDarkButton"
-                text: "On Dark"
-                compact: true
-                accent: root.activeMaskAccent
-                tone: active ? "primary" : "secondary"
-                active: editorPreview.maskPreviewMode === "white-on-black"
-                enabled: editorPreview.hasAsset
-                tooltipText: "Show the mask against a dark matte."
-                onClicked: editorPreview.maskPreviewMode = "white-on-black"
             }
 
             ActionButton {
@@ -417,34 +608,256 @@ Column {
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
-                active: editorPreview.maskPreviewMode === "marching-ants"
+                active: editorPreview.maskPreviewDisplayMode === "outline"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Show a solid selection boundary only."
+                onClicked: editorPreview.maskPreviewMode = "outline"
+            }
+
+            ActionButton {
+                objectName: "maskPreviewMarchingAntsButton"
+                text: "Marching Ants"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewDisplayMode === "marching-ants"
                 enabled: editorPreview.hasAsset
                 tooltipText: "Show the animated selection boundary only."
                 onClicked: editorPreview.maskPreviewMode = "marching-ants"
             }
 
             ActionButton {
+                objectName: "maskPreviewNoneButton"
+                text: "Hidden"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewDisplayMode === "hidden"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Hide selection preview overlays."
+                onClicked: editorPreview.maskPreviewMode = "hidden"
+            }
+        }
+
+        ActionButton {
+            objectName: "maskPreviewDiagnosticsToggleButton"
+            width: parent.width
+            text: root.diagnosticMaskPreviewModesVisible ? "Hide Matte Diagnostics" : "Matte Diagnostics"
+            compact: true
+            accent: root.activeMaskAccent
+            tone: root.diagnosticMaskPreviewModesVisible ? "primary" : "secondary"
+            active: root.diagnosticMaskPreviewModesVisible
+            enabled: editorPreview.hasAsset
+            tooltipText: "Show deliberate matte inspection modes separately from the normal selection overlay."
+            onClicked: root.diagnosticMaskPreviewModesVisible = !root.diagnosticMaskPreviewModesVisible
+        }
+
+        Flow {
+            objectName: "diagnosticMaskPreviewModeFlow"
+            readonly property string displayContract: root.diagnosticMaskDisplayContract
+            visible: root.diagnosticMaskPreviewModesVisible
+            Layout.fillWidth: true
+            width: parent.width
+            spacing: 6
+
+            ActionButton {
+                objectName: "maskPreviewColorOnBwButton"
+                text: "Color on B&W"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewMode === "color-on-bw"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Show the colored selection overlay against a muted black-and-white image context."
+                onClicked: editorPreview.maskPreviewMode = "color-on-bw"
+            }
+
+            ActionButton {
+                objectName: "maskPreviewImageOnBwButton"
+                text: "Image on B&W"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewMode === "image-on-bw"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Inspect selected-image coverage against a muted black-and-white image context."
+                onClicked: editorPreview.maskPreviewMode = "image-on-bw"
+            }
+
+            ActionButton {
+                objectName: "maskPreviewMatteButton"
+                text: "Grayscale Alpha"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewDisplayMode === "grayscale-alpha"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Show a neutral black-and-white matte without the tinted overlay."
+                onClicked: editorPreview.maskPreviewMode = "grayscale-alpha"
+            }
+
+            ActionButton {
+                objectName: "maskPreviewOnBlackButton"
+                text: "Isolated Mask"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewDisplayMode === "isolated-mask"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Inspect the selected pixels on a black backing."
+                onClicked: editorPreview.maskPreviewMode = "isolated-mask"
+            }
+
+            ActionButton {
+                objectName: "maskPreviewOnWhiteButton"
+                text: "On White"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: editorPreview.maskPreviewMode === "on-white"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Inspect the selection overlay on a white backing."
+                onClicked: editorPreview.maskPreviewMode = "on-white"
+            }
+
+            ActionButton {
                 objectName: "maskPreviewEdgeButton"
+                visible: false
                 text: "Edge"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "edge"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Show only semi-transparent mask edges."
+                tooltipText: "Show only semi-transparent selection edges."
                 onClicked: editorPreview.maskPreviewMode = "edge"
             }
 
             ActionButton {
+                objectName: "maskPreviewRefinementEdgeButton"
+                visible: false
+                text: "Refine Edge"
+                compact: true
+                accent: root.activeMaskAccent
+                tone: active ? "primary" : "secondary"
+                active: false
+                enabled: false
+                tooltipText: "Show only matte pixels changed by selection refinement controls."
+            }
+
+            ActionButton {
                 objectName: "maskPreviewAffectedButton"
+                visible: false
                 text: "Affected"
                 compact: true
                 accent: root.activeMaskAccent
                 tone: active ? "primary" : "secondary"
                 active: editorPreview.maskPreviewMode === "affected"
                 enabled: editorPreview.hasAsset
-                tooltipText: "Highlight pixels affected by the active mask."
+                tooltipText: "Highlight pixels affected by the active selection."
                 onClicked: editorPreview.maskPreviewMode = "affected"
+            }
+        }
+
+        InspectorSlider {
+            objectName: "maskPreviewOverlayOpacitySlider"
+            width: parent.width
+            label: "OVERLAY OPACITY"
+            from: 0
+            to: 100
+            stepSize: 1
+            defaultValue: 100
+            value: Math.round(editorPreview.maskPreviewOverlayOpacity * 100)
+            valueText: Math.round(editorPreview.maskPreviewOverlayOpacity * 100).toString() + "%"
+            accent: root.maskPreviewOverlayResolvedColor
+            onValueDragged: function(value) { editorPreview.maskPreviewOverlayOpacity = value / 100 }
+            onResetRequested: editorPreview.maskPreviewOverlayOpacity = 1.0
+        }
+
+        RowLayout {
+            width: parent.width
+            spacing: 8
+
+            Rectangle {
+                objectName: "maskPreviewOverlayColorSwatch"
+                Layout.preferredWidth: 32
+                Layout.preferredHeight: 24
+                radius: 3
+                color: root.maskPreviewOverlayResolvedColor
+                border.width: 1
+                border.color: theme.alpha(theme.polar, 0.36)
+
+                MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: maskPreviewOverlayColorDialog.open()
+                }
+            }
+
+            ActionButton {
+                objectName: "maskPreviewOverlayColorButton"
+                Layout.fillWidth: true
+                text: "Overlay Color"
+                compact: true
+                accent: root.maskPreviewOverlayResolvedColor
+                tooltipText: "Pick the selection preview overlay color."
+                onClicked: maskPreviewOverlayColorDialog.open()
+            }
+
+            ActionButton {
+                objectName: "maskPreviewOverlayColorResetButton"
+                text: "Auto"
+                compact: true
+                accent: root.activeMaskAccent
+                tooltipText: "Use automatic operation colors for selection preview overlays."
+                onClicked: editorPreview.maskPreviewOverlayColor = ""
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+
+            ActionButton {
+                objectName: "maskPreviewShowActiveOnlyButton"
+                Layout.fillWidth: true
+                text: "Active Only"
+                compact: true
+                accent: root.maskPreviewOverlayResolvedColor
+                tone: !editorPreview.maskPreviewShowAll ? "primary" : "secondary"
+                active: !editorPreview.maskPreviewShowAll
+                enabled: editorPreview.hasAsset
+                tooltipText: "Show only the active selection mask preview."
+                onClicked: editorPreview.maskPreviewShowAll = false
+            }
+
+            ActionButton {
+                objectName: "maskPreviewShowAllButton"
+                Layout.fillWidth: true
+                text: "Show All Masks"
+                compact: true
+                accent: root.maskPreviewOverlayResolvedColor
+                tone: editorPreview.maskPreviewShowAll ? "primary" : "secondary"
+                active: editorPreview.maskPreviewShowAll
+                enabled: editorPreview.hasAsset
+                tooltipText: "Show every enabled selection mask instead of only the active mask."
+                onClicked: editorPreview.maskPreviewShowAll = !editorPreview.maskPreviewShowAll
+            }
+
+            ActionButton {
+                objectName: "maskPreviewShowInvertedButton"
+                Layout.fillWidth: true
+                text: editorPreview.activeMaskSelectionInverted ? "Inverted" : "Normal"
+                compact: true
+                accent: editorPreview.activeMaskSelectionInverted ? "#d98962" : root.maskPreviewOverlayResolvedColor
+                tone: editorPreview.activeMaskSelectionInverted ? "primary" : "secondary"
+                active: editorPreview.activeMaskSelectionInverted
+                enabled: editorPreview.hasActiveMask &&
+                         editorPreview.activeMaskToolRole !== "retouch"
+                tooltipText: editorPreview.activeMaskSelectionInverted
+                             ? "Show and edit the normal selected region."
+                             : "Show and edit the inverse selected region."
+                onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
             }
         }
 
@@ -454,7 +867,7 @@ Column {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: editorPreview.hasActiveMask ? "Deselect" : "Exit Mask"
+                text: editorPreview.hasActiveMask ? "Deselect" : "Exit Selection"
                 compact: true
                 enabled: editorPreview.hasActiveMask ||
                          editRoot.objectPickArmed ||
@@ -467,6 +880,9 @@ Column {
             ActionButton {
                 Layout.fillWidth: true
                 text: "Delete Active"
+                tooltipText: editorPreview.activeMaskToolRole === "retouch"
+                             ? "Remove the active retouch recipe entry; the original file is unchanged."
+                             : "Remove the active selection recipe entry; the original file is unchanged."
                 compact: true
                 accent: "#d36a5e"
                 enabled: editorPreview.hasActiveMask
@@ -497,6 +913,7 @@ Column {
                 compact: true
                 accent: root.retouchAccent(editorPreview.activeMaskRetouchMode)
                 tone: "primary"
+                tooltipText: "Apply this retouch patch to the edit recipe; the original file is unchanged."
                 onClicked: editorPreview.applyActiveRetouch()
             }
 
@@ -504,6 +921,7 @@ Column {
                 Layout.fillWidth: true
                 text: "Discard"
                 compact: true
+                tooltipText: "Discard the staged retouch patch from the recipe; the original file is unchanged."
                 onClicked: {
                     editRoot.clearTransientTools()
                     editorPreview.cancelActiveRetouch()
@@ -514,16 +932,68 @@ Column {
         Label {
             visible: !editorPreview.subjectMaskAvailable
             Layout.fillWidth: true
-            text: "AI Subject, Object Select, and Remove Object require macOS 14 or later."
+            text: "Vision Object Select requires macOS 14 or later. " +
+                  root.smartSelectionRuntimeLabel() + " remains available for rough local selections."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
             font.pixelSize: 11
         }
 
-        Label {
+        RowLayout {
             Layout.fillWidth: true
-            text: editorPreview.aiModelStatus
+            spacing: 6
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                radius: 6
+                color: "#121920"
+                border.width: 1
+                border.color: editorPreview.aiSmartSelectionAvailable ? "#437a68" : "#6f5736"
+
+                Label {
+                    objectName: "maskSelectionRuntimeChip"
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    text: "Selection · " + root.smartSelectionRuntimeLabel()
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                    color: editorPreview.aiSmartSelectionAvailable ? "#9adfca" : "#d9aa70"
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 28
+                radius: 6
+                color: "#121920"
+                border.width: 1
+                border.color: editorPreview.aiInpaintAvailable ? "#437a68" : "#6f5736"
+
+                Label {
+                    objectName: "maskInpaintRuntimeChip"
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    text: "Retouch · " + root.inpaintRuntimeLabel()
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                    color: editorPreview.aiInpaintAvailable ? "#9adfca" : "#d9aa70"
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        Label {
+            objectName: "maskRuntimeDiagnosticsLabel"
+            Layout.fillWidth: true
+            text: "Selection: " + root.smartSelectionRuntimeLabel() +
+                  " · Retouch: " + root.inpaintRuntimeLabel() +
+                  "\n" + editorPreview.aiModelStatus +
+                  "\n" + String(editorPreview.aiModelDiagnostics || "")
             wrapMode: Text.WordWrap
             color: editorPreview.aiSmartSelectionAvailable || editorPreview.aiInpaintAvailable
                    ? "#72cbb2"
@@ -535,8 +1005,8 @@ Column {
 
     MaskSection {
         width: parent.width
-        title: "Mask Sets"
-        subtitle: "Selection sources build one editable mask set."
+        title: "Masks"
+        subtitle: "Each mask contains ordered Components that add, subtract, or refine its matte."
         expandable: true
         expanded: true
 
@@ -545,9 +1015,10 @@ Column {
             spacing: 8
 
             TextField {
+                objectName: "maskSearchField"
                 width: parent.width
                 text: root.maskSearchQuery
-                placeholderText: "Search masks"
+                placeholderText: "Search masks, tools, controls"
                 selectByMouse: true
                 font.family: theme.fontUi
                 font.pixelSize: 12
@@ -562,10 +1033,55 @@ Column {
                 }
             }
 
+            Rectangle {
+                objectName: "maskSearchResultsPanel"
+                width: parent.width
+                visible: root.maskSearchText().length > 0
+                implicitHeight: visible ? maskSearchResultsColumn.implicitHeight + 12 : 0
+                radius: 8
+                color: "#11161a"
+                border.width: 1
+                border.color: "#2a3138"
+
+                Column {
+                    id: maskSearchResultsColumn
+                    anchors.fill: parent
+                    anchors.margins: 6
+                    spacing: 6
+
+                    Repeater {
+                        model: root.maskSearchResults()
+
+                        delegate: ActionButton {
+                            required property var modelData
+                            objectName: "maskSearchResultButton"
+                            width: parent.width
+                            text: modelData.category + " · " + modelData.label
+                            iconName: modelData.category === "Tool" ? "local-adjust" : (modelData.category === "Mask" ? "masks" : "density")
+                            compact: true
+                            tooltipText: modelData.detail
+                            onClicked: root.activateMaskSearchResult(modelData)
+                        }
+                    }
+
+                    Label {
+                        width: parent.width
+                        visible: root.maskSearchResults().length === 0
+                        text: "No matching mask tools, masks, or local controls."
+                        color: "#8f98a2"
+                        font.family: theme.fontUi
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
             Repeater {
                 model: editorPreview.maskSets
 
                 delegate: Rectangle {
+                    id: maskSetDelegate
+                    objectName: "maskInspectorSetFocusRow"
                     required property var modelData
 
                     readonly property bool isActiveSet: {
@@ -579,12 +1095,17 @@ Column {
                     readonly property color setColor: firstSource ? editRoot.maskAccent(firstSource) : "#8ab8d8"
 
                     width: parent.width
+                    visible: root.maskSetMatchesSearch(modelData)
                     radius: 10
                     color: isActiveSet ? Qt.alpha(setColor, 0.12) : "#171b1f"
                     border.width: 1
-                    border.color: isActiveSet ? Qt.alpha(setColor, 0.45) : "#2d3339"
+                    border.color: activeFocus ? "#8ab8d8" : (isActiveSet ? Qt.alpha(setColor, 0.45) : "#2d3339")
                     implicitHeight: setColumn.implicitHeight + 20
                     opacity: modelData.enabled ? 1.0 : 0.55
+                    activeFocusOnTab: true
+                    Keys.onReturnPressed: if (firstSource) editorPreview.activeMaskIndex = firstSource.flatIndex
+                    Keys.onEnterPressed: if (firstSource) editorPreview.activeMaskIndex = firstSource.flatIndex
+                    Keys.onSpacePressed: if (firstSource) editorPreview.activeMaskIndex = firstSource.flatIndex
 
                     Column {
                         id: setColumn
@@ -655,8 +1176,8 @@ Column {
                                 Label {
                                     Layout.fillWidth: true
                                     text: modelData.sourceCount === 1
-                                          ? "1 source"
-                                          : modelData.sourceCount.toString() + " sources"
+                                          ? "1 component"
+                                          : modelData.sourceCount.toString() + " components"
                                     color: "#8f98a2"
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
@@ -670,7 +1191,7 @@ Column {
                                 compact: true
                                 active: modelData.enabled
                                 accent: setColor
-                                tooltipText: modelData.enabled ? "Disable mask set" : "Enable mask set"
+                                tooltipText: modelData.enabled ? "Disable selection set" : "Enable selection set"
                                 enabled: firstSource !== null
                                 onClicked: {
                                     const newEnabled = !modelData.enabled
@@ -684,10 +1205,24 @@ Column {
                             }
                         }
 
+                        Label {
+                            objectName: "maskComponentsHeaderLabel"
+                            width: parent.width
+                            text: "Components"
+                            color: "#aeb7c1"
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                            visible: modelData.sourceCount > 0
+                        }
+
                         Repeater {
                             model: root.maskTreeSources(modelData.sources).filter(root.maskMatchesSearch)
 
                             delegate: Rectangle {
+                                id: maskSourceDelegate
+                                objectName: "maskInspectorSourceFocusRow"
                                 required property var modelData
 
                                 x: Math.min(40, modelData.depth * 14)
@@ -697,16 +1232,120 @@ Column {
                                        ? "#21272d"
                                        : "#14181c"
                                 border.width: 1
-                                border.color: modelData.flatIndex === editorPreview.activeMaskIndex
-                                              ? editRoot.maskAccent(modelData)
-                                              : "#242b31"
+                                border.color: activeFocus
+                                              ? "#8ab8d8"
+                                              : (modelData.flatIndex === editorPreview.activeMaskIndex
+                                                 ? editRoot.maskAccent(modelData)
+                                                 : "#242b31")
                                 implicitHeight: 52
                                 opacity: modelData.enabled ? 1.0 : 0.6
+                                activeFocusOnTab: true
+                                Keys.onReturnPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                Keys.onEnterPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                Keys.onSpacePressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                Drag.active: maskSourceDragHandler.active
+                                Drag.keys: ["mask-source"]
+                                Drag.supportedActions: Qt.MoveAction
+                                Drag.mimeData: {
+                                    "application/x-photo-editor-mask-source-index": String(modelData.flatIndex)
+                                }
+
+                                DragHandler {
+                                    id: maskSourceDragHandler
+                                    objectName: "maskSourceDragHandler"
+                                    target: null
+                                    onActiveChanged: {
+                                        if (active)
+                                            editorPreview.activeMaskIndex = modelData.flatIndex
+                                    }
+                                }
+
+                                DropArea {
+                                    objectName: "maskSourceReorderDropArea"
+                                    anchors.fill: parent
+                                    keys: ["mask-source"]
+                                    onDropped: function(drop) {
+                                        const sourceIndex = Number(drop.getDataAsString("application/x-photo-editor-mask-source-index"))
+                                        if (Number.isFinite(sourceIndex) &&
+                                                editorPreview.moveMaskSource(sourceIndex, maskSetDelegate.modelData.id, index))
+                                            drop.acceptProposedAction()
+                                    }
+                                }
 
                                 MouseArea {
                                     anchors.fill: parent
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: editorPreview.activeMaskIndex = modelData.flatIndex
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onClicked: function(mouse) {
+                                        editorPreview.activeMaskIndex = modelData.flatIndex
+                                        if (mouse.button === Qt.RightButton)
+                                            maskInspectorSourceContextMenu.popup()
+                                    }
+                                }
+
+                                Menu {
+                                    id: maskInspectorSourceContextMenu
+                                    objectName: "maskInspectorSourceContextMenu"
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextSelectItem"
+                                        text: "Select"
+                                        onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextRenameItem"
+                                        text: "Rename"
+                                        onTriggered: root.renameMaskRow(modelData.flatIndex)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextEnableItem"
+                                        text: modelData.enabled ? "Disable" : "Enable"
+                                        enabled: !modelData.locked
+                                        onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextSoloItem"
+                                        text: modelData.solo ? "Clear Solo" : "Solo"
+                                        enabled: !modelData.locked
+                                        onTriggered: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextLockItem"
+                                        text: modelData.locked ? "Unlock" : "Lock"
+                                        onTriggered: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
+                                    }
+
+                                    MenuSeparator {}
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextMoveUpItem"
+                                        text: "Move Up"
+                                        enabled: modelData.flatIndex > 0
+                                        onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextMoveDownItem"
+                                        text: "Move Down"
+                                        enabled: modelData.flatIndex < editorPreview.maskCount - 1
+                                        onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextDuplicateItem"
+                                        text: "Duplicate"
+                                        onTriggered: root.duplicateMaskRow(modelData.flatIndex)
+                                    }
+
+                                    MenuItem {
+                                        objectName: "maskInspectorSourceContextDeleteItem"
+                                        text: "Delete"
+                                        onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                                    }
                                 }
 
                                 RowLayout {
@@ -798,10 +1437,7 @@ Column {
                                         accent: modelData.enabled ? editRoot.maskAccent(modelData) : "#d98962"
                                         enabled: !modelData.locked
                                         tooltipText: modelData.enabled ? "Disable this source" : "Enable this source"
-                                        onClicked: {
-                                            editorPreview.activeMaskIndex = modelData.flatIndex
-                                            editorPreview.activeMaskEnabled = !modelData.enabled
-                                        }
+                                        onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                     }
 
                                     ActionButton {
@@ -809,11 +1445,8 @@ Column {
                                         compact: true
                                         active: modelData.solo
                                         enabled: !modelData.locked
-                                        tooltipText: modelData.solo ? "Clear solo" : "Solo this mask"
-                                        onClicked: {
-                                            editorPreview.activeMaskIndex = modelData.flatIndex
-                                            editorPreview.activeMaskSolo = !modelData.solo
-                                        }
+                                        tooltipText: modelData.solo ? "Clear solo" : "Solo this selection"
+                                        onClicked: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
                                     }
 
                                     ActionButton {
@@ -821,11 +1454,8 @@ Column {
                                         compact: true
                                         active: modelData.locked
                                         accent: modelData.locked ? "#d98962" : editRoot.maskAccent(modelData)
-                                        tooltipText: modelData.locked ? "Unlock this mask" : "Lock this mask"
-                                        onClicked: {
-                                            editorPreview.activeMaskIndex = modelData.flatIndex
-                                            editorPreview.activeMaskLocked = !modelData.locked
-                                        }
+                                        tooltipText: modelData.locked ? "Unlock this selection" : "Lock this selection"
+                                        onClicked: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
                                     }
                                 }
                             }
@@ -868,6 +1498,7 @@ Column {
             }
 
             Rectangle {
+                objectName: "maskInspectorEmptyStateGuidance"
                 visible: editorPreview.maskSetCount === 0
                 width: parent.width
                 implicitHeight: emptyMaskSets.implicitHeight + 24
@@ -884,7 +1515,7 @@ Column {
 
                     Label {
                         width: parent.width
-                        text: "No mask sets yet"
+                        text: "No masks yet"
                         horizontalAlignment: Text.AlignHCenter
                         color: "#8f98a2"
                         font.family: theme.fontUi
@@ -894,7 +1525,8 @@ Column {
 
                     Label {
                         width: parent.width
-                        text: "Start with AI Subject, Pick Object, a shape mask, or a manual selection."
+                        text: "Create a mask with " + root.smartSelectionRuntimeLabel() +
+                              ", Pick Object, Brush, Lasso, Polygon, a range control, or Alpha Image."
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
                         color: "#6b7580"
@@ -932,6 +1564,7 @@ Column {
             }
 
             ActionButton {
+                objectName: "activeMaskDuplicateButton"
                 Layout.fillWidth: true
                 text: "Duplicate"
                 compact: true
@@ -939,10 +1572,11 @@ Column {
             }
 
             ConfirmActionButton {
+                objectName: "activeMaskDeleteButton"
                 Layout.fillWidth: true
                 text: "Delete"
                 compact: true
-                helperText: "Delete the active mask"
+                helperText: "Remove this selection recipe entry; the original file is unchanged."
                 onConfirmed: editorPreview.removeActiveMask()
             }
         }
@@ -963,22 +1597,93 @@ Column {
                 model: editorPreview.retouchStack
 
                 delegate: Rectangle {
+                    objectName: "maskInspectorRetouchFocusRow"
                     required property var modelData
 
                     width: parent.width
                     radius: 10
                     color: modelData.flatIndex === editorPreview.activeMaskIndex ? "#21272d" : "#171b1f"
                     border.width: 1
-                    border.color: modelData.flatIndex === editorPreview.activeMaskIndex
-                                  ? editRoot.maskAccent(modelData)
-                                  : "#2d3339"
+                    border.color: activeFocus
+                                  ? "#8ab8d8"
+                                  : (modelData.flatIndex === editorPreview.activeMaskIndex
+                                     ? editRoot.maskAccent(modelData)
+                                     : "#2d3339")
                     implicitHeight: retouchRowLayout.implicitHeight + 20
                     opacity: modelData.enabled ? 1.0 : 0.55
+                    activeFocusOnTab: true
+                    Keys.onReturnPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                    Keys.onEnterPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                    Keys.onSpacePressed: editorPreview.activeMaskIndex = modelData.flatIndex
 
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: editorPreview.activeMaskIndex = modelData.flatIndex
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: function(mouse) {
+                            editorPreview.activeMaskIndex = modelData.flatIndex
+                            if (mouse.button === Qt.RightButton)
+                                maskInspectorRetouchContextMenu.popup()
+                        }
+                    }
+
+                    Menu {
+                        id: maskInspectorRetouchContextMenu
+                        objectName: "maskInspectorRetouchContextMenu"
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextSelectItem"
+                            text: "Select"
+                            onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextApplyItem"
+                            text: "Apply"
+                            visible: !modelData.committed
+                            onTriggered: root.applyRetouchRow(modelData.flatIndex)
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextCancelItem"
+                            text: "Cancel"
+                            visible: !modelData.committed
+                            onTriggered: root.cancelRetouchRow(modelData.flatIndex)
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextRenameItem"
+                            text: "Rename"
+                            onTriggered: root.renameMaskRow(modelData.flatIndex)
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextEnableItem"
+                            text: modelData.enabled ? "Disable" : "Enable"
+                            onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                        }
+
+                        MenuSeparator {}
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextMoveUpItem"
+                            text: "Move Up"
+                            enabled: modelData.flatIndex > 0
+                            onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextMoveDownItem"
+                            text: "Move Down"
+                            enabled: modelData.flatIndex < editorPreview.maskCount - 1
+                            onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                        }
+
+                        MenuItem {
+                            objectName: "maskInspectorRetouchContextDeleteItem"
+                            text: "Delete"
+                            onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                        }
                     }
 
                     ColumnLayout {
@@ -1045,10 +1750,8 @@ Column {
                                 compact: true
                                 visible: !modelData.committed
                                 accent: editRoot.maskAccent(modelData)
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.applyActiveRetouch()
-                                }
+                                tooltipText: "Apply this retouch patch to the edit recipe; the original file is unchanged."
+                                onClicked: root.applyRetouchRow(modelData.flatIndex)
                             }
 
                             ActionButton {
@@ -1057,21 +1760,15 @@ Column {
                                 compact: true
                                 visible: !modelData.committed
                                 accent: "#d98962"
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.cancelActiveRetouch()
-                                }
+                                tooltipText: "Discard the staged retouch patch from the recipe; the original file is unchanged."
+                                onClicked: root.cancelRetouchRow(modelData.flatIndex)
                             }
 
                             ActionButton {
                                 objectName: "retouchListRenameButton"
                                 text: "Rename"
                                 compact: true
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    activeMaskNameField.forceActiveFocus()
-                                    activeMaskNameField.selectAll()
-                                }
+                                onClicked: root.renameMaskRow(modelData.flatIndex)
                             }
 
                             ActionButton {
@@ -1079,10 +1776,7 @@ Column {
                                 text: modelData.enabled ? "Off" : "On"
                                 compact: true
                                 accent: modelData.enabled ? "#d98962" : editRoot.maskAccent(modelData)
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.activeMaskEnabled = !modelData.enabled
-                                }
+                                onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                             }
 
                             ActionButton {
@@ -1090,10 +1784,7 @@ Column {
                                 text: "Up"
                                 compact: true
                                 enabled: modelData.flatIndex > 0
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.moveActiveMask(-1)
-                                }
+                                onClicked: root.moveMaskRow(modelData.flatIndex, -1)
                             }
 
                             ActionButton {
@@ -1101,10 +1792,7 @@ Column {
                                 text: "Down"
                                 compact: true
                                 enabled: modelData.flatIndex < editorPreview.maskCount - 1
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.moveActiveMask(1)
-                                }
+                                onClicked: root.moveMaskRow(modelData.flatIndex, 1)
                             }
 
                             ActionButton {
@@ -1112,10 +1800,8 @@ Column {
                                 text: "Delete"
                                 compact: true
                                 accent: "#d36a5e"
-                                onClicked: {
-                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                    editorPreview.removeActiveMask()
-                                }
+                                tooltipText: "Remove this retouch patch recipe entry; the original file is unchanged."
+                                onClicked: root.deleteMaskRow(modelData.flatIndex)
                             }
                         }
                     }
@@ -1161,16 +1847,17 @@ Column {
     }
 
     MaskSection {
-        objectName: "maskPropertiesSection"
+        objectName: "activeMaskControlsSection"
         width: parent.width
-        title: editorPreview.activeMaskToolRole === "retouch" ? "Retouch Properties" : "Mask Properties"
+        title: editorPreview.activeMaskToolRole === "retouch" ? "Retouch Properties" : "Selection Properties"
         visible: editorPreview.hasActiveMask
 
         ToneTextField {
             id: activeMaskNameField
+            objectName: "activeMaskRenameField"
             width: parent.width
             text: editorPreview.activeMaskName
-            placeholderText: editorPreview.activeMaskToolRole === "retouch" ? "Retouch name" : "Mask set name"
+            placeholderText: editorPreview.activeMaskToolRole === "retouch" ? "Retouch name" : "Selection set name"
             enabled: !editorPreview.activeMaskLocked
             onEditingFinished: editorPreview.activeMaskName = text
         }
@@ -1260,6 +1947,7 @@ Column {
                      (editorPreview.activeMaskRetouchMode === "remove" ||
                       editorPreview.activeMaskRetouchMode === "heal" ||
                       editorPreview.activeMaskRetouchMode === "patch") &&
+                     editorPreview.inpaintPatchDiagnosticsAvailable &&
                      editorPreview.activeInpaintPatchBounds.width > 0
             text: editorPreview.inpaintPatchDiagnosticsEnabled ? "Hide Patch Bounds" : "Show Patch Bounds"
             active: editorPreview.inpaintPatchDiagnosticsEnabled
@@ -1277,7 +1965,7 @@ Column {
                 objectName: "activeMaskOperationAddButton"
                 Layout.fillWidth: true
                 text: "Add"
-                tooltipText: "Add this source to the mask set."
+                tooltipText: "Add this source to the selection set."
                 active: editorPreview.activeMaskOperation === "add"
                 onClicked: editorPreview.activeMaskOperation = "add"
             }
@@ -1286,7 +1974,7 @@ Column {
                 objectName: "activeMaskOperationSubtractButton"
                 Layout.fillWidth: true
                 text: "Subtract"
-                tooltipText: "Remove this source from the mask set."
+                tooltipText: "Remove this source from the selection set."
                 active: editorPreview.activeMaskOperation === "subtract"
                 onClicked: editorPreview.activeMaskOperation = "subtract"
             }
@@ -1295,7 +1983,7 @@ Column {
                 objectName: "activeMaskOperationIntersectButton"
                 Layout.fillWidth: true
                 text: "Intersect"
-                tooltipText: "Keep only the overlap with the mask set."
+                tooltipText: "Keep only the overlap with the selection set."
                 active: editorPreview.activeMaskOperation === "intersect"
                 onClicked: editorPreview.activeMaskOperation = "intersect"
             }
@@ -1320,7 +2008,7 @@ Column {
                 objectName: "activeMaskOperationReplaceButton"
                 Layout.fillWidth: true
                 text: "Replace"
-                tooltipText: "Use this source as the mask set result."
+                tooltipText: "Use this source as the selection set result."
                 active: editorPreview.activeMaskOperation === "replace"
                 onClicked: editorPreview.activeMaskOperation = "replace"
             }
@@ -1329,7 +2017,7 @@ Column {
                 objectName: "activeMaskOperationUnionButton"
                 Layout.fillWidth: true
                 text: "Union"
-                tooltipText: "Union this source with the current mask set."
+                tooltipText: "Union this source with the current selection set."
                 active: editorPreview.activeMaskOperation === "union"
                 onClicked: editorPreview.activeMaskOperation = "union"
             }
@@ -1340,8 +2028,9 @@ Column {
             spacing: 8
 
             ActionButton {
+                objectName: "activeMaskHideButton"
                 Layout.fillWidth: true
-                text: editorPreview.activeMaskEnabled ? "Enabled" : "Disabled"
+                text: editorPreview.activeMaskEnabled ? "Hide" : "Show"
                 active: editorPreview.activeMaskEnabled
                 enabled: !editorPreview.activeMaskLocked
                 onClicked: editorPreview.activeMaskEnabled = !editorPreview.activeMaskEnabled
@@ -1365,6 +2054,7 @@ Column {
             spacing: 8
 
             ActionButton {
+                objectName: "activeMaskSoloButton"
                 Layout.fillWidth: true
                 text: editorPreview.activeMaskSolo ? "Soloed" : "Solo"
                 active: editorPreview.activeMaskSolo
@@ -1373,8 +2063,9 @@ Column {
             }
 
             ActionButton {
+                objectName: "activeMaskLockButton"
                 Layout.fillWidth: true
-                text: editorPreview.activeMaskLocked ? "Locked" : "Unlocked"
+                text: editorPreview.activeMaskLocked ? "Unlock" : "Lock"
                 active: editorPreview.activeMaskLocked
                 accent: editorPreview.activeMaskLocked ? "#d98962" : root.activeMaskAccent
                 onClicked: editorPreview.activeMaskLocked = !editorPreview.activeMaskLocked
@@ -1390,7 +2081,7 @@ Column {
                 Layout.fillWidth: true
                 text: editorPreview.activeMaskInverted ? "Inverted" : "Normal"
                 active: editorPreview.activeMaskInverted
-                tooltipText: editorPreview.activeMaskInverted ? "Return this mask source to normal." : "Invert this mask source."
+                tooltipText: editorPreview.activeMaskInverted ? "Return this selection source to normal." : "Invert this selection source."
                 onClicked: editorPreview.activeMaskInverted = !editorPreview.activeMaskInverted
             }
 
@@ -1435,7 +2126,7 @@ Column {
         Label {
             width: parent.width
             visible: editorPreview.activeMaskToolRole !== "retouch"
-            text: "Selections inside the same mask set share the same adjustments. Pick any source in the set to grade the whole mask."
+            text: "Selections inside the same selection set share the same adjustments. Pick any source in the set to grade the whole selection."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
@@ -1577,15 +2268,44 @@ Column {
             ActionButton {
                 Layout.fillWidth: true
                 text: "Reset Edge"
-                onClicked: {
-                    editorPreview.activeMaskSelectionInverted = false
-                    editorPreview.activeMaskSelectionExpand = 0
-                    editorPreview.activeMaskSelectionSmooth = 0
-                    editorPreview.activeMaskSelectionFineEdge = 0
-                    editorPreview.activeMaskSelectionEdgeContrast = 0
-                    editorPreview.activeMaskSelectionDecontaminate = 0
-                    editorPreview.activeMaskFeather = editRoot.activeMaskResetFeather()
-                }
+                tooltip: "Reset matte refinement while preserving the source geometry and local adjustments."
+                onClicked: editorPreview.resetActiveMaskRefinement()
+            }
+
+            ActionButton {
+                objectName: "maskInspectorShowOriginalRefinementButton"
+                Layout.fillWidth: true
+                text: "Show Original"
+                active: editorPreview.maskRefinementPreviewMode === "original"
+                tooltipText: "Preview this selection before edge refinement without changing the recipe."
+                onClicked: editorPreview.maskRefinementPreviewMode = "original"
+            }
+
+            ActionButton {
+                objectName: "maskInspectorShowRefinedRefinementButton"
+                Layout.fillWidth: true
+                text: "Show Refined"
+                active: editorPreview.maskRefinementPreviewMode !== "original"
+                tooltipText: "Preview this selection with current edge refinement."
+                onClicked: editorPreview.maskRefinementPreviewMode = "refined"
+            }
+
+            ActionButton {
+                objectName: "maskInspectorHighQualityRefinementPreviewButton"
+                Layout.fillWidth: true
+                text: "High Quality"
+                active: editorPreview.maskRefinementHighQualityPreview
+                tooltipText: "Use a higher-resolution selection refinement preview for expensive edge checks."
+                onClicked: editorPreview.maskRefinementHighQualityPreview = !editorPreview.maskRefinementHighQualityPreview
+            }
+
+            ActionButton {
+                objectName: "maskInspectorFullResolutionPreviewButton"
+                Layout.fillWidth: true
+                text: "Full Res"
+                active: editorPreview.maskFullResolutionPreview
+                tooltipText: "Use full-resolution mask alpha for the active preview without scheduling a full image render."
+                onClicked: editorPreview.maskFullResolutionPreview = !editorPreview.maskFullResolutionPreview
             }
 
         }
@@ -1593,8 +2313,8 @@ Column {
         Label {
             width: parent.width
             text: editorPreview.activeMaskSelectionInverted
-                  ? "The mask is inverted. Adjustments now target everything outside the visible boundary."
-                  : "Brush Add and Brush Erase paint the selection directly. Use Edge below only when the painted mask needs cleanup."
+                  ? "The selection is inverted. Adjustments now target everything outside the visible boundary."
+                  : "Brush Add and Brush Erase paint the selection directly. Use Edge below only when the painted selection needs cleanup."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
@@ -1605,12 +2325,16 @@ Column {
     MaskSection {
         objectName: "maskEdgeSection"
         width: parent.width
-        title: "Edge"
-        subtitle: "Trim or recover boundaries, then tighten soft edges or clean color spill."
+        title: root.activeRefineEffectCount() > 0
+               ? "Edge · " + root.activeRefineEffectCount().toString() + " active"
+               : "Edge"
+        subtitle: root.activeRefineEffectCount() > 0
+                  ? root.activeRefineEffectCount().toString() + " advanced refine changes active."
+                  : "Advanced refinement is collapsed until needed."
         visible: editRoot.activeMaskSupportsSelectionRefine() &&
                  editorPreview.activeMaskToolRole !== "retouch"
         expandable: true
-        expanded: editRoot.isAiMaskKind(editorPreview.activeMaskKind)
+        expanded: false
 
         RowLayout {
             width: parent.width
@@ -1618,7 +2342,7 @@ Column {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: "Edge Add"
+                text: "Refine Add"
                 compact: true
                 onClicked: {
                     editRoot.clearTransientTools()
@@ -1631,7 +2355,7 @@ Column {
 
             ActionButton {
                 Layout.fillWidth: true
-                text: "Edge Erase"
+                text: "Refine Erase"
                 compact: true
                 onClicked: {
                     editRoot.clearTransientTools()
@@ -1645,7 +2369,7 @@ Column {
 
         Label {
             width: parent.width
-            text: "Edge brushes are smaller than the normal brush and paint directly onto the mask. Edge Contrast tightens soft boundaries. Decontaminate mutes colored fringing along semi-transparent edges."
+            text: "Brush Refine · Shift Edge · Contrast Edge · Decontaminate"
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
@@ -1653,6 +2377,7 @@ Column {
         }
 
         Rectangle {
+            id: maskRefineEffectMeter
             objectName: "maskRefineEffectMeter"
             property real expandStrength: Math.min(1, Math.abs(editorPreview.activeMaskSelectionExpand) / 100)
             property real featherStrength: Math.min(1, Math.abs(editorPreview.activeMaskFeather - editRoot.activeMaskResetFeather()) / 0.95)
@@ -1661,13 +2386,15 @@ Column {
             property real edgeContrastStrength: Math.min(1, editorPreview.activeMaskSelectionEdgeContrast / 100)
             property real decontaminateStrength: Math.min(1, editorPreview.activeMaskSelectionDecontaminate / 100)
             property int activeEffectCount: root.activeRefineEffectCount()
+            property real shiftEdgePreviewOffset: Math.max(-34, Math.min(34, editorPreview.activeMaskSelectionExpand / 100 * 34))
+            property real contrastEdgePreviewWidth: Math.max(5, 34 - edgeContrastStrength * 24)
 
             width: parent.width
             radius: 8
             color: "#11161a"
             border.width: 1
             border.color: activeEffectCount > 0 ? Qt.alpha(root.activeMaskAccent, 0.46) : "#252c32"
-            implicitHeight: 72
+            implicitHeight: 114
 
             ColumnLayout {
                 anchors.fill: parent
@@ -1693,6 +2420,51 @@ Column {
                         color: editorPreview.activeMaskSelectionInverted ? "#d98962" : "#8f98a2"
                         font.family: theme.fontUi
                         font.pixelSize: 10
+                    }
+                }
+
+                Rectangle {
+                    objectName: "maskEdgeRefinePreview"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 30
+                    radius: 5
+                    color: "#0a0d10"
+                    border.width: 1
+                    border.color: "#20272d"
+                    clip: true
+
+                    Rectangle {
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 1
+                        color: "#47515a"
+                    }
+
+                    Rectangle {
+                        id: maskEdgePreviewContrastBand
+                        objectName: "maskEdgePreviewContrastBand"
+                        property real previewWidth: maskRefineEffectMeter.contrastEdgePreviewWidth
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.horizontalCenter: maskEdgePreviewShiftMarker.horizontalCenter
+                        width: previewWidth
+                        height: parent.height - 8
+                        radius: 4
+                        color: Qt.alpha("#f2c56b", 0.24 + maskRefineEffectMeter.edgeContrastStrength * 0.34)
+                        border.width: 1
+                        border.color: Qt.alpha("#f2c56b", 0.36 + maskRefineEffectMeter.edgeContrastStrength * 0.40)
+                    }
+
+                    Rectangle {
+                        id: maskEdgePreviewShiftMarker
+                        objectName: "maskEdgePreviewShiftMarker"
+                        property real previewOffset: maskRefineEffectMeter.shiftEdgePreviewOffset
+                        x: Math.round((parent.width - width) / 2 + previewOffset)
+                        y: 3
+                        width: 3
+                        height: parent.height - 6
+                        radius: 1
+                        color: editorPreview.activeMaskSelectionExpand < 0 ? "#d98962" : root.activeMaskAccent
                     }
                 }
 
@@ -1744,8 +2516,9 @@ Column {
         }
 
         InspectorSlider {
+            objectName: "activeMaskShiftEdgeSlider"
             width: parent.width
-            label: "Mask Size"
+            label: "Shift Edge"
             valueText: Math.round(editorPreview.activeMaskSelectionExpand).toString()
             from: -100
             to: 100
@@ -1789,8 +2562,9 @@ Column {
         }
 
         InspectorSlider {
+            objectName: "activeMaskContrastEdgeSlider"
             width: parent.width
-            label: "Edge Contrast"
+            label: "Contrast Edge"
             valueText: Math.round(editorPreview.activeMaskSelectionEdgeContrast).toString()
             from: 0
             to: 100
@@ -1812,17 +2586,45 @@ Column {
     }
 
     MaskSection {
-        objectName: "maskAdjustSection"
+        objectName: "activeMaskAdjustmentSection"
         width: parent.width
         title: "Adjust"
         subtitle: editorPreview.activeMaskToolRole === "retouch"
-                  ? "Retouch uses its own stroke settings. Image adjustments apply only to selection mask sets."
+                  ? "Retouch uses its own stroke settings. Image adjustments apply only to selection sets."
                   : (editRoot.activeMaskHasAdjustments()
-                     ? "The current mask set is modifying tone or color."
-                     : "Collapsed until the current mask set needs image adjustments.")
+                     ? "The current selection set is modifying tone or color."
+                     : "Collapsed until the current selection set needs image adjustments.")
         expandable: true
         expanded: editRoot.activeMaskHasAdjustments()
         visible: editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch"
+
+        RowLayout {
+            objectName: "maskAdjustToneGroup"
+            width: parent.width
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                text: "Tone"
+                color: "#aeb7c1"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+            }
+
+            ActionButton {
+                objectName: "maskAdjustToneBeforeAfterButton"
+                compact: true
+                showText: false
+                iconName: root.maskCompareGroupActive("tone") ? "hidden" : "visible"
+                active: root.maskCompareGroupActive("tone")
+                enabled: editorPreview.hasActiveMask
+                tooltipText: root.maskCompareGroupActive("tone")
+                             ? "Restore local Tone in before/after."
+                             : "Compare before and after for local Tone without changing values."
+                onClicked: root.toggleMaskCompareGroup("tone")
+            }
+        }
 
         InspectorSlider {
             width: parent.width
@@ -1890,6 +2692,34 @@ Column {
             onResetRequested: editorPreview.activeMaskBlacks = 0
         }
 
+        RowLayout {
+            objectName: "maskAdjustColorGroup"
+            width: parent.width
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                text: "Color"
+                color: "#aeb7c1"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+            }
+
+            ActionButton {
+                objectName: "maskAdjustColorBeforeAfterButton"
+                compact: true
+                showText: false
+                iconName: root.maskCompareGroupActive("color") ? "hidden" : "visible"
+                active: root.maskCompareGroupActive("color")
+                enabled: editorPreview.hasActiveMask
+                tooltipText: root.maskCompareGroupActive("color")
+                             ? "Restore local Color in before/after."
+                             : "Compare before and after for local Color without changing values."
+                onClicked: root.toggleMaskCompareGroup("color")
+            }
+        }
+
         InspectorSlider {
             width: parent.width
             label: "Temperature"
@@ -1910,6 +2740,34 @@ Column {
             value: editorPreview.activeMaskTint
             onValueDragged: function(value) { editorPreview.activeMaskTint = value }
             onResetRequested: editorPreview.activeMaskTint = 0
+        }
+
+        RowLayout {
+            objectName: "maskAdjustPresenceGroup"
+            width: parent.width
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                text: "Presence"
+                color: "#aeb7c1"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+            }
+
+            ActionButton {
+                objectName: "maskAdjustPresenceBeforeAfterButton"
+                compact: true
+                showText: false
+                iconName: root.maskCompareGroupActive("presence") ? "hidden" : "visible"
+                active: root.maskCompareGroupActive("presence")
+                enabled: editorPreview.hasActiveMask
+                tooltipText: root.maskCompareGroupActive("presence")
+                             ? "Restore local Presence in before/after."
+                             : "Compare before and after for local Presence without changing values."
+                onClicked: root.toggleMaskCompareGroup("presence")
+            }
         }
 
         InspectorSlider {
@@ -1977,6 +2835,45 @@ Column {
             value: editorPreview.activeMaskColorizeStrength
             onValueDragged: function(value) { editorPreview.activeMaskColorizeStrength = value }
             onResetRequested: editorPreview.activeMaskColorizeStrength = 0
+        }
+
+        RowLayout {
+            objectName: "maskAdjustEffectsGroup"
+            width: parent.width
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                text: "Effects"
+                color: "#aeb7c1"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+            }
+
+            ActionButton {
+                objectName: "maskAdjustEffectsBeforeAfterButton"
+                compact: true
+                showText: false
+                iconName: root.maskCompareGroupActive("effects") ? "hidden" : "visible"
+                active: root.maskCompareGroupActive("effects")
+                enabled: editorPreview.hasActiveMask
+                tooltipText: root.maskCompareGroupActive("effects")
+                             ? "Restore local Effects in before/after."
+                             : "Compare before and after for local Effects without changing values."
+                onClicked: root.toggleMaskCompareGroup("effects")
+            }
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Remove"
+            valueText: Math.round(editorPreview.activeMaskRemoveStrength).toString() + "%"
+            from: 0
+            to: 100
+            value: editorPreview.activeMaskRemoveStrength
+            onValueDragged: function(value) { editorPreview.activeMaskRemoveStrength = value }
+            onResetRequested: editorPreview.activeMaskRemoveStrength = 0
         }
     }
 
@@ -2122,6 +3019,61 @@ Column {
             }
         }
 
+        RowLayout {
+            objectName: "maskAdjustDetailGroup"
+            width: parent.width
+            visible: editorPreview.activeMaskRetouchMode === "heal"
+            spacing: 8
+
+            Label {
+                Layout.fillWidth: true
+                text: "Detail"
+                color: "#aeb7c1"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                font.weight: Font.DemiBold
+            }
+
+            ActionButton {
+                objectName: "maskAdjustDetailBeforeAfterButton"
+                compact: true
+                showText: false
+                iconName: root.maskCompareGroupActive("detail") ? "hidden" : "visible"
+                active: root.maskCompareGroupActive("detail")
+                enabled: editorPreview.hasActiveMask
+                tooltipText: root.maskCompareGroupActive("detail")
+                             ? "Restore local Detail in before/after."
+                             : "Compare before and after for local Detail without changing values."
+                onClicked: root.toggleMaskCompareGroup("detail")
+            }
+        }
+
+        InspectorSlider {
+            width: parent.width
+            visible: editorPreview.activeMaskRetouchMode === "heal"
+            label: "Heal Texture"
+            valueText: Math.round(editorPreview.activeMaskHealTextureBlend * 100).toString() + "%"
+            from: 0
+            to: 1
+            stepSize: 0.01
+            value: editorPreview.activeMaskHealTextureBlend
+            onValueDragged: function(value) { editorPreview.activeMaskHealTextureBlend = value }
+            onResetRequested: editorPreview.activeMaskHealTextureBlend = 0.68
+        }
+
+        InspectorSlider {
+            width: parent.width
+            visible: editorPreview.activeMaskRetouchMode === "heal"
+            label: "Heal Color"
+            valueText: Math.round(editorPreview.activeMaskHealColorBlend * 100).toString() + "%"
+            from: 0
+            to: 1
+            stepSize: 0.01
+            value: editorPreview.activeMaskHealColorBlend
+            onValueDragged: function(value) { editorPreview.activeMaskHealColorBlend = value }
+            onResetRequested: editorPreview.activeMaskHealColorBlend = 0.46
+        }
+
         GridLayout {
             width: parent.width
             columns: 2
@@ -2146,10 +3098,58 @@ Column {
 
         GridLayout {
             width: parent.width
+            columns: 3
+            columnSpacing: 8
+            rowSpacing: 8
+            visible: editorPreview.activeMaskKind === "brush"
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Save Custom"
+                compact: true
+                onClicked: editorPreview.saveActiveMaskBrushPreset("Custom Brush", true)
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Delete Custom"
+                compact: true
+                enabled: editorPreview.isCustomBrushPreset(editorPreview.activeMaskBrushPreset)
+                onClicked: editorPreview.deleteCustomBrushPreset(editorPreview.activeMaskBrushPreset)
+            }
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: "Reset Custom"
+                compact: true
+                onClicked: editorPreview.resetCustomBrushPresets()
+            }
+        }
+
+        GridLayout {
+            width: parent.width
             columns: 2
             columnSpacing: 8
             rowSpacing: 8
             visible: editorPreview.activeMaskRetouchMode === "clone"
+
+            ActionButton {
+                Layout.fillWidth: true
+                text: editorPreview.activeMaskCloneAligned ? "Aligned" : "Non-aligned"
+                compact: true
+                active: editorPreview.activeMaskCloneAligned
+                onClicked: editorPreview.activeMaskCloneAligned = !editorPreview.activeMaskCloneAligned
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: editorPreview.activeMaskCloneScale.toFixed(2) + "x / " +
+                      Math.round(editorPreview.activeMaskCloneRotation).toString() + "°"
+                horizontalAlignment: Text.AlignRight
+                color: "#8f98a2"
+                font.family: theme.fontUi
+                font.pixelSize: 11
+            }
 
             ActionButton {
                 Layout.fillWidth: true
@@ -2219,7 +3219,7 @@ Column {
         InspectorSlider {
             width: parent.width
             label: "Brush Spacing"
-            valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "%"
+            valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "% of diameter"
             from: 0.05
             to: 2.0
             stepSize: 0.01
@@ -2238,6 +3238,42 @@ Column {
             value: editorPreview.activeMaskBrushSmoothing
             onValueDragged: function(value) { editorPreview.activeMaskBrushSmoothing = value }
             onResetRequested: editorPreview.activeMaskBrushSmoothing = 0.0
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Pressure Size"
+            valueText: Math.round(editorPreview.activeMaskBrushPressureSize * 100).toString() + "%"
+            from: 0.0
+            to: 1.0
+            stepSize: 0.01
+            value: editorPreview.activeMaskBrushPressureSize
+            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureSize = value }
+            onResetRequested: editorPreview.activeMaskBrushPressureSize = 0.65
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Pressure Flow"
+            valueText: Math.round(editorPreview.activeMaskBrushPressureFlow * 100).toString() + "%"
+            from: 0.0
+            to: 1.0
+            stepSize: 0.01
+            value: editorPreview.activeMaskBrushPressureFlow
+            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureFlow = value }
+            onResetRequested: editorPreview.activeMaskBrushPressureFlow = 1.0
+        }
+
+        InspectorSlider {
+            width: parent.width
+            label: "Pressure Opacity"
+            valueText: Math.round(editorPreview.activeMaskBrushPressureOpacity * 100).toString() + "%"
+            from: 0.0
+            to: 1.0
+            stepSize: 0.01
+            value: editorPreview.activeMaskBrushPressureOpacity
+            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureOpacity = value }
+            onResetRequested: editorPreview.activeMaskBrushPressureOpacity = 0.0
         }
 
         ActionButton {
@@ -2259,7 +3295,7 @@ Column {
 
         ActionButton {
             width: parent.width
-            text: editorPreview.activeMaskBrushAutoMask ? "Auto Mask" : "Freehand Mask"
+                            text: editorPreview.activeMaskBrushAutoMask ? "Edge Aware" : "Freehand"
             active: editorPreview.activeMaskBrushAutoMask
             compact: true
             onClicked: editorPreview.activeMaskBrushAutoMask = !editorPreview.activeMaskBrushAutoMask
@@ -2268,7 +3304,7 @@ Column {
         InspectorSlider {
             width: parent.width
             visible: editorPreview.activeMaskBrushAutoMask
-            label: "Auto-Mask Range"
+            label: "Edge-Aware Range"
             valueText: Math.round(editorPreview.activeMaskBrushAutoMaskTolerance * 100).toString() + "%"
             from: 0.02
             to: 0.75
@@ -2276,6 +3312,30 @@ Column {
             value: editorPreview.activeMaskBrushAutoMaskTolerance
             onValueDragged: function(value) { editorPreview.activeMaskBrushAutoMaskTolerance = value }
             onResetRequested: editorPreview.activeMaskBrushAutoMaskTolerance = 0.18
+        }
+
+        ActionButton {
+            width: parent.width
+            visible: editorPreview.activeMaskBrushAutoMask
+            text: editorPreview.activeMaskBrushAutoMaskContinuousSampling ? "Sample Each Dab" : "Sample First Dab"
+            active: editorPreview.activeMaskBrushAutoMaskContinuousSampling
+            compact: true
+            tooltipText: editorPreview.activeMaskBrushAutoMaskContinuousSampling
+                         ? "Update the protected color from every dab center during the stroke."
+                         : "Lock the protected color to the first dab in the stroke."
+            onClicked: editorPreview.activeMaskBrushAutoMaskContinuousSampling =
+                       !editorPreview.activeMaskBrushAutoMaskContinuousSampling
+        }
+
+        ActionButton {
+            width: parent.width
+            visible: editorPreview.activeMaskBrushAutoMask
+            text: "Protect Edges"
+            active: editorPreview.activeMaskBrushProtectEdges
+            compact: true
+            tooltipText: "Tighten edge gating for hair, sky, and building boundaries."
+            onClicked: editorPreview.activeMaskBrushProtectEdges =
+                       !editorPreview.activeMaskBrushProtectEdges
         }
 
         InspectorSlider {
@@ -2355,11 +3415,42 @@ Column {
                 onClicked: editorPreview.clearActivePolygonPoints()
             }
         }
+
+        RowLayout {
+            width: parent.width
+            spacing: 8
+            visible: editorPreview.activeMaskKind === "polygon"
+
+            ActionButton {
+                text: "Simplify"
+                compact: true
+                enabled: editorPreview.activeMaskPolygonPointCount > 3
+                onClicked: editorPreview.simplifyActivePolygon()
+            }
+
+            ActionButton {
+                text: "Smooth"
+                compact: true
+                enabled: editorPreview.activeMaskPolygonPointCount >= 3
+                onClicked: editorPreview.smoothActivePolygon()
+            }
+        }
+
+        Label {
+            objectName: "polygonSelfIntersectionWarning"
+            width: parent.width
+            visible: editorPreview.activeMaskKind === "polygon" && editorPreview.activeMaskPolygonSelfIntersecting
+            text: "Self-intersecting polygon. Undo the last point or redraw the shape."
+            wrapMode: Text.WordWrap
+            color: theme.warning
+            font.family: theme.fontUi
+            font.pixelSize: 11
+        }
     }
 
     MaskSection {
         width: parent.width
-        title: "AI Refine"
+        title: "Generated Refine"
         visible: editRoot.isAiMaskKind(editorPreview.activeMaskKind)
         expandable: true
         expanded: true
@@ -2379,12 +3470,60 @@ Column {
         Label {
             width: parent.width
             text: editorPreview.activeMaskKind === "object"
-                  ? "Object picks come from the live AI preview on the canvas. If AI cannot isolate the click, the workflow falls back to manual refinement."
-                  : "AI " + editRoot.aiMaskLabel(editorPreview.activeMaskKind).toLowerCase() + " masks stay editable inside the current mask set."
+                  ? "Object picks use " + root.smartSelectionRuntimeLabel() + " on the canvas. If the target cannot be isolated, refine manually."
+                  : editRoot.aiMaskLabel(editorPreview.activeMaskKind) + " selections stay editable inside the current selection set."
             wrapMode: Text.WordWrap
             color: "#8f98a2"
             font.family: theme.fontUi
             font.pixelSize: 11
+        }
+
+        Label {
+            objectName: "generatedMaskQualitySummary"
+            width: parent.width
+            visible: editorPreview.activeGeneratedMaskQualitySummary.length > 0
+            text: editorPreview.activeGeneratedMaskQualitySummary
+            wrapMode: Text.WordWrap
+            color: editorPreview.activeGeneratedMaskQualityScore < 70 ? theme.warning : "#8f98a2"
+            font.family: theme.fontUi
+            font.pixelSize: 11
+        }
+
+        Label {
+            objectName: "generatedMaskCleanupSummary"
+            width: parent.width
+            visible: editorPreview.activeGeneratedMaskCleanupSummary.length > 0
+            text: editorPreview.activeGeneratedMaskCleanupSummary
+            wrapMode: Text.WordWrap
+            color: "#8f98a2"
+            font.family: theme.fontUi
+            font.pixelSize: 11
+        }
+
+        InspectorSlider {
+            objectName: "generatedMaskHoleFillThresholdSlider"
+            width: parent.width
+            label: "Fill Holes"
+            valueText: (editorPreview.activeGeneratedMaskHoleFillThreshold * 100).toFixed(2) + "%"
+            from: 0
+            to: 0.05
+            stepSize: 0.0005
+            value: editorPreview.activeGeneratedMaskHoleFillThreshold
+            onValueDragged: function(value) { editorPreview.activeGeneratedMaskHoleFillThreshold = value }
+            onResetRequested: editorPreview.activeGeneratedMaskHoleFillThreshold = 0.004
+        }
+
+        InspectorSlider {
+            objectName: "generatedMaskIslandRemovalThresholdSlider"
+            width: parent.width
+            label: "Remove Specks"
+            valueText: (editorPreview.activeGeneratedMaskIslandRemovalThreshold * 100).toFixed(2) + "%"
+            from: 0
+            to: 0.05
+            stepSize: 0.0005
+            value: editorPreview.activeGeneratedMaskIslandRemovalThreshold
+            onValueDragged: function(value) { editorPreview.activeGeneratedMaskIslandRemovalThreshold = value }
+            onResetRequested: editorPreview.activeGeneratedMaskIslandRemovalThreshold = 0.0015
         }
     }
 
@@ -2557,6 +3696,69 @@ Column {
         expandable: true
         expanded: true
 
+        RowLayout {
+            width: parent.width
+            spacing: 6
+
+            MiniButton {
+                objectName: "activeMaskLuminanceRangeSampleButton"
+                Layout.fillWidth: true
+                text: "Drag Sample"
+                iconName: "eyedropper"
+                role: "segmented"
+                active: editRoot.maskLuminanceRangeSampling && editorPreview.activeMaskKind === "luminance"
+                tooltip: "Drag a luminance patch on the image."
+                enabled: editorPreview.hasAsset && editorPreview.activeMaskLuminanceSamples.length < 5
+                onClicked: editRoot.setMaskLuminanceRangeSampler(!active)
+            }
+
+            Label {
+                objectName: "activeMaskLuminanceRangeSampleCountLabel"
+                text: editorPreview.activeMaskLuminanceSamples.length + "/5"
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                font.letterSpacing: 0
+            }
+        }
+
+        RowLayout {
+            objectName: "activeMaskLuminanceRangeSampleStrip"
+            width: parent.width
+            visible: editorPreview.activeMaskLuminanceSamples.length > 0
+            spacing: 5
+
+            Repeater {
+                model: editorPreview.activeMaskLuminanceSamples
+
+                delegate: RowLayout {
+                    required property var modelData
+                    required property int index
+                    readonly property real swatchLuma: Math.max(0, Math.min(1, Number(modelData.luminanceMean || 0)))
+                    spacing: 3
+
+                    Rectangle {
+                        objectName: "activeMaskLuminanceRangeSampleSwatch" + index
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: Qt.rgba(parent.swatchLuma, parent.swatchLuma, parent.swatchLuma, 1)
+                        border.color: theme.alpha(theme.polar, 0.28)
+                        border.width: 1
+                    }
+
+                    MiniButton {
+                        objectName: "activeMaskLuminanceRangeRemoveSampleButton" + index
+                        square: true
+                        iconName: "minus"
+                        role: "icon"
+                        tooltip: "Remove this luminance range sample."
+                        onClicked: editorPreview.removeActiveLuminanceRangeSample(index)
+                    }
+                }
+            }
+        }
+
         InspectorSlider {
             width: parent.width
             label: "Minimum"
@@ -2600,6 +3802,68 @@ Column {
         visible: editorPreview.activeMaskKind === "color"
         expandable: true
         expanded: true
+
+        RowLayout {
+            width: parent.width
+            spacing: 6
+
+            MiniButton {
+                objectName: "activeMaskColorRangeSampleButton"
+                Layout.fillWidth: true
+                text: "Sample"
+                iconName: "eyedropper"
+                role: "segmented"
+                active: editRoot.maskColorRangeSampling && editorPreview.activeMaskKind === "color"
+                tooltip: "Sample a color range swatch from the image."
+                enabled: editorPreview.hasAsset && editorPreview.activeMaskColorSamples.length < 5
+                onClicked: editRoot.setMaskColorRangeSampler(!active)
+            }
+
+            Label {
+                objectName: "activeMaskColorRangeSampleCountLabel"
+                text: editorPreview.activeMaskColorSamples.length + "/5"
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                font.letterSpacing: 0
+            }
+        }
+
+        RowLayout {
+            objectName: "activeMaskColorRangeSampleStrip"
+            width: parent.width
+            visible: editorPreview.activeMaskColorSamples.length > 0
+            spacing: 5
+
+            Repeater {
+                model: editorPreview.activeMaskColorSamples
+
+                delegate: RowLayout {
+                    required property var modelData
+                    required property int index
+                    spacing: 3
+
+                    Rectangle {
+                        objectName: "activeMaskColorRangeSampleSwatch" + index
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: String(modelData.hex || "#000000")
+                        border.color: theme.alpha(theme.polar, 0.28)
+                        border.width: 1
+                    }
+
+                    MiniButton {
+                        objectName: "activeMaskColorRangeRemoveSampleButton" + index
+                        square: true
+                        iconName: "minus"
+                        role: "icon"
+                        tooltip: "Remove this color range sample."
+                        onClicked: editorPreview.removeActiveColorRangeSample(index)
+                    }
+                }
+            }
+        }
 
         InspectorSlider {
             width: parent.width
@@ -2656,6 +3920,73 @@ Column {
         visible: editorPreview.activeMaskKind === "depth"
         expandable: true
         expanded: true
+
+        RowLayout {
+            width: parent.width
+            spacing: 6
+
+            MiniButton {
+                objectName: "activeMaskDepthRangeSampleButton"
+                Layout.fillWidth: true
+                text: "Sample"
+                iconName: "eyedropper"
+                role: "segmented"
+                active: editRoot.maskDepthRangeSampling && editorPreview.activeMaskKind === "depth"
+                tooltip: editorPreview.activeMaskDepthSamplingAvailable
+                         ? "Sample a depth value from the image."
+                         : editorPreview.activeMaskDepthSamplingDisabledReason
+                enabled: editorPreview.hasAsset &&
+                         editorPreview.activeMaskDepthSamplingAvailable &&
+                         editorPreview.activeMaskDepthSamples.length < 5
+                onClicked: editRoot.setMaskDepthRangeSampler(!active)
+            }
+
+            Label {
+                objectName: "activeMaskDepthRangeSampleCountLabel"
+                text: editorPreview.activeMaskDepthSamples.length + "/5"
+                color: theme.textMuted
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                font.letterSpacing: 0
+            }
+        }
+
+        RowLayout {
+            objectName: "activeMaskDepthRangeSampleStrip"
+            width: parent.width
+            visible: editorPreview.activeMaskDepthSamples.length > 0
+            spacing: 5
+
+            Repeater {
+                model: editorPreview.activeMaskDepthSamples
+
+                delegate: RowLayout {
+                    required property var modelData
+                    required property int index
+                    readonly property real swatchDepth: Math.max(0, Math.min(1, Number(modelData.depthMean || 0)))
+                    spacing: 3
+
+                    Rectangle {
+                        objectName: "activeMaskDepthRangeSampleSwatch" + index
+                        Layout.preferredWidth: 22
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        color: Qt.rgba(parent.swatchDepth, parent.swatchDepth, parent.swatchDepth, 1)
+                        border.color: theme.alpha(theme.polar, 0.28)
+                        border.width: 1
+                    }
+
+                    MiniButton {
+                        objectName: "activeMaskDepthRangeRemoveSampleButton" + index
+                        square: true
+                        iconName: "minus"
+                        role: "icon"
+                        tooltip: "Remove this depth range sample."
+                        onClicked: editorPreview.removeActiveDepthRangeSample(index)
+                    }
+                }
+            }
+        }
 
         InspectorSlider {
             width: parent.width

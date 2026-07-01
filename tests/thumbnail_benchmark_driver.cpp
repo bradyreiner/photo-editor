@@ -191,6 +191,9 @@ int main(int argc, char** argv) {
   photo_editor::desktop::CatalogAssetModel warm_model;
   warm_model.replaceAssetsForTesting(items);
   warm_model.setVisibleAssetRange(0, window_size - 1);
+  if (!wait_for_thumbnail_window(&warm_model, window_size, timeout_ms)) {
+    return fail(QStringLiteral("Warm thumbnail benchmark timed out."));
+  }
   const auto warm_ready_count = ready_thumbnail_count(&warm_model, window_size);
   const auto warm_elapsed_ms = warm_timer.elapsed();
   photo_editor::desktop::observability::logInfo(
@@ -208,6 +211,19 @@ int main(int argc, char** argv) {
   if (warm_ready_count < window_size) {
     return fail(QStringLiteral("Warm thumbnail benchmark did not find cached thumbnails."));
   }
+
+  photo_editor::desktop::observability::logInfo(
+      photoEditorPerfLog(),
+      QStringLiteral("benchmark.thumbnail_corpus.summary_completed"),
+      {
+          {QStringLiteral("corpus"), corpus_path},
+          {QStringLiteral("asset_count"), static_cast<int>(items.size())},
+          {QStringLiteral("window_size"), window_size},
+          {QStringLiteral("cold_elapsed_ms"), cold_elapsed_ms},
+          {QStringLiteral("warm_elapsed_ms"), warm_elapsed_ms},
+          {QStringLiteral("warm_ready_count"), warm_ready_count},
+          {QStringLiteral("elapsed_ms"), cold_elapsed_ms + warm_elapsed_ms},
+      });
 
   std::cout << "thumbnail_assets=" << items.size() << '\n';
   std::cout << "window_size=" << window_size << '\n';

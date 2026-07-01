@@ -243,7 +243,9 @@ int preview_export_diff_tolerance_for_preset(const QString& preset) {
   return 1;
 }
 
-QVariantMap preview_export_diff_to_map(const PreviewExportDiff& diff) {
+QVariantMap preview_export_diff_to_map(
+    const PreviewExportDiff& diff,
+    const QJsonObject& export_preview_job = {}) {
   QVariantMap value;
   value.insert(QStringLiteral("available"), diff.available);
   value.insert(QStringLiteral("withinTolerance"), diff.within_tolerance);
@@ -253,7 +255,390 @@ QVariantMap preview_export_diff_to_map(const PreviewExportDiff& diff) {
   value.insert(QStringLiteral("meanChannelDelta"), diff.mean_channel_delta);
   value.insert(QStringLiteral("tolerance"), diff.tolerance);
   value.insert(QStringLiteral("status"), diff.status);
+  if (!export_preview_job.isEmpty()) {
+    value.insert(
+        QStringLiteral("exportPreviewJobId"),
+        export_preview_job.value(QStringLiteral("jobId")).toString());
+    value.insert(
+        QStringLiteral("exportPreviewJobKind"),
+        export_preview_job.value(QStringLiteral("jobKind")).toString());
+    value.insert(
+        QStringLiteral("exportPreviewStage"),
+        export_preview_job.value(QStringLiteral("stage")).toString());
+    value.insert(
+        QStringLiteral("exportPreviewStateSignature"),
+        export_preview_job.value(QStringLiteral("stateSignature")).toString());
+  }
   return value;
+}
+
+QString sha1_hex(const QByteArray& data) {
+  return QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha1).toHex());
+}
+
+QString json_sha1(const QJsonObject& payload) {
+  return sha1_hex(QJsonDocument(payload).toJson(QJsonDocument::Compact));
+}
+
+QVariantMap export_trace_mask_source_payload(QVariantMap mask) {
+  for (const auto& key : {
+           QStringLiteral("mask_source_id"),
+           QStringLiteral("mask_set_id"),
+           QStringLiteral("mask_set_name"),
+           QStringLiteral("mask_source_kind"),
+           QStringLiteral("mask_source_operation"),
+           QStringLiteral("mask_source_schema_version"),
+           QStringLiteral("mask_source_count"),
+           QStringLiteral("mask_source_ids"),
+           QStringLiteral("mask_source_hash"),
+           QStringLiteral("mask_alpha_trace_hash"),
+           QStringLiteral("mask_alpha_trace_signature"),
+           QStringLiteral("mask_alpha_provider_contract"),
+           QStringLiteral("mask_alpha_provider"),
+           QStringLiteral("mask_alpha_full_resolution_available"),
+           QStringLiteral("mask_alpha_deterministic"),
+           QStringLiteral("mask_alpha_target_width"),
+           QStringLiteral("mask_alpha_target_height"),
+           QStringLiteral("mask_alpha_provider_signature"),
+           QStringLiteral("mask_alpha_component_providers"),
+           QStringLiteral("mask_source_revision_hash"),
+           QStringLiteral("mask_alpha_raster_width"),
+           QStringLiteral("mask_alpha_raster_height"),
+           QStringLiteral("mask_source_point_count"),
+           QStringLiteral("mask_source_stroke_count"),
+           QStringLiteral("mask_work_state_revision"),
+       }) {
+    mask.remove(key);
+  }
+
+  for (const auto& key : {
+           QStringLiteral("segmentationData"),
+           QStringLiteral("depthData"),
+           QStringLiteral("generatedMaskCleanupSourceData"),
+       }) {
+    const auto bytes = mask.value(key).toByteArray();
+    if (!bytes.isEmpty()) {
+      QVariantMap fingerprint;
+      fingerprint.insert(QStringLiteral("bytes"), bytes.size());
+      fingerprint.insert(QStringLiteral("sha1"), sha1_hex(bytes));
+      mask.insert(key, fingerprint);
+    }
+  }
+  return mask;
+}
+
+QString export_mask_alpha_provider_for_mask(const QVariantMap& mask) {
+  const auto kind = mask.value(QStringLiteral("kind")).toString().trimmed().toLower();
+  if (kind == QStringLiteral("brush") &&
+      (!mask.value(QStringLiteral("brushPoints")).toList().isEmpty() ||
+       !mask.value(QStringLiteral("brushStrokes")).toList().isEmpty())) {
+    return QStringLiteral("brush-stroke-replay");
+  }
+
+  const auto width = mask.value(QStringLiteral("segmentationWidth")).toInt();
+  const auto height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+  const auto data = mask.value(QStringLiteral("segmentationData")).toByteArray();
+  const auto has_raster_payload =
+      width > 0 && height > 0 && data.size() == static_cast<qsizetype>(width * height);
+  if (has_raster_payload || kind == QStringLiteral("alpha") ||
+      kind == QStringLiteral("subject") || kind == QStringLiteral("object") ||
+      kind == QStringLiteral("sky") || kind == QStringLiteral("background")) {
+    return has_raster_payload ? QStringLiteral("raster-payload")
+                              : QStringLiteral("raster-missing");
+  }
+
+  if (kind == QStringLiteral("linear") || kind == QStringLiteral("radial") ||
+      kind == QStringLiteral("ellipse") || kind == QStringLiteral("rectangle") ||
+      kind == QStringLiteral("polygon") || kind == QStringLiteral("lasso") ||
+      kind == QStringLiteral("luminance_range") || kind == QStringLiteral("color_range") ||
+      kind == QStringLiteral("depth_range")) {
+    return QStringLiteral("procedural-geometry");
+  }
+
+  return QStringLiteral("unavailable");
+}
+
+QString export_source_revision_hash(const QString& source_path) {
+  const QFileInfo source_info(source_path);
+  if (!source_info.exists()) {
+    return {};
+  }
+
+  QJsonObject payload;
+  payload.insert(QStringLiteral("version"), QStringLiteral("export-source-revision-v1"));
+  payload.insert(QStringLiteral("path"), source_info.absoluteFilePath());
+  payload.insert(QStringLiteral("size"), QString::number(source_info.size()));
+  payload.insert(
+      QStringLiteral("lastModified"),
+      source_info.lastModified().toUTC().toString(Qt::ISODateWithMs));
+  return json_sha1(payload);
+}
+
+QJsonObject export_mask_alpha_trace_metadata(
+    const QString& recipe_json,
+    const QString& source_path) {
+  const auto state = parse_edit_recipe_json(recipe_json);
+  if (state.mask_stack.isEmpty()) {
+    return {};
+  }
+
+  const auto source_revision_hash = export_source_revision_hash(source_path);
+  QJsonArray component_ids;
+  QJsonArray component_hashes;
+  QJsonArray component_signatures;
+  QJsonArray component_providers;
+  auto ordinal = 1;
+  auto max_width = 0;
+  auto max_height = 0;
+  for (const auto& value : state.mask_stack) {
+    const auto mask = normalized_mask_definition(value.toMap(), ordinal);
+    ++ordinal;
+    if (!mask.value(QStringLiteral("enabled"), true).toBool()) {
+      continue;
+    }
+
+    const auto source_id = mask.value(QStringLiteral("id")).toString().simplified();
+    if (source_id.isEmpty()) {
+      continue;
+    }
+
+    const auto width = mask.value(QStringLiteral("segmentationWidth")).toInt();
+    const auto height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+    if (width > 0 && height > 0) {
+      max_width = std::max(max_width, width);
+      max_height = std::max(max_height, height);
+    }
+    const auto provider = export_mask_alpha_provider_for_mask(mask);
+    const auto provider_available =
+        provider != QStringLiteral("unavailable") && provider != QStringLiteral("raster-missing");
+
+    auto source_payload = QJsonObject::fromVariantMap(export_trace_mask_source_payload(mask));
+    source_payload.insert(QStringLiteral("ordinal"), ordinal - 1);
+    const auto source_hash = json_sha1(source_payload);
+
+    QJsonObject trace_payload;
+    trace_payload.insert(QStringLiteral("maskSourceHash"), source_hash);
+    trace_payload.insert(QStringLiteral("alphaProvider"), provider);
+    trace_payload.insert(QStringLiteral("alphaFullResolutionAvailable"), provider_available);
+    trace_payload.insert(QStringLiteral("alphaDeterministic"), provider_available);
+    if (!source_revision_hash.isEmpty()) {
+      trace_payload.insert(QStringLiteral("sourceRevisionHash"), source_revision_hash);
+    }
+    if (width > 0 && height > 0) {
+      trace_payload.insert(QStringLiteral("rasterWidth"), width);
+      trace_payload.insert(QStringLiteral("rasterHeight"), height);
+    }
+    const auto trace_hash = json_sha1(trace_payload);
+    component_ids.append(source_id);
+    component_hashes.append(QStringLiteral("sha1:%1").arg(trace_hash));
+    component_providers.append(provider);
+    component_signatures.append(
+        QStringLiteral("mask:%1|source:sha1:%2|revision:%3|raster:%4x%5|provider:%6|full:%7")
+            .arg(source_id)
+            .arg(source_hash)
+            .arg(source_revision_hash.isEmpty()
+                     ? QStringLiteral("none")
+                      : QStringLiteral("sha1:%1").arg(source_revision_hash))
+            .arg(width)
+            .arg(height)
+            .arg(provider)
+            .arg(provider_available ? QStringLiteral("true") : QStringLiteral("false")));
+  }
+
+  if (component_ids.isEmpty()) {
+    return {};
+  }
+
+  QJsonObject source_payload;
+  source_payload.insert(QStringLiteral("context"), QStringLiteral("export-render"));
+  source_payload.insert(QStringLiteral("componentSignatures"), component_signatures);
+  source_payload.insert(QStringLiteral("sourceRevisionHash"), source_revision_hash);
+  const auto source_hash = json_sha1(source_payload);
+
+  QJsonObject trace_payload;
+  trace_payload.insert(QStringLiteral("maskSourceHash"), source_hash);
+  trace_payload.insert(QStringLiteral("componentHashes"), component_hashes);
+  trace_payload.insert(QStringLiteral("componentProviders"), component_providers);
+  trace_payload.insert(QStringLiteral("alphaProvider"), QStringLiteral("export-render"));
+  const auto export_available =
+      component_providers.size() == component_ids.size() &&
+      !component_providers.contains(QStringLiteral("unavailable")) &&
+      !component_providers.contains(QStringLiteral("raster-missing"));
+  trace_payload.insert(QStringLiteral("alphaFullResolutionAvailable"), export_available);
+  trace_payload.insert(QStringLiteral("alphaDeterministic"), export_available);
+  if (!source_revision_hash.isEmpty()) {
+    trace_payload.insert(QStringLiteral("sourceRevisionHash"), source_revision_hash);
+  }
+  if (max_width > 0 && max_height > 0) {
+    trace_payload.insert(QStringLiteral("rasterWidth"), max_width);
+    trace_payload.insert(QStringLiteral("rasterHeight"), max_height);
+  }
+  const auto trace_hash = json_sha1(trace_payload);
+
+  QJsonObject fields;
+  fields.insert(QStringLiteral("trace_context"), QStringLiteral("export-render"));
+  fields.insert(QStringLiteral("mask_source_count"), component_ids.size());
+  fields.insert(QStringLiteral("mask_source_ids"), component_ids);
+  fields.insert(QStringLiteral("mask_source_hash"), QStringLiteral("sha1:%1").arg(source_hash));
+  fields.insert(QStringLiteral("mask_alpha_trace_hash"), QStringLiteral("sha1:%1").arg(trace_hash));
+  fields.insert(
+      QStringLiteral("mask_alpha_provider_contract"),
+      QStringLiteral("shared-mask-alpha-provider-v1"));
+  fields.insert(QStringLiteral("mask_alpha_provider"), QStringLiteral("export-render"));
+  fields.insert(QStringLiteral("mask_alpha_full_resolution_available"), export_available);
+  fields.insert(QStringLiteral("mask_alpha_deterministic"), export_available);
+  fields.insert(QStringLiteral("mask_alpha_component_providers"), component_providers);
+  fields.insert(
+      QStringLiteral("mask_alpha_provider_signature"),
+      QStringLiteral("contract:shared-mask-alpha-provider-v1|provider:export-render|full:%1|deterministic:%2|components:%3|target:%4x%5")
+          .arg(export_available ? QStringLiteral("true") : QStringLiteral("false"),
+               export_available ? QStringLiteral("true") : QStringLiteral("false"))
+          .arg(component_ids.size())
+          .arg(max_width)
+          .arg(max_height));
+  fields.insert(
+      QStringLiteral("mask_alpha_trace_signature"),
+      QStringLiteral("export-render|sources:%1|source:sha1:%2|revision:%3|raster:%4x%5|provider:export-render|full:%6")
+          .arg(component_ids.size())
+          .arg(source_hash)
+          .arg(source_revision_hash.isEmpty()
+                   ? QStringLiteral("none")
+                   : QStringLiteral("sha1:%1").arg(source_revision_hash))
+          .arg(max_width)
+          .arg(max_height)
+          .arg(export_available ? QStringLiteral("true") : QStringLiteral("false")));
+  if (!source_revision_hash.isEmpty()) {
+    fields.insert(
+        QStringLiteral("mask_source_revision_hash"),
+        QStringLiteral("sha1:%1").arg(source_revision_hash));
+  }
+  if (max_width > 0 && max_height > 0) {
+    fields.insert(QStringLiteral("mask_alpha_raster_width"), max_width);
+    fields.insert(QStringLiteral("mask_alpha_raster_height"), max_height);
+  }
+  return fields;
+}
+
+QString export_render_state_signature(
+    const PersistentJobRecord& job,
+    const QString& source_path,
+    const QString& output_path,
+    bool render_photo,
+    const QJsonObject& mask_alpha_trace) {
+  QJsonObject payload;
+  payload.insert(QStringLiteral("jobId"), job.job_id);
+  payload.insert(QStringLiteral("assetId"), job.asset_id);
+  payload.insert(QStringLiteral("sourcePath"), source_path);
+  payload.insert(QStringLiteral("outputPath"), output_path);
+  payload.insert(QStringLiteral("recipeJson"), job.recipe_json);
+  payload.insert(QStringLiteral("preset"), job.preset_name);
+  payload.insert(QStringLiteral("metadata"), job.metadata_json);
+  payload.insert(QStringLiteral("renderPhoto"), render_photo);
+  payload.insert(QStringLiteral("maskAlphaTrace"), mask_alpha_trace);
+  return QStringLiteral("sha1:%1").arg(QString::fromLatin1(
+      QCryptographicHash::hash(
+          QJsonDocument(payload).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha1)
+          .toHex()));
+}
+
+QJsonObject export_render_job_metadata(
+    const PersistentJobRecord& job,
+    const QString& source_path,
+    const QString& output_path,
+    bool render_photo) {
+  const auto mask_alpha_trace =
+      render_photo ? export_mask_alpha_trace_metadata(job.recipe_json, source_path) : QJsonObject{};
+  const auto signature = export_render_state_signature(
+      job,
+      source_path,
+      output_path,
+      render_photo,
+      mask_alpha_trace);
+  const auto signature_token =
+      signature.mid(signature.indexOf(QLatin1Char(':')) + 1, 12);
+  QJsonObject metadata;
+  metadata.insert(
+      QStringLiteral("jobId"),
+      QStringLiteral("export_render-%1-%2").arg(job.job_id, signature_token));
+  metadata.insert(
+      QStringLiteral("jobKind"),
+      render_photo ? QStringLiteral("full_resolution_export") : QStringLiteral("file_export_copy"));
+  metadata.insert(QStringLiteral("stage"), QStringLiteral("export_render"));
+  metadata.insert(QStringLiteral("assetId"), job.asset_id);
+  metadata.insert(QStringLiteral("sourcePath"), source_path);
+  metadata.insert(QStringLiteral("outputPath"), output_path);
+  metadata.insert(QStringLiteral("preset"), job.preset_name);
+  metadata.insert(QStringLiteral("stateSignature"), signature);
+  metadata.insert(QStringLiteral("queuedAt"), job.created_at);
+  metadata.insert(QStringLiteral("renderPhoto"), render_photo);
+  if (!mask_alpha_trace.isEmpty()) {
+    metadata.insert(QStringLiteral("maskAlphaTrace"), mask_alpha_trace);
+  }
+  return metadata;
+}
+
+QString export_preview_state_signature(
+    const PersistentJobRecord& job,
+    const QString& source_path,
+    const QString& output_path,
+    bool render_photo,
+    const QJsonObject& export_render_job,
+    int tolerance) {
+  QJsonObject payload;
+  payload.insert(QStringLiteral("jobId"), job.job_id);
+  payload.insert(QStringLiteral("assetId"), job.asset_id);
+  payload.insert(QStringLiteral("sourcePath"), source_path);
+  payload.insert(QStringLiteral("outputPath"), output_path);
+  payload.insert(QStringLiteral("recipeJson"), job.recipe_json);
+  payload.insert(QStringLiteral("preset"), job.preset_name);
+  payload.insert(QStringLiteral("renderPhoto"), render_photo);
+  payload.insert(QStringLiteral("tolerance"), tolerance);
+  payload.insert(QStringLiteral("exportRenderJob"), export_render_job);
+  return QStringLiteral("sha1:%1").arg(QString::fromLatin1(
+      QCryptographicHash::hash(
+          QJsonDocument(payload).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha1)
+          .toHex()));
+}
+
+QJsonObject export_preview_job_metadata(
+    const PersistentJobRecord& job,
+    const QString& source_path,
+    const QString& output_path,
+    bool render_photo,
+    const QJsonObject& export_render_job) {
+  const auto tolerance = render_photo ? preview_export_diff_tolerance_for_preset(job.preset_name) : 0;
+  const auto signature = export_preview_state_signature(
+      job,
+      source_path,
+      output_path,
+      render_photo,
+      export_render_job,
+      tolerance);
+  const auto signature_token =
+      signature.mid(signature.indexOf(QLatin1Char(':')) + 1, 12);
+  QJsonObject metadata;
+  metadata.insert(
+      QStringLiteral("jobId"),
+      QStringLiteral("export_preview-%1-%2").arg(job.job_id, signature_token));
+  metadata.insert(
+      QStringLiteral("jobKind"),
+      render_photo ? QStringLiteral("full_resolution_export_preview")
+                   : QStringLiteral("file_export_copy_preview"));
+  metadata.insert(QStringLiteral("stage"), QStringLiteral("export_preview_diff"));
+  metadata.insert(QStringLiteral("assetId"), job.asset_id);
+  metadata.insert(QStringLiteral("sourcePath"), source_path);
+  metadata.insert(QStringLiteral("outputPath"), output_path);
+  metadata.insert(QStringLiteral("preset"), job.preset_name);
+  metadata.insert(QStringLiteral("stateSignature"), signature);
+  metadata.insert(QStringLiteral("queuedAt"), job.created_at);
+  metadata.insert(QStringLiteral("renderPhoto"), render_photo);
+  metadata.insert(QStringLiteral("tolerance"), tolerance);
+  metadata.insert(
+      QStringLiteral("exportRenderJobId"),
+      export_render_job.value(QStringLiteral("jobId")).toString());
+  return metadata;
 }
 
 PreviewExportDiff compare_preview_to_export(
@@ -341,7 +726,8 @@ bool render_photo_export(
       preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space)),
       options.image_format,
       metadata.valid ? &metadata : nullptr,
-      telemetry);
+      telemetry,
+      RenderMaskOptions{.rebuild_editable_masks_at_output_resolution = true});
   if (image.isNull()) {
     return false;
   }
@@ -404,7 +790,9 @@ QVariantMap run_export_work(
     const QString& preset_name,
     const QJsonObject& export_metadata,
     const QString& output_path,
-    bool render_photo) {
+    bool render_photo,
+    const QJsonObject& export_render_job,
+    const QJsonObject& export_preview_job) {
   QElapsedTimer timer;
   timer.start();
   QVariantMap result;
@@ -412,6 +800,8 @@ QVariantMap run_export_work(
   result.insert(QStringLiteral("outputPath"), output_path);
   result.insert(QStringLiteral("backend"), render_photo ? QStringLiteral("unknown") : QStringLiteral("copy"));
   result.insert(QStringLiteral("fallbackReason"), QString());
+  result.insert(QStringLiteral("exportRenderJob"), export_render_job.toVariantMap());
+  result.insert(QStringLiteral("exportPreviewJob"), export_preview_job.toVariantMap());
 
   QDir().mkpath(QFileInfo(output_path).absolutePath());
   QFile::remove(output_path);
@@ -435,11 +825,15 @@ QVariantMap run_export_work(
   }
   result.insert(QStringLiteral("success"), success);
   if (success && render_photo) {
+    const auto tolerance = export_preview_job.value(QStringLiteral("tolerance"))
+                               .toInt(preview_export_diff_tolerance_for_preset(preset_name));
     const auto preview_export_diff = compare_preview_to_export(
         rendered_output,
         QImage(output_path),
-        preview_export_diff_tolerance_for_preset(preset_name));
-    result.insert(QStringLiteral("previewExportDiff"), preview_export_diff_to_map(preview_export_diff));
+        tolerance);
+    result.insert(
+        QStringLiteral("previewExportDiff"),
+        preview_export_diff_to_map(preview_export_diff, export_preview_job));
   }
   if (!success) {
     result.insert(
@@ -844,6 +1238,14 @@ void JobRunner::runExportJob(const QString& job_id) {
     return;
   }
 
+  const auto export_render_job = export_render_job_metadata(job, source_path, output_path, render_photo);
+  job.metadata_json.insert(QStringLiteral("exportRenderJob"), export_render_job);
+  const auto export_preview_job =
+      export_preview_job_metadata(job, source_path, output_path, render_photo, export_render_job);
+  job.metadata_json.insert(QStringLiteral("exportPreviewJob"), export_preview_job);
+  job.updated_at = iso_now();
+  (void)upsertPersistedJobRecord(job, nullptr);
+
   async_job_watcher_.setFuture(QtConcurrent::run(
       run_export_work,
       source_path,
@@ -851,7 +1253,9 @@ void JobRunner::runExportJob(const QString& job_id) {
       job.preset_name,
       job.metadata_json,
       output_path,
-      render_photo));
+      render_photo,
+      export_render_job,
+      export_preview_job));
 }
 
 void JobRunner::handleAsyncJobFinished() {
@@ -888,6 +1292,36 @@ void JobRunner::handleAsyncJobFinished() {
   const auto worker_elapsed_ms = result.value(QStringLiteral("elapsedMs")).toLongLong();
   const auto backend = result.value(QStringLiteral("backend")).toString().trimmed();
   const auto fallback_reason = result.value(QStringLiteral("fallbackReason")).toString().trimmed();
+  const auto export_render_job = result.value(QStringLiteral("exportRenderJob")).toMap();
+  const auto export_render_job_id =
+      export_render_job.value(QStringLiteral("jobId")).toString().trimmed();
+  const auto persisted_export_render_job =
+      job.metadata_json.value(QStringLiteral("exportRenderJob")).toObject().toVariantMap();
+  const auto persisted_export_render_job_id =
+      persisted_export_render_job.value(QStringLiteral("jobId")).toString().trimmed();
+  const auto export_preview_job = result.value(QStringLiteral("exportPreviewJob")).toMap();
+  const auto export_preview_job_id =
+      export_preview_job.value(QStringLiteral("jobId")).toString().trimmed();
+  const auto persisted_export_preview_job =
+      job.metadata_json.value(QStringLiteral("exportPreviewJob")).toObject().toVariantMap();
+  const auto persisted_export_preview_job_id =
+      persisted_export_preview_job.value(QStringLiteral("jobId")).toString().trimmed();
+  const auto render_photo_result =
+      export_render_job.value(QStringLiteral("renderPhoto")).toBool();
+  const auto export_render_mask_trace =
+      export_render_job.value(QStringLiteral("maskAlphaTrace")).toMap();
+  const auto stale_export_render_result =
+      job_kind == QStringLiteral("asset_export") &&
+      (export_render_job_id.isEmpty() ||
+       persisted_export_render_job_id.isEmpty() ||
+       export_render_job_id != persisted_export_render_job_id);
+  const auto stale_export_preview_result =
+      job_kind == QStringLiteral("asset_export") &&
+      success &&
+      render_photo_result &&
+      (export_preview_job_id.isEmpty() ||
+       persisted_export_preview_job_id.isEmpty() ||
+       export_preview_job_id != persisted_export_preview_job_id);
   const auto cancellation_reason = cancellation_reason_for_job(job);
   if (cancellation_requested) {
     const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
@@ -906,8 +1340,39 @@ void JobRunner::handleAsyncJobFinished() {
     job.metadata_json.insert(
         QStringLiteral("cancellationReason"),
         cancellation_reason.isEmpty() ? QStringLiteral("cooperative_cancel_requested") : cancellation_reason);
+  } else if (stale_export_render_result || stale_export_preview_result) {
+    const auto output_path = result.value(QStringLiteral("outputPath")).toString().trimmed();
+    if (!output_path.isEmpty()) {
+      QFile::remove(output_path);
+    }
+    job.status = QStringLiteral("Failed");
+    job.error_message =
+        stale_export_preview_result
+            ? QStringLiteral("Export preview result was discarded because the job changed.")
+            : QStringLiteral("Export render result was discarded because the job changed.");
+    job.progress = 0;
+    job.metadata_json.insert(QStringLiteral("staleExportRenderResult"), stale_export_render_result);
+    job.metadata_json.insert(
+        QStringLiteral("staleExportRenderJobId"),
+        export_render_job_id);
+    job.metadata_json.insert(
+        QStringLiteral("staleExportPreviewResult"),
+        stale_export_preview_result);
+    job.metadata_json.insert(
+        QStringLiteral("staleExportPreviewJobId"),
+        export_preview_job_id);
   } else if (success) {
     job.output_path = result.value(QStringLiteral("outputPath")).toString();
+    if (!export_render_job.isEmpty()) {
+      job.metadata_json.insert(
+          QStringLiteral("exportRenderJob"),
+          QJsonObject::fromVariantMap(export_render_job));
+    }
+    if (!export_preview_job.isEmpty()) {
+      job.metadata_json.insert(
+          QStringLiteral("exportPreviewJob"),
+          QJsonObject::fromVariantMap(export_preview_job));
+    }
     const auto preview_export_diff = result.value(QStringLiteral("previewExportDiff")).toMap();
     if (!preview_export_diff.isEmpty()) {
       job.metadata_json.insert(
@@ -957,7 +1422,7 @@ void JobRunner::handleAsyncJobFinished() {
 
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
-  if (success) {
+  if (job.status == QStringLiteral("Completed")) {
     observability::logInfo(
         photoEditorJobsLog(),
         QStringLiteral("job.completed"),
@@ -968,6 +1433,48 @@ void JobRunner::handleAsyncJobFinished() {
             {QStringLiteral("status"), job.status},
             {QStringLiteral("backend"), backend},
             {QStringLiteral("fallback_reason"), fallback_reason},
+            {QStringLiteral("export_render_job_id"), export_render_job_id},
+            {QStringLiteral("export_render_job_kind"),
+             export_render_job.value(QStringLiteral("jobKind")).toString()},
+            {QStringLiteral("export_render_stage"),
+             export_render_job.value(QStringLiteral("stage")).toString()},
+            {QStringLiteral("export_render_state_signature"),
+             export_render_job.value(QStringLiteral("stateSignature")).toString()},
+            {QStringLiteral("mask_source_count"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_count")).toInt()},
+            {QStringLiteral("mask_source_ids"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_ids")).toList()},
+            {QStringLiteral("mask_source_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_hash")).toString()},
+            {QStringLiteral("mask_alpha_trace_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_hash")).toString()},
+            {QStringLiteral("mask_alpha_trace_signature"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_signature")).toString()},
+            {QStringLiteral("mask_source_revision_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_revision_hash")).toString()},
+            {QStringLiteral("mask_alpha_raster_width"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_raster_width")).toInt()},
+            {QStringLiteral("mask_alpha_raster_height"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_raster_height")).toInt()},
+            {QStringLiteral("render_stage_telemetry_contract"),
+             QStringLiteral("layer-mask-render-stage-telemetry-v1")},
+            {QStringLiteral("layer_recipe_stage"), QStringLiteral("layer_recipe_evaluation")},
+            {QStringLiteral("mask_alpha_stage"), QStringLiteral("mask_alpha_retrieval")},
+            {QStringLiteral("mask_alpha_retrieval_provider"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_provider")).toString()},
+            {QStringLiteral("mask_alpha_retrieval_signature"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_signature")).toString()},
+            {QStringLiteral("layer_composite_stage"), QStringLiteral("layer_composite")},
+            {QStringLiteral("thumbnail_render_stage"), QStringLiteral("thumbnail_render")},
+            {QStringLiteral("final_export_stage"), QStringLiteral("final_export")},
+            {QStringLiteral("final_export_ms"), worker_elapsed_ms},
+            {QStringLiteral("export_preview_job_id"), export_preview_job_id},
+            {QStringLiteral("export_preview_job_kind"),
+             export_preview_job.value(QStringLiteral("jobKind")).toString()},
+            {QStringLiteral("export_preview_stage"),
+             export_preview_job.value(QStringLiteral("stage")).toString()},
+            {QStringLiteral("export_preview_state_signature"),
+             export_preview_job.value(QStringLiteral("stateSignature")).toString()},
             {QStringLiteral("queue_wait_ms"), queue_wait_ms},
             {QStringLiteral("cancellation_requested"), cancellation_requested},
             {QStringLiteral("cancellation_reason"), cancellation_reason},
@@ -987,6 +1494,50 @@ void JobRunner::handleAsyncJobFinished() {
             {QStringLiteral("status"), job.status},
             {QStringLiteral("backend"), backend},
             {QStringLiteral("fallback_reason"), fallback_reason},
+            {QStringLiteral("export_render_job_id"), export_render_job_id},
+            {QStringLiteral("export_render_job_kind"),
+             export_render_job.value(QStringLiteral("jobKind")).toString()},
+            {QStringLiteral("export_render_stage"),
+             export_render_job.value(QStringLiteral("stage")).toString()},
+            {QStringLiteral("export_render_state_signature"),
+             export_render_job.value(QStringLiteral("stateSignature")).toString()},
+            {QStringLiteral("mask_source_count"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_count")).toInt()},
+            {QStringLiteral("mask_source_ids"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_ids")).toList()},
+            {QStringLiteral("mask_source_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_hash")).toString()},
+            {QStringLiteral("mask_alpha_trace_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_hash")).toString()},
+            {QStringLiteral("mask_alpha_trace_signature"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_signature")).toString()},
+            {QStringLiteral("mask_source_revision_hash"),
+             export_render_mask_trace.value(QStringLiteral("mask_source_revision_hash")).toString()},
+            {QStringLiteral("mask_alpha_raster_width"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_raster_width")).toInt()},
+            {QStringLiteral("mask_alpha_raster_height"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_raster_height")).toInt()},
+            {QStringLiteral("render_stage_telemetry_contract"),
+             QStringLiteral("layer-mask-render-stage-telemetry-v1")},
+            {QStringLiteral("layer_recipe_stage"), QStringLiteral("layer_recipe_evaluation")},
+            {QStringLiteral("mask_alpha_stage"), QStringLiteral("mask_alpha_retrieval")},
+            {QStringLiteral("mask_alpha_retrieval_provider"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_provider")).toString()},
+            {QStringLiteral("mask_alpha_retrieval_signature"),
+             export_render_mask_trace.value(QStringLiteral("mask_alpha_trace_signature")).toString()},
+            {QStringLiteral("layer_composite_stage"), QStringLiteral("layer_composite")},
+            {QStringLiteral("thumbnail_render_stage"), QStringLiteral("thumbnail_render")},
+            {QStringLiteral("final_export_stage"), QStringLiteral("final_export")},
+            {QStringLiteral("final_export_ms"), worker_elapsed_ms},
+            {QStringLiteral("stale_export_render_result"), stale_export_render_result},
+            {QStringLiteral("export_preview_job_id"), export_preview_job_id},
+            {QStringLiteral("export_preview_job_kind"),
+             export_preview_job.value(QStringLiteral("jobKind")).toString()},
+            {QStringLiteral("export_preview_stage"),
+             export_preview_job.value(QStringLiteral("stage")).toString()},
+            {QStringLiteral("export_preview_state_signature"),
+             export_preview_job.value(QStringLiteral("stateSignature")).toString()},
+            {QStringLiteral("stale_export_preview_result"), stale_export_preview_result},
             {QStringLiteral("queue_wait_ms"), queue_wait_ms},
             {QStringLiteral("cancellation_requested"), cancellation_requested},
             {QStringLiteral("cancellation_reason"), cancellation_reason},

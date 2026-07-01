@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Quick Qml QuickControls2 Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Network Quick Qml QuickControls2 Widgets)
 
 qt_standard_project_setup(REQUIRES 6.5)
 if(Qt6_VERSION VERSION_GREATER_EQUAL 6.8)
@@ -6,6 +6,11 @@ if(Qt6_VERSION VERSION_GREATER_EQUAL 6.8)
 endif()
 
 set(photo_editor_desktop_sources
+  src/agent_edit_controller.cpp
+  src/agent_edit_recipe_patch.cpp
+  src/agent_edit_style.cpp
+  src/agent_image_validation.cpp
+  src/agent_local_model.cpp
   src/ai_model_runtime.cpp
   src/app_shell_controller.cpp
   src/macos_updater.h
@@ -24,6 +29,7 @@ set(photo_editor_desktop_sources
   src/job_store.cpp
   src/observability.cpp
   src/photo_render_utils.cpp
+  src/photo_automation_bridge.cpp
   src/raw_image_decoder_stub.cpp
   src/main.cpp
   src/preview_backend_controller.cpp
@@ -174,6 +180,7 @@ qt_add_qml_module(photo_editor_app
     qml/workspaces/MaskInspectorSections.qml
     qml/workspaces/MaskView.qml
     qml/workspaces/SequenceWorkspace.qml
+    qml/workspaces/SharedMaskOverlay.qml
     qml/workspaces/StudioWorkspace.qml
     qml/workspaces/TimelineView.qml
 )
@@ -187,6 +194,7 @@ target_link_libraries(
     Qt6::Concurrent
     Qt6::Gui
     Qt6::Multimedia
+    Qt6::Network
     Qt6::Quick
     Qt6::Qml
     Qt6::QuickControls2

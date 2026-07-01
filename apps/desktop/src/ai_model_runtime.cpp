@@ -138,6 +138,29 @@ QColor average_patch_boundary_color(const QImage& source, const QRect& bounds) {
       static_cast<int>(alpha / count));
 }
 
+QRect patch_source_rect(const AiInpaintRequest& request, const QSize& source_size) {
+  if (!request.patch_source_set || !source_size.isValid()) {
+    return {};
+  }
+  const auto width = std::clamp(
+      static_cast<int>(std::lround(request.patch_source_width * source_size.width())),
+      1,
+      source_size.width());
+  const auto height = std::clamp(
+      static_cast<int>(std::lround(request.patch_source_height * source_size.height())),
+      1,
+      source_size.height());
+  const auto x = std::clamp(
+      static_cast<int>(std::lround(request.patch_source_x * source_size.width())),
+      0,
+      std::max(0, source_size.width() - width));
+  const auto y = std::clamp(
+      static_cast<int>(std::lround(request.patch_source_y * source_size.height())),
+      0,
+      std::max(0, source_size.height() - height));
+  return QRect(x, y, width, height).intersected(QRect(QPoint(0, 0), source_size));
+}
+
 double inpaint_mask_coverage(const AiInpaintRequest& request, const QRect& bounds) {
   if (!bounds.isValid()) {
     return 0.0;
@@ -211,6 +234,52 @@ void populate_inpaint_region_result(
   result->region_y = bounds.y();
   result->region_width = bounds.width();
   result->region_height = bounds.height();
+}
+
+AiInpaintResult run_source_region_patch(const AiInpaintRequest& request) {
+  AiInpaintResult result;
+  if (!valid_inpaint_mask(request)) {
+    result.error_message = QStringLiteral("Invalid inpaint request.");
+    return result;
+  }
+
+  const auto bounds = inpaint_mask_bounds(request);
+  if (!bounds.isValid()) {
+    result.error_message = QStringLiteral("Inpaint mask is empty.");
+    return result;
+  }
+
+  auto source = request.source_image;
+  if (!source.colorSpace().isValid()) {
+    source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  }
+  if (source.format() != QImage::Format_ARGB32) {
+    source = source.convertToFormat(QImage::Format_ARGB32);
+  }
+  const auto source_rect = patch_source_rect(request, source.size());
+  if (!source_rect.isValid() || source_rect.isEmpty()) {
+    result.error_message = QStringLiteral("Patch source region is empty.");
+    return result;
+  }
+
+  auto patch = source.copy(source_rect).scaled(
+      bounds.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+  if (patch.format() != QImage::Format_ARGB32) {
+    patch = patch.convertToFormat(QImage::Format_ARGB32);
+  }
+  patch.setColorSpace(source.colorSpace());
+
+  result.success = true;
+  result.model_name = QStringLiteral("source-region-patch-v1");
+  populate_inpaint_region_result(&result, request, bounds);
+  result.patch_image = patch;
+  result.candidate_images = {patch};
+  result.candidate_index = 0;
+  result.patch_x = bounds.x();
+  result.patch_y = bounds.y();
+  result.patch_width = bounds.width();
+  result.patch_height = bounds.height();
+  return result;
 }
 
 AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const QString& source_error = {}) {
@@ -445,8 +514,15 @@ AiInpaintResult run_cpu_diffusion_inpaint(const AiInpaintRequest& request, const
                                                  result.region_kind == QStringLiteral("large-patch")
                                                ? 0.34
                                                : 0.28;
+    const auto heal_texture_multiplier =
+        request.retouch_mode.trimmed().toLower() == QStringLiteral("heal")
+            ? std::clamp(request.heal_texture_blend, 0.0, 1.0)
+            : 1.0;
     const auto texture_strength =
-        std::clamp(base_texture_strength * prompt_texture_multiplier(result.prompt), 0.0, 0.5);
+        std::clamp(base_texture_strength * prompt_texture_multiplier(result.prompt) *
+                       heal_texture_multiplier,
+                   0.0,
+                   0.5);
     for (int y = 0; y < patch_height; ++y) {
       for (int x = 0; x < patch_width; ++x) {
         const auto index = static_cast<std::size_t>(y * patch_width + x);
@@ -960,7 +1036,15 @@ AiModelRuntimeStatus ai_model_runtime_status() {
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_AI_MODELS")) {
     status.smart_selection_available = true;
     status.inpaint_available = true;
-    status.summary = QStringLiteral("Test AI models active.");
+    status.smart_selection_runtime_label = QStringLiteral("SAM Smart Select");
+    status.inpaint_runtime_label = QStringLiteral("LaMa Model Inpaint");
+    status.diagnostics = QStringLiteral(
+        "root:%1|manifest:test|sam:test-ready|lama:test-ready|onnx:%2")
+                             .arg(
+                                 status.model_root,
+                                 kOnnxRuntimeLinked ? QStringLiteral("linked")
+                                                    : QStringLiteral("not-linked"));
+    status.summary = QStringLiteral("Test SAM Smart Select and LaMa Model Inpaint runtimes active.");
     return status;
   }
 
@@ -978,17 +1062,42 @@ AiModelRuntimeStatus ai_model_runtime_status() {
       kSamRuntimeImplemented && smart_selection_files_available;
   status.inpaint_available =
       kLamaRuntimeImplemented && inpaint_files_available;
+  status.smart_selection_runtime_label =
+      status.smart_selection_available ? QStringLiteral("SAM Smart Select")
+                                       : QStringLiteral("Local Smart Select");
+  status.inpaint_runtime_label =
+      status.inpaint_available ? QStringLiteral("LaMa Model Inpaint")
+                               : QStringLiteral("Local CPU Fill");
+  const auto sam_state =
+      status.smart_selection_available
+          ? QStringLiteral("ready")
+          : (!smart_selection_files_available
+                 ? QStringLiteral("model-missing")
+                 : QStringLiteral("runtime-missing"));
+  const auto lama_state =
+      status.inpaint_available
+          ? QStringLiteral("ready")
+          : (!inpaint_files_available ? QStringLiteral("model-missing")
+                                      : QStringLiteral("runtime-missing"));
+  status.diagnostics =
+      QStringLiteral("root:%1|manifest:%2|sam:%3|lama:%4|onnx:%5")
+          .arg(
+              status.model_root,
+              manifest_available ? QStringLiteral("present") : QStringLiteral("missing"),
+              sam_state,
+              lama_state,
+              kOnnxRuntimeLinked ? QStringLiteral("linked") : QStringLiteral("not-linked"));
 
   if (status.smart_selection_available && status.inpaint_available) {
-    status.summary = QStringLiteral("Bundled AI models ready.");
+    status.summary = QStringLiteral("Bundled SAM Smart Select and LaMa Model Inpaint runtimes ready.");
   } else if (inpaint_files_available && !kLamaRuntimeImplemented) {
-    status.summary = QStringLiteral("Bundled AI inpaint model found, but ONNX Runtime is not linked in this build.");
+    status.summary = QStringLiteral("Bundled LaMa inpaint model found, but ONNX Runtime is not linked in this build; retouch uses Local CPU Fill.");
   } else if (smart_selection_files_available && !kSamRuntimeImplemented) {
     status.summary = QStringLiteral("Bundled smart-selection model found, but SAM ONNX inference is not implemented in this build.");
   } else if (manifest_available) {
-    status.summary = QStringLiteral("Bundled AI model manifest found, but required model files are incomplete.");
+    status.summary = QStringLiteral("Bundled model manifest found, but required SAM/LaMa model files are incomplete; retouch uses Local CPU Fill.");
   } else {
-    status.summary = QStringLiteral("Bundled AI models missing.");
+    status.summary = QStringLiteral("Bundled SAM/LaMa models missing; retouch uses Local CPU Fill.");
   }
   return status;
 }
@@ -1007,6 +1116,11 @@ SegmentationResult generate_ai_smart_selection_mask(
 }
 
 AiInpaintResult run_ai_inpaint(const AiInpaintRequest& request) {
+  if (request.retouch_mode.trimmed().toLower() == QStringLiteral("patch") &&
+      request.patch_source_set) {
+    return run_source_region_patch(request);
+  }
+
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_AI_MODELS")) {
     return run_fake_inpaint(request);
   }

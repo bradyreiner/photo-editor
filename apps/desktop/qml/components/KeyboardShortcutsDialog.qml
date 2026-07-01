@@ -23,6 +23,12 @@ Dialog {
         { "id": "command-palette", "label": "Command Palette", "sequence": primary("K"), "defaultSequence": primary("K") },
         { "id": "workspace-library", "label": "Go To Library", "sequence": primary("1"), "defaultSequence": primary("1") },
         { "id": "workspace-edit", "label": "Go To Edit", "sequence": primary("2"), "defaultSequence": primary("2") },
+        { "id": "tool-adjust", "label": "Adjust Tool", "sequence": primaryAlt("A"), "defaultSequence": primaryAlt("A") },
+        { "id": "tool-crop", "label": "Crop Tool", "sequence": primaryAlt("C"), "defaultSequence": primaryAlt("C") },
+        { "id": "tool-masks", "label": "Masks Tool", "sequence": primaryAlt("M"), "defaultSequence": primaryAlt("M") },
+        { "id": "tool-brush", "label": "Brush Tool", "sequence": primaryAlt("B"), "defaultSequence": primaryAlt("B") },
+        { "id": "tool-compare", "label": "Compare Tool", "sequence": primaryAlt("P"), "defaultSequence": primaryAlt("P") },
+        { "id": "tool-export", "label": "Export Tool", "sequence": primaryAlt("E"), "defaultSequence": primaryAlt("E") },
         { "id": "queue-export", "label": "Queue Export", "sequence": primary("Shift+E"), "defaultSequence": primary("Shift+E") },
         { "id": "toggle-full-edit", "label": "Full-Screen Edit", "sequence": "F", "defaultSequence": "F" }
     ]
@@ -35,6 +41,12 @@ Dialog {
                 "command-palette": primary("K"),
                 "workspace-library": primary("1"),
                 "workspace-edit": primary("2"),
+                "tool-adjust": primaryAlt("A"),
+                "tool-crop": primaryAlt("C"),
+                "tool-masks": primaryAlt("M"),
+                "tool-brush": primaryAlt("B"),
+                "tool-compare": primaryAlt("P"),
+                "tool-export": primaryAlt("E"),
                 "queue-export": primary("Shift+E"),
                 "toggle-full-edit": "F"
             }
@@ -46,6 +58,12 @@ Dialog {
                 "command-palette": primary("K"),
                 "workspace-library": "G",
                 "workspace-edit": "D",
+                "tool-adjust": primaryAlt("A"),
+                "tool-crop": primaryAlt("C"),
+                "tool-masks": primaryAlt("M"),
+                "tool-brush": primaryAlt("B"),
+                "tool-compare": primaryAlt("P"),
+                "tool-export": primaryAlt("E"),
                 "queue-export": primary("Shift+E"),
                 "toggle-full-edit": "F"
             }
@@ -57,6 +75,12 @@ Dialog {
                 "command-palette": primary("Alt+K"),
                 "workspace-library": "F5",
                 "workspace-edit": "F6",
+                "tool-adjust": primaryAlt("A"),
+                "tool-crop": primaryAlt("C"),
+                "tool-masks": primaryAlt("M"),
+                "tool-brush": primaryAlt("B"),
+                "tool-compare": primaryAlt("P"),
+                "tool-export": primaryAlt("E"),
                 "queue-export": primary("Alt+Shift+S"),
                 "toggle-full-edit": "F"
             }
@@ -68,6 +92,12 @@ Dialog {
                 "command-palette": primary("K"),
                 "workspace-library": primary("B"),
                 "workspace-edit": primary("E"),
+                "tool-adjust": primaryAlt("A"),
+                "tool-crop": primaryAlt("C"),
+                "tool-masks": primaryAlt("M"),
+                "tool-brush": primaryAlt("B"),
+                "tool-compare": primaryAlt("P"),
+                "tool-export": primaryAlt("E"),
                 "queue-export": primary("D"),
                 "toggle-full-edit": "F11"
             }
@@ -85,6 +115,7 @@ Dialog {
                 { "keys": primary("A"), "description": "Select all visible items in Library, Import, or Timeline." },
                 { "keys": primary("Shift+A"), "description": "Clear the active library, import, or timeline selection." },
                 { "keys": primary("Shift+E"), "description": "Queue the current selection for export." },
+                { "keys": primaryAlt("E"), "description": "Open the export workflow." },
                 { "keys": primary(","), "description": "Open preferences." }
             ]
         },
@@ -94,6 +125,9 @@ Dialog {
             items: [
                 { "keys": primary("Z"), "description": "Undo the last photo adjustment." },
                 { "keys": redoLabel, "description": "Redo the most recently undone adjustment." },
+                { "keys": primaryAlt("A"), "description": "Open the adjust tool." },
+                { "keys": primaryAlt("C"), "description": "Open crop editing." },
+                { "keys": primaryAlt("P"), "description": "Open compare view." },
                 { "keys": primary("D"), "description": "Deselect the active mask and clear transient selection tools." },
                 { "keys": "Esc", "description": "Exit the current mask tool or deselect the active mask." },
                 { "keys": "Left", "description": "Move to the previous photo in the filmstrip." },
@@ -104,13 +138,30 @@ Dialog {
             title: "Masks",
             accent: theme.accentWarm300,
             items: [
+                { "keys": "Ctrl+Shift+M", "description": "Create a new selection and linked adjustment layer." },
+                { "keys": "Ctrl+Shift+A / S / I", "description": "Set the next selection operation to Add, Subtract, or Intersect." },
+                { "keys": "Ctrl+Shift+V", "description": "Invert the active mask." },
+                { "keys": "Ctrl+Shift+O", "description": "Show or hide the active mask color overlay." },
+                { "keys": "Ctrl+Shift+U", "description": "Toggle the solid mask outline." },
+                { "keys": "Ctrl+Shift+L / K", "description": "Switch to the next active layer target or active mask target." },
+                { "keys": "Ctrl+Alt+Shift+L / K", "description": "Switch to the previous active layer target or active mask target." },
+                { "keys": "Ctrl+Shift+B", "description": "Return adjustments to the Base Image target." },
                 { "keys": "B", "description": "Start the brush-add tool on the active mask." },
                 { "keys": "E", "description": "Start the brush-erase tool on the active mask." },
+                { "keys": "X (hold)", "description": "Temporarily erase with the brush, then restore the previous brush operation." },
                 { "keys": "[ / ]", "description": "Decrease / increase brush size." },
-                { "keys": "I", "description": "Toggle invert on the active mask." },
-                { "keys": "V", "description": "Cycle mask preview mode (Color → Matte → B/W → W/B)." },
+                { "keys": "Shift+[ / Shift+]", "description": "Decrease / increase brush hardness." },
+                { "keys": "Alt+[ / Alt+]", "description": "Decrease / increase brush flow." },
+                { "keys": "Ctrl+[ / Ctrl+]", "description": "Decrease / increase mask density." },
+                { "keys": "Ctrl+Alt+[ / Ctrl+Alt+]", "description": "Decrease / increase mask opacity." },
+                { "keys": "L / P", "description": "Start lasso or polygon selection." },
+                { "keys": primaryAlt("M"), "description": "Open the masks workflow." },
+                { "keys": primaryAlt("B"), "description": "Open brush masking from anywhere." },
+                { "keys": "V", "description": "Cycle normal mask preview modes: Color Overlay, Marching Ants, Hidden." },
+                { "keys": "H (hold)", "description": "Temporarily hide the active mask preview." },
                 { "keys": "H", "description": "Start the heal brush." },
                 { "keys": "Delete", "description": "Remove the active mask." },
+                { "keys": "F2", "description": "Rename the active mask." },
                 { "keys": "Tab / Shift+Tab", "description": "Cycle object candidates during smart select." }
             ]
         },
@@ -152,6 +203,50 @@ Dialog {
 
     function primary(key) {
         return primaryLabel + "+" + key
+    }
+
+    function primaryAlt(key) {
+        return primaryLabel + "+Alt+" + key
+    }
+
+    function coreWorkflowShortcutSignature() {
+        return [
+            "adjust:" + shortcutSequence("tool-adjust"),
+            "crop:" + shortcutSequence("tool-crop"),
+            "masks:" + shortcutSequence("tool-masks"),
+            "brush:" + shortcutSequence("tool-brush"),
+            "compare:" + shortcutSequence("tool-compare"),
+            "export:" + shortcutSequence("tool-export")
+        ].join("|")
+    }
+
+    function maskShortcutHelpSignature() {
+        return [
+            "create:Ctrl+Shift+M",
+            "add-subtract-intersect:Ctrl+Shift+A/S/I",
+            "invert:Ctrl+Shift+V",
+            "overlay:Ctrl+Shift+O",
+            "outline:Ctrl+Shift+U",
+            "layer-mask-target-next:Ctrl+Shift+L/K",
+            "layer-mask-target-previous:Ctrl+Alt+Shift+L/K",
+            "base-image:Ctrl+Shift+B",
+            "temporary-erase:X-hold",
+            "temporary-hide:H-hold",
+            "rename:F2"
+        ].join("|")
+    }
+
+    function brushShortcutHelpSignature() {
+        return [
+            "brush-add:B",
+            "brush-erase:E",
+            "temporary-erase:X-hold",
+            "size:[/]",
+            "hardness:Shift+[/Shift+]",
+            "flow:Alt+[/Alt+]",
+            "density:Ctrl+[/Ctrl+]",
+            "opacity:Ctrl+Alt+[/Ctrl+Alt+]"
+        ].join("|")
     }
 
     function shortcutSequence(shortcutId) {

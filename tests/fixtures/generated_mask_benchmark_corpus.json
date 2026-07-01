@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "name": "generated-mask-benchmark-synthetic-v1",
+  "description": "Deterministic synthetic generated-mask benchmark cases for smart selection and generated matte quality.",
+  "requiredCategories": [
+    "portrait",
+    "product",
+    "landscape",
+    "low_contrast",
+    "busy_background",
+    "transparent_object"
+  ],
+  "cases": [
+    {
+      "id": "portrait_hair_strands_v1",
+      "category": "portrait",
+      "source": "synthetic",
+      "width": 512,
+      "height": 512,
+      "generatedKind": "subject",
+      "promptType": "positive-point",
+      "stressors": ["hair", "skin", "soft_edge", "background_spill"],
+      "expectedFeatures": ["non_empty", "person_centered", "fine_edge_boundary", "spill_candidate"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.08,
+        "maxSelectedFraction": 0.72,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true
+      }
+    },
+    {
+      "id": "product_hard_edge_shadow_v1",
+      "category": "product",
+      "source": "synthetic",
+      "width": 512,
+      "height": 384,
+      "generatedKind": "object",
+      "promptType": "box",
+      "stressors": ["hard_edge", "cast_shadow", "specular_highlight"],
+      "expectedFeatures": ["object_contiguous", "edge_contrast", "shadow_excluded"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.05,
+        "maxSelectedFraction": 0.55,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true
+      }
+    },
+    {
+      "id": "landscape_sky_tree_line_v1",
+      "category": "landscape",
+      "source": "synthetic",
+      "width": 640,
+      "height": 384,
+      "generatedKind": "sky",
+      "promptType": "semantic",
+      "stressors": ["tree_line", "horizon", "thin_branches", "gradient_sky"],
+      "expectedFeatures": ["large_region", "branch_gaps", "horizon_boundary"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.18,
+        "maxSelectedFraction": 0.78,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true
+      }
+    },
+    {
+      "id": "low_contrast_subject_v1",
+      "category": "low_contrast",
+      "source": "synthetic",
+      "width": 512,
+      "height": 512,
+      "generatedKind": "subject",
+      "promptType": "positive-negative-points",
+      "stressors": ["low_contrast", "soft_lighting", "similar_luminance"],
+      "expectedFeatures": ["prompt_guided_boundary", "confidence_warning_candidate"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.04,
+        "maxSelectedFraction": 0.68,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true
+      }
+    },
+    {
+      "id": "busy_background_object_v1",
+      "category": "busy_background",
+      "source": "synthetic",
+      "width": 512,
+      "height": 512,
+      "generatedKind": "object",
+      "promptType": "box-with-negative-points",
+      "stressors": ["repeating_texture", "distractor_objects", "fragment_risk"],
+      "expectedFeatures": ["distractors_excluded", "island_removal_candidate", "prompt_specific_object"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.03,
+        "maxSelectedFraction": 0.50,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true
+      }
+    },
+    {
+      "id": "transparent_glass_object_v1",
+      "category": "transparent_object",
+      "source": "synthetic",
+      "width": 512,
+      "height": 512,
+      "generatedKind": "alpha",
+      "promptType": "box",
+      "stressors": ["transparency", "refraction", "partial_alpha", "inner_holes"],
+      "expectedFeatures": ["semi_transparent_boundary", "hole_preservation", "matte_not_binary_only"],
+      "qualityChecks": {
+        "minSelectedFraction": 0.04,
+        "maxSelectedFraction": 0.62,
+        "requiresBoundaryPixels": true,
+        "requiresInteriorPixels": true,
+        "requiresExteriorPixels": true,
+        "requiresSemiTransparentPixels": true
+      }
+    }
+  ]
+}

@@ -189,6 +189,70 @@ int main() {
     }
   }
 
+  constexpr int kHighResolutionRawStressWidth = 4096;
+  constexpr int kHighResolutionRawStressHeight = 256;
+  std::vector<ColorPixel> high_resolution_raw_strip;
+  high_resolution_raw_strip.reserve(
+      kHighResolutionRawStressWidth * kHighResolutionRawStressHeight);
+  for (int y = 0; y < kHighResolutionRawStressHeight; ++y) {
+    for (int x = 0; x < kHighResolutionRawStressWidth; ++x) {
+      const auto horizontal =
+          static_cast<float>(x) / static_cast<float>(kHighResolutionRawStressWidth - 1);
+      const auto vertical =
+          static_cast<float>(y) / static_cast<float>(kHighResolutionRawStressHeight - 1);
+      high_resolution_raw_strip.push_back(ColorPixel{
+          .red = 0.04F + horizontal * 1.42F,
+          .green = 0.05F + vertical * 1.10F,
+          .blue = 0.08F + (1.0F - horizontal) * 0.72F + vertical * 0.28F,
+          .alpha = 1.0F,
+      });
+    }
+  }
+  std::vector<ColorPixel> high_resolution_first_output;
+  for (const auto& raw_case : {corpus.front(), corpus.back()}) {
+    const auto input_profile =
+        photo_editor::pipeline::input_color_profile_from_name(raw_case.input_profile);
+    const auto camera_profile =
+        photo_editor::pipeline::resolve_camera_profile(raw_case.metadata, input_profile);
+    const auto recipe = photo_editor::pipeline::resolve_input_transform_recipe(
+        input_profile,
+        camera_profile,
+        raw_case.metadata);
+
+    ColorAdjustmentState state;
+    state.input_transform.raw_input_transform_enabled = true;
+    state.input_transform.camera_matching_look = raw_case.camera_matching_look;
+    state.input_transform.highlight_reconstruction_mode = "Enabled";
+    state.input_transform.raw_black_level = 0.015;
+    state.input_transform.raw_white_level = 1.28;
+    state.color_pipeline.input_profile = input_profile;
+    state.color_pipeline.camera_profile = camera_profile;
+    state.color_pipeline.input_transform_recipe = recipe;
+
+    auto pixels = high_resolution_raw_strip;
+    photo_editor::pipeline::apply_color_adjustments(
+        &pixels,
+        kHighResolutionRawStressWidth,
+        kHighResolutionRawStressHeight,
+        state);
+    const auto sample_index =
+        (kHighResolutionRawStressHeight / 2) * kHighResolutionRawStressWidth +
+        (kHighResolutionRawStressWidth / 2);
+    if (!finite_pixel(pixels.front()) || !finite_pixel(pixels[sample_index]) ||
+        !finite_pixel(pixels.back()) || pixels[sample_index].alpha != 1.0F) {
+      std::cerr << raw_case.name
+                << " high-resolution RAW stress buffer produced invalid output\n";
+      return EXIT_FAILURE;
+    }
+    if (high_resolution_first_output.empty()) {
+      high_resolution_first_output = std::move(pixels);
+    } else if (max_channel_delta(high_resolution_first_output[sample_index], pixels[sample_index]) <
+               1.0e-4) {
+      std::cerr << "high-resolution RAW stress buffers should preserve camera/profile differences\n";
+      return EXIT_FAILURE;
+    }
+  }
+
   if (distinct_case_count < 3) {
     std::cerr << "representative RAW corpus should exercise distinct camera/profile outputs\n";
     return EXIT_FAILURE;

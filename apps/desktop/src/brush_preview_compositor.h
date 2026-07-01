@@ -14,6 +14,9 @@ struct BrushPreviewPoint final {
   double y = 0.5;
   double size = 0.05;
   double flow = 1.0;
+  double opacity = 1.0;
+  double auto_mask_anchor_x = 0.5;
+  double auto_mask_anchor_y = 0.5;
   double pressure = 1.0;
   double tilt_x = 0.0;
   double tilt_y = 0.0;

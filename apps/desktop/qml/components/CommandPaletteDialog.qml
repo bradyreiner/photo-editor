@@ -15,7 +15,9 @@ Popup {
     Theme { id: theme }
 
     property var commands: []
+    property var requiredCommandLabels: []
     readonly property int commandCount: commands.length
+    readonly property int requiredCommandCount: requiredCommandLabels.length
 
     function buildCommands() {
         let items = []
@@ -32,6 +34,31 @@ Popup {
             }
         }
         return items
+    }
+
+    function commandLabels() {
+        const items = buildCommands()
+        let labels = []
+        for (let i = 0; i < items.length; ++i)
+            labels.push(items[i].label)
+        return labels
+    }
+
+    function missingRequiredCommandLabels() {
+        const labels = commandLabels()
+        let missing = []
+        for (let i = 0; i < requiredCommandLabels.length; ++i) {
+            const label = String(requiredCommandLabels[i] || "")
+            if (label.length > 0 && labels.indexOf(label) < 0)
+                missing.push(label)
+        }
+        return missing
+    }
+
+    function commandCoverageSignature() {
+        return "commands:" + commandLabels().length
+                + "|required:" + requiredCommandLabels.length
+                + "|missing:" + missingRequiredCommandLabels().join(",")
     }
 
     function fuzzyMatch(text, query) {

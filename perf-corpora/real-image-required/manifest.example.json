@@ -1,0 +1,107 @@
+{
+  "asset_count": 6,
+  "assets": [
+    {
+      "asset_id": "private-dark-raw-001",
+      "format": "dng",
+      "height": 6000,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-dark-raw-001.dng",
+      "recipe": "recipes/night-recovery.json",
+      "review_regions": [
+        {
+          "height": 0.25,
+          "label": "shadow texture",
+          "width": 0.25,
+          "x": 0.18,
+          "y": 0.55
+        }
+      ],
+      "tags": [
+        "dark_raw",
+        "textured_detail"
+      ],
+      "width": 4000
+    },
+    {
+      "asset_id": "private-highlight-001",
+      "format": "cr3",
+      "height": 4480,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-highlight-001.cr3",
+      "recipe": "recipes/highlight-rollback.json",
+      "tags": [
+        "clipped_highlights"
+      ],
+      "width": 6720
+    },
+    {
+      "asset_id": "private-sky-001",
+      "format": "jpg",
+      "height": 4000,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-sky-001.jpg",
+      "recipe": "recipes/sky-gradient.json",
+      "tags": [
+        "smooth_sky"
+      ],
+      "width": 6000
+    },
+    {
+      "asset_id": "private-portrait-001",
+      "format": "nef",
+      "height": 5504,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-portrait-001.nef",
+      "recipe": "recipes/clean-portrait.json",
+      "tags": [
+        "skin"
+      ],
+      "width": 8256
+    },
+    {
+      "asset_id": "private-foliage-001",
+      "format": "arw",
+      "height": 4672,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-foliage-001.arw",
+      "recipe": "recipes/landscape-pop.json",
+      "tags": [
+        "foliage"
+      ],
+      "width": 7008
+    },
+    {
+      "asset_id": "private-detail-001",
+      "format": "tif",
+      "height": 3600,
+      "license": "Internal QA license",
+      "license_evidence": "Internal asset register or photographer release ID",
+      "license_verified": true,
+      "media_type": "photo",
+      "path": "assets/private-detail-001.tif",
+      "recipe": "recipes/detail-texture.json",
+      "tags": [
+        "textured_detail"
+      ],
+      "width": 5400
+    }
+  ],
+  "description": "Example private QA corpus manifest. Copy outside the repo and point paths at licensed local files.",
+  "manifest_version": 1
+}

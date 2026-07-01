@@ -8,6 +8,8 @@ import "../components"
 Rectangle {
     id: root
 
+    Theme { id: theme }
+
     color: "transparent"
     property bool objectPickArmed: false
     property bool objectPickCreateNew: false
@@ -15,10 +17,53 @@ Rectangle {
     property bool polygonDrawArmed: false
     property bool lassoDrawArmed: false
     property bool cloneSourcePickArmed: false
+    property bool createMaskChooserOpen: false
+    property string maskSearchQuery: ""
     property bool tabletBrushStrokeActive: false
-    property var smartSelectStrokePoints: []
-    property bool smartSelectStrokeActive: false
+    property real brushHoverX: 0
+    property real brushHoverY: 0
+    property bool brushHoverActive: false
+    property bool brushCursorPositionKnown: false
     property real selectionOutlinePhase: 0
+    readonly property color activeMaskAccent: root.maskAccent({
+        "kind": editorPreview.activeMaskKind,
+        "operation": editorPreview.activeMaskOperation,
+        "toolRole": editorPreview.activeMaskToolRole,
+        "retouchMode": editorPreview.activeMaskRetouchMode
+    })
+    readonly property int selectionOutlineAnimationPointBudget: 1800
+    readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
+    readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
+    readonly property int stableInspectorWidth: 410
+    readonly property int minimumCanvasWidth: 360
+    readonly property int minimumCanvasHeight: 320
+    readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
+    readonly property string handleReadabilityContract: "dual-contrast-halo|large-hit-target|color-independent:v1"
+
+    function stableOutlineWidth(logicalPixels) {
+        return Math.max(0.75, Number(logicalPixels || 1.0))
+    }
+
+    function stableOutlineDash(logicalPixels) {
+        return Math.max(1.0, Number(logicalPixels || 1.0))
+    }
+
+    function handleOuterHaloColor() {
+        return theme.alpha("#101419", 0.94)
+    }
+
+    function handleInnerHaloColor() {
+        return theme.alpha("#f4f7fa", 0.96)
+    }
+
+    function handleWarningFillColor() {
+        return theme.alpha("#f0c46e", 0.92)
+    }
+
+    function pixelAligned(value) {
+        const ratio = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+        return (Math.round(Number(value || 0) * ratio) + 0.5) / ratio
+    }
 
     FileDialog {
         id: alphaMaskFileDialog
@@ -26,7 +71,86 @@ Rectangle {
         nameFilters: ["Image masks (*.png *.tif *.tiff *.jpg *.jpeg *.webp)", "All files (*)"]
         onAccepted: {
             root.clearTransientTools()
-            editorPreview.addAlphaImageMask(selectedFile)
+            editorPreview.beginAlphaImageMaskImport(selectedFile)
+        }
+    }
+
+    Rectangle {
+        objectName: "alphaMaskImportPreviewPanel"
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: 14
+        width: 280
+        height: alphaImportColumn.implicitHeight + 20
+        radius: 4
+        color: theme.alpha(theme.ink950, 0.92)
+        border.width: theme.chromeBorderWidth
+        border.color: theme.alpha(theme.polar, 0.28)
+        visible: editorPreview.alphaMaskImportPreviewActive
+        z: 50
+
+        ColumnLayout {
+            id: alphaImportColumn
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 8
+
+            Label {
+                objectName: "alphaMaskImportPreviewSummary"
+                Layout.fillWidth: true
+                text: "Alpha " + editorPreview.alphaMaskImportPreview.width + "x" +
+                      editorPreview.alphaMaskImportPreview.height + "  " +
+                      editorPreview.alphaMaskImportPreview.selectedPixelCount + " px"
+                color: theme.textStrong
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                font.letterSpacing: 0
+                elide: Text.ElideRight
+            }
+
+            CheckBox {
+                objectName: "alphaMaskImportInvertCheck"
+                text: "Invert"
+                checked: editorPreview.alphaMaskImportInvert
+                onToggled: editorPreview.alphaMaskImportInvert = checked
+            }
+
+            Slider {
+                objectName: "alphaMaskImportThresholdSlider"
+                Layout.fillWidth: true
+                from: 0
+                to: 1
+                stepSize: 0.01
+                value: editorPreview.alphaMaskImportThreshold
+                onMoved: editorPreview.alphaMaskImportThreshold = value
+            }
+
+            ComboBox {
+                objectName: "alphaMaskImportResampleModeCombo"
+                Layout.fillWidth: true
+                model: ["Original", "Match Source"]
+                currentIndex: editorPreview.alphaMaskImportResampleMode === "Match Source" ? 1 : 0
+                onActivated: editorPreview.alphaMaskImportResampleMode = currentText
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                ActionButton {
+                    objectName: "alphaMaskImportCancelButton"
+                    Layout.fillWidth: true
+                    text: "Cancel"
+                    onClicked: editorPreview.cancelAlphaImageMaskImport()
+                }
+
+                ActionButton {
+                    objectName: "alphaMaskImportCommitButton"
+                    Layout.fillWidth: true
+                    text: "Commit"
+                    onClicked: editorPreview.commitAlphaImageMaskImport()
+                }
+            }
         }
     }
 
@@ -49,6 +173,10 @@ Rectangle {
         return clamp(rawTilt / 60.0, -1.0, 1.0)
     }
 
+    function smartSelectionRuntimeLabel() {
+        return String(editorPreview.smartSelectionRuntimeLabel || "Local Smart Select")
+    }
+
     function clearTransientTools() {
         objectPickArmed = false
         objectPickCreateNew = false
@@ -56,55 +184,36 @@ Rectangle {
         polygonDrawArmed = false
         lassoDrawArmed = false
         cloneSourcePickArmed = false
-        smartSelectStrokePoints = []
-        smartSelectStrokeActive = false
+        editorPreview.resetSmartSelectStroke()
     }
 
-    function normalizedStrokePoint(mouseX, mouseY) {
-        return {
-            "x": clamp(mouseX / Math.max(1, previewItem.width), 0.0, 1.0),
-            "y": clamp(mouseY / Math.max(1, previewItem.height), 0.0, 1.0)
-        }
+    function normalizedStrokeX(mouseX) {
+        return clamp(mouseX / Math.max(1, previewItem.width), 0.0, 1.0)
     }
 
-    function appendSmartSelectStrokePoint(mouseX, mouseY, force) {
-        const point = normalizedStrokePoint(mouseX, mouseY)
-        const points = smartSelectStrokePoints
-        if (!force && points.length > 0) {
-            const lastPoint = points[points.length - 1]
-            const deltaX = (point.x - lastPoint.x) * previewItem.width
-            const deltaY = (point.y - lastPoint.y) * previewItem.height
-            if ((deltaX * deltaX) + (deltaY * deltaY) < 81)
-                return false
-        }
-        smartSelectStrokePoints = points.concat([point])
-        return true
+    function normalizedStrokeY(mouseY) {
+        return clamp(mouseY / Math.max(1, previewItem.height), 0.0, 1.0)
     }
 
     function beginSmartSelectStroke(mouseX, mouseY) {
-        smartSelectStrokeActive = true
-        smartSelectStrokePoints = []
-        appendSmartSelectStrokePoint(mouseX, mouseY, true)
-        editorPreview.scheduleSmartSelectPreviewPath(smartSelectStrokePoints)
+        editorPreview.beginSmartSelectStroke(
+                    normalizedStrokeX(mouseX),
+                    normalizedStrokeY(mouseY),
+                    previewItem.width,
+                    previewItem.height)
     }
 
     function updateSmartSelectStroke(mouseX, mouseY) {
-        if (!smartSelectStrokeActive)
-            return
-        if (appendSmartSelectStrokePoint(mouseX, mouseY, false))
-            editorPreview.scheduleSmartSelectPreviewPath(smartSelectStrokePoints)
+        editorPreview.updateSmartSelectStroke(
+                    normalizedStrokeX(mouseX),
+                    normalizedStrokeY(mouseY),
+                    previewItem.width,
+                    previewItem.height)
     }
 
     function commitSmartSelectStroke() {
-        if (!smartSelectStrokeActive || smartSelectStrokePoints.length === 0) {
-            smartSelectStrokePoints = []
-            smartSelectStrokeActive = false
-            return
-        }
-        editorPreview.pickMaskPath(smartSelectStrokePoints, objectPickMode, objectPickCreateNew)
+        editorPreview.commitSmartSelectStroke(objectPickMode, objectPickCreateNew)
         objectPickCreateNew = false
-        smartSelectStrokePoints = []
-        smartSelectStrokeActive = false
     }
 
     function selectTool(mode) {
@@ -125,6 +234,177 @@ Rectangle {
             lassoDrawArmed = true
     }
 
+    function closeCreateMaskChooser() {
+        root.createMaskChooserOpen = false
+    }
+
+    function chooseCanvasCreateTool(mode) {
+        root.closeCreateMaskChooser()
+        if (mode === "polygon" && editorPreview.activeMaskKind !== "polygon")
+            editorPreview.startPolygonSelection()
+        root.selectTool(mode)
+    }
+
+    function chooseMaskSource(kind) {
+        root.closeCreateMaskChooser()
+        root.clearTransientTools()
+        editorPreview.addMask(kind)
+    }
+
+    function chooseBrushMaskSource(subtract) {
+        root.closeCreateMaskChooser()
+        root.clearTransientTools()
+        editorPreview.startSelectionBrush(subtract)
+    }
+
+    function chooseAlphaMaskSource() {
+        root.closeCreateMaskChooser()
+        root.clearTransientTools()
+        alphaMaskFileDialog.open()
+    }
+
+    function openCreateMaskContext() {
+        root.clearTransientTools()
+        root.createMaskChooserOpen = !root.createMaskChooserOpen
+    }
+
+    function activeMaskEditingContext() {
+        if (root.createMaskChooserOpen)
+            return "create"
+        if (root.objectPickArmed || editorPreview.smartSelectStrokeActive || editorPreview.smartSelectPreviewActive)
+            return "smart-select"
+        if (root.polygonDrawArmed || root.lassoDrawArmed ||
+                editorPreview.activeMaskKind === "polygon" ||
+                editorPreview.activeMaskKind === "lasso")
+            return "polygon"
+        if (editorPreview.activeMaskToolRole === "retouch")
+            return "retouch"
+        if (editorPreview.activeMaskKind === "brush")
+            return "brush"
+        if (editorPreview.hasActiveMask)
+            return "refine"
+        return "create"
+    }
+
+    function maskContextVisible(contextName) {
+        return root.activeMaskEditingContext() === contextName
+    }
+
+    function maskActiveControlsContextVisible() {
+        return editorPreview.hasActiveMask &&
+               !root.maskContextVisible("create") &&
+               !root.maskContextVisible("smart-select")
+    }
+
+    function activeMaskEditingContextLabel() {
+        const context = root.activeMaskEditingContext()
+        if (context === "create")
+            return "Create"
+        if (context === "smart-select")
+            return "Smart Select"
+        if (context === "polygon")
+            return root.lassoDrawArmed || editorPreview.activeMaskKind === "lasso" ? "Lasso / Polygon" : "Polygon"
+        if (context === "retouch")
+            return "Retouch"
+        if (context === "brush")
+            return "Brush"
+        return "Refine"
+    }
+
+    function activeMaskEditingContextSignature() {
+        const context = root.activeMaskEditingContext()
+        return "context:" + context +
+               "|create:" + (context === "create").toString() +
+               "|refine:" + (context === "refine").toString() +
+               "|brush:" + (context === "brush").toString() +
+               "|polygon:" + (context === "polygon").toString() +
+               "|smart-select:" + (context === "smart-select").toString() +
+               "|retouch:" + (context === "retouch").toString()
+    }
+
+    function percentText(value) {
+        return Math.round(root.clamp(value, 0.0, 1.0) * 100).toString() + "%"
+    }
+
+    function brushCursorReadout() {
+        const sizeText = editorPreview.activeMaskBrushSizeSummary || "Size --"
+        return sizeText +
+               "  Hard " + root.percentText(editorPreview.activeMaskBrushHardness) +
+               "  Flow " + root.percentText(editorPreview.activeMaskBrushFlow) +
+               "  Density " + root.percentText(editorPreview.activeMaskDensity)
+    }
+
+    function activeMaskHeaderKind() {
+        if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode.length > 0)
+            return editorPreview.activeMaskRetouchMode
+        return editorPreview.activeMaskKind.length > 0 ? editorPreview.activeMaskKind : "selection"
+    }
+
+    function activeMaskHeaderTarget() {
+        if (editorPreview.activeMaskToolRole === "retouch")
+            return "Retouch Stack"
+        return editorPreview.activeMaskSetName.length > 0
+               ? editorPreview.activeMaskSetName
+               : "Mask Set"
+    }
+
+    function activeMaskCompactHeaderSignature() {
+        return "name:" + editorPreview.activeMaskName +
+               "|kind:" + root.activeMaskHeaderKind() +
+               "|operation:" + editorPreview.activeMaskOperation +
+               "|target:" + root.activeMaskHeaderTarget() +
+               "|enabled:" + editorPreview.activeMaskEnabled.toString() +
+               "|solo:" + editorPreview.activeMaskSolo.toString() +
+               "|locked:" + editorPreview.activeMaskLocked.toString() +
+               "|opacity:" + root.percentText(editorPreview.activeMaskOpacity)
+    }
+
+    function renameMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        activeMaskNameField.forceActiveFocus()
+        activeMaskNameField.selectAll()
+    }
+
+    function toggleMaskRowEnabled(flatIndex, enabled) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskEnabled = !enabled
+    }
+
+    function toggleMaskRowSolo(flatIndex, solo) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskSolo = !solo
+    }
+
+    function toggleMaskRowLocked(flatIndex, locked) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.activeMaskLocked = !locked
+    }
+
+    function moveMaskRow(flatIndex, offset) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.moveActiveMask(offset)
+    }
+
+    function duplicateMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.duplicateActiveMask()
+    }
+
+    function deleteMaskRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.removeActiveMask()
+    }
+
+    function applyRetouchRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.applyActiveRetouch()
+    }
+
+    function cancelRetouchRow(flatIndex) {
+        editorPreview.activeMaskIndex = flatIndex
+        editorPreview.cancelActiveRetouch()
+    }
+
     function activeToolLabel() {
         if (lassoDrawArmed)
             return "Lasso"
@@ -133,11 +413,11 @@ Rectangle {
         if (polygonDrawArmed)
             return "Polygon"
         if (objectPickArmed && objectPickCreateNew)
-            return "New Smart Selection"
+            return "New " + root.smartSelectionRuntimeLabel()
         if (objectPickArmed && objectPickMode === "selection-subtract")
-            return "Subtract Smart Selection"
+            return "Subtract " + root.smartSelectionRuntimeLabel()
         if (objectPickArmed)
-            return "Smart Select"
+            return root.smartSelectionRuntimeLabel()
         if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "clone")
             return "Clone Stamp"
         if (editorPreview.activeMaskKind === "brush" && editorPreview.activeMaskRetouchMode === "heal")
@@ -149,7 +429,7 @@ Rectangle {
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "red-eye")
             return "Red-Eye Removal"
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "skin-cleanup")
-            return "Skin Cleanup"
+            return "Skin Cleanup (Heuristic)"
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "frequency-smoothing")
             return "Frequency Smoothing"
         if (editorPreview.activeMaskKind === "polygon")
@@ -189,6 +469,135 @@ Rectangle {
                Math.abs(editorPreview.activeMaskRemoveStrength) > 0.001
     }
 
+    function maskCompareGroupActive(groupKey) {
+        return editorPreview.maskCompareAdjustmentGroups.indexOf(groupKey) >= 0
+    }
+
+    function toggleMaskCompareGroup(groupKey) {
+        const groups = editorPreview.maskCompareAdjustmentGroups.slice(0)
+        const existingIndex = groups.indexOf(groupKey)
+        if (existingIndex >= 0)
+            groups.splice(existingIndex, 1)
+        else
+            groups.push(groupKey)
+        editorPreview.maskCompareAdjustmentGroups = groups
+    }
+
+    function maskSearchText() {
+        return root.maskSearchQuery.trim().toLowerCase()
+    }
+
+    function maskSearchMatches(text) {
+        const query = root.maskSearchText()
+        return query.length === 0 || String(text || "").toLowerCase().indexOf(query) >= 0
+    }
+
+    function maskMatchesSearch(mask) {
+        const searchable = ((mask.name || "") + " " +
+                            (mask.kind || "") + " " +
+                            (mask.operation || "") + " " +
+                            (mask.maskSetName || "") + " " +
+                            (mask.sourceBadge || "") + " " +
+                            (mask.operationBadge || "") + " " +
+                            (mask.sourceAuditLabel || ""))
+        return root.maskSearchMatches(searchable)
+    }
+
+    function maskSetMatchesSearch(maskSet) {
+        if (root.maskSearchText().length === 0)
+            return true
+        if (root.maskSearchMatches((maskSet.name || "") + " " + (maskSet.id || "")))
+            return true
+        const sources = maskSet.sources || []
+        for (let index = 0; index < sources.length; ++index) {
+            if (root.maskMatchesSearch(sources[index]))
+                return true
+        }
+        return false
+    }
+
+    function maskSearchToolItems() {
+        return [
+            { category: "Tool", label: "Smart Select", detail: "Create or refine with object selection", keywords: "smart select object subject ai local runtime", action: "smart" },
+            { category: "Tool", label: "Brush Add", detail: "Paint an additive brush component", keywords: "brush add paint selection", action: "brush-add" },
+            { category: "Tool", label: "Brush Subtract", detail: "Paint an erasing brush component", keywords: "brush subtract erase remove paint", action: "brush-subtract" },
+            { category: "Tool", label: "Lasso", detail: "Draw a freeform selection", keywords: "lasso freeform manual selection", action: "lasso" },
+            { category: "Tool", label: "Polygon", detail: "Click editable polygon points", keywords: "polygon manual points selection", action: "polygon" },
+            { category: "Tool", label: "Linear", detail: "Create a linear gradient selection", keywords: "linear gradient mask", action: "linear" },
+            { category: "Tool", label: "Radial", detail: "Create a radial selection", keywords: "radial ellipse circular selection", action: "radial" },
+            { category: "Tool", label: "Luma Range", detail: "Select by luminance", keywords: "luma luminance range brightness", action: "luminance" },
+            { category: "Tool", label: "Color Range", detail: "Select by sampled color", keywords: "color range hue saturation sample eyedropper", action: "color" },
+            { category: "Tool", label: "Depth Range", detail: "Select by depth metadata", keywords: "depth range portrait", action: "depth" },
+            { category: "Tool", label: "Alpha Image", detail: "Import an image as a matte", keywords: "alpha image import matte file", action: "alpha" },
+            { category: "Tool", label: "Subject", detail: "Create a subject selection", keywords: "subject foreground smart select generated", action: "subject" }
+        ]
+    }
+
+    function maskSearchAdjustmentItems() {
+        return [
+            { category: "Control", label: "Exposure", detail: "Tone adjustment", keywords: "exposure tone ev light local adjustment" },
+            { category: "Control", label: "Warmth", detail: "Color adjustment", keywords: "warmth temperature color white balance local adjustment" },
+            { category: "Control", label: "Hue Shift", detail: "Color adjustment", keywords: "hue shift color local adjustment" },
+            { category: "Control", label: "Saturation", detail: "Presence adjustment", keywords: "saturation chroma presence local adjustment" },
+            { category: "Control", label: "Tint Hue", detail: "Presence adjustment", keywords: "tint hue colorize local adjustment" },
+            { category: "Control", label: "Tint Amount", detail: "Presence adjustment", keywords: "tint amount colorize strength local adjustment" },
+            { category: "Control", label: "Remove", detail: "Effects adjustment", keywords: "remove strength effects retouch local adjustment" },
+            { category: "Control", label: "Heal Texture", detail: "Detail adjustment", keywords: "heal texture detail retouch local adjustment" },
+            { category: "Control", label: "Heal Color", detail: "Detail adjustment", keywords: "heal color detail retouch local adjustment" }
+        ]
+    }
+
+    function maskSearchResults() {
+        const query = root.maskSearchText()
+        if (query.length === 0)
+            return []
+        const results = []
+        const addIfMatch = function(item) {
+            if (root.maskSearchMatches(item.label + " " + item.detail + " " + item.keywords))
+                results.push(item)
+        }
+        root.maskSearchToolItems().forEach(addIfMatch)
+        const sets = editorPreview.maskSets || []
+        for (let setIndex = 0; setIndex < sets.length; ++setIndex) {
+            const sources = sets[setIndex].sources || []
+            if (root.maskSearchMatches((sets[setIndex].name || "") + " mask components")) {
+                results.push({ category: "Mask", label: sets[setIndex].name, detail: sources.length + " components", flatIndex: sources.length > 0 ? sources[0].flatIndex : -1 })
+            }
+            for (let sourceIndex = 0; sourceIndex < sources.length; ++sourceIndex) {
+                const source = sources[sourceIndex]
+                if (root.maskMatchesSearch(source)) {
+                    results.push({ category: "Mask", label: source.name || source.kind, detail: (source.maskSetName || sets[setIndex].name || "Mask") + " · " + (source.operationBadge || source.operation || "add"), flatIndex: source.flatIndex })
+                }
+            }
+        }
+        root.maskSearchAdjustmentItems().forEach(addIfMatch)
+        return results.slice(0, 12)
+    }
+
+    function activateMaskSearchResult(result) {
+        if (result.flatIndex !== undefined && result.flatIndex >= 0) {
+            editorPreview.activeMaskIndex = result.flatIndex
+            return
+        }
+        if (result.action === "smart") {
+            root.chooseCanvasCreateTool("smart-new")
+        } else if (result.action === "brush-add") {
+            root.chooseBrushMaskSource(false)
+        } else if (result.action === "brush-subtract") {
+            root.chooseBrushMaskSource(true)
+        } else if (result.action === "lasso" || result.action === "polygon") {
+            root.chooseCanvasCreateTool(result.action)
+        } else if (result.action === "alpha") {
+            root.chooseAlphaMaskSource()
+        } else if (result.action === "subject") {
+            root.closeCreateMaskChooser()
+            root.clearTransientTools()
+            editorPreview.addAIMask("subject")
+        } else if (result.action && result.action.length > 0) {
+            root.chooseMaskSource(result.action)
+        }
+    }
+
     function activeMaskSupportsSelectionRefine() {
         return editorPreview.hasActiveMask &&
                (editorPreview.activeMaskKind === "linear" ||
@@ -198,7 +607,25 @@ Rectangle {
                 editorPreview.activeMaskKind === "alpha" ||
                 isAiMaskKind(editorPreview.activeMaskKind) ||
                 editorPreview.activeMaskKind === "luminance" ||
-                editorPreview.activeMaskKind === "color")
+                 editorPreview.activeMaskKind === "color")
+    }
+
+    function activeRefineEffectCount() {
+        const featherDefault = activeMaskResetFeather()
+        let count = editorPreview.activeMaskSelectionInverted ? 1 : 0
+        if (Math.abs(editorPreview.activeMaskSelectionExpand) > 1)
+            ++count
+        if (Math.abs(editorPreview.activeMaskFeather - featherDefault) > 0.01)
+            ++count
+        if (editorPreview.activeMaskSelectionSmooth > 1)
+            ++count
+        if (editorPreview.activeMaskSelectionFineEdge > 1)
+            ++count
+        if (editorPreview.activeMaskSelectionEdgeContrast > 1)
+            ++count
+        if (editorPreview.activeMaskSelectionDecontaminate > 1)
+            ++count
+        return count
     }
 
     function isAiMaskKind(kind) {
@@ -209,20 +636,57 @@ Rectangle {
 
     function aiMaskLabel(kind) {
         if (kind === "sky")
-            return "Sky"
+            return "Sky (Heuristic)"
         if (kind === "background")
-            return "Background"
+            return "Background (Subject Invert)"
         if (kind === "people")
-            return "People"
+            return "People (Unsupported)"
         if (kind === "face")
-            return "Face"
+            return "Face (Unsupported)"
         if (kind === "hair")
-            return "Hair"
+            return "Hair (Unsupported)"
         if (kind === "clothing")
-            return "Clothing"
+            return "Clothing (Unsupported)"
+        if (kind === "facial-hair")
+            return "Facial Hair (Unsupported)"
+        if (kind === "lips")
+            return "Lips (Unsupported)"
+        if (kind === "teeth")
+            return "Teeth (Unsupported)"
+        if (kind === "eyes")
+            return "Eyes (Unsupported)"
+        if (kind === "skin")
+            return "Skin (Unsupported)"
+        if (kind === "water")
+            return "Water (Unsupported)"
+        if (kind === "vegetation")
+            return "Vegetation (Unsupported)"
+        if (kind === "mountains")
+            return "Mountains (Unsupported)"
+        if (kind === "ground")
+            return "Ground (Unsupported)"
+        if (kind === "architecture")
+            return "Architecture (Unsupported)"
+        if (kind === "snow")
+            return "Snow (Unsupported)"
         if (kind === "object")
             return "Object"
         return "Subject"
+    }
+
+    function generatedMaskTooltip(kind) {
+        if (kind === "sky")
+            return "Uses a color and position heuristic, not semantic sky segmentation."
+        if (kind === "background")
+            return "Inverts the subject foreground matte; it is not a separate background model."
+        if (kind === "people" || kind === "face" || kind === "hair" || kind === "clothing" ||
+                kind === "facial-hair" || kind === "lips" || kind === "teeth" ||
+                kind === "eyes" || kind === "skin")
+            return "Hidden until the runtime can return this person-part matte."
+        if (kind === "water" || kind === "vegetation" || kind === "mountains" ||
+                kind === "ground" || kind === "architecture" || kind === "snow")
+            return "Hidden until the runtime can return a real landscape semantic matte for this target."
+        return "Uses the available foreground selection runtime."
     }
 
     function previewImageX() {
@@ -244,10 +708,10 @@ Rectangle {
     function maskAccent(mask) {
         if (!mask)
             return "#8ab8d8"
-        if (mask.operation === "subtract")
-            return "#d36a5e"
-        if (mask.operation === "intersect")
-            return "#6fa96d"
+        if (mask.toolRole !== "retouch" &&
+                (mask.operation === "add" || mask.operation === "subtract" ||
+                 mask.operation === "intersect"))
+            return selectionOperationOverlayColor(mask.operation)
         if (mask.kind === "brush" && mask.retouchMode === "clone")
             return "#7cb5ff"
         if (mask.kind === "brush" && mask.retouchMode === "heal")
@@ -291,6 +755,31 @@ Rectangle {
         return "#c99a52"
     }
 
+    function selectionOperationOverlayColor(operationName) {
+        const operation = String(operationName || "add").trim().toLowerCase()
+        if (operation === "subtract")
+            return "#ff8a4c"
+        if (operation === "intersect")
+            return "#8fa8ff"
+        return "#24dcc2"
+    }
+
+    function defaultMaskOverlayColor() {
+        return "#24dcc2"
+    }
+
+    function resolvedMaskOverlayColor(mask) {
+        if (mask && mask.toolRole === "retouch") {
+            if (mask.retouchMode === "clone")
+                return "#7cb5ff"
+            if (mask.retouchMode === "heal")
+                return "#72cbb2"
+            return "#d98962"
+        }
+        const customColor = String(editorPreview.maskPreviewOverlayColor || "")
+        return customColor.length > 0 ? customColor : defaultMaskOverlayColor()
+    }
+
     function activeMaskResetFeather() {
         if (editorPreview.activeMaskKind === "radial")
             return 0.25
@@ -319,27 +808,87 @@ Rectangle {
                     maximum)
     }
 
+    function outlinePointCount(outlines) {
+        if (!outlines || outlines.length === undefined)
+            return 0
+        let total = 0
+        for (let i = 0; i < outlines.length; ++i) {
+            const entry = outlines[i]
+            if (!entry)
+                continue
+            if (entry.x !== undefined && entry.y !== undefined) {
+                total += 1
+            } else if (entry.length !== undefined) {
+                total += entry.length
+            }
+        }
+        return total
+    }
+
+    function activeSelectionOutlinePointCount() {
+        const pathPointCount = root.outlinePointCount(editorPreview.activeMaskOutlinePaths)
+        if (pathPointCount > 0)
+            return pathPointCount
+        return root.outlinePointCount(editorPreview.activeMaskOutlinePoints)
+    }
+
+    function smartSelectionPreviewOutlinePointCount() {
+        return root.outlinePointCount(editorPreview.smartSelectPreviewOutlinePoints)
+    }
+
+    function selectionOutlineAnimationPointCount() {
+        const activePointCount = root.activeSelectionOutlinePointCount()
+        if (activePointCount >= 2)
+            return activePointCount
+        if (objectPickArmed && editorPreview.smartSelectPreviewActive)
+            return root.smartSelectionPreviewOutlinePointCount()
+        return activePointCount
+    }
+
+    function selectionOutlineAnimationShouldRun() {
+        if (editorPreview.maskPreviewMode !== "marching-ants")
+            return false
+        if (!root.visible || (!editorPreview.hasActiveMask &&
+                !(objectPickArmed && editorPreview.smartSelectPreviewActive)))
+            return false
+        if (editorPreview.maskPreviewTemporarilyHidden === true || editorPreview.compareMode ||
+                editorPreview.cropEditing)
+            return false
+        if (editorPreview.brushStrokeActive || editorPreview.smartSelectStrokeActive ||
+                root.tabletBrushStrokeActive)
+            return false
+        const pointCount = root.selectionOutlineAnimationPointCount()
+        return pointCount >= 2 && pointCount <= root.selectionOutlineAnimationPointBudget
+    }
+
     NumberAnimation on selectionOutlinePhase {
         from: 0
         to: 24
         duration: 900
         loops: Animation.Infinite
-        running: editorPreview.hasActiveMask
+        running: root.selectionOutlineAnimationEnabled
     }
 
     RowLayout {
+        objectName: "maskWorkspaceStableSplit"
         anchors.fill: parent
         spacing: 14
 
         BrandPanel {
+            objectName: "maskCanvasPane"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            title: "Mask Stack"
-            subtitle: "Brush, shape, and range masks all live in one ordered selection stack."
+            Layout.minimumWidth: root.minimumCanvasWidth
+            Layout.minimumHeight: root.minimumCanvasHeight
+            title: "Masks"
+            subtitle: "Build each mask from ordered Components, then refine its local edit."
 
             Rectangle {
+                objectName: "maskCanvasViewport"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                Layout.minimumWidth: root.minimumCanvasWidth
+                Layout.minimumHeight: root.minimumCanvasHeight
                 radius: 12
                 color: "#14171a"
                 border.width: 1
@@ -365,6 +914,23 @@ Rectangle {
                     width: maskPreview.paintedWidth
                     height: maskPreview.paintedHeight
 
+                    SharedMaskOverlay {
+                        anchors.fill: parent
+                        objectNamePrefix: "maskView"
+                        masked: maskPreview.visible && (editorPreview.maskSetCount > 0 || editorPreview.hasActiveMask)
+                        hasActiveMask: editorPreview.hasActiveMask
+                        compareMode: false
+                        activeBrushPainting: root.tabletBrushStrokeActive || editorPreview.brushStrokeActive
+                        accentColor: "#19E0B0"
+                        cropX: editorPreview.cropRectX
+                        cropY: editorPreview.cropRectY
+                        cropWidth: editorPreview.cropRectWidth
+                        cropHeight: editorPreview.cropRectHeight
+                        transformRotation: editorPreview.transformRotation
+                        enablePolygonHandles: false
+                        z: 0
+                    }
+
                     Repeater {
                         model: editorPreview.maskStack
 
@@ -375,6 +941,7 @@ Rectangle {
                             readonly property var mask: modelData
                             readonly property bool active: index === editorPreview.activeMaskIndex
                             readonly property color accent: root.maskAccent(mask)
+                            readonly property color overlayAccent: root.resolvedMaskOverlayColor(mask)
                             readonly property real brushDiameter: Math.max(8, Math.min(previewItem.width, previewItem.height) * (mask.brushSize || 0.08) * 2)
 
                             anchors.fill: parent
@@ -396,23 +963,23 @@ Rectangle {
                                     anchors.fill: parent
                                     radius: 10
                                     gradient: Gradient {
-                                        GradientStop { position: 0.0; color: Qt.alpha(accent, 0.34) }
+                                        GradientStop { position: 0.0; color: Qt.alpha(overlayAccent, 0.34) }
                                         GradientStop {
-                                            position: Math.max(0.0, positionValue - featherValue * 0.5)
-                                            color: Qt.alpha(accent, 0.14)
+                                            position: Math.max(0.0, linearOverlay.positionValue - linearOverlay.featherValue * 0.5)
+                                            color: Qt.alpha(overlayAccent, 0.14)
                                         }
-                                        GradientStop { position: positionValue; color: Qt.rgba(0.95, 0.97, 0.98, 0.72) }
+                                        GradientStop { position: linearOverlay.positionValue; color: Qt.rgba(0.95, 0.97, 0.98, 0.72) }
                                         GradientStop {
-                                            position: Math.min(1.0, positionValue + featherValue * 0.5)
-                                            color: Qt.alpha(accent, 0.06)
+                                            position: Math.min(1.0, linearOverlay.positionValue + linearOverlay.featherValue * 0.5)
+                                            color: Qt.alpha(overlayAccent, 0.06)
                                         }
-                                        GradientStop { position: 1.0; color: Qt.alpha(accent, 0.0) }
+                                        GradientStop { position: 1.0; color: Qt.alpha(overlayAccent, 0.0) }
                                     }
                                 }
 
                                 Rectangle {
                                     x: 0
-                                    y: Math.max(0, Math.min(linearOverlay.height - 1, linearOverlay.height * positionValue))
+                                    y: Math.max(0, Math.min(linearOverlay.height - 1, linearOverlay.height * linearOverlay.positionValue))
                                     width: linearOverlay.width
                                     height: 1
                                     color: "#f4f7fa"
@@ -433,7 +1000,7 @@ Rectangle {
                                 Rectangle {
                                     visible: active
                                     x: linearOverlay.width / 2 - width / 2
-                                    y: linearOverlay.height * positionValue - height / 2
+                                    y: linearOverlay.height * linearOverlay.positionValue - height / 2
                                     width: 16
                                     height: 16
                                     radius: 8
@@ -517,11 +1084,11 @@ Rectangle {
 
                                     onPaint: {
                                         const ctx = getContext("2d")
-                                        const innerScale = Math.max(0.0, 1.0 - featherValue)
+                                        const innerScale = Math.max(0.0, 1.0 - radialOverlay.featherValue)
                                         ctx.reset()
                                         ctx.strokeStyle = "#f4f7fa"
                                         ctx.lineWidth = active ? 1.8 : 1.2
-                                        ctx.fillStyle = Qt.alpha(accent, active ? 0.18 : 0.10)
+                                        ctx.fillStyle = Qt.alpha(overlayAccent, active ? 0.18 : 0.10)
                                         ctx.beginPath()
                                         ctx.ellipse(width / 2, height / 2, Math.max(1, width / 2 - 1), Math.max(1, height / 2 - 1), 0, 0, Math.PI * 2)
                                         ctx.fill()
@@ -650,7 +1217,7 @@ Rectangle {
                                         ctx.beginPath()
                                         ctx.arc(x, y, radius, 0, Math.PI * 2, false)
                                         ctx.fillStyle = Qt.alpha(
-                                                    accent,
+                                                     overlayAccent,
                                                     Math.max(0.12, (point.flow || mask.brushFlow || 1.0) * 0.28))
                                         ctx.fill()
                                         if (active) {
@@ -679,6 +1246,50 @@ Rectangle {
                                     function onControlsChanged() {
                                         if (brushOverlay.visible)
                                             brushCanvas.requestPaint()
+                                    }
+                                }
+
+                                Rectangle {
+                                    property real sourceX: (mask.cloneSourceX || 0.5) * brushOverlay.width
+                                    property real sourceY: (mask.cloneSourceY || 0.5) * brushOverlay.height
+                                    property real targetX: Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0))) * brushOverlay.width
+                                    property real targetY: Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0))) * brushOverlay.height
+                                    property real offsetLength: Math.sqrt(Math.pow(targetX - sourceX, 2) + Math.pow(targetY - sourceY, 2))
+                                    visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
+                                    x: sourceX
+                                    y: sourceY - height / 2
+                                    width: Math.max(1, offsetLength)
+                                    height: 2
+                                    radius: 1
+                                    color: "#7cb5ff"
+                                    opacity: 0.78
+                                    rotation: Math.atan2(targetY - sourceY, targetX - sourceX) * 180 / Math.PI
+                                    transformOrigin: Item.Left
+                                }
+
+                                Item {
+                                    visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
+                                    x: Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0))) * brushOverlay.width - width / 2
+                                    y: Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0))) * brushOverlay.height - height / 2
+                                    width: Math.max(18, Math.min(58, (mask.brushSize || 0.07) * brushOverlay.width * (mask.cloneScale || 1.0)))
+                                    height: width
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: width / 2
+                                        color: "#d4fff814"
+                                        border.width: 1.5
+                                        border.color: "#d4fff8"
+                                        rotation: mask.cloneRotation || 0
+                                    }
+
+                                    Rectangle {
+                                        anchors.centerIn: parent
+                                        width: parent.width * 0.58
+                                        height: 2
+                                        radius: 1
+                                        color: "#d4fff8"
+                                        rotation: mask.cloneRotation || 0
                                     }
                                 }
 
@@ -723,6 +1334,10 @@ Rectangle {
 
                                     onTabletPressed: function(x, y, pressure, tiltX, tiltY, eraser) {
                                         editorPreview.activeMaskIndex = index
+                                        root.brushHoverX = x
+                                        root.brushHoverY = y
+                                        root.brushHoverActive = true
+                                        root.brushCursorPositionKnown = true
                                         if (mask.retouchMode === "clone" &&
                                                 (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
                                             editorPreview.setActiveMaskCloneSource(
@@ -744,6 +1359,10 @@ Rectangle {
                                     }
 
                                     onTabletMoved: function(x, y, pressure, tiltX, tiltY, eraser) {
+                                        root.brushHoverX = x
+                                        root.brushHoverY = y
+                                        root.brushHoverActive = true
+                                        root.brushCursorPositionKnown = true
                                         if (!root.tabletBrushStrokeActive || root.cloneSourcePickArmed ||
                                                 (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                             return
@@ -757,6 +1376,9 @@ Rectangle {
                                     }
 
                                     onTabletReleased: function(x, y, pressure, tiltX, tiltY, eraser) {
+                                        root.brushHoverX = x
+                                        root.brushHoverY = y
+                                        root.brushCursorPositionKnown = true
                                         if (root.tabletBrushStrokeActive)
                                             editorPreview.endActiveBrushStroke()
                                         root.tabletBrushStrokeActive = false
@@ -767,9 +1389,16 @@ Rectangle {
                                     anchors.fill: parent
                                     acceptedButtons: Qt.LeftButton
                                     enabled: active
+                                    hoverEnabled: true
                                     cursorShape: Qt.CrossCursor
+                                    onEntered: root.brushHoverActive = true
+                                    onExited: root.brushHoverActive = false
                                     onPressed: function(mouse) {
                                         editorPreview.activeMaskIndex = index
+                                        root.brushHoverX = mouse.x
+                                        root.brushHoverY = mouse.y
+                                        root.brushHoverActive = true
+                                        root.brushCursorPositionKnown = true
                                         if (mask.retouchMode === "clone" &&
                                                 (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
                                             editorPreview.setActiveMaskCloneSource(
@@ -781,10 +1410,84 @@ Rectangle {
                                         editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                     onPositionChanged: function(mouse) {
+                                        root.brushHoverX = mouse.x
+                                        root.brushHoverY = mouse.y
+                                        root.brushHoverActive = true
+                                        root.brushCursorPositionKnown = true
                                         if (!pressed || root.cloneSourcePickArmed ||
                                                 (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                             return
                                         editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
+                                    }
+                                }
+
+                                Item {
+                                    id: maskViewBrushCursor
+                                    objectName: "maskViewBrushCursor"
+                                    readonly property real brushDiameter: Math.max(
+                                        8,
+                                        Math.min(previewItem.width, previewItem.height) *
+                                            editorPreview.activeMaskBrushSize * 2)
+                                    readonly property real hardnessDiameter: Math.max(
+                                        2,
+                                        brushDiameter * root.clamp(editorPreview.activeMaskBrushHardness, 0.0, 1.0))
+                                    readonly property string brushCursorVisibilityContract: "persistent-last-position|dual-contrast-ring|hardness-inner-ring:v1"
+                                    visible: active && (root.brushCursorPositionKnown ||
+                                                        root.brushHoverActive ||
+                                                        editorPreview.brushStrokeActive)
+                                    x: root.brushHoverX - width / 2
+                                    y: root.brushHoverY - height / 2
+                                    width: brushDiameter
+                                    height: brushDiameter
+                                    z: 8
+
+                                    Rectangle {
+                                        objectName: "maskViewBrushCursorOuterHaloRing"
+                                        anchors.fill: parent
+                                        radius: width / 2
+                                        color: "transparent"
+                                        border.width: 3.0
+                                        border.color: Qt.alpha("#101419", 0.92)
+                                    }
+
+                                    Rectangle {
+                                        objectName: "maskViewBrushCursorFeatherRing"
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        radius: width / 2
+                                        color: "transparent"
+                                        border.width: 1.5
+                                        border.color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
+                                    }
+
+                                    Rectangle {
+                                        objectName: "maskViewBrushCursorHardnessRing"
+                                        anchors.centerIn: parent
+                                        width: maskViewBrushCursor.hardnessDiameter
+                                        height: width
+                                        radius: width / 2
+                                        color: "transparent"
+                                        border.width: 1.5
+                                        border.color: Qt.alpha("#f4f7fa", 0.92)
+                                    }
+
+                                    Label {
+                                        objectName: "maskViewBrushCursorReadout"
+                                        anchors.horizontalCenter: parent.horizontalCenter
+                                        anchors.top: parent.bottom
+                                        anchors.topMargin: 5
+                                        text: root.brushCursorReadout()
+                                        color: theme.textStrong
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                        font.letterSpacing: 0
+                                        padding: 4
+                                        background: Rectangle {
+                                            color: theme.alpha(theme.ink950, 0.82)
+                                            border.width: theme.chromeBorderWidth
+                                            border.color: theme.alpha("#f4f7fa", 0.24)
+                                            radius: 2
+                                        }
                                     }
                                 }
                             }
@@ -824,7 +1527,7 @@ Rectangle {
                                             ctx.closePath()
 
                                         if (count >= 3) {
-                                            ctx.fillStyle = Qt.alpha(accent, active ? 0.16 : 0.08)
+                                            ctx.fillStyle = Qt.alpha(overlayAccent, active ? 0.16 : 0.08)
                                             ctx.fill()
                                         }
 
@@ -832,7 +1535,7 @@ Rectangle {
                                         ctx.lineWidth = active ? 1.8 : 1.1
                                         if (ctx.setLineDash)
                                             ctx.setLineDash([8, 6])
-                                        ctx.lineDashOffset = -root.selectionOutlinePhase
+                                        ctx.lineDashOffset = root.selectionOutlineAnimationEnabled ? -root.selectionOutlinePhase : 0
                                         ctx.stroke()
                                     }
                                 }
@@ -843,15 +1546,37 @@ Rectangle {
                                     delegate: Rectangle {
                                         required property var modelData
 
-                                        width: 10
-                                        height: 10
-                                        radius: 5
+                                        readonly property string handleReadabilityContract: root.handleReadabilityContract
+                                        width: 14
+                                        height: width
+                                        radius: width / 2
                                         x: root.previewPointX(modelData.x || 0.5) - width / 2
                                         y: root.previewPointY(modelData.y || 0.5) - height / 2
-                                        color: active ? "#f4f7fa" : accent
-                                        border.width: 1
-                                        border.color: "#101419"
+                                        color: "transparent"
+                                        border.width: 0
                                         visible: active
+
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: parent.width + 8
+                                            height: parent.height + 8
+                                            radius: width / 2
+                                            color: root.handleOuterHaloColor()
+                                        }
+
+                                        Rectangle {
+                                            anchors.centerIn: parent
+                                            width: parent.width + 4
+                                            height: parent.height + 4
+                                            radius: width / 2
+                                            color: root.handleInnerHaloColor()
+                                        }
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            radius: width / 2
+                                            color: Qt.alpha(accent, 0.88)
+                                        }
                                     }
                                 }
                             }
@@ -860,7 +1585,7 @@ Rectangle {
                                 visible: active && (mask.kind === "luminance" || mask.kind === "color" || mask.kind === "depth" || mask.kind === "alpha" || root.isAiMaskKind(mask.kind))
                                 anchors.centerIn: parent
                                 radius: 10
-                                color: Qt.alpha(accent, 0.18)
+                                color: Qt.alpha(overlayAccent, 0.18)
                                 border.width: 1
                                 border.color: Qt.alpha("#f4f7fa", 0.35)
                                 implicitWidth: rangeLabel.implicitWidth + 24
@@ -875,9 +1600,9 @@ Rectangle {
                                             ? "Color range active"
                                             : mask.kind === "depth"
                                               ? "Depth range active"
-                                              : mask.kind === "alpha"
-                                                ? "Alpha image mask active"
-                                            : "AI " + root.aiMaskLabel(mask.kind).toLowerCase() + " mask active"
+                                               : mask.kind === "alpha"
+                                                 ? "Alpha image mask active"
+                                            : root.aiMaskLabel(mask.kind) + " mask active"
                                     color: "#f2f4f6"
                                     font.family: "Avenir Next"
                                     font.pixelSize: 12
@@ -889,10 +1614,14 @@ Rectangle {
 
                     Canvas {
                         id: activeSelectionOutline
+                        objectName: "maskViewActiveSelectionOutline"
+                        antialiasing: true
                         anchors.fill: parent
+                        readonly property string outlineRenderContract: root.outlineRenderContract
+                        readonly property string outlineAnimationContract: root.selectionOutlineAnimationContract
                         visible: editorPreview.hasActiveMask &&
-                                 editorPreview.activeMaskOutlinePoints.length >= 2 &&
-                                 (editorPreview.activeMaskKind === "alpha" ||
+                                  editorPreview.activeMaskOutlinePoints.length >= 2 &&
+                                  (editorPreview.activeMaskKind === "alpha" ||
                                   root.isAiMaskKind(editorPreview.activeMaskKind) ||
                                    editorPreview.activeMaskKind === "polygon" ||
                                    editorPreview.activeMaskKind === "lasso")
@@ -906,6 +1635,19 @@ Rectangle {
                             }
                         }
 
+                        Connections {
+                            target: root
+
+                            function onSelectionOutlinePhaseChanged() {
+                                if (root.selectionOutlineAnimationEnabled)
+                                    activeSelectionOutline.requestPaint()
+                            }
+
+                            function onSelectionOutlineAnimationEnabledChanged() {
+                                activeSelectionOutline.requestPaint()
+                            }
+                        }
+
                         onPaint: {
                             const points = editorPreview.activeMaskOutlinePoints
                             const count = points.length
@@ -914,100 +1656,149 @@ Rectangle {
                             if (count < 2)
                                 return
 
-                            const accent = root.maskAccent(editorPreview.maskStack[editorPreview.activeMaskIndex])
+                            const overlayAccent = root.resolvedMaskOverlayColor(
+                                        editorPreview.maskStack[editorPreview.activeMaskIndex])
                             ctx.beginPath()
-                            ctx.moveTo(root.previewPointX(points[0].x || 0.5), root.previewPointY(points[0].y || 0.5))
+                            ctx.moveTo(root.pixelAligned(root.previewPointX(points[0].x || 0.5)),
+                                       root.pixelAligned(root.previewPointY(points[0].y || 0.5)))
                             for (let i = 1; i < count; ++i) {
-                                ctx.lineTo(root.previewPointX(points[i].x || 0.5), root.previewPointY(points[i].y || 0.5))
+                                ctx.lineTo(root.pixelAligned(root.previewPointX(points[i].x || 0.5)),
+                                           root.pixelAligned(root.previewPointY(points[i].y || 0.5)))
                             }
                             if (count >= 3)
                                 ctx.closePath()
 
                             if (count >= 3) {
-                                ctx.fillStyle = Qt.alpha(accent, 0.12)
+                                ctx.fillStyle = Qt.alpha(overlayAccent, 0.12)
                                 ctx.fill()
                             }
 
-                            ctx.lineWidth = 2
+                            const dashOn = root.stableOutlineDash(8)
+                            const dashOff = root.stableOutlineDash(6)
+                            const phase = root.selectionOutlineAnimationEnabled
+                                          ? root.stableOutlineDash(root.selectionOutlinePhase)
+                                          : 0
+                            ctx.lineWidth = root.stableOutlineWidth(2)
                             if (ctx.setLineDash)
-                                ctx.setLineDash([8, 6])
-                            ctx.lineDashOffset = -root.selectionOutlinePhase
+                                ctx.setLineDash([dashOn, dashOff])
+                            ctx.lineDashOffset = -phase
                             ctx.strokeStyle = "#f4f7fa"
                             ctx.stroke()
                             if (ctx.setLineDash)
-                                ctx.setLineDash([8, 6])
-                            ctx.lineDashOffset = 12 - root.selectionOutlinePhase
+                                ctx.setLineDash([dashOn, dashOff])
+                            ctx.lineDashOffset = root.stableOutlineDash(12) - phase
                             ctx.strokeStyle = Qt.alpha("#101419", 0.78)
                             ctx.stroke()
                         }
                     }
 
-                    MouseArea {
+                    Item {
+                        objectName: "maskViewPointerHandlerLayer"
                         anchors.fill: parent
                         enabled: root.objectPickArmed || root.polygonDrawArmed || root.lassoDrawArmed
-                        acceptedButtons: Qt.LeftButton
-                        hoverEnabled: true
-                        cursorShape: (root.polygonDrawArmed || root.lassoDrawArmed || root.objectPickArmed)
-                                     ? Qt.CrossCursor
-                                     : Qt.ArrowCursor
                         z: 100
+                        property real smartPointerX: 0
+                        property real smartPointerY: 0
+                        property real lassoPointerX: 0
+                        property real lassoPointerY: 0
 
-                        onPressed: function(mouse) {
-                            if (root.objectPickArmed) {
-                                root.beginSmartSelectStroke(mouse.x, mouse.y)
-                                return
+                        HoverHandler {
+                            id: maskViewToolHoverHandler
+                            objectName: "maskViewToolHoverHandler"
+                            enabled: parent.enabled
+                            cursorShape: (root.polygonDrawArmed || root.lassoDrawArmed || root.objectPickArmed)
+                                         ? Qt.CrossCursor
+                                         : Qt.ArrowCursor
+
+                            onPointChanged: {
+                                if (root.objectPickArmed && !editorPreview.smartSelectStrokeActive) {
+                                    editorPreview.scheduleSmartSelectPreview(
+                                                point.position.x / Math.max(1, previewItem.width),
+                                                point.position.y / Math.max(1, previewItem.height))
+                                }
                             }
-                            if (!root.lassoDrawArmed)
-                                return
-                            editorPreview.startLassoSelection()
-                            editorPreview.appendActivePolygonPoint(
-                                        mouse.x / previewItem.width,
-                                        mouse.y / previewItem.height)
                         }
 
-                        onClicked: function(mouse) {
-                            if (root.objectPickArmed)
-                                return
-                            if (root.lassoDrawArmed)
-                                return
-                            if (root.polygonDrawArmed) {
+                        PointHandler {
+                            id: maskViewSmartSelectPointHandler
+                            objectName: "maskViewSmartSelectPointHandler"
+                            readonly property string pointerGrabPolicy: "exclusive-smart-selection-stroke"
+                            enabled: root.objectPickArmed
+                            acceptedButtons: Qt.LeftButton
+                            grabPermissions: PointerHandler.TakeOverForbidden
+                            target: null
+
+                            onActiveChanged: {
+                                if (active) {
+                                    parent.smartPointerX = point.position.x
+                                    parent.smartPointerY = point.position.y
+                                    root.beginSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)
+                                } else {
+                                    root.commitSmartSelectStroke()
+                                }
+                            }
+
+                            onPointChanged: {
+                                parent.smartPointerX = point.position.x
+                                parent.smartPointerY = point.position.y
+                                if (active)
+                                    root.updateSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)
+                            }
+                        }
+
+                        PointHandler {
+                            id: maskViewLassoPointHandler
+                            objectName: "maskViewLassoPointHandler"
+                            readonly property string pointerGrabPolicy: "exclusive-lasso-drag"
+                            enabled: root.lassoDrawArmed
+                            acceptedButtons: Qt.LeftButton
+                            grabPermissions: PointerHandler.TakeOverForbidden
+                            target: null
+
+                            onActiveChanged: {
+                                if (active) {
+                                    parent.lassoPointerX = point.position.x
+                                    parent.lassoPointerY = point.position.y
+                                    editorPreview.startLassoSelection()
+                                    editorPreview.appendActivePolygonPoint(
+                                                parent.lassoPointerX / Math.max(1, previewItem.width),
+                                                parent.lassoPointerY / Math.max(1, previewItem.height))
+                                } else {
+                                    root.lassoDrawArmed = false
+                                }
+                            }
+
+                            onPointChanged: {
+                                parent.lassoPointerX = point.position.x
+                                parent.lassoPointerY = point.position.y
+                                if (active) {
+                                    editorPreview.appendActivePolygonPoint(
+                                                parent.lassoPointerX / Math.max(1, previewItem.width),
+                                                parent.lassoPointerY / Math.max(1, previewItem.height))
+                                }
+                            }
+                        }
+
+                        TapHandler {
+                            id: maskViewPolygonTapHandler
+                            objectName: "maskViewPolygonTapHandler"
+                            readonly property string pointerGrabPolicy: "exclusive-polygon-tap"
+                            enabled: root.polygonDrawArmed
+                            acceptedButtons: Qt.LeftButton
+                            grabPermissions: PointerHandler.TakeOverForbidden
+
+                            onTapped: function(eventPoint, button) {
                                 editorPreview.appendActivePolygonPoint(
-                                            mouse.x / previewItem.width,
-                                            mouse.y / previewItem.height)
+                                            eventPoint.position.x / Math.max(1, previewItem.width),
+                                            eventPoint.position.y / Math.max(1, previewItem.height))
                             }
-                        }
 
-                        onPositionChanged: function(mouse) {
-                            if (root.objectPickArmed) {
-                                if (pressed)
-                                    root.updateSmartSelectStroke(mouse.x, mouse.y)
-                                else
-                                    editorPreview.scheduleSmartSelectPreview(mouse.x / previewItem.width, mouse.y / previewItem.height)
+                            onDoubleTapped: function(eventPoint, button) {
+                                editorPreview.appendActivePolygonPoint(
+                                            eventPoint.position.x / Math.max(1, previewItem.width),
+                                            eventPoint.position.y / Math.max(1, previewItem.height))
+                                root.polygonDrawArmed = false
                             }
-                            if (!root.lassoDrawArmed || !pressed)
-                                return
-                            editorPreview.appendActivePolygonPoint(
-                                        mouse.x / previewItem.width,
-                                        mouse.y / previewItem.height)
-                        }
-
-                        onDoubleClicked: function(mouse) {
-                            if (!root.polygonDrawArmed)
-                                return
-                            editorPreview.appendActivePolygonPoint(
-                                        mouse.x / previewItem.width,
-                                        mouse.y / previewItem.height)
-                            root.polygonDrawArmed = false
-                        }
-
-                        onReleased: function(mouse) {
-                            if (root.objectPickArmed) {
-                                root.commitSmartSelectStroke()
-                                return
-                            }
-                            if (!root.lassoDrawArmed)
-                                return
-                            root.lassoDrawArmed = false
                         }
                     }
 
@@ -1075,24 +1866,270 @@ Rectangle {
         }
 
         BrandPanel {
-            Layout.preferredWidth: 410
+            objectName: "maskInspectorPane"
+            Layout.minimumWidth: root.stableInspectorWidth
+            Layout.preferredWidth: root.stableInspectorWidth
+            Layout.maximumWidth: root.stableInspectorWidth
             Layout.fillHeight: true
             title: "Selection Inspector"
             subtitle: "Pick a tool from the preview rail, then refine the active selection here."
 
             ScrollView {
+                id: maskInspectorScrollView
+                objectName: "maskInspectorScrollView"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                contentWidth: availableWidth
+                contentHeight: maskInspectorColumn.implicitHeight
                 clip: true
 
                 ColumnLayout {
-                    width: parent.width
+                    id: maskInspectorColumn
+                    objectName: "maskInspectorColumn"
+                    width: maskInspectorScrollView.availableWidth
                     spacing: 12
 
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Tools"
                         subtitle: "Select, refine, and retouch tools for the canvas."
+
+                        TextField {
+                            objectName: "maskSearchField"
+                            Layout.fillWidth: true
+                            text: root.maskSearchQuery
+                            placeholderText: "Search masks, tools, controls"
+                            selectByMouse: true
+                            font.family: "Avenir Next"
+                            font.pixelSize: 12
+                            color: "#f2f4f6"
+                            placeholderTextColor: "#6f7882"
+                            onTextChanged: root.maskSearchQuery = text
+                            background: Rectangle {
+                                radius: 8
+                                color: "#11161a"
+                                border.width: 1
+                                border.color: root.maskSearchText().length > 0 ? Qt.alpha("#8ab8d8", 0.52) : "#2a3138"
+                            }
+                        }
+
+                        Rectangle {
+                            objectName: "maskSearchResultsPanel"
+                            Layout.fillWidth: true
+                            visible: root.maskSearchText().length > 0
+                            implicitHeight: visible ? maskSearchResultsColumn.implicitHeight + 12 : 0
+                            radius: 8
+                            color: "#11161a"
+                            border.width: 1
+                            border.color: "#2a3138"
+
+                            ColumnLayout {
+                                id: maskSearchResultsColumn
+                                anchors.fill: parent
+                                anchors.margins: 6
+                                spacing: 6
+
+                                Repeater {
+                                    model: root.maskSearchResults()
+
+                                    delegate: ActionButton {
+                                        required property var modelData
+                                        objectName: "maskSearchResultButton"
+                                        Layout.fillWidth: true
+                                        text: modelData.category + " · " + modelData.label
+                                        iconName: modelData.category === "Tool" ? "local-adjust" : (modelData.category === "Mask" ? "masks" : "density")
+                                        compact: true
+                                        tooltipText: modelData.detail
+                                        onClicked: root.activateMaskSearchResult(modelData)
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: root.maskSearchResults().length === 0
+                                    text: "No matching mask tools, masks, or local controls."
+                                    color: "#8f98a2"
+                                    font.family: "Avenir Next"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            objectName: "maskActiveContextHeader"
+                            Layout.fillWidth: true
+                            implicitHeight: maskActiveContextRow.implicitHeight + 12
+                            radius: 8
+                            color: "#11161a"
+                            border.width: 1
+                            border.color: root.maskContextVisible("create") ? "#5f8fb3" : "#2a3138"
+
+                            RowLayout {
+                                id: maskActiveContextRow
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 8
+
+                                Label {
+                                    objectName: "maskActiveContextLabel"
+                                    Layout.fillWidth: true
+                                    text: "Context · " + root.activeMaskEditingContextLabel()
+                                    color: "#f2f4f6"
+                                    font.family: "Avenir Next"
+                                    font.pixelSize: 12
+                                    font.weight: Font.Medium
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    objectName: "maskActiveContextSignature"
+                                    visible: false
+                                    text: root.activeMaskEditingContextSignature()
+                                }
+                            }
+                        }
+
+                        ActionButton {
+                            objectName: "createNewMaskButton"
+                            Layout.fillWidth: true
+                            text: "Create New Mask"
+                            iconName: "plus"
+                            tone: "primary"
+                            active: root.maskContextVisible("create") && root.createMaskChooserOpen
+                            enabled: editorPreview.hasAsset
+                            tooltipText: "Open a compact chooser for smart, brush, shape, range, and imported mask tools."
+                            onClicked: root.openCreateMaskContext()
+                        }
+
+                        Rectangle {
+                            objectName: "createNewMaskChooser"
+                            Layout.fillWidth: true
+                            visible: root.maskContextVisible("create") && root.createMaskChooserOpen
+                            implicitHeight: visible ? createMaskChooserColumn.implicitHeight + 16 : 0
+                            radius: 8
+                            color: "#11161a"
+                            border.width: 1
+                            border.color: "#2a3138"
+                            clip: true
+
+                            ColumnLayout {
+                                id: createMaskChooserColumn
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 8
+
+                                GridLayout {
+                                    objectName: "createNewMaskChooserGrid"
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 8
+                                    rowSpacing: 8
+
+                                    ActionButton {
+                                        objectName: "createMaskSmartButton"
+                                        Layout.fillWidth: true
+                                        text: "Smart Select"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset
+                                        onClicked: root.chooseCanvasCreateTool("smart-new")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskBrushAddButton"
+                                        Layout.fillWidth: true
+                                        text: "Brush Add"
+                                        compact: true
+                                        onClicked: root.chooseBrushMaskSource(false)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskBrushSubtractButton"
+                                        Layout.fillWidth: true
+                                        text: "Brush Subtract"
+                                        compact: true
+                                        onClicked: root.chooseBrushMaskSource(true)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskLassoButton"
+                                        Layout.fillWidth: true
+                                        text: "Lasso"
+                                        compact: true
+                                        onClicked: root.chooseCanvasCreateTool("lasso")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskPolygonButton"
+                                        Layout.fillWidth: true
+                                        text: "Polygon"
+                                        compact: true
+                                        onClicked: root.chooseCanvasCreateTool("polygon")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskLinearButton"
+                                        Layout.fillWidth: true
+                                        text: "Linear"
+                                        compact: true
+                                        onClicked: root.chooseMaskSource("linear")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskRadialButton"
+                                        Layout.fillWidth: true
+                                        text: "Radial"
+                                        compact: true
+                                        onClicked: root.chooseMaskSource("radial")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskLuminanceButton"
+                                        Layout.fillWidth: true
+                                        text: "Luma Range"
+                                        compact: true
+                                        onClicked: root.chooseMaskSource("luminance")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskColorButton"
+                                        Layout.fillWidth: true
+                                        text: "Color Range"
+                                        compact: true
+                                        onClicked: root.chooseMaskSource("color")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskDepthButton"
+                                        Layout.fillWidth: true
+                                        text: "Depth Range"
+                                        compact: true
+                                        onClicked: root.chooseMaskSource("depth")
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskAlphaImageButton"
+                                        Layout.fillWidth: true
+                                        text: "Alpha Image"
+                                        compact: true
+                                        onClicked: root.chooseAlphaMaskSource()
+                                    }
+
+                                    ActionButton {
+                                        objectName: "createMaskSubjectButton"
+                                        Layout.fillWidth: true
+                                        text: "Subject"
+                                        compact: true
+                                        enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                        onClicked: {
+                                            root.closeCreateMaskChooser()
+                                            root.clearTransientTools()
+                                            editorPreview.addAIMask("subject")
+                                        }
+                                    }
+                                }
+                            }
+                        }
 
                         Label {
                             Layout.fillWidth: true
@@ -1166,7 +2203,8 @@ Rectangle {
                         Label {
                             Layout.fillWidth: true
                             visible: !editorPreview.subjectMaskAvailable
-                            text: "AI Subject requires macOS 14 or later."
+                            text: "Vision Object Select requires macOS 14 or later. " +
+                                  root.smartSelectionRuntimeLabel() + " remains available for rough local selections."
                             wrapMode: Text.WordWrap
                             color: "#8f98a2"
                             font.family: "Avenir Next"
@@ -1176,8 +2214,9 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Masks"
-                        subtitle: "Shape and range masks for local adjustments."
+                        title: "Selections"
+                        subtitle: "Shape and range selections for local adjustments."
+                        visible: root.maskContextVisible("create")
 
                         GridLayout {
                             Layout.fillWidth: true
@@ -1222,8 +2261,10 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedSubjectButton"
                                 Layout.fillWidth: true
                                 text: "Subject"
+                                tooltipText: root.generatedMaskTooltip("subject")
                                 enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
                                 onClicked: {
                                     root.clearTransientTools()
@@ -1232,8 +2273,10 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedSkyHeuristicButton"
                                 Layout.fillWidth: true
-                                text: "Sky"
+                                text: root.aiMaskLabel("sky")
+                                tooltipText: root.generatedMaskTooltip("sky")
                                 enabled: editorPreview.hasAsset
                                 onClicked: {
                                     root.clearTransientTools()
@@ -1242,8 +2285,10 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedBackgroundDerivedButton"
                                 Layout.fillWidth: true
-                                text: "Background"
+                                text: root.aiMaskLabel("background")
+                                tooltipText: root.generatedMaskTooltip("background")
                                 enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
                                 onClicked: {
                                     root.clearTransientTools()
@@ -1252,9 +2297,12 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedPeopleUnsupportedButton"
+                                visible: false
                                 Layout.fillWidth: true
-                                text: "People"
-                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                text: root.aiMaskLabel("people")
+                                tooltipText: root.generatedMaskTooltip("people")
+                                enabled: false
                                 onClicked: {
                                     root.clearTransientTools()
                                     editorPreview.addAIMask("people")
@@ -1262,9 +2310,12 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedFaceUnsupportedButton"
+                                visible: false
                                 Layout.fillWidth: true
-                                text: "Face"
-                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                text: root.aiMaskLabel("face")
+                                tooltipText: root.generatedMaskTooltip("face")
+                                enabled: false
                                 onClicked: {
                                     root.clearTransientTools()
                                     editorPreview.addAIMask("face")
@@ -1272,9 +2323,12 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedHairUnsupportedButton"
+                                visible: false
                                 Layout.fillWidth: true
-                                text: "Hair"
-                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                text: root.aiMaskLabel("hair")
+                                tooltipText: root.generatedMaskTooltip("hair")
+                                enabled: false
                                 onClicked: {
                                     root.clearTransientTools()
                                     editorPreview.addAIMask("hair")
@@ -1282,20 +2336,133 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "maskGeneratedClothingUnsupportedButton"
+                                visible: false
                                 Layout.fillWidth: true
-                                text: "Clothing"
-                                enabled: editorPreview.hasAsset && editorPreview.subjectMaskAvailable
+                                text: root.aiMaskLabel("clothing")
+                                tooltipText: root.generatedMaskTooltip("clothing")
+                                enabled: false
                                 onClicked: {
                                     root.clearTransientTools()
                                     editorPreview.addAIMask("clothing")
                                 }
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedFacialHairUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("facial-hair")
+                                tooltipText: root.generatedMaskTooltip("facial-hair")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("facial-hair")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedLipsUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("lips")
+                                tooltipText: root.generatedMaskTooltip("lips")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("lips")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedTeethUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("teeth")
+                                tooltipText: root.generatedMaskTooltip("teeth")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("teeth")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedEyesUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("eyes")
+                                tooltipText: root.generatedMaskTooltip("eyes")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("eyes")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedSkinUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("skin")
+                                tooltipText: root.generatedMaskTooltip("skin")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("skin")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedWaterUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("water")
+                                tooltipText: root.generatedMaskTooltip("water")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("water")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedVegetationUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("vegetation")
+                                tooltipText: root.generatedMaskTooltip("vegetation")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("vegetation")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedMountainsUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("mountains")
+                                tooltipText: root.generatedMaskTooltip("mountains")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("mountains")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedGroundUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("ground")
+                                tooltipText: root.generatedMaskTooltip("ground")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("ground")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedArchitectureUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("architecture")
+                                tooltipText: root.generatedMaskTooltip("architecture")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("architecture")
+                            }
+
+                            ActionButton {
+                                objectName: "maskGeneratedSnowUnsupportedButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: root.aiMaskLabel("snow")
+                                tooltipText: root.generatedMaskTooltip("snow")
+                                enabled: false
+                                onClicked: editorPreview.addAIMask("snow")
                             }
                         }
                     }
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Mask Sets"
+                        title: "Masks"
 
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -1305,15 +2472,22 @@ Rectangle {
                                 model: editorPreview.maskSets
 
                                 delegate: Rectangle {
+                                    id: maskSetDelegate
+                                    objectName: "maskSetFocusRow"
                                     required property int index
                                     required property var modelData
 
                                     Layout.fillWidth: true
+                                    visible: root.maskSetMatchesSearch(modelData)
                                     radius: 10
                                     color: "#171b1f"
                                     border.width: 1
-                                    border.color: "#2d3339"
+                                    border.color: activeFocus ? "#8ab8d8" : "#2d3339"
                                     implicitHeight: setColumn.implicitHeight + 20
+                                    activeFocusOnTab: true
+                                    Keys.onReturnPressed: if (modelData.sources.length > 0) editorPreview.activeMaskIndex = modelData.sources[0].flatIndex
+                                    Keys.onEnterPressed: if (modelData.sources.length > 0) editorPreview.activeMaskIndex = modelData.sources[0].flatIndex
+                                    Keys.onSpacePressed: if (modelData.sources.length > 0) editorPreview.activeMaskIndex = modelData.sources[0].flatIndex
 
                                     ColumnLayout {
                                         id: setColumn
@@ -1326,12 +2500,41 @@ Rectangle {
                                             spacing: 8
 
                                             Rectangle {
-                                                width: 10
-                                                height: 10
+                                                objectName: "maskSetThumbnail"
+                                                Layout.preferredWidth: 44
+                                                Layout.preferredHeight: 30
                                                 radius: 5
-                                                color: modelData.sources.length > 0
-                                                       ? root.maskAccent(modelData.sources[0])
-                                                       : "#8ab8d8"
+                                                color: "#090c0f"
+                                                border.width: 1
+                                                border.color: Qt.alpha(modelData.sources.length > 0
+                                                                       ? root.maskAccent(modelData.sources[0])
+                                                                       : "#8ab8d8", 0.44)
+                                                clip: true
+
+                                                Image {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 1
+                                                    source: modelData.thumbnailSource || ""
+                                                    fillMode: Image.PreserveAspectCrop
+                                                    asynchronous: true
+                                                    cache: false
+                                                    visible: source.toString().length > 0
+                                                }
+
+                                                Rectangle {
+                                                    anchors.left: parent.left
+                                                    anchors.bottom: parent.bottom
+                                                    anchors.leftMargin: 4
+                                                    anchors.bottomMargin: 4
+                                                    width: 8
+                                                    height: 8
+                                                    radius: 4
+                                                    color: modelData.sources.length > 0
+                                                           ? root.maskAccent(modelData.sources[0])
+                                                           : "#8ab8d8"
+                                                    border.width: 1
+                                                    border.color: "#0c1014"
+                                                }
                                             }
 
                                             ColumnLayout {
@@ -1347,7 +2550,9 @@ Rectangle {
                                                 }
 
                                                 Label {
-                                                    text: modelData.sourceCount.toString() + " sources"
+                                                    text: modelData.sourceCount === 1
+                                                          ? "1 component"
+                                                          : modelData.sourceCount.toString() + " components"
                                                     color: "#8f98a2"
                                                     font.family: "Avenir Next"
                                                     font.pixelSize: 11
@@ -1355,10 +2560,24 @@ Rectangle {
                                             }
                                         }
 
+                                        Label {
+                                            objectName: "maskComponentsHeaderLabel"
+                                            Layout.fillWidth: true
+                                            text: "Components"
+                                            color: "#aeb7c1"
+                                            font.family: "Avenir Next"
+                                            font.pixelSize: 10
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                            visible: modelData.sourceCount > 0
+                                        }
+
                                         Repeater {
-                                            model: modelData.sources
+                                            model: (modelData.sources || []).filter(root.maskMatchesSearch)
 
                                             delegate: Rectangle {
+                                                id: maskSourceDelegate
+                                                objectName: "maskSourceFocusRow"
                                                 required property var modelData
 
                                                 Layout.fillWidth: true
@@ -1367,17 +2586,124 @@ Rectangle {
                                                        ? "#21272d"
                                                        : "#14181c"
                                                 border.width: 1
-                                                border.color: modelData.flatIndex === editorPreview.activeMaskIndex
-                                                              ? root.maskAccent(modelData)
-                                                              : "#242b31"
+                                                border.color: activeFocus
+                                                              ? "#8ab8d8"
+                                                              : (modelData.flatIndex === editorPreview.activeMaskIndex
+                                                                 ? root.maskAccent(modelData)
+                                                                 : "#242b31")
                                                 implicitHeight: 44
+                                                activeFocusOnTab: true
+                                                Keys.onReturnPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                                Keys.onEnterPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                                Keys.onSpacePressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                                Drag.active: maskSourceDragHandler.active
+                                                Drag.keys: ["mask-source"]
+                                                Drag.supportedActions: Qt.MoveAction
+                                                Drag.mimeData: {
+                                                    "application/x-photo-editor-mask-source-index": String(modelData.flatIndex)
+                                                }
+
+                                                DragHandler {
+                                                    id: maskSourceDragHandler
+                                                    objectName: "maskSourceDragHandler"
+                                                    target: null
+                                                    onActiveChanged: {
+                                                        if (active)
+                                                            editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    }
+                                                }
+
+                                                DropArea {
+                                                    objectName: "maskSourceReorderDropArea"
+                                                    anchors.fill: parent
+                                                    keys: ["mask-source"]
+                                                    onDropped: function(drop) {
+                                                        const sourceIndex = Number(drop.getDataAsString("application/x-photo-editor-mask-source-index"))
+                                                        if (Number.isFinite(sourceIndex) &&
+                                                                editorPreview.moveMaskSource(sourceIndex, maskSetDelegate.modelData.id, index))
+                                                            drop.acceptProposedAction()
+                                                    }
+                                                }
 
                                                 MouseArea {
                                                     anchors.fill: parent
-                                                    onClicked: editorPreview.activeMaskIndex =
-                                                                   (editorPreview.activeMaskIndex === modelData.flatIndex
-                                                                    ? -1
-                                                                    : modelData.flatIndex)
+                                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                                    onClicked: function(mouse) {
+                                                        if (mouse.button === Qt.RightButton) {
+                                                            editorPreview.activeMaskIndex = modelData.flatIndex
+                                                            maskSourceContextMenu.popup()
+                                                            return
+                                                        }
+                                                        editorPreview.activeMaskIndex =
+                                                                (editorPreview.activeMaskIndex === modelData.flatIndex
+                                                                 ? -1
+                                                                 : modelData.flatIndex)
+                                                    }
+                                                }
+
+                                                Menu {
+                                                    id: maskSourceContextMenu
+                                                    objectName: "maskSourceContextMenu"
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextSelectItem"
+                                                        text: "Select"
+                                                        onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextRenameItem"
+                                                        text: "Rename"
+                                                        onTriggered: root.renameMaskRow(modelData.flatIndex)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextEnableItem"
+                                                        text: modelData.enabled ? "Disable" : "Enable"
+                                                        enabled: !modelData.locked
+                                                        onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextSoloItem"
+                                                        text: modelData.solo ? "Clear Solo" : "Solo"
+                                                        enabled: !modelData.locked
+                                                        onTriggered: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextLockItem"
+                                                        text: modelData.locked ? "Unlock" : "Lock"
+                                                        onTriggered: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
+                                                    }
+
+                                                    MenuSeparator {}
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextMoveUpItem"
+                                                        text: "Move Up"
+                                                        enabled: modelData.flatIndex > 0
+                                                        onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextMoveDownItem"
+                                                        text: "Move Down"
+                                                        enabled: modelData.flatIndex < editorPreview.maskCount - 1
+                                                        onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextDuplicateItem"
+                                                        text: "Duplicate"
+                                                        onTriggered: root.duplicateMaskRow(modelData.flatIndex)
+                                                    }
+
+                                                    MenuItem {
+                                                        objectName: "maskSourceContextDeleteItem"
+                                                        text: "Delete"
+                                                        onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                                                    }
                                                 }
 
                                                 RowLayout {
@@ -1386,10 +2712,37 @@ Rectangle {
                                                     spacing: 8
 
                                                     Rectangle {
-                                                        width: 8
-                                                        height: 8
-                                                        radius: 4
-                                                        color: root.maskAccent(modelData)
+                                                        objectName: "maskSourceThumbnail"
+                                                        Layout.preferredWidth: 34
+                                                        Layout.preferredHeight: 24
+                                                        radius: 5
+                                                        color: "#090c0f"
+                                                        border.width: 1
+                                                        border.color: Qt.alpha(root.maskAccent(modelData), 0.42)
+                                                        clip: true
+
+                                                        Image {
+                                                            anchors.fill: parent
+                                                            anchors.margins: 1
+                                                            source: modelData.thumbnailSource || ""
+                                                            fillMode: Image.PreserveAspectCrop
+                                                            asynchronous: true
+                                                            cache: false
+                                                            visible: source.toString().length > 0
+                                                        }
+
+                                                        Rectangle {
+                                                            anchors.left: parent.left
+                                                            anchors.bottom: parent.bottom
+                                                            anchors.leftMargin: 3
+                                                            anchors.bottomMargin: 3
+                                                            width: 7
+                                                            height: 7
+                                                            radius: 4
+                                                            color: root.maskAccent(modelData)
+                                                            border.width: 1
+                                                            border.color: "#0c1014"
+                                                        }
                                                     }
 
                                                     ColumnLayout {
@@ -1415,10 +2768,7 @@ Rectangle {
                                                     ActionButton {
                                                         text: modelData.enabled ? "On" : "Off"
                                                         active: modelData.enabled
-                                                        onClicked: {
-                                                            editorPreview.activeMaskIndex = modelData.flatIndex
-                                                            editorPreview.activeMaskEnabled = !modelData.enabled
-                                                        }
+                                                        onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                                     }
                                                 }
                                             }
@@ -1428,8 +2778,9 @@ Rectangle {
                             }
 
                             Label {
+                                objectName: "maskEmptyStateGuidance"
                                 visible: editorPreview.maskSetCount === 0
-                                text: "No selection masks yet. Add a shape, brush, range selector, or AI mask to start."
+                                text: "No masks yet. Create a mask with Smart Select, Brush, Lasso, Polygon, a range control, or Alpha Image."
                                 wrapMode: Text.WordWrap
                                 color: "#8f98a2"
                                 font.family: "Avenir Next"
@@ -1454,15 +2805,17 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "activeMaskDuplicateButton"
                                 Layout.fillWidth: true
                                 text: "Duplicate"
                                 onClicked: editorPreview.duplicateActiveMask()
                             }
 
                             ConfirmActionButton {
+                                objectName: "activeMaskDeleteButton"
                                 Layout.fillWidth: true
                                 text: "Delete"
-                                helperText: "Delete the active mask"
+                                helperText: "Remove this selection recipe entry; the original file is unchanged."
                                 onConfirmed: editorPreview.removeActiveMask()
                             }
                         }
@@ -1471,7 +2824,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Retouch"
-                        subtitle: "Heal, clone, skin, red-eye, dust, and remove live outside mask sets."
+                        subtitle: "Heal, clone, skin, red-eye, dust, and remove live outside selection sets."
 
                         ColumnLayout {
                             Layout.fillWidth: true
@@ -1481,23 +2834,97 @@ Rectangle {
                                 model: editorPreview.retouchStack
 
                                 delegate: Rectangle {
+                                    objectName: "retouchFocusRow"
                                     required property var modelData
 
                                     Layout.fillWidth: true
                                     radius: 10
                                     color: modelData.flatIndex === editorPreview.activeMaskIndex ? "#21272d" : "#171b1f"
                                     border.width: 1
-                                    border.color: modelData.flatIndex === editorPreview.activeMaskIndex
-                                                  ? root.maskAccent(modelData)
-                                                  : "#2d3339"
+                                    border.color: activeFocus
+                                                  ? "#8ab8d8"
+                                                  : (modelData.flatIndex === editorPreview.activeMaskIndex
+                                                     ? root.maskAccent(modelData)
+                                                     : "#2d3339")
                                     implicitHeight: 50
+                                    activeFocusOnTab: true
+                                    Keys.onReturnPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                    Keys.onEnterPressed: editorPreview.activeMaskIndex = modelData.flatIndex
+                                    Keys.onSpacePressed: editorPreview.activeMaskIndex = modelData.flatIndex
 
                                     MouseArea {
                                         anchors.fill: parent
-                                        onClicked: editorPreview.activeMaskIndex =
-                                                       (editorPreview.activeMaskIndex === modelData.flatIndex
-                                                        ? -1
-                                                        : modelData.flatIndex)
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        onClicked: function(mouse) {
+                                            if (mouse.button === Qt.RightButton) {
+                                                editorPreview.activeMaskIndex = modelData.flatIndex
+                                                retouchRowContextMenu.popup()
+                                                return
+                                            }
+                                            editorPreview.activeMaskIndex =
+                                                    (editorPreview.activeMaskIndex === modelData.flatIndex
+                                                     ? -1
+                                                     : modelData.flatIndex)
+                                        }
+                                    }
+
+                                    Menu {
+                                        id: retouchRowContextMenu
+                                        objectName: "retouchRowContextMenu"
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextSelectItem"
+                                            text: "Select"
+                                            onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextApplyItem"
+                                            text: "Apply"
+                                            visible: !modelData.committed
+                                            onTriggered: root.applyRetouchRow(modelData.flatIndex)
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextCancelItem"
+                                            text: "Cancel"
+                                            visible: !modelData.committed
+                                            onTriggered: root.cancelRetouchRow(modelData.flatIndex)
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextRenameItem"
+                                            text: "Rename"
+                                            onTriggered: root.renameMaskRow(modelData.flatIndex)
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextEnableItem"
+                                            text: modelData.enabled ? "Disable" : "Enable"
+                                            onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
+                                        }
+
+                                        MenuSeparator {}
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextMoveUpItem"
+                                            text: "Move Up"
+                                            enabled: modelData.flatIndex > 0
+                                            onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextMoveDownItem"
+                                            text: "Move Down"
+                                            enabled: modelData.flatIndex < editorPreview.maskCount - 1
+                                            onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
+                                        }
+
+                                        MenuItem {
+                                            objectName: "retouchRowContextDeleteItem"
+                                            text: "Delete"
+                                            onTriggered: root.deleteMaskRow(modelData.flatIndex)
+                                        }
                                     }
 
                                     RowLayout {
@@ -1541,41 +2968,28 @@ Rectangle {
                                             ActionButton {
                                                 text: "Rename"
                                                 compact: true
-                                                onClicked: {
-                                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                                    activeMaskNameField.forceActiveFocus()
-                                                    activeMaskNameField.selectAll()
-                                                }
+                                                onClicked: root.renameMaskRow(modelData.flatIndex)
                                             }
 
                                             ActionButton {
                                                 text: modelData.enabled ? "Off" : "On"
                                                 compact: true
                                                 accent: modelData.enabled ? "#d98962" : root.maskAccent(modelData)
-                                                onClicked: {
-                                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                                    editorPreview.activeMaskEnabled = !modelData.enabled
-                                                }
+                                                onClicked: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                             }
 
                                             ActionButton {
                                                 text: "Up"
                                                 compact: true
                                                 enabled: modelData.flatIndex > 0
-                                                onClicked: {
-                                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                                    editorPreview.moveActiveMask(-1)
-                                                }
+                                                onClicked: root.moveMaskRow(modelData.flatIndex, -1)
                                             }
 
                                             ActionButton {
                                                 text: "Down"
                                                 compact: true
                                                 enabled: modelData.flatIndex < editorPreview.maskCount - 1
-                                                onClicked: {
-                                                    editorPreview.activeMaskIndex = modelData.flatIndex
-                                                    editorPreview.moveActiveMask(1)
-                                                }
+                                                onClicked: root.moveMaskRow(modelData.flatIndex, 1)
                                             }
                                         }
                                     }
@@ -1620,15 +3034,184 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        objectName: "activeMaskControlsSection"
                         Layout.fillWidth: true
-                        title: "Active Mask"
-                        visible: editorPreview.hasActiveMask
+                        title: editorPreview.activeMaskToolRole === "retouch" ? "Active Retouch" : "Active Selection"
+                        visible: root.maskActiveControlsContextVisible()
+
+                        Rectangle {
+                            objectName: "activeMaskCompactHeader"
+                            Layout.fillWidth: true
+                            implicitHeight: activeMaskCompactHeaderColumn.implicitHeight + 16
+                            radius: 8
+                            color: "#11161a"
+                            border.width: 1
+                            border.color: root.activeMaskAccent
+
+                            ColumnLayout {
+                                id: activeMaskCompactHeaderColumn
+                                anchors.fill: parent
+                                anchors.margins: 8
+                                spacing: 8
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 10
+                                        Layout.preferredHeight: 10
+                                        radius: 5
+                                        color: root.activeMaskAccent
+                                    }
+
+                                    Label {
+                                        objectName: "activeMaskHeaderNameLabel"
+                                        Layout.fillWidth: true
+                                        text: editorPreview.activeMaskName
+                                        color: "#f2f4f6"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 13
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        objectName: "activeMaskHeaderOpacityLabel"
+                                        text: "Opacity " + root.percentText(editorPreview.activeMaskOpacity)
+                                        color: "#aeb7c1"
+                                        font.family: "Menlo"
+                                        font.pixelSize: 10
+                                        font.letterSpacing: 0
+                                    }
+                                }
+
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: 2
+                                    columnSpacing: 8
+                                    rowSpacing: 6
+
+                                    Label {
+                                        objectName: "activeMaskHeaderKindLabel"
+                                        Layout.fillWidth: true
+                                        text: "Kind · " + root.activeMaskHeaderKind()
+                                        color: "#8f98a2"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        objectName: "activeMaskHeaderOperationLabel"
+                                        Layout.fillWidth: true
+                                        text: "Operation · " + editorPreview.activeMaskOperation
+                                        color: "#8f98a2"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        objectName: "activeMaskHeaderTargetLabel"
+                                        Layout.fillWidth: true
+                                        text: "Target · " + root.activeMaskHeaderTarget()
+                                        color: "#8f98a2"
+                                        font.family: "Avenir Next"
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        objectName: "activeMaskHeaderSignature"
+                                        visible: false
+                                        text: root.activeMaskCompactHeaderSignature()
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    ActionButton {
+                                        objectName: "activeMaskHeaderEnabledButton"
+                                        Layout.fillWidth: true
+                                        text: editorPreview.activeMaskEnabled ? "Enabled" : "Disabled"
+                                        compact: true
+                                        active: editorPreview.activeMaskEnabled
+                                        enabled: !editorPreview.activeMaskLocked
+                                        onClicked: editorPreview.activeMaskEnabled = !editorPreview.activeMaskEnabled
+                                    }
+
+                                    ActionButton {
+                                        objectName: "activeMaskHeaderSoloButton"
+                                        Layout.fillWidth: true
+                                        text: editorPreview.activeMaskSolo ? "Soloed" : "Solo"
+                                        compact: true
+                                        active: editorPreview.activeMaskSolo
+                                        enabled: !editorPreview.activeMaskLocked
+                                        onClicked: editorPreview.activeMaskSolo = !editorPreview.activeMaskSolo
+                                    }
+
+                                    ActionButton {
+                                        objectName: "activeMaskHeaderLockButton"
+                                        Layout.fillWidth: true
+                                        text: editorPreview.activeMaskLocked ? "Locked" : "Unlocked"
+                                        compact: true
+                                        active: editorPreview.activeMaskLocked
+                                        accent: editorPreview.activeMaskLocked ? "#d98962" : root.activeMaskAccent
+                                        onClicked: editorPreview.activeMaskLocked = !editorPreview.activeMaskLocked
+                                    }
+                                }
+                            }
+                        }
+
+                        Label {
+                            objectName: "activeMaskDensityOpacityHelp"
+                            Layout.fillWidth: true
+                            text: "Density sets maximum mask strength. Opacity controls blend amount."
+                            wrapMode: Text.WordWrap
+                            color: "#8f98a2"
+                            font.family: "Avenir Next"
+                            font.pixelSize: 11
+                        }
+
+                        InspectorSlider {
+                            objectName: "activeMaskOpacitySlider"
+                            Layout.fillWidth: true
+                            label: "Mask Opacity"
+                            valueText: root.percentText(editorPreview.activeMaskOpacity)
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            defaultValue: 100
+                            value: Math.round(editorPreview.activeMaskOpacity * 100)
+                            accent: root.activeMaskAccent
+                            onValueDragged: function(value) { editorPreview.activeMaskOpacity = value / 100 }
+                            onResetRequested: editorPreview.activeMaskOpacity = 1.0
+                        }
+
+                        InspectorSlider {
+                            objectName: "activeMaskDensitySlider"
+                            Layout.fillWidth: true
+                            label: "Mask Density"
+                            valueText: root.percentText(editorPreview.activeMaskDensity)
+                            from: 0
+                            to: 100
+                            stepSize: 1
+                            defaultValue: 100
+                            value: Math.round(editorPreview.activeMaskDensity * 100)
+                            accent: root.activeMaskAccent
+                            onValueDragged: function(value) { editorPreview.activeMaskDensity = value / 100 }
+                            onResetRequested: editorPreview.activeMaskDensity = 1.0
+                        }
 
                         ToneTextField {
                             id: activeMaskNameField
+                            objectName: "activeMaskRenameField"
                             Layout.fillWidth: true
                             text: editorPreview.activeMaskName
-                            placeholderText: "Mask name"
+                            placeholderText: editorPreview.activeMaskToolRole === "retouch" ? "Retouch name" : "Selection name"
                             onEditingFinished: editorPreview.activeMaskName = text
                         }
 
@@ -1663,6 +3246,7 @@ Rectangle {
                             ActionButton {
                                 Layout.preferredWidth: 112
                                 text: "Regenerate"
+                                tooltipText: "Regenerate the retouch patch candidate in the recipe; the original file is unchanged."
                                 enabled: !editorPreview.activeMaskCommitted
                                 onClicked: editorPreview.regenerateInpaintSeed()
                             }
@@ -1717,6 +3301,7 @@ Rectangle {
                                      (editorPreview.activeMaskRetouchMode === "remove" ||
                                       editorPreview.activeMaskRetouchMode === "heal" ||
                                       editorPreview.activeMaskRetouchMode === "patch") &&
+                                     editorPreview.inpaintPatchDiagnosticsAvailable &&
                                      editorPreview.activeInpaintPatchBounds.width > 0
                             text: editorPreview.inpaintPatchDiagnosticsEnabled ? "Hide Patch Bounds" : "Show Patch Bounds"
                             active: editorPreview.inpaintPatchDiagnosticsEnabled
@@ -1729,6 +3314,7 @@ Rectangle {
                             spacing: 8
 
                             ActionButton {
+                                objectName: "activeMaskOperationAddButton"
                                 Layout.fillWidth: true
                                 text: "Add"
                                 active: editorPreview.activeMaskOperation === "add"
@@ -1736,6 +3322,7 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "activeMaskOperationSubtractButton"
                                 Layout.fillWidth: true
                                 text: "Subtract"
                                 active: editorPreview.activeMaskOperation === "subtract"
@@ -1743,6 +3330,7 @@ Rectangle {
                             }
 
                             ActionButton {
+                                objectName: "activeMaskOperationIntersectButton"
                                 Layout.fillWidth: true
                                 text: "Intersect"
                                 active: editorPreview.activeMaskOperation === "intersect"
@@ -1753,12 +3341,54 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth: true
                             spacing: 8
+                            visible: editorPreview.activeMaskToolRole !== "retouch" &&
+                                     editorPreview.activeMaskKind !== "brush"
 
                             ActionButton {
+                                objectName: "activeMaskOperationExcludeButton"
                                 Layout.fillWidth: true
-                                text: editorPreview.activeMaskEnabled ? "Enabled" : "Disabled"
+                                text: "Exclude"
+                                active: editorPreview.activeMaskOperation === "exclude"
+                                onClicked: editorPreview.activeMaskOperation = "exclude"
+                            }
+
+                            ActionButton {
+                                objectName: "activeMaskOperationReplaceButton"
+                                Layout.fillWidth: true
+                                text: "Replace"
+                                active: editorPreview.activeMaskOperation === "replace"
+                                onClicked: editorPreview.activeMaskOperation = "replace"
+                            }
+
+                            ActionButton {
+                                objectName: "activeMaskOperationUnionButton"
+                                Layout.fillWidth: true
+                                text: "Union"
+                                active: editorPreview.activeMaskOperation === "union"
+                                onClicked: editorPreview.activeMaskOperation = "union"
+                            }
+                        }
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            ActionButton {
+                                objectName: "activeMaskHideButton"
+                                Layout.fillWidth: true
+                                text: editorPreview.activeMaskEnabled ? "Hide" : "Show"
                                 active: editorPreview.activeMaskEnabled
+                                enabled: !editorPreview.activeMaskLocked
                                 onClicked: editorPreview.activeMaskEnabled = !editorPreview.activeMaskEnabled
+                            }
+
+                            ActionButton {
+                                objectName: "activeMaskLockButton"
+                                Layout.fillWidth: true
+                                text: editorPreview.activeMaskLocked ? "Unlock" : "Lock"
+                                active: editorPreview.activeMaskLocked
+                                accent: editorPreview.activeMaskLocked ? "#d98962" : root.activeMaskAccent
+                                onClicked: editorPreview.activeMaskLocked = !editorPreview.activeMaskLocked
                             }
 
                             Label {
@@ -1780,7 +3410,7 @@ Rectangle {
                         Layout.fillWidth: true
                         title: "Quick Actions"
                         subtitle: "Selection tools first, then precise tuning only if needed."
-                        visible: root.activeMaskSupportsSelectionRefine()
+                        visible: root.maskContextVisible("refine") && root.activeMaskSupportsSelectionRefine()
 
                         GridLayout {
                             Layout.fillWidth: true
@@ -1789,6 +3419,7 @@ Rectangle {
                             rowSpacing: 8
 
                             ActionButton {
+                                objectName: "activeMaskInvertButton"
                                 Layout.fillWidth: true
                                 text: "Invert"
                                 iconName: "invert"
@@ -1799,15 +3430,49 @@ Rectangle {
                             ActionButton {
                                 Layout.fillWidth: true
                                 text: "Reset Edge"
-                                onClicked: {
-                                    editorPreview.activeMaskSelectionInverted = false
-                                    editorPreview.activeMaskSelectionExpand = 0
-                                    editorPreview.activeMaskSelectionSmooth = 0
-                                    editorPreview.activeMaskSelectionFineEdge = 0
-                                    editorPreview.activeMaskSelectionEdgeContrast = 0
-                                    editorPreview.activeMaskSelectionDecontaminate = 0
-                                    editorPreview.activeMaskFeather = root.activeMaskResetFeather()
-                                }
+                                tooltipText: "Reset matte refinement while preserving the source geometry and local adjustments."
+                                onClicked: editorPreview.resetActiveMaskRefinement()
+                            }
+
+                            ActionButton {
+                                objectName: "maskViewShowOriginalRefinementButton"
+                                Layout.fillWidth: true
+                                text: "Show Original"
+                                iconName: "compare"
+                                active: editorPreview.maskRefinementPreviewMode === "original"
+                                tooltipText: "Preview this selection before edge refinement without changing the recipe."
+                                onClicked: editorPreview.maskRefinementPreviewMode = "original"
+                            }
+
+                            ActionButton {
+                                objectName: "maskViewShowRefinedRefinementButton"
+                                Layout.fillWidth: true
+                                text: "Show Refined"
+                                iconName: "target"
+                                active: editorPreview.maskRefinementPreviewMode !== "original"
+                                tooltipText: "Preview this selection with current edge refinement."
+                                onClicked: editorPreview.maskRefinementPreviewMode = "refined"
+                            }
+
+                            ActionButton {
+                                objectName: "maskViewHighQualityRefinementPreviewButton"
+                                Layout.fillWidth: true
+                                text: "High Quality"
+                                iconName: "sparkles"
+                                active: editorPreview.maskRefinementHighQualityPreview
+                                tooltipText: "Use a higher-resolution selection refinement preview for expensive edge checks."
+                                onClicked: editorPreview.maskRefinementHighQualityPreview = !editorPreview.maskRefinementHighQualityPreview
+                            }
+
+                            ActionButton {
+                                objectName: "maskViewRefinementEdgePreviewButton"
+                                visible: false
+                                Layout.fillWidth: true
+                                text: "Refine Edge"
+                                iconName: "focus-frame"
+                                active: false
+                                enabled: false
+                                tooltipText: "Show only the matte pixels changed by current refinement controls."
                             }
 
                             ActionButton {
@@ -1887,7 +3552,7 @@ Rectangle {
                             visible: true
                             text: editorPreview.activeMaskSelectionInverted
                                   ? "Selection is inverted. Image adjustments and removal now target everything outside the visible boundary."
-                                  : "Pick with Smart Select or draw a shape, then use Refine +/- or quick edge actions before touching adjustments."
+                                  : "Pick with " + root.smartSelectionRuntimeLabel() + " or draw a shape, then use Refine +/- or quick edge actions before touching adjustments."
                             wrapMode: Text.WordWrap
                             color: "#8f98a2"
                             font.family: "Avenir Next"
@@ -1897,15 +3562,19 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "Fine Tune"
-                        subtitle: "Precise edge controls when the quick actions are not enough."
-                        visible: root.activeMaskSupportsSelectionRefine()
+                        title: root.activeRefineEffectCount() > 0
+                               ? "Fine Tune · " + root.activeRefineEffectCount().toString() + " active"
+                               : "Fine Tune"
+                        subtitle: root.activeRefineEffectCount() > 0
+                                  ? root.activeRefineEffectCount().toString() + " advanced refine changes active."
+                                  : "Advanced refinement is collapsed until needed."
+                        visible: root.maskContextVisible("refine") && root.activeMaskSupportsSelectionRefine()
                         expandable: true
                         expanded: false
 
                         InspectorSlider {
                             Layout.fillWidth: true
-                            label: "Expand / Contract"
+                            label: "Shift Edge"
                             valueText: Math.round(editorPreview.activeMaskSelectionExpand).toString()
                             from: -100
                             to: 100
@@ -1950,7 +3619,7 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
-                            label: "Edge Contrast"
+                            label: "Contrast Edge"
                             valueText: Math.round(editorPreview.activeMaskSelectionEdgeContrast).toString()
                             from: 0
                             to: 100
@@ -1972,14 +3641,43 @@ Rectangle {
                     }
 
                     InspectorSection {
+                        objectName: "activeMaskAdjustmentSection"
                         Layout.fillWidth: true
                         title: "Adjustment"
                         subtitle: root.activeMaskHasAdjustments()
-                                  ? "The active mask is modifying tone, color, or removal."
-                                  : "Collapsed until the active mask actually needs image adjustments."
+                                  ? "The active selection is modifying tone, color, or removal."
+                                  : "Collapsed until the active selection actually needs image adjustments."
                         expandable: true
                         expanded: root.activeMaskHasAdjustments()
-                        visible: editorPreview.hasActiveMask
+                        visible: root.maskContextVisible("refine") && editorPreview.hasActiveMask
+
+                        RowLayout {
+                            objectName: "maskAdjustToneGroup"
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Tone"
+                                color: "#aeb7c1"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            ActionButton {
+                                objectName: "maskAdjustToneBeforeAfterButton"
+                                compact: true
+                                showText: false
+                                iconName: root.maskCompareGroupActive("tone") ? "hidden" : "visible"
+                                active: root.maskCompareGroupActive("tone")
+                                enabled: editorPreview.hasActiveMask
+                                tooltipText: root.maskCompareGroupActive("tone")
+                                             ? "Restore local Tone in before/after."
+                                             : "Compare before and after for local Tone without changing values."
+                                onClicked: root.toggleMaskCompareGroup("tone")
+                            }
+                        }
 
                         InspectorSlider {
                             Layout.fillWidth: true
@@ -1990,6 +3688,34 @@ Rectangle {
                             value: editorPreview.activeMaskExposure
                             onValueDragged: function(value) { editorPreview.activeMaskExposure = value }
                             onResetRequested: editorPreview.activeMaskExposure = 0
+                        }
+
+                        RowLayout {
+                            objectName: "maskAdjustColorGroup"
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Color"
+                                color: "#aeb7c1"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            ActionButton {
+                                objectName: "maskAdjustColorBeforeAfterButton"
+                                compact: true
+                                showText: false
+                                iconName: root.maskCompareGroupActive("color") ? "hidden" : "visible"
+                                active: root.maskCompareGroupActive("color")
+                                enabled: editorPreview.hasActiveMask
+                                tooltipText: root.maskCompareGroupActive("color")
+                                             ? "Restore local Color in before/after."
+                                             : "Compare before and after for local Color without changing values."
+                                onClicked: root.toggleMaskCompareGroup("color")
+                            }
                         }
 
                         InspectorSlider {
@@ -2012,6 +3738,34 @@ Rectangle {
                             value: editorPreview.activeMaskHueShift
                             onValueDragged: function(value) { editorPreview.activeMaskHueShift = value }
                             onResetRequested: editorPreview.activeMaskHueShift = 0
+                        }
+
+                        RowLayout {
+                            objectName: "maskAdjustPresenceGroup"
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Presence"
+                                color: "#aeb7c1"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            ActionButton {
+                                objectName: "maskAdjustPresenceBeforeAfterButton"
+                                compact: true
+                                showText: false
+                                iconName: root.maskCompareGroupActive("presence") ? "hidden" : "visible"
+                                active: root.maskCompareGroupActive("presence")
+                                enabled: editorPreview.hasActiveMask
+                                tooltipText: root.maskCompareGroupActive("presence")
+                                             ? "Restore local Presence in before/after."
+                                             : "Compare before and after for local Presence without changing values."
+                                onClicked: root.toggleMaskCompareGroup("presence")
+                            }
                         }
 
                         InspectorSlider {
@@ -2048,6 +3802,34 @@ Rectangle {
                             onResetRequested: editorPreview.activeMaskColorizeStrength = 0
                         }
 
+                        RowLayout {
+                            objectName: "maskAdjustEffectsGroup"
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Effects"
+                                color: "#aeb7c1"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            ActionButton {
+                                objectName: "maskAdjustEffectsBeforeAfterButton"
+                                compact: true
+                                showText: false
+                                iconName: root.maskCompareGroupActive("effects") ? "hidden" : "visible"
+                                active: root.maskCompareGroupActive("effects")
+                                enabled: editorPreview.hasActiveMask
+                                tooltipText: root.maskCompareGroupActive("effects")
+                                             ? "Restore local Effects in before/after."
+                                             : "Compare before and after for local Effects without changing values."
+                                onClicked: root.toggleMaskCompareGroup("effects")
+                            }
+                        }
+
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Remove"
@@ -2058,12 +3840,68 @@ Rectangle {
                             onValueDragged: function(value) { editorPreview.activeMaskRemoveStrength = value }
                             onResetRequested: editorPreview.activeMaskRemoveStrength = 0
                         }
+
+                        RowLayout {
+                            objectName: "maskAdjustDetailGroup"
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskRetouchMode === "heal"
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: "Detail"
+                                color: "#aeb7c1"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                                font.weight: Font.DemiBold
+                            }
+
+                            ActionButton {
+                                objectName: "maskAdjustDetailBeforeAfterButton"
+                                compact: true
+                                showText: false
+                                iconName: root.maskCompareGroupActive("detail") ? "hidden" : "visible"
+                                active: root.maskCompareGroupActive("detail")
+                                enabled: editorPreview.hasActiveMask
+                                tooltipText: root.maskCompareGroupActive("detail")
+                                             ? "Restore local Detail in before/after."
+                                             : "Compare before and after for local Detail without changing values."
+                                onClicked: root.toggleMaskCompareGroup("detail")
+                            }
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskRetouchMode === "heal"
+                            label: "Heal Texture"
+                            valueText: Math.round(editorPreview.activeMaskHealTextureBlend * 100).toString() + "%"
+                            from: 0
+                            to: 1
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskHealTextureBlend
+                            onValueDragged: function(value) { editorPreview.activeMaskHealTextureBlend = value }
+                            onResetRequested: editorPreview.activeMaskHealTextureBlend = 0.68
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskRetouchMode === "heal"
+                            label: "Heal Color"
+                            valueText: Math.round(editorPreview.activeMaskHealColorBlend * 100).toString() + "%"
+                            from: 0
+                            to: 1
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskHealColorBlend
+                            onValueDragged: function(value) { editorPreview.activeMaskHealColorBlend = value }
+                            onResetRequested: editorPreview.activeMaskHealColorBlend = 0.46
+                        }
                     }
 
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Shape"
-                        visible: editorPreview.hasActiveMask &&
+                        visible: root.maskContextVisible("refine") &&
+                                 editorPreview.hasActiveMask &&
                                  (editorPreview.activeMaskKind === "linear" || editorPreview.activeMaskKind === "radial")
 
                         InspectorSlider {
@@ -2147,7 +3985,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Brush"
-                        visible: editorPreview.activeMaskKind === "brush"
+                        visible: root.maskContextVisible("brush")
 
                         Label {
                             Layout.fillWidth: true
@@ -2220,10 +4058,58 @@ Rectangle {
 
                         GridLayout {
                             Layout.fillWidth: true
+                            columns: 3
+                            columnSpacing: 8
+                            rowSpacing: 8
+                            visible: editorPreview.activeMaskKind === "brush"
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Save Custom"
+                                compact: true
+                                onClicked: editorPreview.saveActiveMaskBrushPreset("Custom Brush", true)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Delete Custom"
+                                compact: true
+                                enabled: editorPreview.isCustomBrushPreset(editorPreview.activeMaskBrushPreset)
+                                onClicked: editorPreview.deleteCustomBrushPreset(editorPreview.activeMaskBrushPreset)
+                            }
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: "Reset Custom"
+                                compact: true
+                                onClicked: editorPreview.resetCustomBrushPresets()
+                            }
+                        }
+
+                        GridLayout {
+                            Layout.fillWidth: true
                             columns: 2
                             columnSpacing: 8
                             rowSpacing: 8
                             visible: editorPreview.activeMaskRetouchMode === "clone"
+
+                            ActionButton {
+                                Layout.fillWidth: true
+                                text: editorPreview.activeMaskCloneAligned ? "Aligned" : "Non-aligned"
+                                iconName: "compare"
+                                active: editorPreview.activeMaskCloneAligned
+                                onClicked: editorPreview.activeMaskCloneAligned = !editorPreview.activeMaskCloneAligned
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: editorPreview.activeMaskCloneScale.toFixed(2) + "x / " +
+                                      Math.round(editorPreview.activeMaskCloneRotation).toString() + "°"
+                                horizontalAlignment: Text.AlignRight
+                                color: "#8f98a2"
+                                font.family: "Avenir Next"
+                                font.pixelSize: 11
+                            }
 
                             ActionButton {
                                 Layout.fillWidth: true
@@ -2293,7 +4179,7 @@ Rectangle {
                         InspectorSlider {
                             Layout.fillWidth: true
                             label: "Brush Spacing"
-                            valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "%"
+                            valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "% of diameter"
                             from: 0.05
                             to: 2.0
                             stepSize: 0.01
@@ -2312,6 +4198,42 @@ Rectangle {
                             value: editorPreview.activeMaskBrushSmoothing
                             onValueDragged: function(value) { editorPreview.activeMaskBrushSmoothing = value }
                             onResetRequested: editorPreview.activeMaskBrushSmoothing = 0.0
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Pressure Size"
+                            valueText: Math.round(editorPreview.activeMaskBrushPressureSize * 100).toString() + "%"
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushPressureSize
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureSize = value }
+                            onResetRequested: editorPreview.activeMaskBrushPressureSize = 0.65
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Pressure Flow"
+                            valueText: Math.round(editorPreview.activeMaskBrushPressureFlow * 100).toString() + "%"
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushPressureFlow
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureFlow = value }
+                            onResetRequested: editorPreview.activeMaskBrushPressureFlow = 1.0
+                        }
+
+                        InspectorSlider {
+                            Layout.fillWidth: true
+                            label: "Pressure Opacity"
+                            valueText: Math.round(editorPreview.activeMaskBrushPressureOpacity * 100).toString() + "%"
+                            from: 0.0
+                            to: 1.0
+                            stepSize: 0.01
+                            value: editorPreview.activeMaskBrushPressureOpacity
+                            onValueDragged: function(value) { editorPreview.activeMaskBrushPressureOpacity = value }
+                            onResetRequested: editorPreview.activeMaskBrushPressureOpacity = 0.0
                         }
 
                         ActionButton {
@@ -2335,7 +4257,7 @@ Rectangle {
 
                         ActionButton {
                             Layout.fillWidth: true
-                            text: editorPreview.activeMaskBrushAutoMask ? "Auto Mask" : "Freehand Mask"
+                            text: editorPreview.activeMaskBrushAutoMask ? "Edge Aware" : "Freehand"
                             active: editorPreview.activeMaskBrushAutoMask
                             compact: true
                             onClicked: editorPreview.activeMaskBrushAutoMask = !editorPreview.activeMaskBrushAutoMask
@@ -2344,7 +4266,7 @@ Rectangle {
                         InspectorSlider {
                             Layout.fillWidth: true
                             visible: editorPreview.activeMaskBrushAutoMask
-                            label: "Auto-Mask Range"
+                            label: "Edge-Aware Range"
                             valueText: Math.round(editorPreview.activeMaskBrushAutoMaskTolerance * 100).toString() + "%"
                             from: 0.02
                             to: 0.75
@@ -2352,6 +4274,30 @@ Rectangle {
                             value: editorPreview.activeMaskBrushAutoMaskTolerance
                             onValueDragged: function(value) { editorPreview.activeMaskBrushAutoMaskTolerance = value }
                             onResetRequested: editorPreview.activeMaskBrushAutoMaskTolerance = 0.18
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskBrushAutoMask
+                            text: editorPreview.activeMaskBrushAutoMaskContinuousSampling ? "Sample Each Dab" : "Sample First Dab"
+                            active: editorPreview.activeMaskBrushAutoMaskContinuousSampling
+                            compact: true
+                            tooltipText: editorPreview.activeMaskBrushAutoMaskContinuousSampling
+                                         ? "Update the protected color from every dab center during the stroke."
+                                         : "Lock the protected color to the first dab in the stroke."
+                            onClicked: editorPreview.activeMaskBrushAutoMaskContinuousSampling =
+                                       !editorPreview.activeMaskBrushAutoMaskContinuousSampling
+                        }
+
+                        ActionButton {
+                            Layout.fillWidth: true
+                            visible: editorPreview.activeMaskBrushAutoMask
+                            text: "Protect Edges"
+                            active: editorPreview.activeMaskBrushProtectEdges
+                            compact: true
+                            tooltipText: "Tighten edge gating for hair, sky, and building boundaries."
+                            onClicked: editorPreview.activeMaskBrushProtectEdges =
+                                       !editorPreview.activeMaskBrushProtectEdges
                         }
 
                         InspectorSlider {
@@ -2402,7 +4348,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: editorPreview.activeMaskKind === "lasso" ? "Lasso" : "Polygon"
-                        visible: editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso"
+                        visible: root.maskContextVisible("polygon")
 
                         Label {
                             Layout.fillWidth: true
@@ -2442,7 +4388,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Luminance Range"
-                        visible: editorPreview.activeMaskKind === "luminance"
+                        visible: root.maskContextVisible("refine") && editorPreview.activeMaskKind === "luminance"
 
                         InspectorSlider {
                             Layout.fillWidth: true
@@ -2484,7 +4430,7 @@ Rectangle {
                     InspectorSection {
                         Layout.fillWidth: true
                         title: "Color Range"
-                        visible: editorPreview.activeMaskKind === "color"
+                        visible: root.maskContextVisible("refine") && editorPreview.activeMaskKind === "color"
 
                         InspectorSlider {
                             Layout.fillWidth: true
@@ -2549,8 +4495,8 @@ Rectangle {
 
                     InspectorSection {
                         Layout.fillWidth: true
-                        title: "AI Refine"
-                        visible: root.isAiMaskKind(editorPreview.activeMaskKind)
+                        title: "Generated Refine"
+                        visible: root.maskContextVisible("refine") && root.isAiMaskKind(editorPreview.activeMaskKind)
 
                         InspectorSlider {
                             Layout.fillWidth: true
@@ -2567,8 +4513,8 @@ Rectangle {
                         Label {
                             Layout.fillWidth: true
                             text: editorPreview.activeMaskKind === "object"
-                                  ? "Object masks are created by clicking a detected foreground object in the preview."
-                                  : "AI " + root.aiMaskLabel(editorPreview.activeMaskKind).toLowerCase() + " masks are generated automatically from the source image and stay editable as part of the mask stack."
+                                  ? "Object masks are created with " + root.smartSelectionRuntimeLabel() + " in the preview."
+                                  : root.aiMaskLabel(editorPreview.activeMaskKind) + " masks are generated from the source image and stay editable as part of the mask stack."
                             wrapMode: Text.WordWrap
                             color: "#8f98a2"
                             font.family: "Avenir Next"

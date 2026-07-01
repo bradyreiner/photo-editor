@@ -173,6 +173,8 @@ struct PostColorUniforms {
   float grading_hue[3];
   float grading_sat[3];
   float grading_lum[3];
+  float grading_amount;
+  float grading_balance;
   float mixer_hue[8];
   float mixer_sat[8];
   float mixer_lum[8];
@@ -187,7 +189,10 @@ struct PostColorUniforms {
   float color_replacement_source_hue;
   float color_replacement_target_hue;
   float color_replacement_range;
+  float color_replacement_softness;
   float color_replacement_strength;
+  int color_replacement_preserve_luminance;
+  int color_replacement_preserve_saturation;
   int skin_tone_protection_enabled;
   float skin_tone_line_hue;
   float skin_tone_protection_range;
@@ -203,6 +208,8 @@ struct PostColorUniforms {
   int use_blue_curve;
   int curve_lut_size;
   int color_mixer_model;
+  int highlight_chroma_compression_enabled;
+  float output_headroom;
   int width;
   int height;
 };
@@ -364,6 +371,49 @@ static float3 linear_rgb_to_oklab(float3 rgb) {
       0.0259040371f * l_root + 0.7827717662f * m_root - 0.8086757660f * s_root);
 }
 
+static float hue_to_rgb_component(float p, float q, float t) {
+  if (t < 0.0f) {
+    t += 1.0f;
+  }
+  if (t > 1.0f) {
+    t -= 1.0f;
+  }
+  if (t < 1.0f / 6.0f) {
+    return p + (q - p) * 6.0f * t;
+  }
+  if (t < 0.5f) {
+    return q;
+  }
+  if (t < 2.0f / 3.0f) {
+    return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
+  }
+  return p;
+}
+
+static float3 hsl_to_rgb(float hue, float saturation, float lightness) {
+  hue = wrap_unit(hue);
+  saturation = clamp_unit(saturation);
+  lightness = clamp_unit(lightness);
+  if (saturation <= 1.0e-9f) {
+    return float3(lightness);
+  }
+
+  const float q = lightness < 0.5f
+      ? lightness * (1.0f + saturation)
+      : lightness + saturation - lightness * saturation;
+  const float p = 2.0f * lightness - q;
+  return float3(
+      clamp_unit(hue_to_rgb_component(p, q, hue + 1.0f / 3.0f)),
+      clamp_unit(hue_to_rgb_component(p, q, hue)),
+      clamp_unit(hue_to_rgb_component(p, q, hue - 1.0f / 3.0f)));
+}
+
+static float oklab_hue_for_rgb_hue(float hue_unit) {
+  const float3 target_rgb = hsl_to_rgb(hue_unit, 1.0f, 0.5f);
+  const float3 target_oklab = linear_rgb_to_oklab(target_rgb);
+  return wrap_radians(atan2(target_oklab.z, target_oklab.y));
+}
+
 static float3 oklab_to_linear_rgb(float lightness, float a, float b) {
   const float l_root = lightness + 0.3963377774f * a + 0.2158037573f * b;
   const float m_root = lightness - 0.1055613458f * a - 0.0638541728f * b;
@@ -467,17 +517,32 @@ static float bell_weight(float value, float center, float radius) {
   return t * t * (3.0f - 2.0f * t);
 }
 
-static float apply_pivoted_contrast(float value, float amount) {
-  constexpr float kMiddleGray = 0.18f;
-  const float safe_value = max(1.0e-6f, value);
-  const float contrast = clamp(1.0f + amount * 0.48f, 0.72f, 1.52f);
-  const float contrasted = kMiddleGray * pow(safe_value / kMiddleGray, contrast);
-  const float stop_distance = fabs(log2(safe_value / kMiddleGray));
-  const float edge_protection =
-      smoothstep(1.10f, amount >= 0.0f ? 3.20f : 2.70f, stop_distance);
-  const float blend_to_original =
-      clamp(edge_protection * (0.40f + fabs(amount) * 0.38f), 0.0f, 0.82f);
-  return mix(contrasted, safe_value, blend_to_original);
+static float gentle_signed_response(float control) {
+  const float clamped = clamp(control, -1.0f, 1.0f);
+  return copysign(pow(fabs(clamped), 1.18f), clamped);
+}
+
+static float interpolate_tone_anchors(float stops, thread const float* input_stops, thread const float* output_stops) {
+  if (stops <= input_stops[0]) {
+    return stops + (output_stops[0] - input_stops[0]);
+  }
+  if (stops >= input_stops[6]) {
+    return stops + (output_stops[6] - input_stops[6]) * 0.72f;
+  }
+
+  for (int index = 0; index < 6; ++index) {
+    if (stops < input_stops[index] || stops > input_stops[index + 1]) {
+      continue;
+    }
+    const float span = max(1.0e-6f, input_stops[index + 1] - input_stops[index]);
+    const float t = clamp_unit((stops - input_stops[index]) / span);
+    const float eased = t * t * (3.0f - 2.0f * t);
+    const float left_delta = output_stops[index] - input_stops[index];
+    const float right_delta = output_stops[index + 1] - input_stops[index + 1];
+    return stops + mix(left_delta, right_delta, eased);
+  }
+
+  return stops;
 }
 
 static float apply_filmic_toe(float value, float amount) {
@@ -520,8 +585,8 @@ static float apply_levels(float value, constant PreToneUniforms& uniforms) {
   if (black_control <= 1.0e-6f && white_control <= 1.0e-6f && fabs(gamma_control) <= 1.0e-6f) {
     return value;
   }
-  const float input_black = black_control * 0.35f;
-  const float input_white = max(input_black + 0.05f, 1.0f - white_control * 0.35f);
+  const float input_black = black_control * 0.95f;
+  const float input_white = max(input_black + 0.01f, 1.0f - white_control * 0.95f);
   const float normalized = max(0.0f, (value - input_black) / (input_white - input_black));
   const float gamma = pow(2.0f, -gamma_control * 1.45f);
   return pow(normalized, gamma);
@@ -537,20 +602,85 @@ static float zone_exposure_delta(float stops, constant PreToneUniforms& uniforms
   return delta;
 }
 
-static float apply_global_tone(float value, constant PreToneUniforms& uniforms) {
-  constexpr float kMiddleGray = 0.18f;
-  float adjusted = max(0.0f, value);
-  adjusted = apply_pivoted_contrast(adjusted, clamp(uniforms.contrast, -1.0f, 1.0f));
+static float apply_zone_exposure(
+    float adjusted_value,
+    float source_value,
+    constant PreToneUniforms& uniforms) {
+  if (fabs(uniforms.zone_deep_shadows) <= 1.0e-6f &&
+      fabs(uniforms.zone_shadows) <= 1.0e-6f &&
+      fabs(uniforms.zone_midtones) <= 1.0e-6f &&
+      fabs(uniforms.zone_lights) <= 1.0e-6f &&
+      fabs(uniforms.zone_highlights) <= 1.0e-6f) {
+    return adjusted_value;
+  }
 
-  const float stops = log2(max(adjusted, 1.0e-6f) / kMiddleGray);
-  float local_exposure_delta = 0.0f;
-  local_exposure_delta += bell_weight(stops, -2.25f, 2.25f) * clamp(uniforms.blacks, -1.0f, 1.0f) * 1.05f;
-  local_exposure_delta += bell_weight(stops, -1.00f, 1.85f) * clamp(uniforms.shadows, -1.0f, 1.0f) * 0.72f;
-  local_exposure_delta += bell_weight(stops, 0.00f, 3.00f) * clamp(uniforms.brightness, -1.0f, 1.0f) * 0.82f;
-  local_exposure_delta += bell_weight(stops, 1.10f, 1.75f) * clamp(uniforms.highlights, -1.0f, 1.0f) * 0.68f;
-  local_exposure_delta += bell_weight(stops, 2.80f, 2.10f) * clamp(uniforms.whites, -1.0f, 1.0f) * 0.96f;
-  local_exposure_delta += zone_exposure_delta(stops, uniforms);
-  adjusted *= pow(2.0f, local_exposure_delta);
+  constexpr float kMiddleGray = 0.18f;
+  const float safe_value = max(1.0e-8f, source_value);
+  const float stops = log2(safe_value / kMiddleGray);
+  const float delta = zone_exposure_delta(stops, uniforms) * 1.15f;
+  return max(0.0f, adjusted_value * exp2(delta));
+}
+
+static float apply_photographic_tone_curve(float value, constant PreToneUniforms& uniforms) {
+  constexpr float kMiddleGray = 0.18f;
+  if (fabs(uniforms.contrast) <= 1.0e-6f &&
+      fabs(uniforms.highlights) <= 1.0e-6f &&
+      fabs(uniforms.shadows) <= 1.0e-6f &&
+      fabs(uniforms.whites) <= 1.0e-6f &&
+      fabs(uniforms.blacks) <= 1.0e-6f &&
+      fabs(uniforms.brightness) <= 1.0e-6f &&
+      fabs(uniforms.zone_deep_shadows) <= 1.0e-6f &&
+      fabs(uniforms.zone_shadows) <= 1.0e-6f &&
+      fabs(uniforms.zone_midtones) <= 1.0e-6f &&
+      fabs(uniforms.zone_lights) <= 1.0e-6f &&
+      fabs(uniforms.zone_highlights) <= 1.0e-6f) {
+    return value;
+  }
+  const float safe_value = max(1.0e-8f, value);
+  const float input_stop = log2(safe_value / kMiddleGray);
+  const float contrast = gentle_signed_response(clamp(uniforms.contrast, -1.0f, 1.0f));
+  const float highlights = gentle_signed_response(clamp(uniforms.highlights, -1.0f, 1.0f));
+  const float shadows = gentle_signed_response(clamp(uniforms.shadows, -1.0f, 1.0f));
+  const float whites = gentle_signed_response(clamp(uniforms.whites, -1.0f, 1.0f));
+  const float blacks = gentle_signed_response(clamp(uniforms.blacks, -1.0f, 1.0f));
+  const float brightness = gentle_signed_response(clamp(uniforms.brightness, -1.0f, 1.0f));
+
+  float input_stops[7] = {-8.0f, -4.6f, -2.15f, 0.0f, 1.15f, 2.45f, 5.25f};
+  float contrast_weights[7] = {0.05f, 0.20f, 0.62f, 0.0f, 1.0f, 0.04f, 0.02f};
+  float output_stops[7];
+  const float contrast_scale = contrast >= 0.0f ? 0.44f : 0.58f;
+  for (int index = 0; index < 7; ++index) {
+    const float local_slope =
+        clamp(1.0f + contrast * contrast_scale * contrast_weights[index], 0.56f, 1.42f);
+    output_stops[index] = input_stops[index] * local_slope;
+  }
+
+  output_stops[0] += blacks * 1.35f;
+  output_stops[1] += blacks * 0.68f + shadows * 1.35f;
+  output_stops[2] += shadows * 1.10f + blacks * 0.18f;
+  output_stops[3] += brightness * 0.90f;
+  output_stops[4] += brightness * 0.65f + highlights * 0.18f;
+  output_stops[5] += highlights * 0.70f + whites * 0.26f;
+  output_stops[6] += whites * 1.02f + highlights * 0.32f;
+
+  const float zone_offset = zone_exposure_delta(input_stop, uniforms) * 0.75f;
+  output_stops[1] += zone_offset * 0.55f;
+  output_stops[2] += zone_offset * 0.82f;
+  output_stops[3] += zone_offset * 0.74f;
+  output_stops[4] += zone_offset * 0.68f;
+  output_stops[5] += zone_offset * 0.60f;
+
+  for (int index = 1; index < 7; ++index) {
+    output_stops[index] = max(output_stops[index], output_stops[index - 1] + 0.18f);
+  }
+
+  return kMiddleGray * pow(2.0f, interpolate_tone_anchors(input_stop, input_stops, output_stops));
+}
+
+static float apply_global_tone(float value, constant PreToneUniforms& uniforms) {
+  const float safe_value = max(0.0f, value);
+  float adjusted = apply_photographic_tone_curve(safe_value, uniforms);
+  adjusted = apply_zone_exposure(adjusted, safe_value, uniforms);
   adjusted = apply_adaptive_contrast(adjusted, uniforms.adaptive_contrast);
   adjusted = apply_filmic_toe(adjusted, uniforms.filmic_toe);
   return apply_levels(adjusted, uniforms);
@@ -579,6 +709,29 @@ static float circular_weight(float value, float center, float radius) {
   return t * t * (3.0f - 2.0f * t);
 }
 
+static float circular_feathered_selection_weight(
+    float value,
+    float center,
+    float radius,
+    float softness) {
+  if (radius <= 0.0f) {
+    return 0.0f;
+  }
+
+  float distance = fabs(value - center);
+  distance = min(distance, 1.0f - distance);
+  if (distance >= radius) {
+    return 0.0f;
+  }
+
+  const float feather = clamp(softness, 0.0f, 1.0f) * radius;
+  const float inner_radius = radius - feather;
+  if (distance <= inner_radius || feather <= 1.0e-6f) {
+    return 1.0f;
+  }
+  return 1.0f - smoothstep(inner_radius, radius, distance);
+}
+
 static float skin_tone_protection_scale(float normalized_hue, float chroma, constant PostColorUniforms& uniforms) {
   if (uniforms.skin_tone_protection_enabled == 0 || uniforms.skin_tone_protection_strength <= 1.0e-6f) {
     return 1.0f;
@@ -589,6 +742,23 @@ static float skin_tone_protection_scale(float normalized_hue, float chroma, cons
       smoothstep(0.02f, 0.12f, chroma) *
       clamp(uniforms.skin_tone_protection_strength / 100.0f, 0.0f, 1.0f);
   return 1.0f - 0.95f * weight;
+}
+
+static float default_skin_chroma_protection(float normalized_hue, float chroma) {
+  return 1.0f - 0.38f * circular_weight(normalized_hue, 0.08f, 0.15f) *
+                      smoothstep(0.018f, 0.13f, chroma);
+}
+
+static float tone_chroma_protection(float lightness) {
+  const float shadow_protection = smoothstep(0.05f, 0.20f, lightness);
+  const float highlight_protection = 1.0f - smoothstep(0.78f, 0.98f, lightness);
+  return clamp(shadow_protection * highlight_protection, 0.0f, 1.0f);
+}
+
+static float highlight_chroma_compression_scale(float lightness, float chroma) {
+  const float highlight_weight = smoothstep(0.78f, 0.98f, lightness);
+  const float chroma_weight = smoothstep(0.035f, 0.22f, chroma);
+  return clamp(1.0f - 0.42f * highlight_weight * chroma_weight, 0.52f, 1.0f);
 }
 
 static int color_harmony_anchor_count(int mode) {
@@ -820,17 +990,43 @@ kernel void apply_spatial_tone(
 
   const float current_luminance = luminance_buffer[gid];
   const float midtone_weight = bell_weight(current_luminance, 0.5f, 0.42f);
+  const float shadow_guard = smoothstep(0.025f, 0.12f, current_luminance);
   const float highlight_headroom = 1.0f - smoothstep(0.74f, 0.98f, current_luminance);
-  const float texture_signal = current_luminance - texture_blur[gid];
-  const float clarity_signal = current_luminance - clarity_blur[gid];
-  const float haze_signal = clamp(current_luminance - haze_blur[gid], -0.12f, 0.12f);
-  const float texture_gain = uniforms.texture_strength >= 0.0f ? 0.82f : 0.32f;
-  const float clarity_gain = uniforms.clarity_strength >= 0.0f ? 0.82f : 0.24f;
-  const float dehaze_gain = uniforms.dehaze_strength >= 0.0f ? 0.55f : 0.20f;
+  const float tone_guard = shadow_guard * highlight_headroom;
+  const float texture_gain = uniforms.texture_strength >= 0.0f ? 1.30f : 0.48f;
+  const float clarity_gain = uniforms.clarity_strength >= 0.0f ? 1.08f : 0.46f;
+  const float dehaze_gain = uniforms.dehaze_strength >= 0.0f ? 0.95f : 0.36f;
   float target_luminance = current_luminance;
-  target_luminance += uniforms.texture_strength * texture_signal * (0.30f + midtone_weight * 0.55f) * texture_gain;
-  target_luminance += uniforms.clarity_strength * clarity_signal * midtone_weight * highlight_headroom * clarity_gain;
-  target_luminance += uniforms.dehaze_strength * haze_signal * (0.22f + midtone_weight * 0.48f) * highlight_headroom * dehaze_gain;
+  if (abs(uniforms.texture_strength) > 1.0e-6f) {
+    const float texture_signal = current_luminance - texture_blur[gid];
+    const float broad_edge_signal = current_luminance - clarity_blur[gid];
+    const float broad_edge_guard = 1.0f - smoothstep(0.08f, 0.36f, abs(broad_edge_signal)) * 0.72f;
+    target_luminance +=
+        uniforms.texture_strength * texture_signal * (0.46f + midtone_weight * 0.70f) *
+        broad_edge_guard * tone_guard * texture_gain;
+  }
+  if (abs(uniforms.clarity_strength) > 1.0e-6f) {
+    const float clarity_signal = current_luminance - clarity_blur[gid];
+    const float edge_limit = 1.0f - smoothstep(0.24f, 0.58f, abs(clarity_signal)) * 0.28f;
+    target_luminance +=
+        uniforms.clarity_strength * clarity_signal * (0.36f + midtone_weight * 0.82f) *
+        tone_guard * edge_limit * clarity_gain;
+  }
+  if (abs(uniforms.dehaze_strength) > 1.0e-6f) {
+    const float haze_signal = clamp(current_luminance - haze_blur[gid], -0.18f, 0.18f);
+    target_luminance +=
+        uniforms.dehaze_strength * haze_signal * (0.34f + midtone_weight * 0.66f) *
+        highlight_headroom * dehaze_gain;
+    const float haze_shadow_weight = 1.0f - smoothstep(0.14f, 0.46f, current_luminance);
+    const float haze_structure_weight = smoothstep(0.008f, 0.065f, abs(haze_signal));
+    if (uniforms.dehaze_strength > 0.0f) {
+      target_luminance *= max(
+          0.0f,
+          1.0f - uniforms.dehaze_strength * haze_shadow_weight * haze_structure_weight * 0.16f);
+    } else {
+      target_luminance += -uniforms.dehaze_strength * haze_shadow_weight * haze_structure_weight * 0.035f;
+    }
+  }
   pixels[gid] = scale_pixel_to_luminance(pixels[gid], target_luminance);
 }
 
@@ -897,18 +1093,27 @@ kernel void apply_post_color(
   float hue = wrap_radians(atan2(oklab.z, oklab.y));
 
   float explicit_skin_protection = 1.0f;
+  float replacement_luminance_reference = -1.0f;
+  float replacement_luminance_weight = 0.0f;
   if (chroma > 1.0e-6f) {
     const float normalized_hue = wrap_unit(hue / 6.28318530717958647692f);
-    const float low_chroma_weight = 1.0f - smoothstep(0.03f, 0.18f, chroma);
-    const float mid_lightness_weight = 1.0f - smoothstep(0.16f, 0.50f, fabs(lightness - 0.55f));
+    const float low_chroma_weight = 1.0f - smoothstep(0.035f, 0.24f, chroma);
+    const float mid_lightness_weight = 1.0f - smoothstep(0.18f, 0.48f, fabs(lightness - 0.56f));
+    const float tonal_protection = tone_chroma_protection(lightness);
     explicit_skin_protection = skin_tone_protection_scale(normalized_hue, chroma, uniforms);
     const float skin_protection =
-        (1.0f - 0.30f * circular_weight(normalized_hue, 0.08f, 0.15f) * smoothstep(0.02f, 0.12f, chroma)) *
+        default_skin_chroma_protection(normalized_hue, chroma) *
         explicit_skin_protection;
     chroma *= max(0.0f, 1.0f + uniforms.vibrance_strength * low_chroma_weight * mid_lightness_weight *
-                                skin_protection * 1.30f);
-    chroma *= max(0.0f, 1.0f + uniforms.saturation_strength);
+                                tonal_protection * skin_protection * 0.82f);
     chroma *= max(0.0f, 1.0f + max(0.0f, uniforms.dehaze_strength) * 0.10f);
+    const float peak_channel = max(pixel.r, max(pixel.g, pixel.b));
+    const bool compress_highlight_chroma =
+        peak_channel > uniforms.output_headroom + 1.0e-5f ||
+        (uniforms.highlight_chroma_compression_enabled != 0 && peak_channel >= 0.98f);
+    if (compress_highlight_chroma) {
+      chroma *= highlight_chroma_compression_scale(lightness, chroma);
+    }
 
     const float mixer_hue_for_selection = (uniforms.color_mixer_model == 1 || uniforms.color_mixer_model == 2)
         ? rgb_hue_for_selection(pixel.rgb)
@@ -944,14 +1149,28 @@ kernel void apply_post_color(
       }
     }
     if (uniforms.color_replacement_enabled != 0 && uniforms.color_replacement_strength > 1.0e-6f) {
+      const float selection_hue = rgb_hue_for_selection(pixel.rgb);
       const float range = clamp(uniforms.color_replacement_range / 100.0f, 0.01f, 1.0f) * 0.50f;
+      const float softness = clamp(uniforms.color_replacement_softness / 100.0f, 0.0f, 1.0f);
       const float replacement_weight =
-          circular_weight(normalized_hue, wrap_unit(uniforms.color_replacement_source_hue), range) *
+          (selection_hue >= 0.0f
+               ? circular_feathered_selection_weight(
+                     selection_hue,
+                     wrap_unit(uniforms.color_replacement_source_hue),
+                     range,
+                     softness)
+               : 0.0f) *
           clamp(uniforms.color_replacement_strength / 100.0f, 0.0f, 1.0f) * explicit_skin_protection;
       if (replacement_weight > 1.0e-6f) {
-        const float target_hue = wrap_unit(uniforms.color_replacement_target_hue) * 6.28318530717958647692f;
+        if (uniforms.color_replacement_preserve_luminance != 0) {
+          replacement_luminance_reference = luminance(gamut_fit_oklch(lightness, chroma, hue, pixel.a).rgb);
+          replacement_luminance_weight = replacement_weight;
+        }
+        const float target_hue = oklab_hue_for_rgb_hue(uniforms.color_replacement_target_hue);
         hue = wrap_radians(hue + shortest_angular_delta(hue, target_hue) * replacement_weight);
-        chroma = max(chroma, mix(chroma, 0.16f, replacement_weight));
+        if (uniforms.color_replacement_preserve_saturation == 0) {
+          chroma = max(chroma, mix(chroma, 0.16f, replacement_weight));
+        }
       }
     }
     if (uniforms.color_harmony_enabled != 0 && uniforms.color_harmony_strength > 1.0e-6f) {
@@ -966,8 +1185,10 @@ kernel void apply_post_color(
 
   float grade_a = chroma * cos(hue);
   float grade_b = chroma * sin(hue);
-  const float shadow_weight = 1.0f - smoothstep(0.15f, 0.45f, lightness);
-  const float highlight_weight = smoothstep(0.55f, 0.85f, lightness);
+  const float balance_shift = clamp(uniforms.grading_balance, -1.0f, 1.0f) * 0.18f;
+  const float grading_amount = clamp(uniforms.grading_amount, 0.0f, 1.0f);
+  const float shadow_weight = 1.0f - smoothstep(0.15f - balance_shift, 0.45f - balance_shift, lightness);
+  const float highlight_weight = smoothstep(0.55f - balance_shift, 0.85f - balance_shift, lightness);
   const float midtone_weight = 1.0f - shadow_weight - highlight_weight;
   const float weights[3] = {shadow_weight, max(0.0f, midtone_weight), highlight_weight};
 
@@ -977,19 +1198,45 @@ kernel void apply_post_color(
       continue;
     }
     const float sat_norm = clamp(uniforms.grading_sat[region], -100.0f, 100.0f) / 100.0f;
-    const float hue_rad = clamp(uniforms.grading_hue[region], -100.0f, 100.0f) / 100.0f * 6.28318530717958647692f;
+    const float hue_rad = wrap_unit(uniforms.grading_hue[region]) * 6.28318530717958647692f;
     const float lum_norm = clamp(uniforms.grading_lum[region], -100.0f, 100.0f) / 100.0f;
-    const float intensity = fabs(sat_norm) * 0.18f * weight * explicit_skin_protection;
+    const float scaled_weight = weight * grading_amount;
+    const float intensity = fabs(sat_norm) * 0.18f * scaled_weight * explicit_skin_protection;
     if (intensity > 1.0e-9f) {
       grade_a += intensity * cos(hue_rad);
       grade_b += intensity * sin(hue_rad);
     }
-    lightness = clamp_unit(lightness + lum_norm * 0.20f * weight * explicit_skin_protection);
+    lightness = clamp_unit(lightness + lum_norm * 0.20f * scaled_weight * explicit_skin_protection);
   }
 
   chroma = length(float2(grade_a, grade_b));
   hue = wrap_radians(atan2(grade_b, grade_a));
-  pixels[gid] = gamut_fit_oklch(lightness, chroma, hue, pixel.a);
+  // Vibrance protects source image color before hue-domain tools. Saturation is
+  // final so it controls chroma introduced by color grading too.
+  if (fabs(uniforms.saturation_strength) > 1.0e-9f) {
+    chroma *= uniforms.saturation_strength >= 0.0f
+        ? max(0.0f, 1.0f + uniforms.saturation_strength * 0.85f)
+        : max(0.0f, 1.0f + uniforms.saturation_strength);
+  }
+  float4 output = gamut_fit_oklch(lightness, chroma, hue, pixel.a);
+  if (replacement_luminance_reference >= 0.0f && replacement_luminance_weight > 1.0e-6f) {
+    const float current_luminance = luminance(output.rgb);
+    const float target_luminance = mix(
+        current_luminance,
+        clamp(replacement_luminance_reference, 0.0f, uniforms.output_headroom),
+        clamp(replacement_luminance_weight, 0.0f, 1.0f));
+    output = scale_pixel_to_luminance(output, target_luminance);
+  }
+  const bool grading_adds_chroma =
+      fabs(uniforms.grading_sat[0]) > 1.0e-6f ||
+      fabs(uniforms.grading_sat[1]) > 1.0e-6f ||
+      fabs(uniforms.grading_sat[2]) > 1.0e-6f;
+  if (uniforms.saturation_strength <= -0.999999f && !grading_adds_chroma &&
+      uniforms.color_replacement_enabled == 0) {
+    const float neutral = clamp(luminance(output.rgb), 0.0f, uniforms.output_headroom);
+    output.rgb = float3(neutral);
+  }
+  pixels[gid] = output;
 }
 
 kernel void compute_pre_tone_inputs(

@@ -1,0 +1,172 @@
+{
+  "description": "Reproducible public-source seed corpus for real-image QA. The fetch script downloads these assets into a local corpus directory; image binaries are not checked in.",
+  "manifest_version": 1,
+  "name": "real-image-public-seed-v1",
+  "assets": [
+    {
+      "asset_id": "public-canon-a570-raw",
+      "file_name": "public-canon-a570-raw.dng",
+      "format": "dng",
+      "license": "CC0 / Public Domain Dedication",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "license_verified": true,
+      "media_type": "photo",
+      "recipe": {
+        "exposure": 1.25,
+        "shadows": 44.0,
+        "highlights": -18.0,
+        "contrast": 10.0,
+        "whites": 8.0,
+        "blacks": 14.0,
+        "texture": 12.0,
+        "clarity": 8.0
+      },
+      "review_regions": [
+        {
+          "height": 0.3,
+          "label": "shadow recovery and RAW texture",
+          "width": 0.3,
+          "x": 0.2,
+          "y": 0.5
+        }
+      ],
+      "source_page": "https://raw.pixls.us/data/Canon/Canon%20PowerShot%20A570%20IS/",
+      "source_url": "https://raw.pixls.us/data/Canon/Canon%20PowerShot%20A570%20IS/CRW_1918.DNG",
+      "tags": [
+        "dark_raw",
+        "textured_detail"
+      ]
+    },
+    {
+      "asset_id": "public-iphone-se-raw",
+      "file_name": "public-iphone-se-raw.dng",
+      "format": "dng",
+      "license": "CC0 / Public Domain Dedication",
+      "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "license_verified": true,
+      "media_type": "photo",
+      "recipe": {
+        "exposure": 0.75,
+        "shadows": 34.0,
+        "highlights": -26.0,
+        "contrast": 8.0,
+        "vibrance": 18.0,
+        "rawDetail": 18.0,
+        "rawChromaNoiseReduction": 12.0
+      },
+      "review_regions": [
+        {
+          "height": 0.26,
+          "label": "mobile RAW highlight and shadow rolloff",
+          "width": 0.26,
+          "x": 0.32,
+          "y": 0.42
+        }
+      ],
+      "source_page": "https://raw.pixls.us/data/Apple/iPhone%20SE/",
+      "source_url": "https://raw.pixls.us/data/Apple/iPhone%20SE/A4973FFB-9CBD-4ED8-805D-E30F4AE08A95.dng",
+      "tags": [
+        "dark_raw",
+        "clipped_highlights"
+      ]
+    },
+    {
+      "asset_id": "public-obama-portrait",
+      "file_name": "public-obama-portrait.jpg",
+      "format": "jpg",
+      "license": "Public domain",
+      "license_verified": true,
+      "media_type": "photo",
+      "recipe": {
+        "exposure": 0.05,
+        "contrast": 4.0,
+        "highlights": -8.0,
+        "shadows": 12.0,
+        "vibrance": 12.0,
+        "skinToneProtectionEnabled": true,
+        "skinToneLineHue": 0.08,
+        "skinToneProtectionRange": 34.0,
+        "skinToneProtectionStrength": 60.0
+      },
+      "review_regions": [
+        {
+          "height": 0.28,
+          "label": "skin tone protection",
+          "width": 0.22,
+          "x": 0.39,
+          "y": 0.18
+        }
+      ],
+      "source_page": "https://commons.wikimedia.org/wiki/File:President_Barack_Obama.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/8/8d/President_Barack_Obama.jpg",
+      "tags": [
+        "skin"
+      ]
+    },
+    {
+      "asset_id": "public-queen-valley-sky",
+      "file_name": "public-queen-valley-sky.jpg",
+      "format": "jpg",
+      "license": "Public domain",
+      "license_verified": true,
+      "media_type": "photo",
+      "recipe": {
+        "exposure": -0.15,
+        "highlights": -42.0,
+        "shadows": 18.0,
+        "whites": -10.0,
+        "contrast": 6.0,
+        "vibrance": 20.0,
+        "saturation": 4.0
+      },
+      "review_regions": [
+        {
+          "height": 0.24,
+          "label": "smooth sunset sky gradient",
+          "width": 0.45,
+          "x": 0.2,
+          "y": 0.08
+        }
+      ],
+      "source_page": "https://commons.wikimedia.org/wiki/File:Clouds_in_Queen_Valley_at_sunset_(50066228367).jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/9/95/Clouds_in_Queen_Valley_at_sunset_%2850066228367%29.jpg",
+      "tags": [
+        "smooth_sky",
+        "clipped_highlights"
+      ]
+    },
+    {
+      "asset_id": "public-olympic-foliage",
+      "file_name": "public-olympic-foliage.jpg",
+      "format": "jpg",
+      "license": "Public domain",
+      "license_verified": true,
+      "media_type": "photo",
+      "recipe": {
+        "exposure": 0.2,
+        "contrast": 12.0,
+        "shadows": 20.0,
+        "vibrance": 18.0,
+        "texture": 18.0,
+        "clarity": 10.0,
+        "sharpening": 36.0,
+        "luminanceNr": 8.0
+      },
+      "review_regions": [
+        {
+          "height": 0.35,
+          "label": "green separation and fine foliage detail",
+          "width": 0.35,
+          "x": 0.25,
+          "y": 0.35
+        }
+      ],
+      "source_page": "https://commons.wikimedia.org/wiki/File:Fall_rainforest_moss_foliage_forest_BBaccus_NPS_photo_(23060485072).jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/12/Fall_rainforest_moss_foliage_forest_BBaccus_NPS_photo_%2823060485072%29.jpg",
+      "tags": [
+        "foliage",
+        "textured_detail"
+      ]
+    }
+  ]
+}

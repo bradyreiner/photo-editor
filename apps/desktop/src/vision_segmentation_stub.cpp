@@ -8,6 +8,15 @@ namespace photo_editor::desktop {
 
 namespace {
 
+void attach_fake_confidence_map(SegmentationResult* result) {
+  if (result == nullptr || result->mask_data.isEmpty() || result->width <= 0 || result->height <= 0) {
+    return;
+  }
+  result->confidence_data = result->mask_data;
+  result->confidence_width = result->width;
+  result->confidence_height = result->height;
+}
+
 SegmentationResult fake_foreground_mask(const QImage& source_image) {
   SegmentationResult result;
   if (source_image.isNull() || source_image.width() < 2 || source_image.height() < 2) {
@@ -23,6 +32,7 @@ SegmentationResult fake_foreground_mask(const QImage& source_image) {
       result.mask_data[y * result.width + x] = static_cast<char>(0xff);
     }
   }
+  attach_fake_confidence_map(&result);
   result.success = true;
   return result;
 }
@@ -53,13 +63,37 @@ SegmentationResult fake_sky_mask(const QImage& source_image) {
       result.mask_data[y * result.width + x] = static_cast<char>(0xff);
     }
   }
+  attach_fake_confidence_map(&result);
   result.success = true;
   return result;
 }
 
 QString normalized_semantic_kind(const QString& semantic_kind) {
   const auto normalized = semantic_kind.trimmed().toLower();
-  return normalized == QStringLiteral("person") ? QStringLiteral("people") : normalized;
+  if (normalized == QStringLiteral("person")) {
+    return QStringLiteral("people");
+  }
+  if (normalized == QStringLiteral("mountain")) {
+    return QStringLiteral("mountains");
+  }
+  if (normalized == QStringLiteral("facial hair") ||
+      normalized == QStringLiteral("facial_hair")) {
+    return QStringLiteral("facial-hair");
+  }
+  return normalized;
+}
+
+bool is_supported_semantic_kind(const QString& kind) {
+  return kind == QStringLiteral("subject") ||
+         kind == QStringLiteral("sky") ||
+         kind == QStringLiteral("background");
+}
+
+SegmentationResult unsupported_semantic_result(const QString& kind) {
+  SegmentationResult result;
+  result.error_message =
+      QStringLiteral("No semantic segmentation model is available for %1").arg(kind);
+  return result;
 }
 
 }  // namespace
@@ -70,12 +104,15 @@ SegmentationResult generate_subject_mask(const QImage& source_image) {
   }
 
   SegmentationResult result;
-  result.error_message = QStringLiteral("AI subject masking is only available on macOS 14+");
+  result.error_message = QStringLiteral("Vision subject masking is only available on macOS 14+");
   return result;
 }
 
 SegmentationResult generate_semantic_mask(const QImage& source_image, const QString& semantic_kind) {
   const auto kind = normalized_semantic_kind(semantic_kind);
+  if (!is_supported_semantic_kind(kind)) {
+    return unsupported_semantic_result(kind);
+  }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION")) {
     if (kind == QStringLiteral("sky")) {
       return fake_sky_mask(source_image);
@@ -87,7 +124,7 @@ SegmentationResult generate_semantic_mask(const QImage& source_image, const QStr
   }
 
   SegmentationResult result;
-  result.error_message = QStringLiteral("AI semantic masking is only available on macOS 14+");
+  result.error_message = QStringLiteral("Vision semantic masking is only available on macOS 14+");
   return result;
 }
 
@@ -115,7 +152,7 @@ ForegroundInstanceMap generate_foreground_instance_map(const QImage& source_imag
   }
 
   ForegroundInstanceMap result;
-  result.error_message = QStringLiteral("AI object masking is only available on macOS 14+");
+  result.error_message = QStringLiteral("Vision object masking is only available on macOS 14+");
   return result;
 }
 
@@ -182,7 +219,7 @@ SegmentationResult generate_object_mask(
   }
 
   SegmentationResult result;
-  result.error_message = QStringLiteral("AI object masking is only available on macOS 14+");
+  result.error_message = QStringLiteral("Vision object masking is only available on macOS 14+");
   return result;
 }
 

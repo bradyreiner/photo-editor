@@ -40,6 +40,12 @@ photo_editor_apply_warnings(color_tool_invariant_test)
 
 add_test(NAME color_tool_invariant_test COMMAND color_tool_invariant_test)
 
+add_executable(color_science_sweep_test color_science_sweep_test.cpp)
+target_link_libraries(color_science_sweep_test PRIVATE photo_engine)
+photo_editor_apply_warnings(color_science_sweep_test)
+
+add_test(NAME color_science_sweep_test COMMAND color_science_sweep_test)
+
 add_executable(catalog_contract_smoke_test catalog_contract_smoke_test.cpp)
 target_link_libraries(catalog_contract_smoke_test PRIVATE photo_engine)
 photo_editor_apply_warnings(catalog_contract_smoke_test)
@@ -47,7 +53,7 @@ photo_editor_apply_warnings(catalog_contract_smoke_test)
 add_test(NAME catalog_contract_smoke_test COMMAND catalog_contract_smoke_test)
 
 if(PHOTO_EDITOR_BUILD_DESKTOP)
-  find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Qml Quick QuickControls2 Widgets)
+  find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Multimedia Network Qml Quick QuickControls2 Widgets)
 
   set(photo_editor_desktop_image_decoder_sources
     ../apps/desktop/src/raw_image_decoder_stub.cpp)
@@ -140,6 +146,194 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   photo_editor_apply_warnings(app_bootstrap_test)
 
   add_test(NAME app_bootstrap_test COMMAND app_bootstrap_test)
+
+  add_executable(
+    agent_edit_style_test
+    agent_edit_style_test.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp)
+  target_include_directories(
+    agent_edit_style_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    agent_edit_style_test
+    PRIVATE
+      Qt6::Core)
+  photo_editor_apply_warnings(agent_edit_style_test)
+
+  add_test(NAME agent_edit_style_test COMMAND agent_edit_style_test)
+
+  add_executable(
+    agent_edit_recipe_patch_test
+    agent_edit_recipe_patch_test.cpp
+    ../apps/desktop/src/agent_edit_recipe_patch.h
+    ../apps/desktop/src/agent_edit_recipe_patch.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp)
+  target_include_directories(
+    agent_edit_recipe_patch_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    agent_edit_recipe_patch_test
+    PRIVATE
+      Qt6::Core)
+  photo_editor_apply_warnings(agent_edit_recipe_patch_test)
+
+  add_test(NAME agent_edit_recipe_patch_test COMMAND agent_edit_recipe_patch_test)
+
+  add_executable(
+    agent_local_model_test
+    agent_local_model_test.cpp
+    ../apps/desktop/src/agent_local_model.h
+    ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/agent_edit_recipe_patch.h
+    ../apps/desktop/src/agent_edit_recipe_patch.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp)
+  target_include_directories(
+    agent_local_model_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    agent_local_model_test
+    PRIVATE
+      Qt6::Core)
+  photo_editor_apply_warnings(agent_local_model_test)
+
+  add_test(NAME agent_local_model_test COMMAND agent_local_model_test)
+
+  add_executable(
+    agent_image_validation_test
+    agent_image_validation_test.cpp
+    ../apps/desktop/src/agent_image_validation.h
+    ../apps/desktop/src/agent_image_validation.cpp)
+  target_include_directories(
+    agent_image_validation_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    agent_image_validation_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui)
+  photo_editor_apply_warnings(agent_image_validation_test)
+
+  add_test(NAME agent_image_validation_test COMMAND agent_image_validation_test)
+
+  add_executable(
+    agent_edit_controller_test
+    agent_edit_controller_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/agent_edit_controller.h
+    ../apps/desktop/src/agent_edit_controller.cpp
+    ../apps/desktop/src/agent_edit_recipe_patch.h
+    ../apps/desktop/src/agent_edit_recipe_patch.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp
+    ../apps/desktop/src/agent_image_validation.h
+    ../apps/desktop/src/agent_image_validation.cpp
+    ../apps/desktop/src/agent_local_model.h
+    ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/catalog_asset_model.h
+    ../apps/desktop/src/catalog_asset_model.cpp
+    ../apps/desktop/src/export_job_controller.h
+    ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/job_runner.h
+    ../apps/desktop/src/job_runner.cpp
+    ../apps/desktop/src/job_store.h
+    ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/timeline_asset_store.h
+    ../apps/desktop/src/timeline_asset_store.cpp
+    ../apps/desktop/src/timeline_document_controller.h
+    ../apps/desktop/src/timeline_document_controller.cpp)
+  set_target_properties(agent_edit_controller_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    agent_edit_controller_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    agent_edit_controller_test
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    agent_edit_controller_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Widgets
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(agent_edit_controller_test)
+
+  add_test(NAME agent_edit_controller_test COMMAND agent_edit_controller_test)
+
+  add_executable(
+    photo_automation_bridge_test
+    photo_automation_bridge_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/agent_edit_controller.h
+    ../apps/desktop/src/agent_edit_controller.cpp
+    ../apps/desktop/src/agent_edit_recipe_patch.h
+    ../apps/desktop/src/agent_edit_recipe_patch.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp
+    ../apps/desktop/src/agent_image_validation.h
+    ../apps/desktop/src/agent_image_validation.cpp
+    ../apps/desktop/src/agent_local_model.h
+    ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/catalog_asset_model.h
+    ../apps/desktop/src/catalog_asset_model.cpp
+    ../apps/desktop/src/export_job_controller.h
+    ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/job_runner.h
+    ../apps/desktop/src/job_runner.cpp
+    ../apps/desktop/src/job_store.h
+    ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_automation_bridge.h
+    ../apps/desktop/src/photo_automation_bridge.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/timeline_asset_store.h
+    ../apps/desktop/src/timeline_asset_store.cpp
+    ../apps/desktop/src/timeline_document_controller.h
+    ../apps/desktop/src/timeline_document_controller.cpp)
+  set_target_properties(photo_automation_bridge_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    photo_automation_bridge_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    photo_automation_bridge_test
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    photo_automation_bridge_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Network
+      Qt6::Widgets
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(photo_automation_bridge_test)
+
+  add_test(NAME photo_automation_bridge_test COMMAND photo_automation_bridge_test)
 
   add_executable(
     catalog_asset_model_test
@@ -384,6 +578,115 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   add_test(NAME editor_preview_controller_test COMMAND editor_preview_controller_test)
 
   add_executable(
+    editor_preview_layer_mask_history_test
+    editor_preview_layer_mask_history_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_layer_mask_history_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_layer_mask_history_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_layer_mask_history_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_layer_mask_history_test)
+
+  add_test(NAME editor_preview_layer_mask_history_test COMMAND editor_preview_layer_mask_history_test)
+
+  add_executable(
+    editor_preview_outline_trace_test
+    editor_preview_outline_trace_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_outline_trace_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_outline_trace_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    editor_preview_outline_trace_test
+    PRIVATE
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    editor_preview_outline_trace_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_outline_trace_test)
+
+  add_test(NAME editor_preview_outline_trace_test COMMAND editor_preview_outline_trace_test)
+
+  add_executable(
+    editor_preview_layer_adjustment_test
+    editor_preview_layer_adjustment_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_layer_adjustment_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_layer_adjustment_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_layer_adjustment_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_layer_adjustment_test)
+
+  add_test(NAME editor_preview_layer_adjustment_test COMMAND editor_preview_layer_adjustment_test)
+
+  add_executable(
     preview_benchmark_driver
     preview_benchmark_driver.cpp
     ${photo_editor_desktop_observability_sources}
@@ -466,6 +769,29 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
 
   add_test(NAME render_parity_test COMMAND render_parity_test)
   set_tests_properties(render_parity_test PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(
+    layer_lut_render_parity_test
+    layer_lut_render_parity_test.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources})
+  target_include_directories(
+    layer_lut_render_parity_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    layer_lut_render_parity_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(layer_lut_render_parity_test)
+
+  add_test(NAME layer_lut_render_parity_test COMMAND layer_lut_render_parity_test)
 
   add_executable(
     render_golden_test

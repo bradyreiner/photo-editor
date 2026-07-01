@@ -55,9 +55,15 @@ class JobQueueModel final : public QAbstractListModel {
   Q_INVOKABLE int failedJobCountForKind(const QString& job_kind) const;
   Q_INVOKABLE int totalJobCountForKind(const QString& job_kind) const;
   Q_INVOKABLE QVariantMap latestJobForKind(const QString& job_kind) const;
+  Q_INVOKABLE QVariantMap latestFailedJobForKind(const QString& job_kind) const;
   Q_INVOKABLE QString statusForKind(
       const QString& job_kind,
       const QString& idle_status = QString()) const;
+  Q_INVOKABLE bool canCancelJob(const QString& job_id) const;
+  Q_INVOKABLE QString cancellationPolicySignature(
+      const QString& job_kind,
+      const QString& status) const;
+  Q_INVOKABLE QString cancellationSignature(const QString& job_id) const;
   Q_INVOKABLE bool retryJob(const QString& job_id);
   Q_INVOKABLE bool cancelJob(const QString& job_id);
   Q_INVOKABLE void retryFailedJobs();

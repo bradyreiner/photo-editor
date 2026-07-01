@@ -1,5 +1,6 @@
 # Build products
 build/
+Testing/
 compile_commands.json
 CMakeUserPresets.json
 
@@ -13,6 +14,8 @@ CMakeUserPresets.json
 *.swp
 *.swo
 *.log
+**/__pycache__/
+*.pyc
 
 # Local agent/tool state
 .agents/
@@ -40,6 +43,10 @@ postgres-data/
 *.db
 *.sqlite
 *.sqlite3
+
+# Generated performance outputs and corpora
+perf-artifacts/
+perf-corpora/preview-synthetic-v1/
 
 # Rust
 rust/target/

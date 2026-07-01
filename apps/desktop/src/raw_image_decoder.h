@@ -47,6 +47,10 @@ bool apply_raw_false_color_suppression(QImage* image, double amount);
     int max_edge = 0,
     const RawDecodeSettings& settings = {},
     photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr);
+[[nodiscard]] bool decode_raw_preview_image(
+    const QString& file_path,
+    QImage* image,
+    int max_edge = 0);
 [[nodiscard]] bool decode_raw_linear_image(
     const QString& file_path,
     QImage* image,

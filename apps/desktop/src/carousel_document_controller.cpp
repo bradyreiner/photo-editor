@@ -5,6 +5,7 @@
 #include "raw_image_decoder.h"
 #include "working_image.h"
 
+#include <QBrush>
 #include <QColor>
 #include <QColorSpace>
 #include <QDir>
@@ -17,7 +18,9 @@
 #include <QJsonObject>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QLinearGradient>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -83,6 +86,180 @@ double clamp_unit_interval(double value) {
 
 double clamp_zoom_scale(double value) {
   return qBound(0.6, value, 3.5);
+}
+
+QRectF media_draw_rect(
+    const QSizeF& source_size,
+    const QRectF& frame_rect,
+    CarouselDocumentController::FitMode fit_mode,
+    double media_scale,
+    double offset_x,
+    double offset_y) {
+  if (!source_size.isValid() || source_size.width() <= 0.0 || source_size.height() <= 0.0 ||
+      frame_rect.width() <= 0.0 || frame_rect.height() <= 0.0) {
+    return frame_rect;
+  }
+
+  const auto base_scale = fit_mode == CarouselDocumentController::FitMode::Contain
+                              ? qMin(frame_rect.width() / source_size.width(), frame_rect.height() / source_size.height())
+                              : qMax(frame_rect.width() / source_size.width(), frame_rect.height() / source_size.height());
+  const QSizeF draw_size(
+      qMax(1.0, source_size.width() * base_scale * clamp_zoom_scale(media_scale)),
+      qMax(1.0, source_size.height() * base_scale * clamp_zoom_scale(media_scale)));
+  const auto free_x = frame_rect.width() - draw_size.width();
+  const auto free_y = frame_rect.height() - draw_size.height();
+  return QRectF(
+      frame_rect.left() + free_x * ((clamp_unit_interval(offset_x) + 1.0) / 2.0),
+      frame_rect.top() + free_y * ((clamp_unit_interval(offset_y) + 1.0) / 2.0),
+      draw_size.width(),
+      draw_size.height());
+}
+
+double clamp_layer_opacity(double value) {
+  return qBound(0.0, value, 1.0);
+}
+
+double clamp_text_letter_spacing(double value) {
+  return qBound(0.0, value, 80.0);
+}
+
+QString normalized_shape_kind(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("ellipse") || normalized == QStringLiteral("line") ||
+      normalized == QStringLiteral("arrow")) {
+    return normalized;
+  }
+  return QStringLiteral("rectangle");
+}
+
+QString normalized_media_mask_shape(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("ellipse") || normalized == QStringLiteral("circle") ||
+      normalized == QStringLiteral("oval")) {
+    return QStringLiteral("ellipse");
+  }
+  return QStringLiteral("rectangle");
+}
+
+QString normalized_color_value(const QString& value, const QString& fallback) {
+  const QColor color(value.trimmed());
+  return color.isValid() ? color.name(QColor::HexRgb) : fallback;
+}
+
+QString normalized_background_kind(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("linear-horizontal") ||
+      normalized == QStringLiteral("linear-vertical")) {
+    return normalized;
+  }
+  return QStringLiteral("solid");
+}
+
+QString normalized_text_horizontal_alignment(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("left") || normalized == QStringLiteral("right")) {
+    return normalized;
+  }
+  return QStringLiteral("center");
+}
+
+QString normalized_text_vertical_alignment(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("top") || normalized == QStringLiteral("bottom")) {
+    return normalized;
+  }
+  return QStringLiteral("middle");
+}
+
+QString normalized_text_font_family(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("serif") || normalized == QStringLiteral("mono") ||
+      normalized == QStringLiteral("system")) {
+    return normalized;
+  }
+  return QStringLiteral("display");
+}
+
+QString font_family_for_text_family(const QString& value) {
+  const auto normalized = normalized_text_font_family(value);
+  if (normalized == QStringLiteral("serif")) {
+    return QStringLiteral("Georgia");
+  }
+  if (normalized == QStringLiteral("mono")) {
+    return QStringLiteral("Menlo");
+  }
+  if (normalized == QStringLiteral("system")) {
+    return QStringLiteral("Helvetica Neue");
+  }
+  return QString::fromLatin1(kTextFontFamily);
+}
+
+QString normalized_text_weight(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("normal") || normalized == QStringLiteral("bold") ||
+      normalized == QStringLiteral("black")) {
+    return normalized;
+  }
+  return QStringLiteral("demibold");
+}
+
+QFont::Weight font_weight_for_text_weight(const QString& value) {
+  const auto normalized = normalized_text_weight(value);
+  if (normalized == QStringLiteral("normal")) {
+    return QFont::Normal;
+  }
+  if (normalized == QStringLiteral("bold")) {
+    return QFont::Bold;
+  }
+  if (normalized == QStringLiteral("black")) {
+    return QFont::Black;
+  }
+  return QFont::DemiBold;
+}
+
+int text_alignment_flags(const QString& horizontal_alignment, const QString& vertical_alignment) {
+  int flags = Qt::TextWordWrap;
+  const auto horizontal = normalized_text_horizontal_alignment(horizontal_alignment);
+  if (horizontal == QStringLiteral("left")) {
+    flags |= Qt::AlignLeft;
+  } else if (horizontal == QStringLiteral("right")) {
+    flags |= Qt::AlignRight;
+  } else {
+    flags |= Qt::AlignHCenter;
+  }
+
+  const auto vertical = normalized_text_vertical_alignment(vertical_alignment);
+  if (vertical == QStringLiteral("top")) {
+    flags |= Qt::AlignTop;
+  } else if (vertical == QStringLiteral("bottom")) {
+    flags |= Qt::AlignBottom;
+  } else {
+    flags |= Qt::AlignVCenter;
+  }
+  return flags;
+}
+
+QString normalized_blend_mode(const QString& value) {
+  const auto normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("multiply") || normalized == QStringLiteral("screen") ||
+      normalized == QStringLiteral("overlay")) {
+    return normalized;
+  }
+  return QStringLiteral("normal");
+}
+
+QPainter::CompositionMode composition_mode_for_blend_mode(const QString& value) {
+  const auto normalized = normalized_blend_mode(value);
+  if (normalized == QStringLiteral("multiply")) {
+    return QPainter::CompositionMode_Multiply;
+  }
+  if (normalized == QStringLiteral("screen")) {
+    return QPainter::CompositionMode_Screen;
+  }
+  if (normalized == QStringLiteral("overlay")) {
+    return QPainter::CompositionMode_Overlay;
+  }
+  return QPainter::CompositionMode_SourceOver;
 }
 
 QString normalized_path(const QString& path) {
@@ -324,6 +501,7 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .color_replacement_source_hue = state.color_replacement_source_hue,
       .color_replacement_target_hue = state.color_replacement_target_hue,
       .color_replacement_range = state.color_replacement_range,
+      .color_replacement_softness = state.color_replacement_softness,
       .color_replacement_strength = state.color_replacement_strength,
       .skin_tone_protection_enabled = state.skin_tone_protection_enabled,
       .skin_tone_line_hue = state.skin_tone_line_hue,
@@ -333,6 +511,17 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .color_harmony_mode = state.color_harmony_mode.toStdString(),
       .color_harmony_base_hue = state.color_harmony_base_hue,
       .color_harmony_strength = state.color_harmony_strength,
+      .grading_shadows_hue = state.grading_shadows_hue,
+      .grading_shadows_saturation = state.grading_shadows_saturation,
+      .grading_shadows_luminance = state.grading_shadows_luminance,
+      .grading_midtones_hue = state.grading_midtones_hue,
+      .grading_midtones_saturation = state.grading_midtones_saturation,
+      .grading_midtones_luminance = state.grading_midtones_luminance,
+      .grading_highlights_hue = state.grading_highlights_hue,
+      .grading_highlights_saturation = state.grading_highlights_saturation,
+      .grading_highlights_luminance = state.grading_highlights_luminance,
+      .grading_amount = state.grading_amount,
+      .grading_balance = state.grading_balance,
       .linear_mask_enabled = state.linear_mask_enabled,
       .linear_mask_exposure = state.linear_mask_exposure,
       .linear_mask_temperature = state.linear_mask_temperature,
@@ -372,6 +561,15 @@ QString summary_label(const CarouselDocumentController::CanvasItem& item) {
   if (item.kind == CarouselDocumentController::ItemKind::Text) {
     const auto trimmed = item.text.simplified();
     return trimmed.isEmpty() ? QStringLiteral("Text") : trimmed.left(28);
+  }
+  if (item.kind == CarouselDocumentController::ItemKind::Shape) {
+    if (!item.display_label.trimmed().isEmpty()) {
+      return item.display_label.trimmed();
+    }
+    return item.shape_kind == QStringLiteral("ellipse") ? QStringLiteral("Ellipse")
+           : item.shape_kind == QStringLiteral("line")  ? QStringLiteral("Line")
+           : item.shape_kind == QStringLiteral("arrow") ? QStringLiteral("Arrow")
+                                                        : QStringLiteral("Rectangle");
   }
   if (item.kind == CarouselDocumentController::ItemKind::Video) {
     if (!item.display_label.trimmed().isEmpty()) {
@@ -479,6 +677,7 @@ bool save_legacy_document_payload(const QString& document_id, const QJsonObject&
 
 CarouselDocumentController::CarouselDocumentController(QObject* parent)
     : QObject(parent), session_id_(QUuid::createUuid().toString(QUuid::WithoutBraces)) {
+  slides_.push_back(Slide{});
   preview_debounce_timer_ = new QTimer(this);
   preview_debounce_timer_->setSingleShot(true);
   preview_debounce_timer_->setInterval(200);
@@ -548,7 +747,12 @@ QStringList CarouselDocumentController::slotOptions() const {
 }
 
 void CarouselDocumentController::setDocumentFormat(const QString& document_format) {
-  const auto normalized = document_format == QStringLiteral("5x4") ? QStringLiteral("5x4") : QStringLiteral("4x5");
+  const auto requested = document_format.trimmed().toLower();
+  QString normalized = QStringLiteral("4x5");
+  if (requested == QStringLiteral("5x4") || requested == QStringLiteral("1x1") ||
+      requested == QStringLiteral("9x16")) {
+    normalized = requested;
+  }
   if (document_format_ == normalized) {
     return;
   }
@@ -562,7 +766,10 @@ void CarouselDocumentController::setDocumentFormat(const QString& document_forma
   emitCanvasStateChanged(true);
   setStatus(
       QStringLiteral("Canvas format set to %1.")
-          .arg(normalized == QStringLiteral("4x5") ? QStringLiteral("1080x1350") : QStringLiteral("1350x1080")));
+          .arg(normalized == QStringLiteral("5x4")   ? QStringLiteral("1350x1080")
+               : normalized == QStringLiteral("1x1") ? QStringLiteral("1080x1080")
+               : normalized == QStringLiteral("9x16") ? QStringLiteral("1080x1920")
+                                                       : QStringLiteral("1080x1350")));
 }
 
 void CarouselDocumentController::setDocumentName(const QString& document_name) {
@@ -572,6 +779,51 @@ void CarouselDocumentController::setDocumentName(const QString& document_name) {
   }
   document_name_ = normalized;
   emit documentStateChanged();
+}
+
+void CarouselDocumentController::setCurrentSlideBackgroundColor(const QString& color_value) {
+  auto* slide = slideAt(current_index_);
+  if (slide == nullptr) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, QStringLiteral("#fbf7f1"));
+  if (slide->background_color == normalized && slide->background_kind == QStringLiteral("solid")) {
+    return;
+  }
+
+  slide->background_color = normalized;
+  slide->background_kind = QStringLiteral("solid");
+  refreshPreviewAt(current_index_);
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Canvas background set to %1.").arg(normalized));
+}
+
+void CarouselDocumentController::setCurrentSlideBackgroundGradient(
+    const QString& gradient_kind,
+    const QString& start_color,
+    const QString& end_color) {
+  auto* slide = slideAt(current_index_);
+  if (slide == nullptr) {
+    return;
+  }
+
+  const auto normalized_kind = normalized_background_kind(gradient_kind);
+  const auto normalized_start = normalized_color_value(start_color, slide->background_color);
+  const auto normalized_end = normalized_color_value(end_color, slide->background_secondary_color);
+  if (slide->background_kind == normalized_kind && slide->background_color == normalized_start &&
+      slide->background_secondary_color == normalized_end) {
+    return;
+  }
+
+  slide->background_kind = normalized_kind;
+  slide->background_color = normalized_start;
+  slide->background_secondary_color = normalized_end;
+  refreshPreviewAt(current_index_);
+  emitCanvasStateChanged(true);
+  setStatus(normalized_kind == QStringLiteral("solid")
+                ? QStringLiteral("Canvas background set to %1.").arg(normalized_start)
+                : QStringLiteral("Canvas gradient set."));
 }
 
 void CarouselDocumentController::selectSlide(int index) {
@@ -598,6 +850,82 @@ void CarouselDocumentController::addSlide() {
   refreshPreviews();
   emitCanvasStateChanged(true);
   setStatus(QStringLiteral("Added canvas %1.").arg(current_index_ + 1));
+}
+
+void CarouselDocumentController::duplicateCurrentSlide() {
+  if (current_index_ < 0 || current_index_ >= slides_.size()) {
+    return;
+  }
+
+  int start_index = current_index_;
+  int span = 1;
+  const auto* source_group = groupForIndex(current_index_);
+  if (source_group != nullptr) {
+    start_index = source_group->start_index;
+    span = source_group->span;
+  }
+
+  if (slides_.size() + span > kMaxSlides) {
+    setStatus(QStringLiteral("Instagram carousels are capped at 20 canvases."));
+    return;
+  }
+
+  QVector<Slide> duplicated_slides;
+  duplicated_slides.reserve(span);
+  for (int index = 0; index < span; ++index) {
+    duplicated_slides.push_back(slides_.at(start_index + index));
+    duplicated_slides.last().preview_source.clear();
+  }
+
+  if (source_group != nullptr) {
+    const auto duplicated_group_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    LinkedGroup duplicated_group = *source_group;
+    duplicated_group.id = duplicated_group_id;
+    duplicated_group.start_index = start_index + span;
+    groups_.push_back(duplicated_group);
+    for (auto& slide : duplicated_slides) {
+      slide.linked_group_id = duplicated_group_id;
+    }
+  } else {
+    for (auto& slide : duplicated_slides) {
+      slide.linked_group_id.clear();
+    }
+  }
+
+  const auto slide_width = exportPixelSize().width();
+  const auto source_left = static_cast<double>(start_index * slide_width);
+  const auto source_right = source_left + static_cast<double>(span * slide_width);
+  QVector<CanvasItem> duplicated_items;
+  QStringList duplicated_item_ids;
+  for (const auto& item : items_) {
+    const auto center_x = item.bounds.center().x();
+    if (center_x < source_left || center_x >= source_right) {
+      continue;
+    }
+    auto duplicated_item = item;
+    duplicated_item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    duplicated_item.bounds.translate(static_cast<double>(span * slide_width), 0.0);
+    duplicated_items.push_back(duplicated_item);
+    duplicated_item_ids.push_back(duplicated_item.id);
+  }
+
+  const auto insertion_index = start_index + span;
+  for (int index = 0; index < duplicated_slides.size(); ++index) {
+    slides_.insert(insertion_index + index, duplicated_slides.at(index));
+  }
+  adjustItemsForSlidesShifted(insertion_index, span);
+  for (const auto& item : duplicated_items) {
+    items_.push_back(item);
+  }
+
+  rebuildGroupIndices();
+  current_index_ = insertion_index;
+  normalizeForCurrentTemplate();
+  setSelectedItemIds(duplicated_item_ids, duplicated_item_ids.isEmpty() ? QString{} : duplicated_item_ids.back());
+  refreshPreviews();
+  emitCanvasStateChanged(true);
+  setStatus(span == 1 ? QStringLiteral("Duplicated canvas %1.").arg(current_index_ + 1)
+                      : QStringLiteral("Duplicated a %1-canvas linked spread.").arg(span));
 }
 
 void CarouselDocumentController::removeCurrentSlide() {
@@ -839,6 +1167,42 @@ void CarouselDocumentController::addTextItem(const QString& text) {
   setStatus(QStringLiteral("Added a text layer to canvas %1.").arg(current_index_ + 1));
 }
 
+void CarouselDocumentController::addShapeItem(const QString& shape_kind) {
+  const auto slide_rect = slideRectInDocument(current_index_);
+  CanvasItem item;
+  item.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+  item.kind = ItemKind::Shape;
+  item.shape_kind = normalized_shape_kind(shape_kind);
+  item.display_label = item.shape_kind == QStringLiteral("ellipse") ? QStringLiteral("Ellipse")
+                       : item.shape_kind == QStringLiteral("line")  ? QStringLiteral("Line")
+                       : item.shape_kind == QStringLiteral("arrow") ? QStringLiteral("Arrow")
+                                                                    : QStringLiteral("Rectangle");
+  item.fill_color = item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")
+                        ? QStringLiteral("#36f2a6")
+                        : QStringLiteral("#ffffff");
+  item.stroke_color = item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")
+                          ? QStringLiteral("#36f2a6")
+                          : QStringLiteral("#1e1a17");
+  item.stroke_width = item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")
+                          ? qMax(6.0, slide_rect.width() * 0.008)
+                          : 0.0;
+  item.opacity = 1.0;
+  item.corner_radius = item.shape_kind == QStringLiteral("rectangle") ? 24.0 : 0.0;
+  const auto width = item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")
+                         ? slide_rect.width() * 0.48
+                         : slide_rect.width() * 0.42;
+  const auto height = item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")
+                          ? qMax(kMinItemSize, slide_rect.height() * 0.08)
+                          : slide_rect.height() * 0.2;
+  item.bounds = QRectF(0.0, 0.0, width, height);
+  item.bounds.moveCenter(slide_rect.center());
+
+  items_.push_back(item);
+  setSelectedItemId(item.id);
+  emitCanvasStateChanged(true);
+  setStatus(QStringLiteral("Added a %1 shape to canvas %2.").arg(item.display_label.toLower()).arg(current_index_ + 1));
+}
+
 void CarouselDocumentController::pickPhotoItem() {
   const auto file_path = QFileDialog::getOpenFileName(
       nullptr,
@@ -1024,6 +1388,46 @@ void CarouselDocumentController::sendSelectedBackward() {
   }
 }
 
+void CarouselDocumentController::bringSelectedToFront() {
+  const auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty() || indexes.back() == items_.size() - 1) {
+    return;
+  }
+
+  QVector<CanvasItem> selected_items;
+  selected_items.reserve(indexes.size());
+  for (const auto index : indexes) {
+    selected_items.push_back(items_.at(index));
+  }
+  for (qsizetype i = indexes.size(); i > 0; --i) {
+    items_.removeAt(indexes.at(i - 1));
+  }
+  for (const auto& item : selected_items) {
+    items_.push_back(item);
+  }
+  emitCanvasStateChanged(true);
+}
+
+void CarouselDocumentController::sendSelectedToBack() {
+  const auto indexes = selectedItemIndexes();
+  if (indexes.isEmpty() || indexes.front() == 0) {
+    return;
+  }
+
+  QVector<CanvasItem> selected_items;
+  selected_items.reserve(indexes.size());
+  for (const auto index : indexes) {
+    selected_items.push_back(items_.at(index));
+  }
+  for (qsizetype i = indexes.size(); i > 0; --i) {
+    items_.removeAt(indexes.at(i - 1));
+  }
+  for (qsizetype i = selected_items.size(); i > 0; --i) {
+    items_.insert(0, selected_items.at(i - 1));
+  }
+  emitCanvasStateChanged(true);
+}
+
 void CarouselDocumentController::moveSelectedItemByPixels(double delta_x, double delta_y) {
   const auto indexes = selectedItemIndexes(false, false);
   if (indexes.isEmpty()) {
@@ -1073,7 +1477,7 @@ void CarouselDocumentController::setSelectedItemSize(double width, double height
   auto next_width = qMax(kMinItemSize, width);
   auto next_height = qMax(kMinItemSize, height);
 
-  if (item->kind != ItemKind::Text) {
+  if (item->kind == ItemKind::Image || item->kind == ItemKind::Video) {
     const auto aspect_ratio = normalizedAspectRatio(*item);
     if (aspect_ratio > 0.0) {
       if (next_width / next_height > aspect_ratio) {
@@ -1082,7 +1486,7 @@ void CarouselDocumentController::setSelectedItemSize(double width, double height
         next_height = next_width / aspect_ratio;
       }
     }
-  } else {
+  } else if (item->kind == ItemKind::Text) {
     item->bounds.setWidth(next_width);
     item->text_point_size = qMax(kMinTextPointSize, next_height / 1.2);
     next_height = measuredTextHeight(*item);
@@ -1147,7 +1551,7 @@ void CarouselDocumentController::setSelectedItemSizeSilent(double width, double 
   auto next_width = qMax(kMinItemSize, width);
   auto next_height = qMax(kMinItemSize, height);
 
-  if (item->kind != ItemKind::Text) {
+  if (item->kind == ItemKind::Image || item->kind == ItemKind::Video) {
     const auto aspect_ratio = normalizedAspectRatio(*item);
     if (aspect_ratio > 0.0) {
       if (next_width / next_height > aspect_ratio) {
@@ -1156,7 +1560,7 @@ void CarouselDocumentController::setSelectedItemSizeSilent(double width, double 
         next_height = next_width / aspect_ratio;
       }
     }
-  } else {
+  } else if (item->kind == ItemKind::Text) {
     item->bounds.setWidth(next_width);
     item->text_point_size = qMax(kMinTextPointSize, next_height / 1.2);
     next_height = measuredTextHeight(*item);
@@ -1230,6 +1634,574 @@ void CarouselDocumentController::setSelectedTextPointSize(double point_size) {
   const auto center = item->bounds.center();
   item->bounds.setHeight(measuredTextHeight(*item));
   item->bounds.moveCenter(center);
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextFontFamily(const QString& font_family) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_text_font_family(font_family);
+  if (item->text_font_family == normalized) {
+    return;
+  }
+  item->text_font_family = normalized;
+  const auto center = item->bounds.center();
+  item->bounds.setHeight(measuredTextHeight(*item));
+  item->bounds.moveCenter(center);
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextHorizontalAlignment(const QString& alignment) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_text_horizontal_alignment(alignment);
+  if (item->text_horizontal_alignment == normalized) {
+    return;
+  }
+  item->text_horizontal_alignment = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextVerticalAlignment(const QString& alignment) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_text_vertical_alignment(alignment);
+  if (item->text_vertical_alignment == normalized) {
+    return;
+  }
+  item->text_vertical_alignment = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextWeight(const QString& weight) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_text_weight(weight);
+  if (item->text_weight == normalized) {
+    return;
+  }
+  item->text_weight = normalized;
+  const auto center = item->bounds.center();
+  item->bounds.setHeight(measuredTextHeight(*item));
+  item->bounds.moveCenter(center);
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextItalic(bool italic) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  if (item->text_italic == italic) {
+    return;
+  }
+  item->text_italic = italic;
+  const auto center = item->bounds.center();
+  item->bounds.setHeight(measuredTextHeight(*item));
+  item->bounds.moveCenter(center);
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextLetterSpacing(double letter_spacing) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = clamp_text_letter_spacing(letter_spacing);
+  if (qFuzzyCompare(item->text_letter_spacing, normalized)) {
+    return;
+  }
+  item->text_letter_spacing = normalized;
+  const auto center = item->bounds.center();
+  item->bounds.setHeight(measuredTextHeight(*item));
+  item->bounds.moveCenter(center);
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextStrokeColor(const QString& color_value) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, QStringLiteral("#000000"));
+  if (item->text_stroke_color == normalized) {
+    return;
+  }
+  item->text_stroke_color = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextStrokeWidth(double stroke_width) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = qBound(0.0, stroke_width, 96.0);
+  if (qFuzzyCompare(item->text_stroke_width, normalized)) {
+    return;
+  }
+  item->text_stroke_width = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextBackgroundColor(const QString& color_value) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, QStringLiteral("#ffffff"));
+  if (item->text_background_color == normalized) {
+    return;
+  }
+  item->text_background_color = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedTextBackgroundOpacity(double opacity) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Text || item->locked) {
+    return;
+  }
+
+  const auto normalized = clamp_layer_opacity(opacity);
+  if (qFuzzyCompare(item->text_background_opacity, normalized)) {
+    return;
+  }
+  item->text_background_opacity = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedItemOpacity(double opacity) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = clamp_layer_opacity(opacity);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (qFuzzyCompare(item.opacity, normalized)) {
+      continue;
+    }
+    item.opacity = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemBlendMode(const QString& blend_mode) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = normalized_blend_mode(blend_mode);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.blend_mode == normalized) {
+      continue;
+    }
+    item.blend_mode = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemFlippedHorizontal(bool flipped) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.flipped_horizontal == flipped) {
+      continue;
+    }
+    item.flipped_horizontal = flipped;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemFlippedVertical(bool flipped) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.flipped_vertical == flipped) {
+      continue;
+    }
+    item.flipped_vertical = flipped;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemFrameColor(const QString& color_value) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, QStringLiteral("#ffffff"));
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.frame_color == normalized) {
+      continue;
+    }
+    item.frame_color = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemFrameWidth(double frame_width) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = qBound(0.0, frame_width, 160.0);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (qFuzzyCompare(item.frame_width, normalized)) {
+      continue;
+    }
+    item.frame_width = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemShadowColor(const QString& color_value) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, QStringLiteral("#000000"));
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.shadow_color == normalized) {
+      continue;
+    }
+    item.shadow_color = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemShadowOpacity(double opacity) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = clamp_layer_opacity(opacity);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (qFuzzyCompare(item.shadow_opacity, normalized)) {
+      continue;
+    }
+    item.shadow_opacity = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemShadowOffset(double offset_x, double offset_y) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized_x = qBound(-320.0, offset_x, 320.0);
+  const auto normalized_y = qBound(-320.0, offset_y, 320.0);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (qFuzzyCompare(item.shadow_offset_x, normalized_x) &&
+        qFuzzyCompare(item.shadow_offset_y, normalized_y)) {
+      continue;
+    }
+    item.shadow_offset_x = normalized_x;
+    item.shadow_offset_y = normalized_y;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemCornerRadius(double corner_radius) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.kind == ItemKind::Text) {
+      continue;
+    }
+    const auto normalized = qBound(0.0, corner_radius, qMax(item.bounds.width(), item.bounds.height()));
+    if (qFuzzyCompare(item.corner_radius, normalized)) {
+      continue;
+    }
+    item.corner_radius = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(false);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemMediaScale(double scale) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = clamp_zoom_scale(scale);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.kind != ItemKind::Image && item.kind != ItemKind::Video) {
+      continue;
+    }
+    if (qFuzzyCompare(item.media_scale, normalized)) {
+      continue;
+    }
+    item.media_scale = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(true);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemMediaOffset(double offset_x, double offset_y) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized_x = clamp_unit_interval(offset_x);
+  const auto normalized_y = clamp_unit_interval(offset_y);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.kind != ItemKind::Image && item.kind != ItemKind::Video) {
+      continue;
+    }
+    if (qFuzzyCompare(item.media_offset_x, normalized_x) &&
+        qFuzzyCompare(item.media_offset_y, normalized_y)) {
+      continue;
+    }
+    item.media_offset_x = normalized_x;
+    item.media_offset_y = normalized_y;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(true);
+  }
+}
+
+void CarouselDocumentController::setSelectedItemMediaMaskShape(const QString& mask_shape) {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  const auto normalized = normalized_media_mask_shape(mask_shape);
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.kind != ItemKind::Image && item.kind != ItemKind::Video) {
+      continue;
+    }
+    if (item.media_mask_shape == normalized) {
+      continue;
+    }
+    item.media_mask_shape = normalized;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(true);
+  }
+}
+
+void CarouselDocumentController::resetSelectedItemMediaCrop() {
+  const auto indexes = selectedItemIndexes(false, true);
+  if (indexes.isEmpty()) {
+    return;
+  }
+
+  bool changed = false;
+  for (const auto index : indexes) {
+    auto& item = items_[index];
+    if (item.kind != ItemKind::Image && item.kind != ItemKind::Video) {
+      continue;
+    }
+    if (qFuzzyCompare(item.media_scale, 1.0) && qFuzzyCompare(item.media_offset_x, 0.0) &&
+        qFuzzyCompare(item.media_offset_y, 0.0)) {
+      continue;
+    }
+    item.media_scale = 1.0;
+    item.media_offset_x = 0.0;
+    item.media_offset_y = 0.0;
+    changed = true;
+  }
+  if (changed) {
+    emitCanvasStateChanged(true);
+  }
+}
+
+void CarouselDocumentController::setSelectedShapeKind(const QString& shape_kind) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_shape_kind(shape_kind);
+  if (item->shape_kind == normalized) {
+    return;
+  }
+  item->shape_kind = normalized;
+  item->display_label = normalized == QStringLiteral("ellipse") ? QStringLiteral("Ellipse")
+                      : normalized == QStringLiteral("line")    ? QStringLiteral("Line")
+                      : normalized == QStringLiteral("arrow")   ? QStringLiteral("Arrow")
+                                                                : QStringLiteral("Rectangle");
+  emitCanvasStateChanged(true);
+}
+
+void CarouselDocumentController::setSelectedShapeFillColor(const QString& color_value) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, item->fill_color);
+  if (item->fill_color == normalized) {
+    return;
+  }
+  item->fill_color = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedShapeFillKind(const QString& fill_kind) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_background_kind(fill_kind);
+  if (item->fill_kind == normalized) {
+    return;
+  }
+  item->fill_kind = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedShapeSecondaryFillColor(const QString& color_value) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, item->fill_secondary_color);
+  if (item->fill_secondary_color == normalized) {
+    return;
+  }
+  item->fill_secondary_color = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedShapeStrokeColor(const QString& color_value) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = normalized_color_value(color_value, item->stroke_color);
+  if (item->stroke_color == normalized) {
+    return;
+  }
+  item->stroke_color = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedShapeStrokeWidth(double stroke_width) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = qBound(0.0, stroke_width, 96.0);
+  if (qFuzzyCompare(item->stroke_width, normalized)) {
+    return;
+  }
+  item->stroke_width = normalized;
+  emitCanvasStateChanged(false);
+}
+
+void CarouselDocumentController::setSelectedShapeCornerRadius(double corner_radius) {
+  auto* item = currentItem();
+  if (item == nullptr || item->kind != ItemKind::Shape || item->locked) {
+    return;
+  }
+
+  const auto normalized = qBound(0.0, corner_radius, qMax(item->bounds.width(), item->bounds.height()));
+  if (qFuzzyCompare(item->corner_radius, normalized)) {
+    return;
+  }
+  item->corner_radius = normalized;
   emitCanvasStateChanged(false);
 }
 
@@ -2289,7 +3261,16 @@ int CarouselDocumentController::slideIndexForItem(const CanvasItem& item) const 
 }
 
 QSize CarouselDocumentController::exportPixelSize() const {
-  return document_format_ == QStringLiteral("5x4") ? QSize(1350, 1080) : QSize(1080, 1350);
+  if (document_format_ == QStringLiteral("5x4")) {
+    return QSize(1350, 1080);
+  }
+  if (document_format_ == QStringLiteral("1x1")) {
+    return QSize(1080, 1080);
+  }
+  if (document_format_ == QStringLiteral("9x16")) {
+    return QSize(1080, 1920);
+  }
+  return QSize(1080, 1350);
 }
 
 QString CarouselDocumentController::previewsRoot() const {
@@ -2423,6 +3404,9 @@ QJsonObject CarouselDocumentController::slideObject(const Slide& slide) const {
   object.insert(QStringLiteral("secondary"), mediaObject(slide.secondary));
   object.insert(QStringLiteral("tertiary"), mediaObject(slide.tertiary));
   object.insert(QStringLiteral("linkedGroupId"), slide.linked_group_id);
+  object.insert(QStringLiteral("backgroundColor"), slide.background_color);
+  object.insert(QStringLiteral("backgroundSecondaryColor"), slide.background_secondary_color);
+  object.insert(QStringLiteral("backgroundKind"), slide.background_kind);
   return object;
 }
 
@@ -2444,6 +3428,13 @@ CarouselDocumentController::Slide CarouselDocumentController::slideFromObject(co
     slide.tertiary = mediaFromObject(object.value(QStringLiteral("tertiary")).toObject());
   }
   slide.linked_group_id = object.value(QStringLiteral("linkedGroupId")).toString().trimmed();
+  slide.background_color = normalized_color_value(
+      object.value(QStringLiteral("backgroundColor")).toString(),
+      QStringLiteral("#fbf7f1"));
+  slide.background_secondary_color = normalized_color_value(
+      object.value(QStringLiteral("backgroundSecondaryColor")).toString(),
+      QStringLiteral("#ffffff"));
+  slide.background_kind = normalized_background_kind(object.value(QStringLiteral("backgroundKind")).toString());
   return slide;
 }
 
@@ -2477,6 +3468,8 @@ QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item) const
     kind = QStringLiteral("text");
   } else if (item.kind == ItemKind::Video) {
     kind = QStringLiteral("video");
+  } else if (item.kind == ItemKind::Shape) {
+    kind = QStringLiteral("shape");
   }
   object.insert(QStringLiteral("kind"), kind);
   object.insert(QStringLiteral("filePath"), item.file_path);
@@ -2487,6 +3480,37 @@ QJsonObject CarouselDocumentController::itemObject(const CanvasItem& item) const
   object.insert(QStringLiteral("text"), item.text);
   object.insert(QStringLiteral("textColor"), item.text_color);
   object.insert(QStringLiteral("textPointSize"), item.text_point_size);
+  object.insert(QStringLiteral("textFontFamily"), item.text_font_family);
+  object.insert(QStringLiteral("textHorizontalAlignment"), item.text_horizontal_alignment);
+  object.insert(QStringLiteral("textVerticalAlignment"), item.text_vertical_alignment);
+  object.insert(QStringLiteral("textWeight"), item.text_weight);
+  object.insert(QStringLiteral("textItalic"), item.text_italic);
+  object.insert(QStringLiteral("textLetterSpacing"), item.text_letter_spacing);
+  object.insert(QStringLiteral("textStrokeColor"), item.text_stroke_color);
+  object.insert(QStringLiteral("textStrokeWidth"), item.text_stroke_width);
+  object.insert(QStringLiteral("textBackgroundColor"), item.text_background_color);
+  object.insert(QStringLiteral("textBackgroundOpacity"), item.text_background_opacity);
+  object.insert(QStringLiteral("shapeKind"), item.shape_kind);
+  object.insert(QStringLiteral("fillColor"), item.fill_color);
+  object.insert(QStringLiteral("fillSecondaryColor"), item.fill_secondary_color);
+  object.insert(QStringLiteral("fillKind"), item.fill_kind);
+  object.insert(QStringLiteral("strokeColor"), item.stroke_color);
+  object.insert(QStringLiteral("strokeWidth"), item.stroke_width);
+  object.insert(QStringLiteral("cornerRadius"), item.corner_radius);
+  object.insert(QStringLiteral("opacity"), item.opacity);
+  object.insert(QStringLiteral("blendMode"), item.blend_mode);
+  object.insert(QStringLiteral("flippedHorizontal"), item.flipped_horizontal);
+  object.insert(QStringLiteral("flippedVertical"), item.flipped_vertical);
+  object.insert(QStringLiteral("frameColor"), item.frame_color);
+  object.insert(QStringLiteral("frameWidth"), item.frame_width);
+  object.insert(QStringLiteral("shadowColor"), item.shadow_color);
+  object.insert(QStringLiteral("shadowOpacity"), item.shadow_opacity);
+  object.insert(QStringLiteral("shadowOffsetX"), item.shadow_offset_x);
+  object.insert(QStringLiteral("shadowOffsetY"), item.shadow_offset_y);
+  object.insert(QStringLiteral("mediaScale"), item.media_scale);
+  object.insert(QStringLiteral("mediaOffsetX"), item.media_offset_x);
+  object.insert(QStringLiteral("mediaOffsetY"), item.media_offset_y);
+  object.insert(QStringLiteral("mediaMaskShape"), item.media_mask_shape);
   QJsonObject bounds;
   bounds.insert(QStringLiteral("x"), item.bounds.x());
   bounds.insert(QStringLiteral("y"), item.bounds.y());
@@ -2510,6 +3534,8 @@ CarouselDocumentController::CanvasItem CarouselDocumentController::itemFromObjec
     item.kind = ItemKind::Text;
   } else if (kind == QStringLiteral("video")) {
     item.kind = ItemKind::Video;
+  } else if (kind == QStringLiteral("shape")) {
+    item.kind = ItemKind::Shape;
   } else {
     item.kind = ItemKind::Image;
   }
@@ -2525,6 +3551,52 @@ CarouselDocumentController::CanvasItem CarouselDocumentController::itemFromObjec
     item.text_color = QStringLiteral("#1e1a17");
   }
   item.text_point_size = qMax(kMinTextPointSize, object.value(QStringLiteral("textPointSize")).toDouble(72.0));
+  item.text_font_family = normalized_text_font_family(object.value(QStringLiteral("textFontFamily")).toString());
+  item.text_horizontal_alignment =
+      normalized_text_horizontal_alignment(object.value(QStringLiteral("textHorizontalAlignment")).toString());
+  item.text_vertical_alignment =
+      normalized_text_vertical_alignment(object.value(QStringLiteral("textVerticalAlignment")).toString());
+  item.text_weight = normalized_text_weight(object.value(QStringLiteral("textWeight")).toString());
+  item.text_italic = object.value(QStringLiteral("textItalic")).toBool(false);
+  item.text_letter_spacing =
+      clamp_text_letter_spacing(object.value(QStringLiteral("textLetterSpacing")).toDouble(0.0));
+  item.text_stroke_color =
+      normalized_color_value(object.value(QStringLiteral("textStrokeColor")).toString(), QStringLiteral("#000000"));
+  item.text_stroke_width = qBound(0.0, object.value(QStringLiteral("textStrokeWidth")).toDouble(0.0), 96.0);
+  item.text_background_color = normalized_color_value(
+      object.value(QStringLiteral("textBackgroundColor")).toString(),
+      QStringLiteral("#ffffff"));
+  item.text_background_opacity =
+      clamp_layer_opacity(object.value(QStringLiteral("textBackgroundOpacity")).toDouble(0.0));
+  item.shape_kind = normalized_shape_kind(object.value(QStringLiteral("shapeKind")).toString());
+  item.fill_color = normalized_color_value(
+      object.value(QStringLiteral("fillColor")).toString(),
+      QStringLiteral("#ffffff"));
+  item.fill_secondary_color = normalized_color_value(
+      object.value(QStringLiteral("fillSecondaryColor")).toString(),
+      QStringLiteral("#69cad8"));
+  item.fill_kind = normalized_background_kind(object.value(QStringLiteral("fillKind")).toString());
+  item.stroke_color = normalized_color_value(
+      object.value(QStringLiteral("strokeColor")).toString(),
+      QStringLiteral("#1e1a17"));
+  item.stroke_width = qBound(0.0, object.value(QStringLiteral("strokeWidth")).toDouble(0.0), 96.0);
+  item.corner_radius = qMax(0.0, object.value(QStringLiteral("cornerRadius")).toDouble(0.0));
+  item.opacity = clamp_layer_opacity(object.value(QStringLiteral("opacity")).toDouble(1.0));
+  item.blend_mode = normalized_blend_mode(object.value(QStringLiteral("blendMode")).toString());
+  item.flipped_horizontal = object.value(QStringLiteral("flippedHorizontal")).toBool(false);
+  item.flipped_vertical = object.value(QStringLiteral("flippedVertical")).toBool(false);
+  item.frame_color =
+      normalized_color_value(object.value(QStringLiteral("frameColor")).toString(), QStringLiteral("#ffffff"));
+  item.frame_width = qBound(0.0, object.value(QStringLiteral("frameWidth")).toDouble(0.0), 160.0);
+  item.shadow_color =
+      normalized_color_value(object.value(QStringLiteral("shadowColor")).toString(), QStringLiteral("#000000"));
+  item.shadow_opacity = clamp_layer_opacity(object.value(QStringLiteral("shadowOpacity")).toDouble(0.0));
+  item.shadow_offset_x = qBound(-320.0, object.value(QStringLiteral("shadowOffsetX")).toDouble(32.0), 320.0);
+  item.shadow_offset_y = qBound(-320.0, object.value(QStringLiteral("shadowOffsetY")).toDouble(32.0), 320.0);
+  item.media_scale = clamp_zoom_scale(object.value(QStringLiteral("mediaScale")).toDouble(1.0));
+  item.media_offset_x = clamp_unit_interval(object.value(QStringLiteral("mediaOffsetX")).toDouble(0.0));
+  item.media_offset_y = clamp_unit_interval(object.value(QStringLiteral("mediaOffsetY")).toDouble(0.0));
+  item.media_mask_shape = normalized_media_mask_shape(object.value(QStringLiteral("mediaMaskShape")).toString());
   const auto bounds_value = object.value(QStringLiteral("bounds"));
   if (bounds_value.isObject()) {
     const auto bounds = bounds_value.toObject();
@@ -2634,9 +3706,11 @@ bool CarouselDocumentController::loadDocumentObject(const QJsonObject& object) {
   groups_ = next_groups;
   items_ = next_items;
   document_name_ = normalized_document_name(object.value(QStringLiteral("documentName")).toString());
+  const auto loaded_format = object.value(QStringLiteral("documentFormat")).toString().trimmed().toLower();
   document_format_ =
-      object.value(QStringLiteral("documentFormat")).toString().trimmed() == QStringLiteral("5x4")
-          ? QStringLiteral("5x4")
+      (loaded_format == QStringLiteral("5x4") || loaded_format == QStringLiteral("1x1") ||
+       loaded_format == QStringLiteral("9x16"))
+          ? loaded_format
           : QStringLiteral("4x5");
   current_index_ = qBound(0, object.value(QStringLiteral("currentIndex")).toInt(), qMax(0, static_cast<int>(slides_.size()) - 1));
   active_slot_ = object.value(QStringLiteral("activeSlot")).toString().trimmed();
@@ -2745,6 +3819,10 @@ QVariantMap CarouselDocumentController::slideMapForIndex(int index) const {
   map.insert(QStringLiteral("groupSpan"), group != nullptr ? group->span : 0);
   map.insert(QStringLiteral("groupPosition"), group != nullptr ? (index - group->start_index + 1) : 0);
   map.insert(QStringLiteral("previewSource"), slide != nullptr ? slide->preview_source : QString{});
+  map.insert(QStringLiteral("backgroundColor"), slide != nullptr ? slide->background_color : QStringLiteral("#fbf7f1"));
+  map.insert(QStringLiteral("backgroundSecondaryColor"),
+             slide != nullptr ? slide->background_secondary_color : QStringLiteral("#ffffff"));
+  map.insert(QStringLiteral("backgroundKind"), slide != nullptr ? slide->background_kind : QStringLiteral("solid"));
   map.insert(QStringLiteral("primaryHasMedia"), group != nullptr ? group->media.type != MediaType::Empty
                                                                   : slide != nullptr ? slide->primary.type != MediaType::Empty
                                                                                     : false);
@@ -2765,6 +3843,8 @@ QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
     type = QStringLiteral("text");
   } else if (item.kind == ItemKind::Video) {
     type = QStringLiteral("video");
+  } else if (item.kind == ItemKind::Shape) {
+    type = QStringLiteral("shape");
   }
   map.insert(QStringLiteral("type"), type);
   map.insert(QStringLiteral("x"), item.bounds.x());
@@ -2784,6 +3864,39 @@ QVariantMap CarouselDocumentController::itemMap(const CanvasItem& item) const {
   map.insert(QStringLiteral("text"), item.text);
   map.insert(QStringLiteral("textColor"), item.text_color);
   map.insert(QStringLiteral("textPointSize"), item.text_point_size);
+  map.insert(QStringLiteral("textFontFamily"), item.text_font_family);
+  map.insert(QStringLiteral("textHorizontalAlignment"), item.text_horizontal_alignment);
+  map.insert(QStringLiteral("textVerticalAlignment"), item.text_vertical_alignment);
+  map.insert(QStringLiteral("textWeight"), item.text_weight);
+  map.insert(QStringLiteral("textItalic"), item.text_italic);
+  map.insert(QStringLiteral("textLetterSpacing"), item.text_letter_spacing);
+  map.insert(QStringLiteral("textStrokeColor"), item.text_stroke_color);
+  map.insert(QStringLiteral("textStrokeWidth"), item.text_stroke_width);
+  map.insert(QStringLiteral("textBackgroundColor"), item.text_background_color);
+  map.insert(QStringLiteral("textBackgroundOpacity"), item.text_background_opacity);
+  map.insert(QStringLiteral("shapeKind"), item.shape_kind);
+  map.insert(QStringLiteral("fillColor"), item.fill_color);
+  map.insert(QStringLiteral("fillSecondaryColor"), item.fill_secondary_color);
+  map.insert(QStringLiteral("fillKind"), item.fill_kind);
+  map.insert(QStringLiteral("strokeColor"), item.stroke_color);
+  map.insert(QStringLiteral("strokeWidth"), item.stroke_width);
+  map.insert(QStringLiteral("cornerRadius"), item.corner_radius);
+  map.insert(QStringLiteral("opacity"), item.opacity);
+  map.insert(QStringLiteral("blendMode"), item.blend_mode);
+  map.insert(QStringLiteral("flippedHorizontal"), item.flipped_horizontal);
+  map.insert(QStringLiteral("flippedVertical"), item.flipped_vertical);
+  map.insert(QStringLiteral("frameColor"), item.frame_color);
+  map.insert(QStringLiteral("frameWidth"), item.frame_width);
+  map.insert(QStringLiteral("shadowColor"), item.shadow_color);
+  map.insert(QStringLiteral("shadowOpacity"), item.shadow_opacity);
+  map.insert(QStringLiteral("shadowOffsetX"), item.shadow_offset_x);
+  map.insert(QStringLiteral("shadowOffsetY"), item.shadow_offset_y);
+  map.insert(QStringLiteral("mediaScale"), item.media_scale);
+  map.insert(QStringLiteral("mediaOffsetX"), item.media_offset_x);
+  map.insert(QStringLiteral("mediaOffsetY"), item.media_offset_y);
+  map.insert(QStringLiteral("mediaMaskShape"), item.media_mask_shape);
+  map.insert(QStringLiteral("sourceWidth"), item.source_size.width());
+  map.insert(QStringLiteral("sourceHeight"), item.source_size.height());
   map.insert(QStringLiteral("slideIndex"), slideIndexForItem(item));
   return map;
 }
@@ -2816,6 +3929,8 @@ QVariantMap CarouselDocumentController::selectionMap() const {
       item_type = QStringLiteral("text");
     } else if (item->kind == ItemKind::Video) {
       item_type = QStringLiteral("video");
+    } else if (item->kind == ItemKind::Shape) {
+      item_type = QStringLiteral("shape");
     } else {
       item_type = QStringLiteral("image");
     }
@@ -2824,6 +3939,7 @@ QVariantMap CarouselDocumentController::selectionMap() const {
   map.insert(QStringLiteral("isText"), item != nullptr && item->kind == ItemKind::Text);
   map.insert(QStringLiteral("isImage"), item != nullptr && item->kind == ItemKind::Image);
   map.insert(QStringLiteral("isVideo"), item != nullptr && item->kind == ItemKind::Video);
+  map.insert(QStringLiteral("isShape"), item != nullptr && item->kind == ItemKind::Shape);
   map.insert(QStringLiteral("layerDisplayLabel"), item != nullptr ? summary_label(*item) : QStringLiteral("Nothing selected"));
   map.insert(QStringLiteral("displayLabel"),
              item != nullptr ? summary_label(*item) : media != nullptr ? summary_label(*media) : QStringLiteral("Nothing selected"));
@@ -2841,12 +3957,54 @@ QVariantMap CarouselDocumentController::selectionMap() const {
   map.insert(QStringLiteral("text"), item != nullptr ? item->text : QString{});
   map.insert(QStringLiteral("textColor"), item != nullptr ? item->text_color : QStringLiteral("#1e1a17"));
   map.insert(QStringLiteral("textPointSize"), item != nullptr ? item->text_point_size : 72.0);
+  map.insert(QStringLiteral("textFontFamily"), item != nullptr ? item->text_font_family : QStringLiteral("display"));
+  map.insert(QStringLiteral("textHorizontalAlignment"),
+             item != nullptr ? item->text_horizontal_alignment : QStringLiteral("center"));
+  map.insert(QStringLiteral("textVerticalAlignment"),
+             item != nullptr ? item->text_vertical_alignment : QStringLiteral("middle"));
+  map.insert(QStringLiteral("textWeight"), item != nullptr ? item->text_weight : QStringLiteral("demibold"));
+  map.insert(QStringLiteral("textItalic"), item != nullptr ? item->text_italic : false);
+  map.insert(QStringLiteral("textLetterSpacing"), item != nullptr ? item->text_letter_spacing : 0.0);
+  map.insert(QStringLiteral("textStrokeColor"), item != nullptr ? item->text_stroke_color : QStringLiteral("#000000"));
+  map.insert(QStringLiteral("textStrokeWidth"), item != nullptr ? item->text_stroke_width : 0.0);
+  map.insert(QStringLiteral("textBackgroundColor"),
+             item != nullptr ? item->text_background_color : QStringLiteral("#ffffff"));
+  map.insert(QStringLiteral("textBackgroundOpacity"), item != nullptr ? item->text_background_opacity : 0.0);
+  map.insert(QStringLiteral("shapeKind"), item != nullptr ? item->shape_kind : QStringLiteral("rectangle"));
+  map.insert(QStringLiteral("fillColor"), item != nullptr ? item->fill_color : QStringLiteral("#ffffff"));
+  map.insert(QStringLiteral("fillSecondaryColor"),
+             item != nullptr ? item->fill_secondary_color : QStringLiteral("#69cad8"));
+  map.insert(QStringLiteral("fillKind"), item != nullptr ? item->fill_kind : QStringLiteral("solid"));
+  map.insert(QStringLiteral("strokeColor"), item != nullptr ? item->stroke_color : QStringLiteral("#1e1a17"));
+  map.insert(QStringLiteral("strokeWidth"), item != nullptr ? item->stroke_width : 0.0);
+  map.insert(QStringLiteral("cornerRadius"), item != nullptr ? item->corner_radius : 0.0);
+  map.insert(QStringLiteral("opacity"), item != nullptr ? item->opacity : 1.0);
+  map.insert(QStringLiteral("blendMode"), item != nullptr ? item->blend_mode : QStringLiteral("normal"));
+  map.insert(QStringLiteral("flippedHorizontal"), item != nullptr ? item->flipped_horizontal : false);
+  map.insert(QStringLiteral("flippedVertical"), item != nullptr ? item->flipped_vertical : false);
+  map.insert(QStringLiteral("frameColor"), item != nullptr ? item->frame_color : QStringLiteral("#ffffff"));
+  map.insert(QStringLiteral("frameWidth"), item != nullptr ? item->frame_width : 0.0);
+  map.insert(QStringLiteral("shadowColor"), item != nullptr ? item->shadow_color : QStringLiteral("#000000"));
+  map.insert(QStringLiteral("shadowOpacity"), item != nullptr ? item->shadow_opacity : 0.0);
+  map.insert(QStringLiteral("shadowOffsetX"), item != nullptr ? item->shadow_offset_x : 32.0);
+  map.insert(QStringLiteral("shadowOffsetY"), item != nullptr ? item->shadow_offset_y : 32.0);
+  map.insert(QStringLiteral("mediaScale"), item != nullptr ? item->media_scale : 1.0);
+  map.insert(QStringLiteral("mediaOffsetX"), item != nullptr ? item->media_offset_x : 0.0);
+  map.insert(QStringLiteral("mediaOffsetY"), item != nullptr ? item->media_offset_y : 0.0);
+  map.insert(QStringLiteral("mediaMaskShape"),
+             item != nullptr ? item->media_mask_shape : QStringLiteral("rectangle"));
+  map.insert(QStringLiteral("sourceWidth"), item != nullptr ? item->source_size.width() : 0.0);
+  map.insert(QStringLiteral("sourceHeight"), item != nullptr ? item->source_size.height() : 0.0);
   map.insert(QStringLiteral("layerCount"), items_.size());
 
   map.insert(QStringLiteral("isLinkedGroup"), group != nullptr);
   map.insert(QStringLiteral("groupKind"), group != nullptr ? groupKindName(group->kind) : QStringLiteral("none"));
   map.insert(QStringLiteral("groupSpan"), group != nullptr ? group->span : 0);
   map.insert(QStringLiteral("templateKind"), templateNameForIndex(current_index_));
+  map.insert(QStringLiteral("backgroundColor"), slide != nullptr ? slide->background_color : QStringLiteral("#fbf7f1"));
+  map.insert(QStringLiteral("backgroundSecondaryColor"),
+             slide != nullptr ? slide->background_secondary_color : QStringLiteral("#ffffff"));
+  map.insert(QStringLiteral("backgroundKind"), slide != nullptr ? slide->background_kind : QStringLiteral("solid"));
   map.insert(QStringLiteral("activeSlot"), currentActiveSlot());
   map.insert(QStringLiteral("canUseSecondary"),
              slide != nullptr &&
@@ -3014,8 +4172,11 @@ qreal CarouselDocumentController::normalizedAspectRatio(const CanvasItem& item) 
 }
 
 qreal CarouselDocumentController::measuredTextHeight(const CanvasItem& item) const {
-  QFont font(QString::fromLatin1(kTextFontFamily));
+  QFont font(font_family_for_text_family(item.text_font_family));
   font.setPointSizeF(qMax(kMinTextPointSize, item.text_point_size));
+  font.setWeight(font_weight_for_text_weight(item.text_weight));
+  font.setItalic(item.text_italic);
+  font.setLetterSpacing(QFont::AbsoluteSpacing, clamp_text_letter_spacing(item.text_letter_spacing));
   const QFontMetricsF metrics(font);
   const auto width = qMax(kMinItemSize, item.bounds.width());
   const auto text = item.text.isEmpty() ? QStringLiteral(" ") : item.text;
@@ -3130,10 +4291,27 @@ bool CarouselDocumentController::exportVideoSlide(
 QImage CarouselDocumentController::renderSlideBaseImage(int index, const QSize& size, bool preview) const {
   QImage canvas(size, QImage::Format_ARGB32_Premultiplied);
   canvas.setColorSpace(output_color_space_for_name(outputColorSpaceForSlide(index)));
-  canvas.fill(QColor(QStringLiteral("#fbf7f1")));
+  const auto* slide = slideAt(index);
+  canvas.fill(Qt::transparent);
   QPainter painter(&canvas);
   painter.setRenderHint(QPainter::Antialiasing, true);
   painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+  if (slide != nullptr && normalized_background_kind(slide->background_kind) != QStringLiteral("solid")) {
+    const auto kind = normalized_background_kind(slide->background_kind);
+    QLinearGradient gradient;
+    if (kind == QStringLiteral("linear-horizontal")) {
+      gradient = QLinearGradient(QPointF(0.0, 0.0), QPointF(static_cast<qreal>(size.width()), 0.0));
+    } else {
+      gradient = QLinearGradient(QPointF(0.0, 0.0), QPointF(0.0, static_cast<qreal>(size.height())));
+    }
+    gradient.setColorAt(0.0, QColor(slide->background_color));
+    gradient.setColorAt(1.0, QColor(slide->background_secondary_color));
+    painter.fillRect(canvas.rect(), QBrush(gradient));
+  } else {
+    painter.fillRect(
+        canvas.rect(),
+        QColor(slide != nullptr ? slide->background_color : QStringLiteral("#fbf7f1")));
+  }
 
   if (const auto* group = groupForIndex(index)) {
     const QSize virtual_size = QSize(size.width() * group->span, size.height());
@@ -3154,7 +4332,6 @@ QImage CarouselDocumentController::renderSlideBaseImage(int index, const QSize& 
     return canvas;
   }
 
-  const auto* slide = slideAt(index);
   if (slide == nullptr) {
     return canvas;
   }
@@ -3346,7 +4523,6 @@ void CarouselDocumentController::renderMediaIntoRect(
     bool preview) const {
   painter->save();
   painter->setClipRect(destination_rect);
-  painter->fillRect(destination_rect, QColor(QStringLiteral("#fffdf8")));
 
   if (media.type == MediaType::Empty || media.file_path.isEmpty()) {
     painter->setPen(QPen(QColor(QStringLiteral("#d4c4b4")), 2, Qt::DashLine));
@@ -3358,6 +4534,8 @@ void CarouselDocumentController::renderMediaIntoRect(
     painter->restore();
     return;
   }
+
+  painter->fillRect(destination_rect, QColor(QStringLiteral("#fffdf8")));
 
   if (media.type == MediaType::Video) {
     const auto placeholder = renderVideoPlaceholder(media, destination_rect.size());
@@ -3426,13 +4604,57 @@ void CarouselDocumentController::renderItemIntoSlide(
   painter->save();
   painter->translate(frame_rect.center());
   painter->rotate(item.rotation_degrees);
+  painter->scale(item.flipped_horizontal ? -1.0 : 1.0, item.flipped_vertical ? -1.0 : 1.0);
+  painter->setOpacity(clamp_layer_opacity(item.opacity));
+  painter->setCompositionMode(composition_mode_for_blend_mode(item.blend_mode));
   const QRectF local_rect(-frame_rect.width() / 2.0, -frame_rect.height() / 2.0, frame_rect.width(), frame_rect.height());
+  const auto radius_scale = (scale_x + scale_y) / 2.0;
+  const auto local_radius = qBound(0.0, item.corner_radius * radius_scale, qMin(local_rect.width(), local_rect.height()) / 2.0);
+  const auto media_ellipse_mask =
+      (item.kind == ItemKind::Image || item.kind == ItemKind::Video) &&
+      item.media_mask_shape == QStringLiteral("ellipse");
+  auto shadow_color = QColor(item.shadow_color);
+  if (item.shadow_opacity > 0.0 && shadow_color.isValid()) {
+    shadow_color.setAlphaF(static_cast<float>(clamp_layer_opacity(item.shadow_opacity)));
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(shadow_color);
+    const QRectF shadow_rect =
+        local_rect.translated(item.shadow_offset_x * scale_x, item.shadow_offset_y * scale_y);
+    if (media_ellipse_mask) {
+      painter->drawEllipse(shadow_rect);
+    } else if (local_radius > 0.0) {
+      painter->drawRoundedRect(shadow_rect, local_radius, local_radius);
+    } else {
+      painter->drawRect(shadow_rect);
+    }
+  }
   if (item.kind == ItemKind::Image) {
     renderPhotoItem(painter, item, local_rect, preview);
   } else if (item.kind == ItemKind::Video) {
     renderVideoItem(painter, item, local_rect);
+  } else if (item.kind == ItemKind::Shape) {
+    renderShapeItem(painter, item, local_rect);
   } else {
     renderTextItem(painter, item, local_rect);
+  }
+  const auto frame_width = qMax(0.0, item.frame_width) * ((scale_x + scale_y) / 2.0);
+  const QColor frame_color(item.frame_color);
+  if (frame_width > 0.0 && frame_color.isValid()) {
+    QPen frame_pen(frame_color);
+    frame_pen.setWidthF(frame_width);
+    frame_pen.setJoinStyle(Qt::MiterJoin);
+    painter->setBrush(Qt::NoBrush);
+    painter->setPen(frame_pen);
+    const auto inset = qMin(frame_width / 2.0, qMin(local_rect.width(), local_rect.height()) / 2.0);
+    const auto outline_rect = local_rect.adjusted(inset, inset, -inset, -inset);
+    const auto frame_radius = qMax(0.0, local_radius - inset);
+    if (media_ellipse_mask) {
+      painter->drawEllipse(outline_rect);
+    } else if (frame_radius > 0.0) {
+      painter->drawRoundedRect(outline_rect, frame_radius, frame_radius);
+    } else {
+      painter->drawRect(outline_rect);
+    }
   }
   painter->restore();
 }
@@ -3450,13 +4672,28 @@ void CarouselDocumentController::renderPhotoItem(
   }
 
   painter->save();
-  painter->setClipRect(frame_rect);
-  const auto base_scale = item.fit_mode == FitMode::Contain
-                              ? qMin(frame_rect.width() / source_image.width(), frame_rect.height() / source_image.height())
-                              : qMax(frame_rect.width() / source_image.width(), frame_rect.height() / source_image.height());
-  const QSizeF draw_size(source_image.width() * base_scale, source_image.height() * base_scale);
-  QRectF draw_rect(QPointF(0.0, 0.0), draw_size);
-  draw_rect.moveCenter(frame_rect.center());
+  const auto radius_scale = qMin(
+      frame_rect.width() / qMax(1.0, item.bounds.width()),
+      frame_rect.height() / qMax(1.0, item.bounds.height()));
+  const auto radius = qBound(0.0, item.corner_radius * radius_scale, qMin(frame_rect.width(), frame_rect.height()) / 2.0);
+  if (item.media_mask_shape == QStringLiteral("ellipse")) {
+    QPainterPath clip_path;
+    clip_path.addEllipse(frame_rect);
+    painter->setClipPath(clip_path);
+  } else if (radius > 0.0) {
+    QPainterPath clip_path;
+    clip_path.addRoundedRect(frame_rect, radius, radius);
+    painter->setClipPath(clip_path);
+  } else {
+    painter->setClipRect(frame_rect);
+  }
+  const auto draw_rect = media_draw_rect(
+      QSizeF(source_image.size()),
+      frame_rect,
+      item.fit_mode,
+      item.media_scale,
+      item.media_offset_x,
+      item.media_offset_y);
   painter->drawImage(draw_rect, source_image);
   painter->restore();
 }
@@ -3471,24 +4708,140 @@ void CarouselDocumentController::renderVideoItem(
   media.display_label = item.display_label;
 
   painter->save();
-  painter->setClipRect(frame_rect);
-  const auto placeholder =
-      renderVideoPlaceholder(media, frame_rect.size().toSize().expandedTo(QSize(1, 1)));
-  painter->drawImage(frame_rect, placeholder);
+  const auto radius_scale = qMin(
+      frame_rect.width() / qMax(1.0, item.bounds.width()),
+      frame_rect.height() / qMax(1.0, item.bounds.height()));
+  const auto radius = qBound(0.0, item.corner_radius * radius_scale, qMin(frame_rect.width(), frame_rect.height()) / 2.0);
+  if (item.media_mask_shape == QStringLiteral("ellipse")) {
+    QPainterPath clip_path;
+    clip_path.addEllipse(frame_rect);
+    painter->setClipPath(clip_path);
+  } else if (radius > 0.0) {
+    QPainterPath clip_path;
+    clip_path.addRoundedRect(frame_rect, radius, radius);
+    painter->setClipPath(clip_path);
+  } else {
+    painter->setClipRect(frame_rect);
+  }
+  painter->fillRect(frame_rect, QColor(QStringLiteral("#0f1820")));
+  const auto source_size = item.source_size.isValid() ? item.source_size : frame_rect.size();
+  const auto draw_rect = media_draw_rect(
+      source_size,
+      frame_rect,
+      item.fit_mode,
+      item.media_scale,
+      item.media_offset_x,
+      item.media_offset_y);
+  const auto placeholder_size =
+      draw_rect.size().toSize().expandedTo(QSize(1, 1));
+  const auto placeholder = renderVideoPlaceholder(media, placeholder_size);
+  painter->drawImage(draw_rect, placeholder);
   painter->restore();
+}
+
+void CarouselDocumentController::renderShapeItem(
+    QPainter* painter,
+    const CanvasItem& item,
+    const QRectF& frame_rect) const {
+  const QColor fill(item.fill_color);
+  const QColor secondary_fill(item.fill_secondary_color);
+  const QColor stroke(item.stroke_color);
+  const auto stroke_width = qMax(0.0, item.stroke_width);
+  QPen pen(stroke.isValid() ? stroke : QColor(QStringLiteral("#1e1a17")));
+  pen.setWidthF(stroke_width);
+  pen.setCapStyle(Qt::RoundCap);
+  pen.setJoinStyle(Qt::RoundJoin);
+  if (stroke_width > 0.0) {
+    painter->setPen(pen);
+  } else {
+    painter->setPen(Qt::NoPen);
+  }
+  QBrush fill_brush = fill.isValid() ? QBrush(fill) : QBrush(Qt::NoBrush);
+  if (fill.isValid() && secondary_fill.isValid() && item.fill_kind != QStringLiteral("solid")) {
+    QLinearGradient gradient;
+    if (item.fill_kind == QStringLiteral("linear-horizontal")) {
+      gradient = QLinearGradient(frame_rect.topLeft(), frame_rect.topRight());
+    } else {
+      gradient = QLinearGradient(frame_rect.topLeft(), frame_rect.bottomLeft());
+    }
+    gradient.setColorAt(0.0, fill);
+    gradient.setColorAt(1.0, secondary_fill);
+    fill_brush = QBrush(gradient);
+  }
+  painter->setBrush(fill_brush);
+
+  if (item.shape_kind == QStringLiteral("ellipse")) {
+    painter->drawEllipse(frame_rect);
+    return;
+  }
+
+  if (item.shape_kind == QStringLiteral("line") || item.shape_kind == QStringLiteral("arrow")) {
+    const QPointF start(frame_rect.left(), frame_rect.center().y());
+    const QPointF end(frame_rect.right(), frame_rect.center().y());
+    painter->setBrush(Qt::NoBrush);
+    painter->drawLine(start, end);
+    if (item.shape_kind == QStringLiteral("arrow")) {
+      const auto head = qBound(12.0, qMin(frame_rect.width(), frame_rect.height()) * 0.42, 96.0);
+      QPainterPath arrow_head;
+      arrow_head.moveTo(end);
+      arrow_head.lineTo(end.x() - head, end.y() - head * 0.48);
+      arrow_head.lineTo(end.x() - head, end.y() + head * 0.48);
+      arrow_head.closeSubpath();
+      painter->setBrush(stroke.isValid() ? stroke : QColor(QStringLiteral("#1e1a17")));
+      painter->drawPath(arrow_head);
+    }
+    return;
+  }
+
+  const auto radius = qBound(0.0, item.corner_radius, qMin(frame_rect.width(), frame_rect.height()) / 2.0);
+  painter->drawRoundedRect(frame_rect, radius, radius);
 }
 
 void CarouselDocumentController::renderTextItem(
     QPainter* painter,
     const CanvasItem& item,
     const QRectF& frame_rect) const {
-  QFont font(QString::fromLatin1(kTextFontFamily));
+  QFont font(font_family_for_text_family(item.text_font_family));
   const auto scale = frame_rect.height() / qMax(1.0, item.bounds.height());
   font.setPointSizeF(qMax(6.0, item.text_point_size * scale));
-  font.setWeight(QFont::DemiBold);
+  font.setWeight(font_weight_for_text_weight(item.text_weight));
+  font.setItalic(item.text_italic);
+  font.setLetterSpacing(QFont::AbsoluteSpacing, clamp_text_letter_spacing(item.text_letter_spacing) * scale);
   painter->setFont(font);
+  auto background_color = QColor(item.text_background_color);
+  if (item.text_background_opacity > 0.0 && background_color.isValid()) {
+    background_color.setAlphaF(static_cast<float>(clamp_layer_opacity(item.text_background_opacity)));
+    painter->save();
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(background_color);
+    painter->drawRect(frame_rect);
+    painter->restore();
+  }
+  const auto stroke_width = qMax(0.0, item.text_stroke_width * scale);
+  const QColor stroke_color(item.text_stroke_color);
+  if (stroke_width > 0.0 && stroke_color.isValid()) {
+    painter->save();
+    painter->setPen(stroke_color);
+    const auto radius = qCeil(stroke_width);
+    const auto flags = text_alignment_flags(item.text_horizontal_alignment, item.text_vertical_alignment);
+    for (int y = -radius; y <= radius; ++y) {
+      for (int x = -radius; x <= radius; ++x) {
+        if (x == 0 && y == 0) {
+          continue;
+        }
+        if ((x * x) + (y * y) > radius * radius) {
+          continue;
+        }
+        painter->drawText(frame_rect.translated(x, y), flags, item.text);
+      }
+    }
+    painter->restore();
+  }
   painter->setPen(QColor(item.text_color));
-  painter->drawText(frame_rect, Qt::AlignCenter | Qt::TextWordWrap, item.text);
+  painter->drawText(
+      frame_rect,
+      text_alignment_flags(item.text_horizontal_alignment, item.text_vertical_alignment),
+      item.text);
 }
 
 void CarouselDocumentController::adjustItemsForFormatChange(const QSize& old_slide_size, const QSize& new_slide_size) {

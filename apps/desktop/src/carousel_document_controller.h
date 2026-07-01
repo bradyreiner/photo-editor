@@ -49,7 +49,7 @@ class CarouselDocumentController final : public QObject {
   enum class FitMode { Cover, Contain };
   enum class SlideTemplate { Single, SplitPair, StackedTriptych };
   enum class GroupKind { None, HorizontalPair };
-  enum class ItemKind { Image, Text, Video };
+  enum class ItemKind { Image, Text, Video, Shape };
 
   using RecipeState = EditRecipeState;
 
@@ -77,6 +77,37 @@ class CarouselDocumentController final : public QObject {
     QString text = QStringLiteral("New Text");
     QString text_color = QStringLiteral("#1e1a17");
     double text_point_size = 72.0;
+    QString text_font_family = QStringLiteral("display");
+    QString text_horizontal_alignment = QStringLiteral("center");
+    QString text_vertical_alignment = QStringLiteral("middle");
+    QString text_weight = QStringLiteral("demibold");
+    bool text_italic = false;
+    double text_letter_spacing = 0.0;
+    QString text_stroke_color = QStringLiteral("#000000");
+    double text_stroke_width = 0.0;
+    QString text_background_color = QStringLiteral("#ffffff");
+    double text_background_opacity = 0.0;
+    QString shape_kind = QStringLiteral("rectangle");
+    QString fill_color = QStringLiteral("#36f2a6");
+    QString fill_secondary_color = QStringLiteral("#69cad8");
+    QString fill_kind = QStringLiteral("solid");
+    QString stroke_color = QStringLiteral("#0d1419");
+    double stroke_width = 0.0;
+    double corner_radius = 0.0;
+    double opacity = 1.0;
+    QString blend_mode = QStringLiteral("normal");
+    bool flipped_horizontal = false;
+    bool flipped_vertical = false;
+    QString frame_color = QStringLiteral("#ffffff");
+    double frame_width = 0.0;
+    QString shadow_color = QStringLiteral("#000000");
+    double shadow_opacity = 0.0;
+    double shadow_offset_x = 32.0;
+    double shadow_offset_y = 32.0;
+    double media_scale = 1.0;
+    double media_offset_x = 0.0;
+    double media_offset_y = 0.0;
+    QString media_mask_shape = QStringLiteral("rectangle");
     QRectF bounds;
     double rotation_degrees = 0.0;
     FitMode fit_mode = FitMode::Cover;
@@ -107,9 +138,15 @@ class CarouselDocumentController final : public QObject {
 
   Q_INVOKABLE void selectSlide(int index);
   Q_INVOKABLE void addSlide();
+  Q_INVOKABLE void duplicateCurrentSlide();
   Q_INVOKABLE void removeCurrentSlide();
   Q_INVOKABLE void moveCurrentBackward();
   Q_INVOKABLE void moveCurrentForward();
+  Q_INVOKABLE void setCurrentSlideBackgroundColor(const QString& color_value);
+  Q_INVOKABLE void setCurrentSlideBackgroundGradient(
+      const QString& gradient_kind,
+      const QString& start_color,
+      const QString& end_color);
 
   Q_INVOKABLE void addPhotoItem(
       const QString& file_path,
@@ -119,6 +156,7 @@ class CarouselDocumentController final : public QObject {
       const QString& file_path,
       const QString& display_label = QString());
   Q_INVOKABLE void addTextItem(const QString& text = QStringLiteral("New Text"));
+  Q_INVOKABLE void addShapeItem(const QString& shape_kind = QStringLiteral("rectangle"));
   Q_INVOKABLE void pickPhotoItem();
   Q_INVOKABLE void pickVideoItem();
   Q_INVOKABLE void selectItem(const QString& item_id);
@@ -129,6 +167,8 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void duplicateSelectedItem();
   Q_INVOKABLE void bringSelectedForward();
   Q_INVOKABLE void sendSelectedBackward();
+  Q_INVOKABLE void bringSelectedToFront();
+  Q_INVOKABLE void sendSelectedToBack();
   Q_INVOKABLE void moveSelectedItemByPixels(double delta_x, double delta_y);
   Q_INVOKABLE void setSelectedItemCenter(double center_x, double center_y);
   Q_INVOKABLE void setSelectedItemSize(double width, double height);
@@ -141,6 +181,37 @@ class CarouselDocumentController final : public QObject {
   Q_INVOKABLE void setSelectedText(const QString& text);
   Q_INVOKABLE void setSelectedTextColor(const QString& color_value);
   Q_INVOKABLE void setSelectedTextPointSize(double point_size);
+  Q_INVOKABLE void setSelectedTextFontFamily(const QString& font_family);
+  Q_INVOKABLE void setSelectedTextHorizontalAlignment(const QString& alignment);
+  Q_INVOKABLE void setSelectedTextVerticalAlignment(const QString& alignment);
+  Q_INVOKABLE void setSelectedTextWeight(const QString& weight);
+  Q_INVOKABLE void setSelectedTextItalic(bool italic);
+  Q_INVOKABLE void setSelectedTextLetterSpacing(double letter_spacing);
+  Q_INVOKABLE void setSelectedTextStrokeColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedTextStrokeWidth(double stroke_width);
+  Q_INVOKABLE void setSelectedTextBackgroundColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedTextBackgroundOpacity(double opacity);
+  Q_INVOKABLE void setSelectedItemOpacity(double opacity);
+  Q_INVOKABLE void setSelectedItemBlendMode(const QString& blend_mode);
+  Q_INVOKABLE void setSelectedItemFlippedHorizontal(bool flipped);
+  Q_INVOKABLE void setSelectedItemFlippedVertical(bool flipped);
+  Q_INVOKABLE void setSelectedItemFrameColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedItemFrameWidth(double frame_width);
+  Q_INVOKABLE void setSelectedItemShadowColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedItemShadowOpacity(double opacity);
+  Q_INVOKABLE void setSelectedItemShadowOffset(double offset_x, double offset_y);
+  Q_INVOKABLE void setSelectedItemCornerRadius(double corner_radius);
+  Q_INVOKABLE void setSelectedItemMediaScale(double scale);
+  Q_INVOKABLE void setSelectedItemMediaOffset(double offset_x, double offset_y);
+  Q_INVOKABLE void setSelectedItemMediaMaskShape(const QString& mask_shape);
+  Q_INVOKABLE void resetSelectedItemMediaCrop();
+  Q_INVOKABLE void setSelectedShapeKind(const QString& shape_kind);
+  Q_INVOKABLE void setSelectedShapeFillColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedShapeFillKind(const QString& fill_kind);
+  Q_INVOKABLE void setSelectedShapeSecondaryFillColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedShapeStrokeColor(const QString& color_value);
+  Q_INVOKABLE void setSelectedShapeStrokeWidth(double stroke_width);
+  Q_INVOKABLE void setSelectedShapeCornerRadius(double corner_radius);
   Q_INVOKABLE void setSelectedItemHidden(bool hidden);
   Q_INVOKABLE void setSelectedItemLocked(bool locked);
   Q_INVOKABLE void replaceSelectedPhotoItem(
@@ -211,6 +282,9 @@ class CarouselDocumentController final : public QObject {
     MediaItem secondary;
     MediaItem tertiary;
     QString linked_group_id;
+    QString background_color = QStringLiteral("#fbf7f1");
+    QString background_secondary_color = QStringLiteral("#ffffff");
+    QString background_kind = QStringLiteral("solid");
     QString preview_source;
   };
 
@@ -321,6 +395,7 @@ class CarouselDocumentController final : public QObject {
       QPainter* painter,
       const CanvasItem& item,
       const QRectF& frame_rect) const;
+  void renderShapeItem(QPainter* painter, const CanvasItem& item, const QRectF& frame_rect) const;
   void renderTextItem(QPainter* painter, const CanvasItem& item, const QRectF& frame_rect) const;
   void adjustItemsForFormatChange(const QSize& old_slide_size, const QSize& new_slide_size);
   void adjustItemsForSlidesShifted(int start_index, int delta_slides);

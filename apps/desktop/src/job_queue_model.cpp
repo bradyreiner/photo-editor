@@ -59,6 +59,53 @@ bool job_less_than(const PersistentJobRecord& lhs, const PersistentJobRecord& rh
   return lhs.job_id < rhs.job_id;
 }
 
+QVariantMap map_from_job(const PersistentJobRecord& job) {
+  QVariantMap map;
+  map.insert(QStringLiteral("jobId"), job.job_id);
+  map.insert(QStringLiteral("jobKind"), job.job_kind);
+  map.insert(QStringLiteral("assetId"), job.asset_id);
+  map.insert(QStringLiteral("mediaType"), job.media_type);
+  map.insert(QStringLiteral("displayLabel"), job.display_label);
+  map.insert(QStringLiteral("sourcePath"), job.source_path);
+  map.insert(QStringLiteral("presetName"), job.preset_name);
+  map.insert(QStringLiteral("destinationPath"), job.destination_path);
+  map.insert(QStringLiteral("outputPath"), job.output_path);
+  map.insert(QStringLiteral("status"), job.status);
+  map.insert(QStringLiteral("errorMessage"), job.error_message);
+  map.insert(QStringLiteral("progress"), job.progress);
+  map.insert(QStringLiteral("createdAt"), job.created_at);
+  map.insert(QStringLiteral("updatedAt"), job.updated_at);
+  map.insert(QStringLiteral("metadata"), job.metadata_json.toVariantMap());
+  return map;
+}
+
+QString cancellation_mode_for_job(const QString& job_kind, const QString& status) {
+  if (status == QStringLiteral("Queued")) {
+    return QStringLiteral("queued-drop");
+  }
+  if (status == QStringLiteral("Running") &&
+      (job_kind == QStringLiteral("asset_export") ||
+       job_kind == QStringLiteral("timeline_render"))) {
+    return QStringLiteral("cooperative");
+  }
+  if (status == QStringLiteral("Canceling")) {
+    return QStringLiteral("already-canceling");
+  }
+  return QStringLiteral("unsupported");
+}
+
+bool cancellation_enabled_for_job(const QString& job_kind, const QString& status) {
+  const auto mode = cancellation_mode_for_job(job_kind, status);
+  return mode == QStringLiteral("queued-drop") || mode == QStringLiteral("cooperative");
+}
+
+QString cancellation_policy_signature_for_job(const QString& job_kind, const QString& status) {
+  const auto mode = cancellation_mode_for_job(job_kind, status);
+  const auto enabled = mode == QStringLiteral("queued-drop") || mode == QStringLiteral("cooperative");
+  return QStringLiteral("%1|%2|cancel:%3|mode:%4")
+      .arg(job_kind, status, enabled ? QStringLiteral("true") : QStringLiteral("false"), mode);
+}
+
 }  // namespace
 
 JobQueueModel::JobQueueModel(QObject* parent) : QAbstractListModel(parent) {
@@ -182,23 +229,17 @@ QVariantMap JobQueueModel::latestJobForKind(const QString& job_kind) const {
       continue;
     }
 
-    QVariantMap map;
-    map.insert(QStringLiteral("jobId"), job.job_id);
-    map.insert(QStringLiteral("jobKind"), job.job_kind);
-    map.insert(QStringLiteral("assetId"), job.asset_id);
-    map.insert(QStringLiteral("mediaType"), job.media_type);
-    map.insert(QStringLiteral("displayLabel"), job.display_label);
-    map.insert(QStringLiteral("sourcePath"), job.source_path);
-    map.insert(QStringLiteral("presetName"), job.preset_name);
-    map.insert(QStringLiteral("destinationPath"), job.destination_path);
-    map.insert(QStringLiteral("outputPath"), job.output_path);
-    map.insert(QStringLiteral("status"), job.status);
-    map.insert(QStringLiteral("errorMessage"), job.error_message);
-    map.insert(QStringLiteral("progress"), job.progress);
-    map.insert(QStringLiteral("createdAt"), job.created_at);
-    map.insert(QStringLiteral("updatedAt"), job.updated_at);
-    map.insert(QStringLiteral("metadata"), job.metadata_json.toVariantMap());
-    return map;
+    return map_from_job(job);
+  }
+
+  return {};
+}
+
+QVariantMap JobQueueModel::latestFailedJobForKind(const QString& job_kind) const {
+  for (const auto& job : jobs_) {
+    if (job.job_kind == job_kind && job.status == QStringLiteral("Failed")) {
+      return map_from_job(job);
+    }
   }
 
   return {};
@@ -212,6 +253,33 @@ QString JobQueueModel::statusForKind(const QString& job_kind, const QString& idl
     }
   }
   return summary_status_for_jobs(matching_jobs, idle_status);
+}
+
+bool JobQueueModel::canCancelJob(const QString& job_id) const {
+  const auto trimmed_id = job_id.trimmed();
+  for (const auto& job : jobs_) {
+    if (job.job_id == trimmed_id) {
+      return cancellation_enabled_for_job(job.job_kind, job.status);
+    }
+  }
+  return false;
+}
+
+QString JobQueueModel::cancellationPolicySignature(
+    const QString& job_kind,
+    const QString& status) const {
+  return cancellation_policy_signature_for_job(job_kind.trimmed(), status.trimmed());
+}
+
+QString JobQueueModel::cancellationSignature(const QString& job_id) const {
+  const auto trimmed_id = job_id.trimmed();
+  for (const auto& job : jobs_) {
+    if (job.job_id == trimmed_id) {
+      return QStringLiteral("%1|%2")
+          .arg(job.job_id, cancellation_policy_signature_for_job(job.job_kind, job.status));
+    }
+  }
+  return QStringLiteral("%1|missing|cancel:false|mode:missing").arg(trimmed_id);
 }
 
 bool JobQueueModel::retryJob(const QString& job_id) {

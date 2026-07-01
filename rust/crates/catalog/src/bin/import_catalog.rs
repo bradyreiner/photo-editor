@@ -23,6 +23,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let drive_name = arguments[3].clone();
     let import_mode = parse_import_mode(arguments.get(4).map(String::as_str));
     let selected_paths = load_selected_paths(arguments.get(5).map(String::as_str))?;
+    let runtime_paths = AppRuntimePaths::from_env();
+    runtime_paths.ensure_directories()?;
     logger.info(
         "catalog_import.started",
         serde_json::json!({
@@ -38,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         mount_path,
         import_mode,
         selected_paths,
+        managed_root: Some(runtime_paths.app_data_dir.join("managed")),
     };
 
     let discovery_started_at = Instant::now();
@@ -52,7 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             "elapsed_ms": discovery_elapsed_ms,
         }),
     );
-    AppRuntimePaths::from_env().ensure_directories()?;
     let config = PostgresCatalogConfig::from_env();
     let catalog = CatalogService::connect(&config).await?;
     catalog.initialize_schema().await?;

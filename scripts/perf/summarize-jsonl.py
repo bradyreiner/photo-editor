@@ -25,6 +25,7 @@ DEFAULT_EVENTS = {
     "preview.histogram.completed",
     "thumbnail.completed",
     "benchmark.thumbnail_corpus.completed",
+    "benchmark.color_adjustment_sample.completed",
     "benchmark.color_adjustment_pass.completed",
     "benchmark.color_adjustment_suite.completed",
     "benchmark.preview_asset.completed",
@@ -73,6 +74,7 @@ class EventStats:
     count: int = 0
     severities: Counter[str] = field(default_factory=Counter)
     timing_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    numeric_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     categories: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
     files: Counter[str] = field(default_factory=Counter)
 
@@ -212,8 +214,10 @@ def add_record(
     stats.files[source.name] += 1
 
     for key, value in fields.items():
+        number = coerce_number(value)
+        if number is not None:
+            stats.numeric_values[key].append(number)
         if key in PRIMARY_TIMING_FIELDS or key.endswith("_ms"):
-            number = coerce_number(value)
             if number is not None:
                 stats.timing_values[key].append(number)
         if key in CATEGORY_FIELDS and value is not None:
@@ -283,6 +287,10 @@ def build_output(summaries: dict[str, EventStats], parse_stats: ParseStats) -> d
             "timings": {
                 key: timing_summary(values)
                 for key, values in sorted(stats.timing_values.items())
+            },
+            "numeric_fields": {
+                key: timing_summary(values)
+                for key, values in sorted(stats.numeric_values.items())
             },
             "categories": {
                 key: dict(counter.most_common())

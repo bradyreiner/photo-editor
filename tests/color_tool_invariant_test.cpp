@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -18,10 +19,16 @@ using photo_editor::pipeline::CurvePoint;
 using photo_editor::pipeline::LutAdjustment;
 
 constexpr double kEpsilon = 1.0e-6;
+constexpr double kToneChromaRelationshipTolerance = 5.0e-4;
 
 struct NamedPixel final {
   std::string_view name;
   ColorPixel pixel;
+};
+
+struct NeutralRampCase final {
+  std::string name;
+  ColorAdjustmentState state;
 };
 
 bool check(bool condition, std::string_view message, int* failures) {
@@ -53,6 +60,24 @@ double channel_spread(const ColorPixel& pixel) {
       std::abs(static_cast<double>(pixel.green) - static_cast<double>(pixel.blue)),
       std::abs(static_cast<double>(pixel.red) - static_cast<double>(pixel.blue)),
   });
+}
+
+std::array<double, 3> channel_relationships(const ColorPixel& pixel) {
+  const auto red = std::max(0.0, static_cast<double>(pixel.red));
+  const auto green = std::max(0.0, static_cast<double>(pixel.green));
+  const auto blue = std::max(0.0, static_cast<double>(pixel.blue));
+  const auto sum = std::max(kEpsilon, red + green + blue);
+  return {red / sum, green / sum, blue / sum};
+}
+
+double channel_relationship_error(const ColorPixel& before, const ColorPixel& after) {
+  const auto before_relationships = channel_relationships(before);
+  const auto after_relationships = channel_relationships(after);
+  auto error = 0.0;
+  for (std::size_t index = 0; index < before_relationships.size(); ++index) {
+    error = std::max(error, std::abs(before_relationships[index] - after_relationships[index]));
+  }
+  return error;
 }
 
 bool finite_pixel(const ColorPixel& pixel) {
@@ -181,6 +206,105 @@ void require_sdr_headroom(
   }
 }
 
+void require_neutral_ramp_preserved(
+    std::string_view label,
+    const std::vector<ColorPixel>& input,
+    const std::vector<ColorPixel>& output,
+    int* failures) {
+  require_finite_and_alpha(label, input, output, failures);
+  const auto count = std::min(input.size(), output.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    std::ostringstream neutral_message;
+    neutral_message << label << " sample " << index
+                    << " should preserve the neutral axis; rgb=("
+                    << output[index].red << ", " << output[index].green << ", "
+                    << output[index].blue << ")";
+    std::ostringstream luminance_message;
+    luminance_message << label << " sample " << index
+                      << " should preserve neutral luminance; before="
+                      << luminance(input[index]) << " after=" << luminance(output[index]);
+    check(channel_spread(output[index]) <= 1.0e-5, neutral_message.str(), failures);
+    check(
+        std::abs(luminance(output[index]) - luminance(input[index])) <= 2.0e-5,
+        luminance_message.str(),
+        failures);
+  }
+}
+
+void require_chroma_relationships_preserved(
+    std::string_view label,
+    const std::vector<ColorPixel>& input,
+    const std::vector<ColorPixel>& output,
+    int* failures) {
+  require_finite_and_alpha(label, input, output, failures);
+  const auto count = std::min(input.size(), output.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    std::ostringstream relationship_message;
+    relationship_message << label << " sample " << index
+                         << " should preserve normalized channel relationships; error="
+                         << channel_relationship_error(input[index], output[index]);
+    check(
+        channel_relationship_error(input[index], output[index]) <= kToneChromaRelationshipTolerance,
+        relationship_message.str(),
+        failures);
+
+    const auto before_hue = rgb_hue(input[index]);
+    const auto after_hue = rgb_hue(output[index]);
+    std::ostringstream hue_message;
+    hue_message << label << " sample " << index
+                << " should preserve hue; before=" << before_hue << " after=" << after_hue;
+    check(
+        before_hue >= 0.0 && after_hue >= 0.0 &&
+            circular_hue_distance(before_hue, after_hue) <= kToneChromaRelationshipTolerance,
+        hue_message.str(),
+        failures);
+  }
+}
+
+void require_pixels_match(
+    std::string_view label,
+    const std::vector<ColorPixel>& expected,
+    const std::vector<ColorPixel>& actual,
+    int* failures) {
+  check(expected.size() == actual.size(), std::string(label) + " should preserve pixel count", failures);
+  const auto count = std::min(expected.size(), actual.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    std::ostringstream message;
+    message << label << " sample " << index << " should match the default render; expected=("
+            << expected[index].red << ", " << expected[index].green << ", " << expected[index].blue
+            << ", " << expected[index].alpha << ") actual=(" << actual[index].red << ", "
+            << actual[index].green << ", " << actual[index].blue << ", " << actual[index].alpha
+            << ")";
+    check(
+        std::abs(static_cast<double>(expected[index].red) - static_cast<double>(actual[index].red)) <= 1.0e-5 &&
+            std::abs(static_cast<double>(expected[index].green) - static_cast<double>(actual[index].green)) <=
+                1.0e-5 &&
+            std::abs(static_cast<double>(expected[index].blue) - static_cast<double>(actual[index].blue)) <=
+                1.0e-5 &&
+            std::abs(static_cast<double>(expected[index].alpha) - static_cast<double>(actual[index].alpha)) <=
+                1.0e-6,
+        message.str(),
+        failures);
+  }
+}
+
+void require_rgb_channels_monotonic(std::string_view label, const std::vector<ColorPixel>& output, int* failures) {
+  for (std::size_t index = 1; index < output.size(); ++index) {
+    std::ostringstream message;
+    message << label << " sample " << index
+            << " should stay monotonic on neutral ramps; previous=("
+            << output[index - 1].red << ", " << output[index - 1].green << ", "
+            << output[index - 1].blue << ") current=(" << output[index].red << ", "
+            << output[index].green << ", " << output[index].blue << ")";
+    check(
+        output[index].red + 1.0e-5F >= output[index - 1].red &&
+            output[index].green + 1.0e-5F >= output[index - 1].green &&
+            output[index].blue + 1.0e-5F >= output[index - 1].blue,
+        message.str(),
+        failures);
+  }
+}
+
 std::vector<ColorPixel> corpus_pixels() {
   std::vector<ColorPixel> pixels;
   for (const auto& sample : corpus()) {
@@ -294,6 +418,137 @@ int main() {
   }
 
   {
+    const auto expected = apply_pixels(source_corpus, static_cast<int>(source_corpus.size()), 1, base);
+    std::vector<NeutralRampCase> cases;
+
+    auto state = base;
+    cases.push_back(NeutralRampCase{"raw/input transform defaults", state});
+
+    state = base;
+    state.exposure = 0.0;
+    state.contrast = 0.0;
+    state.highlights = 0.0;
+    state.shadows = 0.0;
+    state.whites = 0.0;
+    state.blacks = 0.0;
+    state.brightness = 0.0;
+    cases.push_back(NeutralRampCase{"light defaults", state});
+
+    state = base;
+    state.hdr_local_tone_mapping = 0.0;
+    state.filmic_shoulder = 0.0;
+    state.filmic_toe = 0.0;
+    state.adaptive_contrast = 0.0;
+    state.levels_black_point = 0.0;
+    state.levels_gamma = 0.0;
+    state.levels_white_point = 0.0;
+    cases.push_back(NeutralRampCase{"levels and advanced tone defaults", state});
+
+    state = base;
+    state.zone_deep_shadows = 0.0;
+    state.zone_shadows = 0.0;
+    state.zone_midtones = 0.0;
+    state.zone_lights = 0.0;
+    state.zone_highlights = 0.0;
+    cases.push_back(NeutralRampCase{"zone mapping defaults", state});
+
+    state = base;
+    state.temperature = 0.0;
+    state.tint = 0.0;
+    state.vibrance = 0.0;
+    state.saturation = 0.0;
+    cases.push_back(NeutralRampCase{"white balance and color defaults", state});
+
+    state = base;
+    state.texture = 0.0;
+    state.clarity = 0.0;
+    state.dehaze = 0.0;
+    state.sharpening = 0.0;
+    state.sharpen_masking = 0.0;
+    state.luminance_nr = 0.0;
+    state.color_nr = 0.0;
+    cases.push_back(NeutralRampCase{"presence and detail defaults", state});
+
+    state = base;
+    state.lens_distortion = 0.0;
+    state.lens_vignette = 0.0;
+    state.chromatic_aberration = 0.0;
+    state.perspective_vertical = 0.0;
+    state.perspective_horizontal = 0.0;
+    state.transform_rotation = 0.0;
+    state.transform_scale = 1.0;
+    state.transform_skew_x = 0.0;
+    state.transform_skew_y = 0.0;
+    state.liquify_strength = 0.0;
+    cases.push_back(NeutralRampCase{"optics and transform defaults", state});
+
+    state = base;
+    state.curve_shadows = 0.0;
+    state.curve_darks = 0.0;
+    state.curve_lights = 0.0;
+    state.curve_highlights = 0.0;
+    cases.push_back(NeutralRampCase{"parametric curve defaults", state});
+
+    state = base;
+    state.master_curve_points = {CurvePoint{0.0, 0.0}, CurvePoint{1.0, 1.0}};
+    state.luma_curve_points = {CurvePoint{0.0, 0.0}, CurvePoint{1.0, 1.0}};
+    state.red_curve_points = {CurvePoint{0.0, 0.0}, CurvePoint{1.0, 1.0}};
+    state.green_curve_points = {CurvePoint{0.0, 0.0}, CurvePoint{1.0, 1.0}};
+    state.blue_curve_points = {CurvePoint{0.0, 0.0}, CurvePoint{1.0, 1.0}};
+    cases.push_back(NeutralRampCase{"identity point curves", state});
+
+    state = base;
+    state.color_mixer_model = "OKLab";
+    state.color_mixer_channel = "Reds";
+    state.hue_adjustment = 0.0;
+    state.saturation_adjustment = 0.0;
+    state.luminance_adjustment = 0.0;
+    cases.push_back(NeutralRampCase{"color mixer defaults", state});
+
+    state = base;
+    state.rgb_channel_mixer.red_from_red = 100.0;
+    state.rgb_channel_mixer.green_from_green = 100.0;
+    state.rgb_channel_mixer.blue_from_blue = 100.0;
+    cases.push_back(NeutralRampCase{"rgb channel mixer identity", state});
+
+    state = base;
+    state.black_and_white_enabled = false;
+    state.black_and_white_mixer[0] = 45.0;
+    state.black_and_white_mixer[5] = -45.0;
+    cases.push_back(NeutralRampCase{"disabled black-and-white group", state});
+
+    state = base;
+    state.color_replacement_enabled = false;
+    state.color_replacement_strength = 100.0;
+    state.skin_tone_protection_enabled = false;
+    state.skin_tone_protection_strength = 100.0;
+    state.color_harmony_enabled = false;
+    state.color_harmony_strength = 100.0;
+    cases.push_back(NeutralRampCase{"disabled advanced color groups", state});
+
+    state = base;
+    cases.push_back(NeutralRampCase{"color grading defaults", state});
+
+    state = base;
+    state.lut_enabled = false;
+    state.lut_table = make_identity_lut_adjustment().table;
+    state.lut_size = 2;
+    auto disabled_lut = make_identity_lut_adjustment();
+    disabled_lut.enabled = false;
+    state.lut_stack.push_back(disabled_lut);
+    cases.push_back(NeutralRampCase{"disabled LUT defaults", state});
+
+    check(
+        cases.size() == 15,
+        "identity/default registry should cover every global adjustment group",
+        &failures);
+    for (const auto& identity_case : cases) {
+      const auto output = apply_pixels(source_corpus, static_cast<int>(source_corpus.size()), 1, identity_case.state);
+      require_pixels_match(identity_case.name, expected, output, &failures);
+    }
+  }
+
+  {
     auto state = base;
     state.exposure = 1.0;
     state.contrast = 24.0;
@@ -372,6 +627,306 @@ int main() {
   }
 
   {
+    const auto input = std::vector<ColorPixel>{
+        gray(0.0), gray(0.012), gray(0.035), gray(0.08), gray(0.18),
+        gray(0.34), gray(0.55), gray(0.74), gray(0.90), gray(1.0),
+    };
+    std::vector<NeutralRampCase> cases;
+
+    auto state = base;
+    state.curve_shadows = -48.0;
+    state.curve_darks = -18.0;
+    state.curve_lights = 24.0;
+    state.curve_highlights = 38.0;
+    cases.push_back(NeutralRampCase{"parametric curve monotonicity", state});
+
+    state = base;
+    state.master_curve_points = {
+        CurvePoint{0.0, 0.04},
+        CurvePoint{0.22, 0.18},
+        CurvePoint{0.58, 0.62},
+        CurvePoint{1.0, 0.96},
+    };
+    cases.push_back(NeutralRampCase{"master point curve monotonicity", state});
+
+    state = base;
+    state.luma_curve_points = {
+        CurvePoint{0.0, 0.02},
+        CurvePoint{0.30, 0.24},
+        CurvePoint{0.72, 0.78},
+        CurvePoint{1.0, 0.98},
+    };
+    cases.push_back(NeutralRampCase{"luma point curve monotonicity", state});
+
+    state = base;
+    state.red_curve_points = {
+        CurvePoint{0.0, 0.00},
+        CurvePoint{0.35, 0.30},
+        CurvePoint{0.70, 0.76},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"red point curve monotonicity", state});
+
+    state = base;
+    state.green_curve_points = {
+        CurvePoint{0.0, 0.00},
+        CurvePoint{0.28, 0.22},
+        CurvePoint{0.68, 0.72},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"green point curve monotonicity", state});
+
+    state = base;
+    state.blue_curve_points = {
+        CurvePoint{0.0, 0.00},
+        CurvePoint{0.32, 0.26},
+        CurvePoint{0.78, 0.84},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"blue point curve monotonicity", state});
+
+    state = base;
+    state.master_curve_points = {
+        CurvePoint{0.0, 0.05},
+        CurvePoint{0.45, 0.48},
+        CurvePoint{1.0, 0.95},
+    };
+    state.luma_curve_points = {
+        CurvePoint{0.0, 0.0},
+        CurvePoint{0.50, 0.55},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"stacked master and luma curve monotonicity", state});
+
+    check(
+        cases.size() == 7,
+        "tone curve monotonicity registry should cover parametric, master, luma, and RGB channels",
+        &failures);
+    for (const auto& curve_case : cases) {
+      const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, curve_case.state);
+      require_finite_and_alpha(curve_case.name, input, output, &failures);
+      require_sdr_headroom(curve_case.name, output, &failures);
+      require_rgb_channels_monotonic(curve_case.name, output, &failures);
+    }
+  }
+
+  {
+    const auto input = std::vector<ColorPixel>{
+        ColorPixel{0.02F, 0.04F, 0.08F, 1.0F}, ColorPixel{0.18F, 0.12F, 0.05F, 1.0F},
+        ColorPixel{0.45F, 0.30F, 0.62F, 1.0F}, ColorPixel{0.72F, 0.90F, 0.48F, 1.0F},
+        ColorPixel{1.10F, 0.74F, 0.32F, 1.0F},
+    };
+    std::vector<NeutralRampCase> cases;
+
+    auto state = base;
+    state.curve_shadows = -100.0;
+    state.curve_darks = 100.0;
+    state.curve_lights = -100.0;
+    state.curve_highlights = 100.0;
+    cases.push_back(NeutralRampCase{"extreme parametric curve finite output", state});
+
+    state = base;
+    state.master_curve_points = {
+        CurvePoint{-0.40, 1.30},
+        CurvePoint{0.30, -0.20},
+        CurvePoint{0.30, 0.70},
+        CurvePoint{1.40, -0.10},
+    };
+    cases.push_back(NeutralRampCase{"clamped master point curve finite output", state});
+
+    state = base;
+    state.luma_curve_points = {
+        CurvePoint{0.80, 0.10},
+        CurvePoint{0.20, 0.90},
+        CurvePoint{0.50, 0.50},
+    };
+    cases.push_back(NeutralRampCase{"unsorted luma point curve finite output", state});
+
+    state = base;
+    state.red_curve_points = {
+        CurvePoint{0.0, 1.0},
+        CurvePoint{0.5, 0.0},
+        CurvePoint{1.0, 1.0},
+    };
+    state.green_curve_points = {
+        CurvePoint{0.0, 0.0},
+        CurvePoint{0.5, 1.0},
+        CurvePoint{1.0, 0.0},
+    };
+    state.blue_curve_points = {
+        CurvePoint{0.0, 0.5},
+        CurvePoint{0.5, 0.5},
+        CurvePoint{1.0, 0.5},
+    };
+    cases.push_back(NeutralRampCase{"nonmonotonic RGB point curves finite output", state});
+
+    check(
+        cases.size() == 4,
+        "tone curve finite-output registry should cover extreme, clamped, unsorted, and RGB point curves",
+        &failures);
+    for (const auto& curve_case : cases) {
+      const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, curve_case.state);
+      require_finite_and_alpha(curve_case.name, input, output, &failures);
+      require_sdr_headroom(curve_case.name, output, &failures);
+    }
+  }
+
+  {
+    const auto input = std::vector<ColorPixel>{
+        ColorPixel{0.42F, 0.18F, 0.08F, 1.0F},
+        ColorPixel{0.10F, 0.40F, 0.16F, 1.0F},
+        ColorPixel{0.08F, 0.18F, 0.48F, 1.0F},
+        ColorPixel{0.44F, 0.13F, 0.38F, 1.0F},
+        ColorPixel{0.52F, 0.46F, 0.12F, 1.0F},
+        ColorPixel{0.14F, 0.50F, 0.52F, 1.0F},
+    };
+    std::vector<NeutralRampCase> cases;
+
+    auto state = base;
+    state.exposure = 0.55;
+    state.brightness = 18.0;
+    cases.push_back(NeutralRampCase{"exposure and brightness", state});
+
+    state = base;
+    state.contrast = 32.0;
+    state.highlights = -24.0;
+    state.shadows = 22.0;
+    cases.push_back(NeutralRampCase{"contrast highlight shadow tone", state});
+
+    state = base;
+    state.whites = 18.0;
+    state.blacks = -12.0;
+    state.levels_black_point = 3.0;
+    state.levels_white_point = 97.0;
+    cases.push_back(NeutralRampCase{"levels whites and blacks", state});
+
+    state = base;
+    state.filmic_shoulder = 26.0;
+    state.filmic_toe = 18.0;
+    state.adaptive_contrast = 30.0;
+    cases.push_back(NeutralRampCase{"filmic and adaptive tone", state});
+
+    state = base;
+    state.levels_gamma = -28.0;
+    cases.push_back(NeutralRampCase{"levels gamma", state});
+
+    state = base;
+    state.zone_deep_shadows = 18.0;
+    state.zone_shadows = -14.0;
+    state.zone_midtones = 20.0;
+    state.zone_lights = -16.0;
+    state.zone_highlights = 14.0;
+    cases.push_back(NeutralRampCase{"zone mapping tone", state});
+
+    state = base;
+    state.curve_shadows = 22.0;
+    state.curve_darks = -16.0;
+    state.curve_lights = 18.0;
+    state.curve_highlights = -12.0;
+    cases.push_back(NeutralRampCase{"parametric tone curve", state});
+
+    state = base;
+    state.luma_curve_points = {
+        CurvePoint{0.0, 0.0},
+        CurvePoint{0.24, 0.20},
+        CurvePoint{0.66, 0.74},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"luma point curve", state});
+
+    check(
+        cases.size() == 8,
+        "tone-only chroma registry should cover global light, levels, zone, and luma curve tools",
+        &failures);
+    for (const auto& tone_case : cases) {
+      const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, tone_case.state);
+      require_chroma_relationships_preserved(tone_case.name, input, output, &failures);
+    }
+  }
+
+  {
+    const auto input = std::vector<ColorPixel>{
+        gray(0.0), gray(0.006), gray(0.018), gray(0.055), gray(0.18),
+        gray(0.36), gray(0.62), gray(0.86), gray(0.98),
+    };
+    std::vector<NeutralRampCase> cases;
+
+    auto state = base;
+    state.vibrance = 74.0;
+    state.saturation = -48.0;
+    cases.push_back(NeutralRampCase{"vibrance and saturation", state});
+
+    for (const auto model : std::array<std::string_view, 4>{"HSL", "HSV", "LCH", "OKLab"}) {
+      state = base;
+      state.color_mixer_model = std::string(model);
+      state.color_mixer_channel = "Reds";
+      state.hue_adjustment = 70.0;
+      state.saturation_adjustment = -45.0;
+      state.luminance_adjustment = 24.0;
+      cases.push_back(NeutralRampCase{std::string("legacy ") + std::string(model) + " mixer", state});
+    }
+
+    for (const auto model : std::array<std::string_view, 4>{"HSL", "HSV", "LCH", "OKLab"}) {
+      state = base;
+      state.color_mixer_model = std::string(model);
+      state.color_mixer_channels[0].hue = 34.0;
+      state.color_mixer_channels[2].saturation = 62.0;
+      state.color_mixer_channels[5].luminance = -28.0;
+      state.color_mixer_channels[7].hue = -48.0;
+      cases.push_back(NeutralRampCase{std::string("per-channel ") + std::string(model) + " mixer", state});
+    }
+
+    state = base;
+    state.color_mixer_model = "OKLab";
+    state.color_mixer_channels[0].selective_cyan = 40.0;
+    state.color_mixer_channels[2].selective_magenta = -32.0;
+    state.color_mixer_channels[4].selective_yellow = 58.0;
+    state.color_mixer_channels[6].selective_black = -45.0;
+    cases.push_back(NeutralRampCase{"selective color mixer", state});
+
+    state = base;
+    state.black_and_white_enabled = true;
+    state.black_and_white_mixer[0] = 72.0;
+    state.black_and_white_mixer[2] = -52.0;
+    state.black_and_white_mixer[5] = 44.0;
+    cases.push_back(NeutralRampCase{"black-and-white color mixer", state});
+
+    state = base;
+    state.color_replacement_enabled = true;
+    state.color_replacement_source_hue = 0.0;
+    state.color_replacement_target_hue = 0.61;
+    state.color_replacement_range = 80.0;
+    state.color_replacement_strength = 100.0;
+    cases.push_back(NeutralRampCase{"color replacement", state});
+
+    state = base;
+    state.skin_tone_protection_enabled = true;
+    state.skin_tone_protection_range = 45.0;
+    state.skin_tone_protection_strength = 100.0;
+    cases.push_back(NeutralRampCase{"skin tone protection", state});
+
+    state = base;
+    state.color_harmony_enabled = true;
+    state.color_harmony_mode = "Tetradic";
+    state.color_harmony_base_hue = 0.08;
+    state.color_harmony_strength = 100.0;
+    cases.push_back(NeutralRampCase{"color harmony", state});
+
+    state = base;
+    state.lut_stack.push_back(make_identity_lut_adjustment());
+    cases.push_back(NeutralRampCase{"identity LUT stack", state});
+
+    check(
+        cases.size() == 15,
+        "neutral-ramp color-only registry should cover every hue/chroma-selective color capability",
+        &failures);
+    for (const auto& color_case : cases) {
+      const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, color_case.state);
+      require_neutral_ramp_preserved(color_case.name, input, output, &failures);
+    }
+  }
+
+  {
     auto state = base;
     state.vibrance = 54.0;
     state.saturation = 28.0;
@@ -406,11 +961,11 @@ int main() {
 
   {
     auto state = base;
-    state.grading_shadows_hue = 220.0;
+    state.grading_shadows_hue = 220.0 / 360.0;
     state.grading_shadows_saturation = 28.0;
-    state.grading_midtones_hue = 36.0;
+    state.grading_midtones_hue = 36.0 / 360.0;
     state.grading_midtones_saturation = 22.0;
-    state.grading_highlights_hue = 54.0;
+    state.grading_highlights_hue = 54.0 / 360.0;
     state.grading_highlights_saturation = 18.0;
     state.rgb_channel_mixer.red_from_red = 92.0;
     state.rgb_channel_mixer.red_from_green = 8.0;

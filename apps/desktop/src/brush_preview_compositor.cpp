@@ -65,7 +65,7 @@ class CpuBrushPreviewCompositor final : public BrushPreviewCompositor {
 
     for (const auto& point : points) {
       const auto clamped_size = std::max(0.01, point.size);
-      const auto clamped_flow = clamp_unit(point.flow);
+      const auto clamped_flow = clamp_unit(point.flow) * clamp_unit(point.opacity);
       const auto center_x =
           clamp_unit(point.x) * static_cast<double>(std::max(image->width() - 1, 1));
       const auto center_y =

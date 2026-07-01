@@ -199,6 +199,13 @@ bool decode_raw_image(
   return false;
 }
 
+bool decode_raw_preview_image(
+    const QString& /*file_path*/,
+    QImage* /*image*/,
+    int /*max_edge*/) {
+  return false;
+}
+
 bool decode_raw_linear_image(
     const QString& /*file_path*/,
     QImage* /*image*/,

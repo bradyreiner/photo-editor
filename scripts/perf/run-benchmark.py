@@ -196,7 +196,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def run_summary(run_dir: Path, artifact_dir: Path) -> None:
     summarizer = Path(__file__).with_name("summarize-jsonl.py")
     text_result = subprocess.run(
-        [sys.executable, "-B", str(summarizer), str(run_dir)],
+        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events"],
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -205,7 +205,7 @@ def run_summary(run_dir: Path, artifact_dir: Path) -> None:
     (artifact_dir / "summary.txt").write_text(text_result.stdout, encoding="utf-8")
 
     json_result = subprocess.run(
-        [sys.executable, "-B", str(summarizer), str(run_dir), "--json"],
+        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events", "--json"],
         check=False,
         text=True,
         stdout=subprocess.PIPE,

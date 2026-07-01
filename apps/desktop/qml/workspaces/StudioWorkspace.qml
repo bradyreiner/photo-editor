@@ -20,6 +20,10 @@ Rectangle {
     property int selectedCompareIndex: 1
     property int selectedMaskSetIndex: 0
     property int activePhotoLayerIndex: 0
+    property var selectedPhotoLayerIndices: []
+    property bool baseImageTargetActive: false
+    property var selectedEditTarget: ({ scope: "base-image", layerIndex: -1, maskSetId: "", maskSetName: "", sourceIndex: -1 })
+    readonly property string selectedEditTargetContract: selectedEditTargetSignature()
     property bool selectionMode: false
     property bool importModeOpen: false
     property bool syncEnabled: true
@@ -36,19 +40,33 @@ Rectangle {
     property bool exportSettingsPanelVisible: true
     property string interfaceMode: "pro"
     property bool fullScreenEditingEnabled: false
+    property bool focusEditLayoutEnabled: false
     property bool responsiveSmallDisplayPanelsActive: false
     property bool lightAdvancedToneExpanded: false
+    property bool maskAdvancedDetailsExpanded: false
     property bool lightLevelsExpanded: false
     property bool lightZonesExpanded: false
     property bool cropTransformExpanded: false
     property bool cropLiquifyExpanded: false
+    property bool cropLiquifyToolAvailable: false
     property bool colorMixExpanded: true
     property bool channelMixerExpanded: false
     property bool blackWhiteExpanded: false
     property bool colorReplaceExpanded: false
     property bool skinToneExpanded: false
     property bool harmonyExpanded: false
-    property bool splitToningExpanded: false
+    property bool splitToningExpanded: true
+    property bool labColorToolsVisible: false
+    property string studioSelectedPresetName: ""
+    property string studioPresetDraftName: ""
+    property string studioPresetDraftPack: "User Presets"
+    property string studioPresetSearchText: ""
+    property string studioPresetCategoryFilter: "All"
+    property string studioPresetPackFilter: "All"
+    property bool studioPresetFavoritesOnly: false
+    property string studioPresetImportFolder: ""
+    property string studioPresetExportFolder: ""
+    property string studioPresetPreviewRecipeJson: ""
     property var savedWorkspaceLayouts: [
         {
             name: "Default",
@@ -71,6 +89,31 @@ Rectangle {
             exportSettingsPanelVisible: false
         }
     ]
+
+    Binding {
+        target: editorPreview
+        property: "scopesVisible"
+        value: root.page === "edit" &&
+               root.editInspectorTab === "scopes" &&
+               root.editInspectorPanelVisible
+        restoreMode: Binding.RestoreBindingOrValue
+    }
+
+    Binding {
+        target: agentEdit
+        property: "manualEditingActive"
+        value: root.page === "edit" &&
+               (root.activeCanvasToolChromeReduced ||
+                root.pixelInspectorSamplingActive ||
+                root.maskColorRangeSampling ||
+                root.maskLuminanceRangeSampling ||
+                root.maskDepthRangeSampling ||
+                root.objectPickArmed ||
+                root.polygonDrawArmed ||
+                root.lassoDrawArmed ||
+                root.brushHudSizeDragActive)
+        restoreMode: Binding.RestoreBindingOrValue
+    }
     readonly property int savedWorkspaceLayoutCount: savedWorkspaceLayouts.length
     property bool scopeShowRgb: true
     property bool scopeShowLuma: true
@@ -101,13 +144,41 @@ Rectangle {
     property bool falseColorOverlayEnabled: false
     property bool gamutOverlayEnabled: false
     property bool zoneMapOverlayEnabled: false
-    property string scopeLayoutPreset: "Stacked"
+    property bool diagnosticsPanelOpen: false
+    property bool pixelInspectorSamplingActive: false
+    property bool maskColorRangeSampling: false
+    property bool maskLuminanceRangeSampling: false
+    property bool maskDepthRangeSampling: false
+    property bool objectPickArmed: false
+    property bool objectPickCreateNew: false
+    property string objectPickMode: "selection"
+    property bool polygonDrawArmed: false
+    property bool lassoDrawArmed: false
+    property bool spacePanActive: false
+    property bool temporaryBrushEraseActive: false
+    property string temporaryBrushErasePreviousOperation: ""
+    property bool maskShapeEditTransactionActive: false
+    property string scopeLayoutPreset: "Quad"
     property string scopeSamplingMode: "Balanced"
     property string editTool: "adjust"
     property string cropToolMode: "crop"
     property string maskCreationOperation: "add"
+    property string agentRunMode: "draft"
+    property string agentScopeMode: "selected-assets"
+    property bool maskToolRailExpanded: false
+    property bool standaloneMaskSectionCollapsed: false
+    property var collapsedLayerMaskSections: ({})
+    property string activeMaskRenameDraft: ""
+    property bool brushHudSizeDragActive: false
+    property real brushHudSizeDragStartX: 0
+    property real brushHudSizeDragStartSize: 0.08
+    property real selectionOutlinePhase: 0
+    readonly property int selectionOutlineAnimationPointBudget: 1800
+    readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
+    readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
     property string editInspectorTab: "adjust"
     property string selectedEditLayer: "adjustments"
+    property string editAdjustmentFilterText: ""
     property string exportDestination: "/Volumes/Exports"
     property string exportNameSuffix: "_virel"
     property string searchText: ""
@@ -119,6 +190,42 @@ Rectangle {
         onAccepted: {
             if (editorPreview.setReferenceImage(selectedFile))
                 root.activateEditTool("compare")
+        }
+    }
+
+    Dialog {
+        id: activeMaskRenameDialog
+        objectName: "activeMaskRenameDialog"
+        title: "Rename Selection"
+        modal: true
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        anchors.centerIn: parent
+        onOpened: {
+            activeMaskRenameShortcutField.forceActiveFocus()
+            activeMaskRenameShortcutField.selectAll()
+        }
+        onClosed: root.forceActiveFocus()
+        onAccepted: {
+            const nextName = root.activeMaskRenameDraft.trim()
+            if (nextName.length > 0)
+                editorPreview.activeMaskName = nextName
+        }
+
+        contentItem: ColumnLayout {
+            width: 300
+            spacing: 8
+
+            TextField {
+                id: activeMaskRenameShortcutField
+                objectName: "activeMaskRenameShortcutField"
+                Layout.fillWidth: true
+                text: root.activeMaskRenameDraft
+                selectByMouse: true
+                placeholderText: "Selection name"
+                onTextChanged: root.activeMaskRenameDraft = text
+                onAccepted: activeMaskRenameDialog.accept()
+            }
         }
     }
 
@@ -138,6 +245,14 @@ Rectangle {
             editorPreview.cropEditing = false
     }
 
+    NumberAnimation on selectionOutlinePhase {
+        from: 0
+        to: 24
+        duration: 900
+        loops: Animation.Infinite
+        running: root.selectionOutlineAnimationEnabled
+    }
+
     signal assetActivated(string destination)
     signal projectActivated(string destination, string projectName)
     signal localAssetActivated(string filePath, string previewSource, string displayName)
@@ -153,16 +268,25 @@ Rectangle {
     readonly property color dimText: "#79828C"
     readonly property color faintText: "#4E5862"
     readonly property bool compactMode: interfaceMode === "compact"
-    readonly property bool editingChromeVisible: !fullScreenEditingEnabled
+    readonly property bool libraryImportActive: page === "library" && importModeOpen
+    readonly property bool editingChromeVisible: !fullScreenEditingEnabled && !focusEditLayoutEnabled
     readonly property bool smallDisplayMode: width > 0 && width < 1120
     readonly property int librarySourcesPanelWidth: compactMode ? 218 : 262
     readonly property int libraryInspectorPanelWidth: compactMode ? 292 : 340
     readonly property int editContextPanelWidth: compactMode ? 210 : 246
     readonly property int editInspectorPanelWidth: compactMode ? 356 : 420
+    readonly property bool maskWorkActive: editTool === "masks" ||
+                                           brushToolReady() ||
+                                           (editorPreview.hasActiveMask &&
+                                            editorPreview.activeMaskToolRole === "retouch" &&
+                                            !editorPreview.compareMode)
+    readonly property bool activeCanvasToolChromeReduced: editTool === "crop" ||
+                                                        maskWorkActive
     readonly property bool editContextPanelActive: editingChromeVisible
                                                 && editContextPanelVisible
                                                 && !editSidebarCollapsed
                                                 && editTool !== "compare"
+                                                && !activeCanvasToolChromeReduced
                                                 && !(largeScopesMode && editInspectorTab === "scopes")
     readonly property int exportPresetsPanelWidth: compactMode ? 258 : 306
     readonly property int exportSettingsPanelWidth: compactMode ? 294 : 342
@@ -225,7 +349,7 @@ Rectangle {
         { key: "match-exposure", label: "Match Exposure", status: "Batch exposure match" },
         { key: "match-white-balance", label: "Match White Balance", status: "Batch white balance match" },
         { key: "batch-crop", label: "Batch Crop", status: "Apply crop behavior" },
-        { key: "batch-mask-ai", label: "Batch Mask / AI", status: "Batch mask generation" },
+        { key: "batch-mask-ai", label: "Batch Generated Masks", status: "Batch mask generation" },
         { key: "batch-retouch-safe", label: "Batch Retouch", status: "Safe reusable retouch" },
         { key: "batch-metadata-templates", label: "Batch Metadata", status: "Apply metadata templates" },
         { key: "batch-export-validation", label: "Batch Export Validation", status: "Validate before queue" }
@@ -289,7 +413,7 @@ Rectangle {
         { key: "visible-history-panel", label: "History Panel", status: "Visible edit history" },
         { key: "workspace-autosave", label: "Autosave", status: "Autosave across workspaces" },
         { key: "crash-safe-recipe-writes", label: "Crash-Safe Recipes", status: "Atomic edit recipe writes" },
-        { key: "job-recovery", label: "Job Recovery", status: "Exports, imports, AI tasks, timeline renders" },
+        { key: "job-recovery", label: "Job Recovery", status: "Exports, imports, generated mask tasks, timeline renders" },
         { key: "catalog-repair-tools", label: "Catalog Repair", status: "Catalog integrity repair" },
         { key: "cache-repair-tools", label: "Cache Repair", status: "Cache validation and rebuild" },
         { key: "relink-repair-tools", label: "Relink Repair", status: "Missing-original relink repair" },
@@ -307,7 +431,7 @@ Rectangle {
         { key: "plugin-extension-api", label: "Extensions", status: "Plugin and extension API" },
         { key: "scripting-automation-hooks", label: "Automation", status: "Scripting hooks" },
         { key: "custom-export-actions", label: "Export Actions", status: "Custom delivery actions" },
-        { key: "custom-model-plugins", label: "Model Plugins", status: "Custom AI model plugins" }
+        { key: "custom-model-plugins", label: "Model Plugins", status: "Custom selection and retouch model plugins" }
     ]
     readonly property var qaTestingCapabilityRegistry: [
         { key: "golden-image-corpus", label: "Golden Corpus", status: "Golden image corpus" },
@@ -413,6 +537,100 @@ Rectangle {
         return Math.max(low, Math.min(high, value))
     }
 
+    function thumbnailScreenDevicePixelRatio() {
+        return Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+    }
+
+    function thumbnailSourceSizeForDisplay(displayPixels, backingPixels) {
+        return Math.max(0, Math.max(Number(backingPixels || 0),
+                                   Math.round(Math.max(1, Number(displayPixels || 1)) *
+                                              root.thumbnailScreenDevicePixelRatio())))
+    }
+
+    function clearTransientMaskTools() {
+        root.endMaskShapeEditTransaction()
+        objectPickArmed = false
+        objectPickCreateNew = false
+        objectPickMode = "selection"
+        polygonDrawArmed = false
+        lassoDrawArmed = false
+        spacePanActive = false
+        editorPreview.clearSmartSelectPreview()
+    }
+
+    function beginMaskShapeEditTransaction() {
+        if (root.maskShapeEditTransactionActive)
+            return
+        editorPreview.beginCoalescedEdit()
+        root.maskShapeEditTransactionActive = true
+    }
+
+    function endMaskShapeEditTransaction() {
+        if (!root.maskShapeEditTransactionActive)
+            return
+        root.maskShapeEditTransactionActive = false
+        editorPreview.endCoalescedEdit()
+    }
+
+    function manualSelectionSubtractActive() {
+        return root.maskCreationOperation === "subtract" ||
+               root.objectPickMode === "selection-subtract"
+    }
+
+    function maskOperationForModifierState(modifierState) {
+        const modifiers = Number(modifierState || 0)
+        const shiftHeld = (modifiers & Qt.ShiftModifier) !== 0
+        const optionHeld = (modifiers & Qt.AltModifier) !== 0
+        if (shiftHeld && optionHeld)
+            return "intersect"
+        if (optionHeld)
+            return "subtract"
+        if (shiftHeld)
+            return "add"
+        return root.maskCreationOperation
+    }
+
+    function applyMaskOperationForModifierState(modifierState) {
+        const operation = root.maskOperationForModifierState(modifierState)
+        root.maskCreationOperation = operation
+        if (editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch")
+            editorPreview.activeMaskOperation = operation
+        return operation
+    }
+
+    function objectPickModeForModifierState(modifierState) {
+        return root.maskOperationForModifierState(modifierState) === "subtract"
+                ? "selection-subtract"
+                : "selection"
+    }
+
+    function applyObjectPickModeForModifierState(modifierState) {
+        if (root.objectPickMode === "remove")
+            return root.objectPickMode
+        root.objectPickMode = root.objectPickModeForModifierState(modifierState)
+        return root.objectPickMode
+    }
+
+    function maskSpacePanShortcutActive() {
+        return page === "edit" &&
+               editorPreview.hasAsset &&
+               !editorPreview.compareMode &&
+               (root.brushToolReady() ||
+                root.lassoDrawArmed ||
+                root.activeLassoShortcutReady() ||
+                root.polygonDrawArmed ||
+                root.activePolygonShortcutReady() ||
+                root.objectPickArmed)
+    }
+
+    function handleMaskPickOutcome(outcome) {
+        if (outcome === "selection-ai" || outcome === "remove-ai") {
+            root.clearTransientMaskTools()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+        }
+    }
+
     function pixelValueText(sample) {
         if (!sample || sample.valid !== true)
             return "--"
@@ -429,6 +647,970 @@ Rectangle {
             ? "+" + inspector.deltaLuminance.toFixed(3)
             : inspector.deltaLuminance.toFixed(3)
         return "Delta " + r + " " + g + " " + b + "  Y " + luma
+    }
+
+    function previewFailureStageLabel(stage) {
+        const normalized = String(stage || "").replace(/_/g, " ").trim()
+        if (normalized.length === 0)
+            return ""
+        return normalized.charAt(0).toUpperCase() + normalized.slice(1)
+    }
+
+    function thumbnailFailureStageLabel(stage) {
+        const label = previewFailureStageLabel(stage)
+        return label.length > 0 ? label : "Thumbnail"
+    }
+
+    function thumbnailStateSignature(data) {
+        const ready = Boolean(data && data.thumbnailReady === true)
+        const stale = Boolean(data && data.thumbnailStale === true)
+        const progressive = Boolean(data && data.thumbnailProgressive === true)
+        const contained = Boolean(data && data.thumbnailFailureContained === true)
+        const stage = String(data && data.thumbnailFailureStage !== undefined
+                             ? data.thumbnailFailureStage : "").trim()
+        const displayState = thumbnailDisplayState(data)
+        return "ready:" + String(ready)
+                + "|stale:" + String(stale)
+                + "|progressive:" + String(progressive)
+                + "|failure-contained:" + String(contained)
+                + "|stage:" + stage
+                + "|display:" + displayState
+    }
+
+    function thumbnailDisplayState(data) {
+        const ready = Boolean(data && data.thumbnailReady === true)
+        const stale = Boolean(data && data.thumbnailStale === true)
+        const progressive = Boolean(data && data.thumbnailProgressive === true)
+        const contained = Boolean(data && data.thumbnailFailureContained === true)
+        const source = String(data && data.thumbnailSource !== undefined
+                              ? data.thumbnailSource : "").trim()
+        if (contained && stale)
+            return "contained-failure-stale"
+        if (contained)
+            return "contained-failure"
+        if (progressive && stale && source.length > 0)
+            return "progressive-updating"
+        if (ready && source.length > 0)
+            return "ready"
+        return "empty"
+    }
+
+    function thumbnailStatusLabel(data, fallbackText) {
+        const contained = Boolean(data && data.thumbnailFailureContained === true)
+        const stale = Boolean(data && data.thumbnailStale === true)
+        const progressive = Boolean(data && data.thumbnailProgressive === true)
+        const stage = String(data && data.thumbnailFailureStage !== undefined
+                             ? data.thumbnailFailureStage : "").trim()
+        if (contained && stale)
+            return "Thumbnail stale / " + thumbnailFailureStageLabel(stage)
+        if (contained)
+            return "Thumbnail unavailable / " + thumbnailFailureStageLabel(stage)
+        if (progressive && stale)
+            return "Thumbnail updating"
+        return String(fallbackText || "")
+    }
+
+    function thumbnailRetryActionSignature(data, rowKind) {
+        const contained = Boolean(data && data.thumbnailFailureContained === true)
+        const stage = String(data && data.thumbnailFailureStage !== undefined
+                             ? data.thumbnailFailureStage : "").trim()
+        const detail = String(data && data.thumbnailFailureDetail !== undefined
+                              ? data.thumbnailFailureDetail : "").trim()
+        return "thumbnail-retry|row:" + String(rowKind || "unknown")
+                + "|available:" + String(contained)
+                + "|stage:" + stage
+                + "|detail:" + detail
+    }
+
+    function maskAlphaProviderSummary(data) {
+        const provider = String(data && data.mask_alpha_provider !== undefined
+                                ? data.mask_alpha_provider : "").trim()
+        if (provider.length === 0)
+            return "Alpha provider unavailable"
+        const full = Boolean(data && data.mask_alpha_full_resolution_available === true)
+        const deterministic = Boolean(data && data.mask_alpha_deterministic === true)
+        const width = Math.max(0, Number(data && data.mask_alpha_target_width !== undefined
+                                         ? data.mask_alpha_target_width : 0))
+        const height = Math.max(0, Number(data && data.mask_alpha_target_height !== undefined
+                                          ? data.mask_alpha_target_height : 0))
+        const target = width > 0 && height > 0 ? " / " + Math.round(width) + "x" + Math.round(height) : ""
+        return "Alpha " + provider
+                + " / " + (full ? "full-res" : "preview")
+                + " / " + (deterministic ? "deterministic" : "transient")
+                + target
+    }
+
+    function maskSourceProvenanceSummary(data) {
+        const brushContract = String(data && data.brushAlphaSourceContract !== undefined
+                                     ? data.brushAlphaSourceContract : "").trim()
+        if (brushContract.length > 0) {
+            const strokes = Math.max(0, Number(data && data.brushAlphaStrokeCount !== undefined
+                                               ? data.brushAlphaStrokeCount : 0))
+            const points = Math.max(0, Number(data && data.brushAlphaPointCount !== undefined
+                                              ? data.brushAlphaPointCount : 0))
+            const source = String(data && data.brushAlphaSourceOfTruth !== undefined
+                                  ? data.brushAlphaSourceOfTruth : "brush source").trim()
+            return "Brush source / " + Math.round(strokes) + " strokes / "
+                    + Math.round(points) + " points / " + source
+        }
+
+        const shapeContract = String(data && data.shapeAlphaSourceContract !== undefined
+                                     ? data.shapeAlphaSourceContract : "").trim()
+        if (shapeContract.length > 0) {
+            const points = Math.max(0, Number(data && data.shapeAlphaPointCount !== undefined
+                                              ? data.shapeAlphaPointCount : 0))
+            const rawPoints = Math.max(0, Number(data && data.shapeAlphaRawPointCount !== undefined
+                                                 ? data.shapeAlphaRawPointCount : 0))
+            const pointText = rawPoints > 0
+                    ? Math.round(points) + " simplified / " + Math.round(rawPoints) + " raw"
+                    : Math.round(points) + " points"
+            return "Editable path / " + pointText + " / "
+                    + (Boolean(data && data.shapeAlphaClosed === true) ? "closed" : "open")
+        }
+
+        const generatedContract = String(data && data.generatedAlphaSourceContract !== undefined
+                                         ? data.generatedAlphaSourceContract : "").trim()
+        if (generatedContract.length > 0) {
+            const target = String(data && data.generatedAlphaTargetType !== undefined
+                                  ? data.generatedAlphaTargetType : "generated").trim()
+            const model = String(data && data.generatedAlphaModelName !== undefined
+                                 ? data.generatedAlphaModelName : "model").trim()
+            const width = Math.max(0, Number(data && data.generatedAlphaWidth !== undefined
+                                             ? data.generatedAlphaWidth : 0))
+            const height = Math.max(0, Number(data && data.generatedAlphaHeight !== undefined
+                                              ? data.generatedAlphaHeight : 0))
+            const alphaSize = width > 0 && height > 0
+                    ? " / alpha " + Math.round(width) + "x" + Math.round(height)
+                    : ""
+            return "Generated " + target + " / " + model + alphaSize
+        }
+
+        return maskAlphaProviderSummary(data)
+    }
+
+    function previewRenderPresentationSignature(processing, statusText, failureStage, failureDetail) {
+        const status = String(statusText || "").toLowerCase()
+        const failed = status.indexOf("fail") >= 0
+                || status.indexOf("error") >= 0
+                || status.indexOf("unavailable") >= 0
+                || status.indexOf("unable") >= 0
+        const updating = Boolean(processing) && !failed
+        const state = failed ? "failed" : (updating ? "updating" : "ready")
+        const stage = String(failureStage || "").trim()
+        const detail = String(failureDetail || "").trim()
+        return state
+                + "|blocking:false"
+                + "|stale:" + String(updating)
+                + "|retry:" + String(failed)
+                + (failed && stage.length > 0 ? "|stage:" + stage : "")
+                + (failed && detail.length > 0 ? "|detail:true" : "")
+    }
+
+    function previewRenderFailed() {
+        return previewRenderPresentationSignature(
+                    editorPreview.processing,
+                    editorPreview.status,
+                    editorPreview.previewFailureStage,
+                    editorPreview.previewFailureDetail).indexOf("failed") === 0
+    }
+
+    function activePreviewFailureStage() {
+        if (!previewRenderFailed())
+            return ""
+        return String(editorPreview.previewFailureStage || "").trim()
+    }
+
+    function previewFailureIdListContains(idList, id) {
+        const needle = String(id || "").trim()
+        if (needle.length === 0 || !idList || idList.length === undefined)
+            return false
+        for (let index = 0; index < idList.length; ++index) {
+            if (String(idList[index] || "").trim() === needle)
+                return true
+        }
+        return false
+    }
+
+    function previewFailureHasAffectedIds() {
+        return (editorPreview.previewFailureLayerIds &&
+                editorPreview.previewFailureLayerIds.length > 0) ||
+               (editorPreview.previewFailureMaskSetIds &&
+                editorPreview.previewFailureMaskSetIds.length > 0)
+    }
+
+    function maskSetId(maskSet) {
+        return String(maskSet && maskSet.id !== undefined ? maskSet.id : "").trim()
+    }
+
+    function previewFailureRowLabel(stage) {
+        const label = previewFailureStageLabel(stage)
+        return label.length > 0 ? "Preview failed: " + label : ""
+    }
+
+    function previewFailureRowPresentationSignature(rowKind, rowActive, statusText, failureStage, failureDetail) {
+        const presentation = previewRenderPresentationSignature(
+                    false,
+                    statusText,
+                    failureStage,
+                    failureDetail)
+        const stage = String(failureStage || "").trim()
+        const failed = Boolean(rowActive) &&
+                presentation.indexOf("failed") === 0 &&
+                stage.length > 0
+        return "row:" + String(rowKind || "unknown") +
+                "|failed:" + String(failed) +
+                "|stage:" + (failed ? stage : "") +
+                "|label:" + String(failed && previewFailureRowLabel(stage).length > 0)
+    }
+
+    function photoLayerPreviewFailureStage(layerIndex) {
+        const stage = activePreviewFailureStage()
+        if (stage.length === 0)
+            return ""
+        const normalizedLayerIndex = Math.floor(Number(layerIndex))
+        if (normalizedLayerIndex < 0 || normalizedLayerIndex >= editorPreview.photoLayerCount)
+            return ""
+        const layer = editorPreview.photoLayers[normalizedLayerIndex] || ({})
+        let checkedAffectedIds = false
+        let matchedAffectedIds = false
+        if (editorPreview.previewFailureLayerIds &&
+                editorPreview.previewFailureLayerIds.length > 0) {
+            checkedAffectedIds = true
+            matchedAffectedIds = matchedAffectedIds ||
+                    root.previewFailureIdListContains(
+                        editorPreview.previewFailureLayerIds,
+                        String(layer.id || ""))
+        }
+        if (editorPreview.previewFailureMaskSetIds &&
+                editorPreview.previewFailureMaskSetIds.length > 0) {
+            checkedAffectedIds = true
+            const layerMaskSetIds = root.photoLayerMaskSetIds(layer)
+            for (let index = 0; index < layerMaskSetIds.length; ++index) {
+                matchedAffectedIds = matchedAffectedIds ||
+                        root.previewFailureIdListContains(
+                            editorPreview.previewFailureMaskSetIds,
+                            layerMaskSetIds[index])
+            }
+            const linkedMaskSets = root.maskSetsForAdjustmentLayer(normalizedLayerIndex)
+            for (let index = 0; index < linkedMaskSets.length; ++index) {
+                matchedAffectedIds = matchedAffectedIds ||
+                        root.previewFailureIdListContains(
+                            editorPreview.previewFailureMaskSetIds,
+                            root.maskSetId(linkedMaskSets[index]))
+            }
+        }
+        if (checkedAffectedIds)
+            return matchedAffectedIds ? stage : ""
+        if (normalizedLayerIndex === root.activeEditTargetLayerIndex() ||
+                root.photoLayerSelected(normalizedLayerIndex) ||
+                root.photoLayerHasSelectedMask(normalizedLayerIndex))
+            return stage
+        return ""
+    }
+
+    function photoLayerPreviewFailureSignature(layerIndex) {
+        const stage = photoLayerPreviewFailureStage(layerIndex)
+        const rowActive = stage.length > 0
+        return previewFailureRowPresentationSignature(
+                    "layer",
+                    rowActive,
+                    editorPreview.status,
+                    stage,
+                    editorPreview.previewFailureDetail) +
+                "|active-target:" + String(Math.floor(Number(layerIndex)) === root.activeEditTargetLayerIndex()) +
+                "|selected:" + String(root.photoLayerSelected(layerIndex)) +
+                "|mask-selected:" + String(root.photoLayerHasSelectedMask(layerIndex)) +
+                "|affected-ids:" + String(root.previewFailureHasAffectedIds()) +
+                "|affected-layer-ids:" + String(editorPreview.previewFailureLayerIds || []) +
+                "|affected-mask-set-ids:" + String(editorPreview.previewFailureMaskSetIds || [])
+    }
+
+    function maskSetPreviewFailureStage(maskSet) {
+        const stage = activePreviewFailureStage()
+        if (stage.length === 0)
+            return ""
+        let checkedAffectedIds = false
+        let matchedAffectedIds = false
+        if (editorPreview.previewFailureMaskSetIds &&
+                editorPreview.previewFailureMaskSetIds.length > 0) {
+            checkedAffectedIds = true
+            matchedAffectedIds = matchedAffectedIds ||
+                    root.previewFailureIdListContains(
+                        editorPreview.previewFailureMaskSetIds,
+                        root.maskSetId(maskSet))
+        }
+        if (editorPreview.previewFailureLayerIds &&
+                editorPreview.previewFailureLayerIds.length > 0) {
+            checkedAffectedIds = true
+            const linkedLayerIndex = root.adjustmentLayerIndexForMaskSet(maskSet)
+            const layer = linkedLayerIndex >= 0
+                    ? (editorPreview.photoLayers[linkedLayerIndex] || ({}))
+                    : ({})
+            matchedAffectedIds = matchedAffectedIds ||
+                    root.previewFailureIdListContains(
+                        editorPreview.previewFailureLayerIds,
+                        String(layer.id || ""))
+        }
+        if (checkedAffectedIds)
+            return matchedAffectedIds ? stage : ""
+        if (!root.maskSetActive(maskSet))
+            return ""
+        return stage
+    }
+
+    function maskSetPreviewFailureSignature(maskSet) {
+        const stage = maskSetPreviewFailureStage(maskSet)
+        return previewFailureRowPresentationSignature(
+                    "mask",
+                    stage.length > 0,
+                    editorPreview.status,
+                    stage,
+                    editorPreview.previewFailureDetail) +
+                "|active-mask:" + String(root.maskSetActive(maskSet)) +
+                "|affected-ids:" + String(root.previewFailureHasAffectedIds()) +
+                "|affected-layer-ids:" + String(editorPreview.previewFailureLayerIds || []) +
+                "|affected-mask-set-ids:" + String(editorPreview.previewFailureMaskSetIds || [])
+    }
+
+    function previewRenderChromeSignature(processing, statusText, failureStage, failureDetail) {
+        const presentation = previewRenderPresentationSignature(
+                    processing,
+                    statusText,
+                    failureStage,
+                    failureDetail)
+        const failed = presentation.indexOf("failed") === 0
+        return presentation
+                + "|chrome:badge"
+                + "|center:false"
+                + "|retryButton:" + String(failed)
+    }
+
+    function previewUpdateBadgeText() {
+        if (previewRenderFailed()) {
+            const stage = previewFailureStageLabel(editorPreview.previewFailureStage)
+            return stage.length > 0 ? "Preview failed: " + stage : "Preview failed"
+        }
+        if (editorPreview.processing)
+            return "Preview updating"
+        return "Preview ready"
+    }
+
+    function maskWorkChromeSignature() {
+        return "maskWork:" + String(root.maskWorkActive) +
+                "|chromeReduced:" + String(root.activeCanvasToolChromeReduced) +
+                "|diagnosticsPanel:" + String(root.diagnosticsPanelOpen && !root.maskWorkActive)
+    }
+
+    function maskActivityPresentationSignature(processing, statusText, smartPreviewActive, toolName) {
+        const status = String(statusText || "").toLowerCase()
+        const tool = String(toolName || "").toLowerCase()
+        const maskTool = tool === "masks" || tool === "brush" || tool === "retouch"
+        let phase = "idle"
+        if (editorPreview.inpaintProgressActive)
+            phase = "inpainting"
+        else if (Boolean(smartPreviewActive) || status.indexOf("smart select") >= 0 || status.indexOf("smart selection") >= 0)
+            phase = "analyzing"
+        else if (status.indexOf("inpaint") >= 0 || status.indexOf("retouch") >= 0)
+            phase = "inpainting"
+        else if (Boolean(processing) && (maskTool || status.indexOf("mask") >= 0 || status.indexOf("selection") >= 0))
+            phase = "rasterizing"
+        const visible = phase !== "idle"
+        const progressSuffix = editorPreview.inpaintProgressActive
+                ? "|progress:" + Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))).toFixed(3)
+                  + "|label:" + String(editorPreview.inpaintProgressLabel || "")
+                : ""
+        return phase + "|visible:" + String(visible) + "|blocking:false|chip:persistent" + progressSuffix
+    }
+
+    function maskActivityChipVisible() {
+        return maskActivityPresentationSignature(
+                    editorPreview.processing,
+                    editorPreview.status,
+                    editorPreview.smartSelectPreviewActive,
+                    root.editTool).indexOf("visible:true") >= 0
+    }
+
+    function maskActivityChipText() {
+        const signature = maskActivityPresentationSignature(
+                    editorPreview.processing,
+                    editorPreview.status,
+                    editorPreview.smartSelectPreviewActive,
+                    root.editTool)
+        if (signature.indexOf("analyzing") === 0)
+            return "Analyzing selection"
+        if (signature.indexOf("inpainting") === 0)
+            return editorPreview.inpaintProgressActive
+                    ? String(editorPreview.inpaintProgressLabel || "Inpainting retouch") + " · "
+                      + Math.round(Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))) * 100) + "%"
+                    : "Inpainting retouch"
+        if (signature.indexOf("rasterizing") === 0)
+            return "Rasterizing masks"
+        return "Mask activity"
+    }
+
+    function layerMaskJobChipVisible(rowIsActive) {
+        return Boolean(rowIsActive) && root.maskActivityChipVisible()
+    }
+
+    function layerMaskJobChipSignature(rowKind, rowIsActive) {
+        return "row:" + String(rowKind || "row") +
+                "|active:" + String(Boolean(rowIsActive)) +
+                "|" + maskActivityPresentationSignature(
+                    editorPreview.processing,
+                    editorPreview.status,
+                    editorPreview.smartSelectPreviewActive,
+                    root.editTool)
+    }
+
+    function editAdjustmentFilterNeedle() {
+        return String(editAdjustmentFilterText || "").trim().toLowerCase()
+    }
+
+    function adjustmentGroupSearchText(groupKey) {
+        const searchable = {
+            "white-balance": "white balance temp temperature tint sample neutral kelvin",
+            "light": "light basic tone exposure brightness contrast highlights shadows whites blacks hdr local filmic levels zone mapping gamma",
+            "tone-curve": "tone curve point curve rgb luma red green blue parametric shadows darks lights highlights matte filmic rolloff",
+            "color": "color vibrance saturation",
+            "presence": "presence texture clarity dehaze",
+            "detail": "detail sharpening sharpen masking luminance noise reduction color noise reduction lens distortion vignette chromatic aberration",
+            "raw": "raw exposure boost shadow highlight recovery lens correction detail camera profile",
+            "advanced-color": "advanced color mix hsl hsv lch oklab hue luminance selective channel mixer black white color replace skin tone harmony split toning grading",
+            "presets": "preset presets look pack style custom virel built in apply save"
+        }
+        return String(searchable[groupKey] || groupKey).toLowerCase()
+    }
+
+    function adjustmentGroupMatches(groupKey) {
+        const needle = editAdjustmentFilterNeedle()
+        if (needle.length === 0)
+            return true
+        return adjustmentGroupSearchText(groupKey).indexOf(needle) >= 0
+    }
+
+    function adjustmentGroupFilterText(groupKey) {
+        const key = String(groupKey || "").trim().toLowerCase()
+        if (key === "white-balance")
+            return "white balance"
+        if (key === "tone-curve")
+            return "tone curve"
+        if (key === "hsl")
+            return "hsl"
+        if (key === "grading")
+            return "grading"
+        if (key === "lut")
+            return "lut"
+        if (key === "lens-transform")
+            return "lens transform"
+        return key
+    }
+
+    function adjustmentGroupEditStack(groupKey) {
+        const key = String(groupKey || "").trim().toLowerCase()
+        if (key === "tone-curve")
+            return "curve"
+        if (key === "hsl")
+            return "hsl"
+        if (key === "grading" || key === "lut" || key === "color")
+            return "color"
+        if (key === "detail")
+            return "detail"
+        if (key === "lens-transform")
+            return "lens"
+        return "adjustments"
+    }
+
+    function studioCurrentPresetName() {
+        if (studioSelectedPresetName.length > 0 && editorPreview.presetNames.indexOf(studioSelectedPresetName) >= 0)
+            return studioSelectedPresetName
+        if (editorPreview.presetNames.length > 0)
+            return editorPreview.presetNames[0]
+        return ""
+    }
+
+    function selectStudioPreset(name) {
+        studioSelectedPresetName = String(name || "")
+        studioPresetDraftName = studioSelectedPresetName
+        const pack = editorPreview.presetPackName(studioSelectedPresetName)
+        studioPresetDraftPack = pack.length > 0 ? pack : "User Presets"
+    }
+
+    function studioPresetMetaText() {
+        const name = studioCurrentPresetName()
+        if (name.length === 0)
+            return "No presets available"
+        const pack = editorPreview.presetPackName(name)
+        const category = editorPreview.presetCategoryName(name)
+        return (pack.length > 0 ? pack : "User Presets") + (category.length > 0 ? " / " + category : "")
+    }
+
+    function studioPresetLibraryNames() {
+        const names = editorPreview.searchPresetNames(studioPresetSearchText).slice()
+        const filtered = []
+        for (let index = 0; index < names.length; ++index) {
+            const name = names[index]
+            if (studioPresetFavoritesOnly && !editorPreview.isPresetFavorite(name))
+                continue
+            if (studioPresetCategoryFilter !== "All" && editorPreview.presetCategoryName(name) !== studioPresetCategoryFilter)
+                continue
+            if (studioPresetPackFilter !== "All" && editorPreview.presetPackName(name) !== studioPresetPackFilter)
+                continue
+            filtered.push(name)
+        }
+        filtered.sort(function(left, right) {
+            const leftPack = editorPreview.presetPackName(left)
+            const rightPack = editorPreview.presetPackName(right)
+            if (leftPack !== rightPack)
+                return leftPack.localeCompare(rightPack)
+            const leftCategory = editorPreview.presetCategoryName(left)
+            const rightCategory = editorPreview.presetCategoryName(right)
+            if (leftCategory !== rightCategory)
+                return leftCategory.localeCompare(rightCategory)
+            return left.localeCompare(right)
+        })
+        return filtered
+    }
+
+    function studioPresetLibraryRows() {
+        const names = studioPresetLibraryNames()
+        const rows = []
+        let currentPack = ""
+        let currentPackCount = 0
+        for (let index = 0; index < names.length; ++index) {
+            const name = names[index]
+            const pack = editorPreview.presetPackName(name).length > 0 ? editorPreview.presetPackName(name) : "User Presets"
+            if (pack !== currentPack) {
+                currentPack = pack
+                currentPackCount = 0
+                for (let countIndex = 0; countIndex < names.length; ++countIndex) {
+                    const countPack = editorPreview.presetPackName(names[countIndex]).length > 0 ? editorPreview.presetPackName(names[countIndex]) : "User Presets"
+                    if (countPack === pack)
+                        ++currentPackCount
+                }
+                rows.push({ kind: "pack", label: pack, count: currentPackCount })
+            }
+            rows.push({ kind: "preset", name: name })
+        }
+        return rows
+    }
+
+    function studioPresetCategoryFilters() {
+        const filters = ["All"]
+        const categories = editorPreview.presetCategoryNames
+        for (let index = 0; index < categories.length; ++index)
+            filters.push(categories[index])
+        return filters
+    }
+
+    function studioPresetPackFilters() {
+        const filters = ["All"]
+        const packs = editorPreview.presetPackNames
+        for (let index = 0; index < packs.length; ++index)
+            filters.push(packs[index])
+        return filters
+    }
+
+    function studioPresetFilterLabel(value) {
+        if (value === "All")
+            return "All"
+        return value.length > 12 ? value.slice(0, 11) + "..." : value
+    }
+
+    function studioPresetTypeText(name) {
+        if (String(name || "").length === 0)
+            return ""
+        return editorPreview.isUserPreset(name) ? "Custom" : "Virel"
+    }
+
+    function previewStudioPreset(name) {
+        const presetName = String(name || "")
+        if (presetName.length === 0) {
+            studioPresetPreviewRecipeJson = ""
+            return false
+        }
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0) {
+            const recipe = editorPreview.photoLayerPresetPreviewRecipe(layerIndex, presetName, [], editorPreview.presetIntensity)
+            const hasRecipe = recipe && Object.keys(recipe).length > 0
+            studioPresetPreviewRecipeJson = hasRecipe ? JSON.stringify(recipe) : ""
+            return hasRecipe
+        }
+        studioPresetPreviewRecipeJson = editorPreview.presetPreviewRecipeJson(presetName, [], editorPreview.presetIntensity)
+        return studioPresetPreviewRecipeJson.length > 0
+    }
+
+    function clearStudioPresetPreview() {
+        studioPresetPreviewRecipeJson = ""
+    }
+
+    function applyStudioPreset() {
+        const name = studioCurrentPresetName()
+        if (name.length === 0)
+            return false
+        selectStudioPreset(name)
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0)
+            return editorPreview.applyPresetToPhotoLayer(layerIndex, name, editorPreview.presetIntensity, [])
+        return editorPreview.applyPresetWithIntensity(name, editorPreview.presetIntensity, [])
+    }
+
+    function saveStudioPreset() {
+        const name = studioPresetDraftName.trim()
+        if (name.length === 0)
+            return false
+        const pack = studioPresetDraftPack.trim().length > 0 ? studioPresetDraftPack.trim() : "User Presets"
+        if (editorPreview.savePresetToPack(name, pack, true)) {
+            selectStudioPreset(name)
+            return true
+        }
+        return false
+    }
+
+    function toggleStudioPresetFavorite(name) {
+        const presetName = String(name || "")
+        if (presetName.length === 0)
+            return false
+        editorPreview.setPresetFavorite(presetName, !editorPreview.isPresetFavorite(presetName))
+        return true
+    }
+
+    function renameStudioPreset() {
+        const oldName = studioCurrentPresetName()
+        const newName = studioPresetDraftName.trim()
+        if (oldName.length === 0 || newName.length === 0 || !editorPreview.isUserPreset(oldName))
+            return false
+        if (editorPreview.renamePreset(oldName, newName)) {
+            selectStudioPreset(newName)
+            return true
+        }
+        return false
+    }
+
+    function moveStudioPresetToPack() {
+        const name = studioCurrentPresetName()
+        const pack = studioPresetDraftPack.trim().length > 0 ? studioPresetDraftPack.trim() : "User Presets"
+        if (name.length === 0 || !editorPreview.isUserPreset(name))
+            return false
+        return editorPreview.movePresetToPack(name, pack)
+    }
+
+    function deleteStudioPreset() {
+        const name = studioCurrentPresetName()
+        if (name.length === 0 || !editorPreview.isUserPreset(name))
+            return false
+        if (editorPreview.deletePreset(name)) {
+            const names = editorPreview.presetNames
+            selectStudioPreset(names.length > 0 ? names[0] : "")
+            return true
+        }
+        return false
+    }
+
+    function exportStudioPresetBundle() {
+        const folder = studioPresetExportFolder.trim()
+        if (folder.length === 0)
+            return false
+        return editorPreview.exportPresetSyncBundle(folder)
+    }
+
+    function importStudioPresetBundle() {
+        const folder = studioPresetImportFolder.trim()
+        if (folder.length === 0)
+            return false
+        return editorPreview.importPresetSyncBundle(folder, true)
+    }
+
+    function wrapUnit(value) {
+        const wrapped = value - Math.floor(value)
+        return wrapped < 0 ? wrapped + 1 : wrapped
+    }
+
+    function harmonyAnchorHues(mode, baseHue) {
+        const base = wrapUnit(baseHue)
+        if (mode === "Analogous")
+            return [wrapUnit(base - 1 / 12), base, wrapUnit(base + 1 / 12)]
+        if (mode === "Triadic")
+            return [base, wrapUnit(base + 1 / 3), wrapUnit(base + 2 / 3)]
+        if (mode === "Split Complementary")
+            return [base, wrapUnit(base + 5 / 12), wrapUnit(base + 7 / 12)]
+        if (mode === "Tetradic")
+            return [base, wrapUnit(base + 0.25), wrapUnit(base + 0.5), wrapUnit(base + 0.75)]
+        return [base, wrapUnit(base + 0.5)]
+    }
+
+    function harmonyRangeHues(mode, baseHue) {
+        const anchors = harmonyAnchorHues(mode, baseHue)
+        const range = []
+        for (let i = 0; i < anchors.length; ++i) {
+            range.push(wrapUnit(anchors[i] - 1 / 36))
+            range.push(anchors[i])
+            range.push(wrapUnit(anchors[i] + 1 / 36))
+        }
+        return range
+    }
+
+    function hueSwatchColor(hue) {
+        return Qt.hsla(wrapUnit(hue), 0.72, 0.58, 1)
+    }
+
+    function applyHarmonyPreset(name) {
+        if (name === "Warm Analogous") {
+            root.setPrimaryBoolAdjustmentValue("colorHarmonyEnabled", true)
+            root.setPrimaryStringAdjustmentValue("colorHarmonyMode", "Analogous")
+            root.setPrimaryAdjustmentValue("colorHarmonyBaseHue", 0.08)
+            root.setPrimaryAdjustmentValue("colorHarmonyStrength", 35)
+            return true
+        }
+        if (name === "Cool Triad") {
+            root.setPrimaryBoolAdjustmentValue("colorHarmonyEnabled", true)
+            root.setPrimaryStringAdjustmentValue("colorHarmonyMode", "Triadic")
+            root.setPrimaryAdjustmentValue("colorHarmonyBaseHue", 0.56)
+            root.setPrimaryAdjustmentValue("colorHarmonyStrength", 32)
+            return true
+        }
+        if (name === "Soft Complement") {
+            root.setPrimaryBoolAdjustmentValue("colorHarmonyEnabled", true)
+            root.setPrimaryStringAdjustmentValue("colorHarmonyMode", "Complementary")
+            root.setPrimaryAdjustmentValue("colorHarmonyBaseHue", 0.08)
+            root.setPrimaryAdjustmentValue("colorHarmonyStrength", 28)
+            return true
+        }
+        return false
+    }
+
+    function rawUnavailableReason() {
+        return "RAW controls require a RAW source; this asset is a rendered image."
+    }
+
+    function modelUnavailableReason(modelKey) {
+        const status = String(editorPreview.aiModelStatus || "Model runtime unavailable")
+        if (modelKey === "smart-selection" && !editorPreview.aiSmartSelectionAvailable)
+            return "Model-backed smart selection is not active in this build; " +
+                    editorPreview.smartSelectionRuntimeLabel + " is active: " + status
+        if (modelKey === "inpaint" && !editorPreview.aiInpaintAvailable)
+            return "LaMa Model Inpaint is not active in this build; retouch will use " +
+                    editorPreview.inpaintRuntimeLabel + ": " + status
+        return ""
+    }
+
+    function profileUnavailableReason(profileKey) {
+        if (profileKey === "camera-input" && !editorPreview.rawControlsAvailable)
+            return "Camera input profiles require RAW data; rendered images keep their embedded profile."
+        if (profileKey === "soft-proof" && !editorPreview.softProofEnabled)
+            return "Enable soft proofing before choosing a proof profile."
+        return ""
+    }
+
+    function disabledCapabilityReason(capabilityKey) {
+        const key = String(capabilityKey || "")
+        if (key === "raw")
+            return editorPreview.rawControlsAvailable ? "" : rawUnavailableReason()
+        if (key === "model-smart-selection")
+            return modelUnavailableReason("smart-selection")
+        if (key === "model-inpaint")
+            return modelUnavailableReason("inpaint")
+        if (key === "profile-camera-input")
+            return profileUnavailableReason("camera-input")
+        if (key === "profile-soft-proof")
+            return profileUnavailableReason("soft-proof")
+        return ""
+    }
+
+    function disabledCapabilityReasonSignature() {
+        const keys = ["raw", "model-smart-selection", "model-inpaint", "profile-camera-input", "profile-soft-proof"]
+        return keys.map(function(key) {
+            const reason = disabledCapabilityReason(key)
+            return key + ":" + (reason.length > 0 ? "disabled:" + reason : "enabled")
+        }).join("|")
+    }
+
+    function filteredAdjustmentGroupKeys() {
+        const keys = ["white-balance", "light", "tone-curve", "color", "presence", "detail", "raw", "advanced-color"]
+        return keys.filter(function(key) {
+            return adjustmentGroupMatches(key) && (key !== "raw" || editorPreview.rawControlsAvailable)
+        })
+    }
+
+    function editAdjustmentFilterStatusText() {
+        const count = filteredAdjustmentGroupKeys().length
+        if (editAdjustmentFilterNeedle().length > 0 && adjustmentGroupMatches("raw") && !editorPreview.rawControlsAvailable)
+            return rawUnavailableReason()
+        return count > 0 ? count + " matching adjustment groups" : "No matching adjustment groups"
+    }
+
+    function editAdjustmentFilterSignature() {
+        return "query:" + editAdjustmentFilterNeedle()
+                + "|count:" + filteredAdjustmentGroupKeys().length
+                + "|groups:" + filteredAdjustmentGroupKeys().join(",")
+    }
+
+    function rawControlAvailabilitySignature() {
+        const rawGroups = filteredAdjustmentGroupKeys().filter(function(key) {
+            return key === "raw"
+        })
+        const rawGroupVisible = root.editInspectorTab === "adjust"
+                && editorPreview.rawControlsAvailable
+                && root.adjustmentGroupMatches("raw")
+        return "available:" + String(Boolean(editorPreview.rawControlsAvailable))
+                + "|rawGroups:" + rawGroups.length
+                + "|groupVisible:" + String(Boolean(rawGroupVisible))
+    }
+
+    function hslChannelShortLabel(channelName) {
+        const labels = {
+            "Reds": "Red",
+            "Oranges": "Org",
+            "Yellows": "Yel",
+            "Greens": "Grn",
+            "Aquas": "Aqu",
+            "Blues": "Blu",
+            "Purples": "Pur",
+            "Magentas": "Mag"
+        }
+        const name = String(channelName || "")
+        return labels[name] || name.slice(0, 3)
+    }
+
+    function hslChannelTooltip(channelName) {
+        const name = String(channelName || "")
+        return name.length > 0 ? name + " color mix channel." : "Color mix channel."
+    }
+
+    function hslChannelColor(channelName) {
+        const colors = {
+            "Reds": "#F25A5A",
+            "Oranges": "#F39B45",
+            "Yellows": "#E3C84B",
+            "Greens": "#5CCB73",
+            "Aquas": "#4BD1C9",
+            "Blues": "#4D91F0",
+            "Purples": "#9B75F0",
+            "Magentas": "#E05AC8"
+        }
+        const name = String(channelName || "")
+        return colors[name] || root.mint
+    }
+
+    function hslChannelRangeColors(channelName) {
+        const channels = ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"]
+        const index = Math.max(0, channels.indexOf(String(channelName || "")))
+        const previous = channels[(index + channels.length - 1) % channels.length]
+        const current = channels[index]
+        const next = channels[(index + 1) % channels.length]
+        return [hslChannelColor(previous), hslChannelColor(current), hslChannelColor(next)]
+    }
+
+    function hslChannelControlSignature(channelName) {
+        return String(channelName || "")
+                + "|label:" + hslChannelShortLabel(channelName)
+                + "|tooltip:" + hslChannelTooltip(channelName)
+    }
+
+    function colorMixActiveChannelSignature() {
+        return root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel) + "|" +
+                root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel)
+                + "|h:" + Math.round(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment))
+                + "|s:" + Math.round(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment))
+                + "|l:" + Math.round(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment))
+    }
+
+    function resetColorMixActiveChannel() {
+        root.setPrimaryAdjustmentValue("hueAdjustment", 0)
+        root.setPrimaryAdjustmentValue("saturationAdjustment", 0)
+        root.setPrimaryAdjustmentValue("luminanceAdjustment", 0)
+        return true
+    }
+
+    function colorReplaceSignature() {
+        return "source:" + Math.round(root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "sourceHue", editorPreview.colorReplacementSourceHue) * 360)
+                + "|target:" + Math.round(root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "targetHue", editorPreview.colorReplacementTargetHue) * 360)
+                + "|range:" + Math.round(root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "range", editorPreview.colorReplacementRange))
+                + "|softness:" + Math.round(root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "softness", editorPreview.colorReplacementSoftness))
+                + "|strength:" + Math.round(root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "strength", editorPreview.colorReplacementStrength))
+                + "|preserveLuma:" + String(root.primaryBoolAdjustmentValue("colorReplacementPreserveLuminance", editorPreview.colorReplacementPreserveLuminance))
+                + "|preserveSat:" + String(root.primaryBoolAdjustmentValue("colorReplacementPreserveSaturation", editorPreview.colorReplacementPreserveSaturation))
+    }
+
+    function swapColorReplacementHues() {
+        const source = root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "sourceHue", editorPreview.colorReplacementSourceHue)
+        root.setPrimaryAdjustmentValue("colorReplacementSourceHue", root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", "targetHue", editorPreview.colorReplacementTargetHue))
+        root.setPrimaryAdjustmentValue("colorReplacementTargetHue", source)
+        return true
+    }
+
+    function setColorToolSampler(target) {
+        const cleanTarget = String(target || "")
+        root.maskColorRangeSampling = false
+        root.maskLuminanceRangeSampling = false
+        root.maskDepthRangeSampling = false
+        if (editorPreview.colorToolSamplingTarget === cleanTarget) {
+            editorPreview.setColorToolSamplingTarget("")
+            return ""
+        }
+        editorPreview.setColorToolSamplingTarget(cleanTarget)
+        return editorPreview.colorToolSamplingTarget
+    }
+
+    function setMaskColorRangeSampler(enabled) {
+        const nextEnabled = Boolean(enabled) && editorPreview.activeMaskKind === "color"
+        root.maskColorRangeSampling = nextEnabled
+        root.maskLuminanceRangeSampling = false
+        root.maskDepthRangeSampling = false
+        if (nextEnabled) {
+            editorPreview.setColorToolSamplingTarget("")
+            editorPreview.whiteBalanceSampling = false
+            root.editTool = "masks"
+        }
+        return root.maskColorRangeSampling
+    }
+
+    function setMaskLuminanceRangeSampler(enabled) {
+        const nextEnabled = Boolean(enabled) && editorPreview.activeMaskKind === "luminance"
+        root.maskLuminanceRangeSampling = nextEnabled
+        root.maskColorRangeSampling = false
+        root.maskDepthRangeSampling = false
+        if (nextEnabled) {
+            editorPreview.setColorToolSamplingTarget("")
+            editorPreview.whiteBalanceSampling = false
+            root.editTool = "masks"
+        } else {
+            editorPreview.cancelActiveLuminanceRangeSample()
+        }
+        return root.maskLuminanceRangeSampling
+    }
+
+    function setMaskDepthRangeSampler(enabled) {
+        const nextEnabled = Boolean(enabled) &&
+                editorPreview.activeMaskKind === "depth" &&
+                editorPreview.activeMaskDepthSamplingAvailable
+        root.maskDepthRangeSampling = nextEnabled
+        root.maskColorRangeSampling = false
+        root.maskLuminanceRangeSampling = false
+        if (nextEnabled) {
+            editorPreview.setColorToolSamplingTarget("")
+            editorPreview.whiteBalanceSampling = false
+            root.editTool = "masks"
+        }
+        return root.maskDepthRangeSampling
+    }
+
+    function pixelInspectorVisibilitySignature(sampling, inspectorActive, toolName) {
+        const visible = Boolean(sampling) && Boolean(inspectorActive) && String(toolName || "") !== "crop"
+        return "sampling:" + String(Boolean(sampling))
+                + "|active:" + String(Boolean(inspectorActive))
+                + "|tool:" + String(toolName || "")
+                + "|visible:" + String(visible)
+    }
+
+    function beginPixelInspectorSampling() {
+        pixelInspectorSamplingActive = true
+        return pixelInspectorSamplingActive
+    }
+
+    function finishPixelInspectorSampling() {
+        pixelInspectorSamplingActive = false
+        editorPreview.clearPixelInspector()
+        return pixelInspectorSamplingActive
     }
 
     function customizablePanelSignature() {
@@ -467,12 +1649,25 @@ Rectangle {
 
     function setFullScreenEditing(enabled) {
         fullScreenEditingEnabled = Boolean(enabled)
+        if (fullScreenEditingEnabled)
+            focusEditLayoutEnabled = false
         return fullScreenEditingEnabled
     }
 
     function toggleFullScreenEditing() {
-        fullScreenEditingEnabled = !fullScreenEditingEnabled
+        setFullScreenEditing(!fullScreenEditingEnabled)
         return fullScreenEditingEnabled
+    }
+
+    function setFocusEditLayout(enabled) {
+        focusEditLayoutEnabled = Boolean(enabled)
+        if (focusEditLayoutEnabled)
+            fullScreenEditingEnabled = false
+        return focusEditLayoutEnabled
+    }
+
+    function toggleFocusEditLayout() {
+        return setFocusEditLayout(!focusEditLayoutEnabled)
     }
 
     function responsivePanelSignature() {
@@ -486,6 +1681,36 @@ Rectangle {
             editInspectorPanelVisible,
             exportPresetsPanelVisible,
             exportSettingsPanelVisible
+        ].join("|")
+    }
+
+    function responsivePanelDensityMode(availableWidth) {
+        const widthValue = Number(availableWidth || width || 0)
+        if (widthValue > 0 && widthValue < 1120)
+            return "small-collapsed"
+        return compactMode ? "compact" : "pro"
+    }
+
+    function responsivePanelDensitySignature(availableWidth) {
+        const widthValue = Math.round(Number(availableWidth || width || 0))
+        return [
+            "w:" + widthValue,
+            "mode:" + responsivePanelDensityMode(widthValue),
+            "interface:" + interfaceMode,
+            "small:" + String(widthValue > 0 && widthValue < 1120),
+            "active:" + String(responsiveSmallDisplayPanelsActive),
+            "library:" + librarySourcesPanelWidth + "/" + libraryInspectorPanelWidth,
+            "edit:" + editContextPanelWidth + "/" + editInspectorPanelWidth,
+            "export:" + exportPresetsPanelWidth + "/" + exportSettingsPanelWidth,
+            "visible:" + [
+                librarySourcesPanelVisible,
+                libraryInspectorPanelVisible,
+                editSidebarCollapsed,
+                editContextPanelVisible,
+                editInspectorPanelVisible,
+                exportPresetsPanelVisible,
+                exportSettingsPanelVisible
+            ].join(",")
         ].join("|")
     }
 
@@ -606,6 +1831,204 @@ Rectangle {
         return catalogAssets.status.length > 0 ? catalogAssets.status : "Ready"
     }
 
+    function agentAvailableStyles() {
+        return agentEdit.availableStyles || []
+    }
+
+    function agentSelectedStyleName() {
+        const styles = agentAvailableStyles()
+        for (let index = 0; index < styles.length; ++index) {
+            const style = styles[index]
+            if (String(style.id || "") === String(agentEdit.selectedStyleId || ""))
+                return String(style.name || style.id || "Selected style")
+        }
+        return styles.length > 0 ? String(styles[0].name || styles[0].id || "Style") : "No styles"
+    }
+
+    function activeAgentModel() {
+        const models = agentEdit.availableModels || []
+        for (let index = 0; index < models.length; ++index) {
+            const modelInfo = models[index]
+            if (String(modelInfo.id || "") === String(agentEdit.selectedModelId || ""))
+                return modelInfo
+        }
+        return models.length > 0 ? models[0] : null
+    }
+
+    function agentModelStatusText() {
+        const modelInfo = activeAgentModel()
+        if (!modelInfo)
+            return "No local model"
+        const name = String(modelInfo.name || modelInfo.id || "Local model")
+        const status = String(modelInfo.status || (modelInfo.available ? "available" : "unavailable"))
+        const backend = String(modelInfo.backend || "local")
+        return name + " · " + status + " · " + backend
+    }
+
+    function agentScopeHeadline() {
+        if (!catalogAssets)
+            return "Catalog unavailable"
+        if (root.importModeOpen)
+            return "Import source browser · " + root.liveSourceSummary()
+        const selectedCount = Number(catalogAssets.selectedAssetCount || 0)
+        if (selectedCount > 1)
+            return "Selected assets · " + root.formatInt(selectedCount)
+        if (selectedCount === 1)
+            return "Current photo · " + root.selectedName()
+        if (catalogAssets.projectFilter !== "all")
+            return "Album/project · " + root.projectFilterLabel() + " · " + root.formatInt(catalogAssets.assetCount)
+        if (root.filtersActive())
+            return "Filtered library · " + root.formatInt(catalogAssets.assetCount) + " visible"
+        return "Library · " + root.formatInt(catalogAssets.assetCount) + " visible"
+    }
+
+    function agentScopeRows() {
+        if (!catalogAssets)
+            return [["Scope", "Catalog unavailable"]]
+        const rows = []
+        const selectedCount = Number(catalogAssets.selectedAssetCount || 0)
+        if (selectedCount === 1)
+            rows.push(["Current photo", root.selectedName()])
+        else
+            rows.push(["Current photo", catalogAssets.selectedIndex >= 0 ? root.selectedName() : "None selected"])
+        rows.push(["Selected assets", selectedCount > 0 ? root.formatInt(selectedCount) : "None"])
+        rows.push(["Album/project", catalogAssets.projectFilter !== "all" ? root.projectFilterLabel() : "All Projects"])
+        rows.push(["Filter result", root.filtersActive() ? root.formatInt(catalogAssets.assetCount) + " visible" : "No active filters"])
+        rows.push(["Folder/import", root.importModeOpen ? root.liveSourceSummary() : "Catalog selection"])
+        return rows
+    }
+
+    function agentScopeModeLabel(scope) {
+        if (scope === "current-photo")
+            return "Current"
+        if (scope === "project")
+            return "Project"
+        if (scope === "filtered-library")
+            return "Filter"
+        return "Selected"
+    }
+
+    function agentScopeModeIcon(scope) {
+        if (scope === "project")
+            return "folder"
+        if (scope === "filtered-library")
+            return "filter"
+        if (scope === "current-photo")
+            return "media"
+        return "check"
+    }
+
+    function agentScopeEstimatedCount(scope) {
+        if (!catalogAssets)
+            return 0
+        if (scope === "current-photo")
+            return catalogAssets.selectedIndex >= 0 ? 1 : 0
+        if (scope === "project")
+            return catalogAssets.projectFilter !== "all"
+                   ? catalogAssets.assetCountForProject(catalogAssets.projectFilter)
+                   : catalogAssets.assetCount
+        if (scope === "filtered-library")
+            return catalogAssets.assetCount
+        return Number(catalogAssets.selectedAssetCount || 0)
+    }
+
+    function agentRunModeLabel(mode) {
+        if (mode === "analyze")
+            return "Analyze"
+        if (mode === "validate-batch")
+            return "Batch Check"
+        if (mode === "export-preflight")
+            return "Export Check"
+        return "Draft"
+    }
+
+    function agentRunModeIcon(mode) {
+        if (mode === "analyze")
+            return "filter"
+        if (mode === "validate-batch")
+            return "check"
+        if (mode === "export-preflight")
+            return "export"
+        return "adjust"
+    }
+
+    function agentCanRunMode(mode) {
+        if (!catalogAssets || agentEdit.running || agentEdit.manualEditingActive)
+            return false
+        if (mode === "analyze") {
+            return (root.agentScopeMode === "current-photo" ||
+                    root.agentScopeMode === "selected-assets") &&
+                   root.agentScopeEstimatedCount(root.agentScopeMode) === 1
+        }
+        return root.agentScopeEstimatedCount(root.agentScopeMode) >= 1
+    }
+
+    function runSelectedAgentMode() {
+        if (!agentCanRunMode(root.agentRunMode))
+            return
+        if (root.agentRunMode === "analyze") {
+            agentEdit.analyzeSelected()
+        } else if (root.agentRunMode === "validate-batch") {
+            agentEdit.validateBatchForScope(root.agentScopeMode)
+        } else if (root.agentRunMode === "export-preflight") {
+            agentEdit.exportPreflightForScope(root.agentScopeMode)
+        } else {
+            agentEdit.runDraftForScope(root.agentScopeMode, agentEdit.userInstructions)
+        }
+    }
+
+    function agentLastReport() {
+        return agentEdit.lastRunReport || ({})
+    }
+
+    function agentArtifactPath(keyName) {
+        const report = root.agentLastReport()
+        const key = String(keyName || "")
+        if (report && report[key] !== undefined && String(report[key] || "").length > 0)
+            return String(report[key])
+        const validation = report && report.validationReport !== undefined ? report.validationReport : ({})
+        const artifacts = validation && validation.artifacts !== undefined ? validation.artifacts : ({})
+        if (artifacts && artifacts[key] !== undefined && String(artifacts[key] || "").length > 0)
+            return String(artifacts[key])
+        return ""
+    }
+
+    function agentFileSource(path) {
+        const text = String(path || "")
+        if (text.length === 0)
+            return ""
+        if (text.indexOf("file:") === 0 || text.indexOf("qrc:") === 0)
+            return text
+        return "file://" + text
+    }
+
+    function agentProofImages() {
+        const images = []
+        const current = root.agentArtifactPath("currentProofPath")
+        const before = root.agentArtifactPath("beforeProofPath")
+        const after = root.agentArtifactPath("afterProofPath")
+        if (current.length > 0) {
+            images.push({ label: "Current", source: root.agentFileSource(current) })
+            return images
+        }
+        if (before.length > 0)
+            images.push({ label: "Before", source: root.agentFileSource(before) })
+        if (after.length > 0)
+            images.push({ label: "After", source: root.agentFileSource(after) })
+        return images
+    }
+
+    function agentMaskLocalProofText() {
+        const report = root.agentLastReport()
+        const proof = report && report.maskLocalProof !== undefined ? report.maskLocalProof : ({})
+        if (!proof || proof.required !== true)
+            return ""
+        const maskCount = Number(proof.maskStackCount || 0)
+        const localCount = Number(proof.localAdjustmentFieldCount || 0)
+        const ready = proof.proofAvailable === true ? "proof ready" : "proof pending"
+        return "Mask/local " + ready + " · " + maskCount + " masks · " + localCount + " local edits"
+    }
+
     function systemHealthItems() {
         const gpuActive = previewBackend ? String(previewBackend.activeBackend || "CPU") : "Unavailable"
         const gpuDetail = previewBackend && String(previewBackend.fallbackReason || "").length > 0
@@ -615,12 +2038,13 @@ Rectangle {
 
         const modelReady = editorPreview.aiSmartSelectionAvailable || editorPreview.aiInpaintAvailable
         const modelFeatures = [
-            editorPreview.aiSmartSelectionAvailable ? "smart masks" : "",
-            editorPreview.aiInpaintAvailable ? "inpaint" : ""
+            editorPreview.smartSelectionRuntimeLabel,
+            editorPreview.inpaintRuntimeLabel
         ].filter(function(item) { return item.length > 0 }).join(", ")
+        const modelDiagnostics = String(editorPreview.aiModelDiagnostics || "")
         const modelDetail = modelReady
-                ? modelFeatures
-                : String(editorPreview.aiModelStatus || "Model runtime unavailable")
+                ? modelFeatures + " / " + modelDiagnostics
+                : modelFeatures + " / " + String(editorPreview.aiModelStatus || "Model runtime unavailable") + " / " + modelDiagnostics
 
         const catalogState = catalogAssets.errorMessage.length > 0
                 ? "Error"
@@ -648,11 +2072,27 @@ Rectangle {
         return systemHealthItems().length
     }
 
+    function maskRuntimeTrustSignature() {
+        return "selection:" + editorPreview.smartSelectionRuntimeLabel +
+                "|selectionModel:" + String(Boolean(editorPreview.aiSmartSelectionAvailable)) +
+                "|inpaint:" + editorPreview.inpaintRuntimeLabel +
+                "|inpaintModel:" + String(Boolean(editorPreview.aiInpaintAvailable)) +
+                "|diagnostics:" + String(editorPreview.aiModelDiagnostics || "")
+    }
+
     function systemHealthSignature() {
         const items = systemHealthItems()
         let parts = []
         for (let i = 0; i < items.length; ++i)
             parts.push(items[i].label + ":" + items[i].state)
+        return parts.join("|")
+    }
+
+    function systemHealthDetailSignature() {
+        const items = systemHealthItems()
+        let parts = []
+        for (let i = 0; i < items.length; ++i)
+            parts.push(items[i].label + ":" + items[i].detail)
         return parts.join("|")
     }
 
@@ -668,6 +2108,40 @@ Rectangle {
 
     function scopeAnalysisModes() {
         return ["Waveform", "Parade", "Vectorscope", "Histogram"]
+    }
+
+    function cropGuideModes() {
+        return ["Off", "Thirds", "Center", "Diagonal", "Golden Ratio", "Golden Spiral"]
+    }
+
+    function cropGuideModeIndex() {
+        const index = cropGuideModes().indexOf(root.cropGuideMode)
+        return index < 0 ? 1 : index
+    }
+
+    function setCropGuideMode(modeName) {
+        const cleanMode = String(modeName || "")
+        if (cropGuideModes().indexOf(cleanMode) < 0)
+            return false
+        root.cropGuideMode = cleanMode
+        return true
+    }
+
+    function cropGuideControlSignature() {
+        return root.cropGuideMode + "|" + cropGuideModes().join(",")
+    }
+
+    function cropHudAspectText() {
+        const preset = String(editorPreview.cropPreset || "")
+        if (preset.length > 0 && preset !== "Original")
+            return "Aspect " + preset
+
+        const sourceWidth = Number(editorPreview.sourceImageWidth || 0)
+        const sourceHeight = Number(editorPreview.sourceImageHeight || 0)
+        const cropWidth = Math.max(0, Number(editorPreview.cropRectWidth || 0))
+        const cropHeight = Math.max(0, Number(editorPreview.cropRectHeight || 0))
+        const aspect = root.aspectRatioText(sourceWidth * cropWidth, sourceHeight * cropHeight)
+        return aspect.length > 0 ? "Aspect " + aspect : "Aspect Original"
     }
 
     function scopeAnalysisModeAvailable(mode) {
@@ -698,14 +2172,121 @@ Rectangle {
         return true
     }
 
+    function scopesViewMode() {
+        return largeScopesMode && editInspectorTab === "scopes" ? "large" : "image"
+    }
+
+    function setScopesViewMode(modeName) {
+        const cleanMode = String(modeName || "").toLowerCase()
+        if (cleanMode === "large" || cleanMode === "scopes-only") {
+            editInspectorTab = "scopes"
+            if (scopeLayoutPreset === "Stacked")
+                scopeLayoutPreset = "Quad"
+            largeScopesMode = true
+            return true
+        }
+        if (cleanMode === "image" || cleanMode === "image-and-scopes") {
+            largeScopesMode = false
+            return true
+        }
+        return false
+    }
+
+    function scopesViewModeSignature() {
+        const scopesOnly = largeScopesMode && editInspectorTab === "scopes"
+        return [
+            "mode:" + scopesViewMode(),
+            "image:" + String(!scopesOnly),
+            "large:" + String(scopesOnly)
+        ].join("|")
+    }
+
     function scopeChannelSignature() {
         return [
             "rgb:" + String(scopeShowRgb),
             "luma:" + String(scopeShowLuma),
             "density:" + String(scopeShowDensity),
             "trace:" + String(scopeShowTrace),
+            "grid:" + String(scopeShowGrid),
+            "log:" + String(scopeLogHistogram),
             "layout:" + scopeLayoutPreset,
             "sampling:" + scopeSamplingMode
+        ].join("|")
+    }
+
+    function proofingStatusText() {
+        const output = String(editorPreview.outputColorSpace || "sRGB")
+        if (editorPreview.softProofEnabled)
+            return "Output " + output + "  Proof " + String(editorPreview.softProofProfile || "Custom")
+        return "Output " + output + "  Proof Off"
+    }
+
+    function proofingStatusSignature() {
+        return [
+            "output:" + String(editorPreview.outputColorSpace || ""),
+            "proof:" + String(Boolean(editorPreview.softProofEnabled)),
+            "profile:" + String(editorPreview.softProofProfile || "")
+        ].join("|")
+    }
+
+    function setAnalysisOverlay(overlayName) {
+        const cleanOverlay = String(overlayName || "")
+        const wasActive = activeAnalysisOverlay() === cleanOverlay
+        const nextOverlay = wasActive ? "" : cleanOverlay
+        focusCheckOverlayEnabled = nextOverlay === "focus-check"
+        focusPeakingOverlayEnabled = nextOverlay === "focus-peaking"
+        clippingOverlayEnabled = nextOverlay === "clipping"
+        falseColorOverlayEnabled = nextOverlay === "false-color"
+        gamutOverlayEnabled = nextOverlay === "gamut"
+        zoneMapOverlayEnabled = nextOverlay === "zone-map"
+        return true
+    }
+
+    function diagnosticsStatusText() {
+        const overlay = activeAnalysisOverlay()
+        if (overlay === "focus-check")
+            return "Focus"
+        if (overlay === "focus-peaking")
+            return "Peak"
+        if (overlay === "clipping")
+            return "Clips"
+        if (overlay === "false-color")
+            return "False"
+        if (overlay === "gamut")
+            return "Gamut"
+        if (overlay === "zone-map")
+            return "Zone"
+        if (loupeEnabled)
+            return "Loupe"
+        return "Diagnostics"
+    }
+
+    function activeAnalysisOverlay() {
+        if (focusCheckOverlayEnabled)
+            return "focus-check"
+        if (focusPeakingOverlayEnabled)
+            return "focus-peaking"
+        if (clippingOverlayEnabled)
+            return "clipping"
+        if (falseColorOverlayEnabled)
+            return "false-color"
+        if (gamutOverlayEnabled)
+            return "gamut"
+        if (zoneMapOverlayEnabled)
+            return "zone-map"
+        return ""
+    }
+
+    function analysisOverlaySignature() {
+        return [
+            "active:" + activeAnalysisOverlay(),
+            "panel:" + String(diagnosticsPanelOpen),
+            "focus:" + String(focusCheckOverlayEnabled),
+            "peaking:" + String(focusPeakingOverlayEnabled),
+            "clipping:" + String(clippingOverlayEnabled),
+            "false:" + String(falseColorOverlayEnabled),
+            "gamut:" + String(gamutOverlayEnabled),
+            "zone:" + String(zoneMapOverlayEnabled)
         ].join("|")
     }
 
@@ -865,6 +2446,78 @@ Rectangle {
         return keys.join("|")
     }
 
+    function capabilityRegistryList() {
+        return [
+            editRecipeArchitectureCapabilityRegistry,
+            colorScienceCapabilityRegistry,
+            libraryCapabilityRegistry,
+            metadataCapabilityRegistry,
+            cullingSearchCapabilityRegistry,
+            batchEditingCapabilityRegistry,
+            exportDeliveryCapabilityRegistry,
+            performanceCapabilityRegistry,
+            aiModelRuntimeCapabilityRegistry,
+            reliabilityRecoveryCapabilityRegistry,
+            collaborationHandoffCapabilityRegistry,
+            qaTestingCapabilityRegistry,
+            observabilityCapabilityRegistry,
+            packagingProductizationCapabilityRegistry,
+            accessibilityLocalizationCapabilityRegistry,
+            documentationHelpCapabilityRegistry,
+            acceptanceCriteriaRegistry
+        ]
+    }
+
+    function allCapabilityRegistry() {
+        const registries = capabilityRegistryList()
+        let capabilities = []
+        for (let registryIndex = 0; registryIndex < registries.length; ++registryIndex) {
+            const registry = registries[registryIndex]
+            for (let capabilityIndex = 0; capabilityIndex < registry.length; ++capabilityIndex)
+                capabilities.push(registry[capabilityIndex])
+        }
+        return capabilities
+    }
+
+    function allCapabilityCount() { return allCapabilityRegistry().length }
+    function allCapabilitySignature() { return capabilityRegistrySignature(allCapabilityRegistry()) }
+
+    function duplicateCapabilityKeys() {
+        const capabilities = allCapabilityRegistry()
+        let seen = ({})
+        let duplicates = []
+        for (let i = 0; i < capabilities.length; ++i) {
+            const key = String(capabilities[i].key || "")
+            if (key.length === 0)
+                continue
+            if (seen[key] && duplicates.indexOf(key) < 0)
+                duplicates.push(key)
+            seen[key] = true
+        }
+        duplicates.sort()
+        return duplicates
+    }
+
+    function uniqueCapabilityCount() {
+        const capabilities = allCapabilityRegistry()
+        let seen = ({})
+        let count = 0
+        for (let i = 0; i < capabilities.length; ++i) {
+            const key = String(capabilities[i].key || "")
+            if (key.length === 0 || seen[key])
+                continue
+            seen[key] = true
+            ++count
+        }
+        return count
+    }
+
+    function capabilityRegistryGateSignature() {
+        return "total:" + allCapabilityCount()
+                + "|unique:" + uniqueCapabilityCount()
+                + "|duplicates:" + duplicateCapabilityKeys().join(",")
+    }
+
     function editRecipeArchitectureCapabilityCount() { return editRecipeArchitectureCapabilityRegistry.length }
     function editRecipeArchitectureCapabilityAvailable(key) { return capabilityRegistryContains(editRecipeArchitectureCapabilityRegistry, key) }
     function editRecipeArchitectureCapabilitySignature() { return capabilityRegistrySignature(editRecipeArchitectureCapabilityRegistry) }
@@ -973,10 +2626,14 @@ Rectangle {
     }
 
     function inspectorTabTitle(tabKey) {
+        if (tabKey === "presets")
+            return "Presets"
+        if (tabKey === "crop")
+            return "Crop"
+        if (tabKey === "layers")
+            return "Layers"
         if (tabKey === "scopes")
             return "Scopes"
-        if (tabKey === "detail")
-            return "Detail"
         if (tabKey === "info")
             return "Info"
         return "Adjust"
@@ -990,13 +2647,13 @@ Rectangle {
 
     function assetName(index) {
         const asset = assetAt(index)
-        const path = String(asset.filePath || catalogAssets.selectedFilePath || "")
+        const path = String(asset.filePath || "")
         if (path.length > 0) {
             const parts = path.split("/")
             return parts.length > 0 ? parts[parts.length - 1] : path
         }
-        const fallback = String(asset.assetId || catalogAssets.selectedAssetId || "")
-        return fallback.length > 0 ? fallback : "DJI_20250930114030_0017_Z.jpg"
+        const fallback = String(asset.assetId || "")
+        return fallback.length > 0 ? fallback : "Untitled"
     }
 
     function assetThumb(index) {
@@ -1004,18 +2661,161 @@ Rectangle {
         const thumb = String(asset.thumbnailSource || "")
         if (thumb.length > 0)
             return thumb
-        if (index === catalogAssets.selectedIndex && catalogAssets.selectedThumbnailSource.length > 0)
-            return catalogAssets.selectedThumbnailSource
-        if (editorPreview.displayPreviewSource.length > 0)
-            return editorPreview.displayPreviewSource
         return ""
     }
 
     function assetThumbCacheable(index) {
         const asset = assetAt(index)
-        if (String(asset.thumbnailSource || "").length > 0)
-            return true
-        return index === catalogAssets.selectedIndex && catalogAssets.selectedThumbnailSource.length > 0
+        return String(asset.thumbnailSource || "").length > 0
+    }
+
+    function assetRating(index) {
+        const asset = assetAt(index)
+        return Math.max(0, Math.min(5, Number(asset.rating || 0)))
+    }
+
+    function assetPicked(index) {
+        const asset = assetAt(index)
+        return Boolean(asset.picked)
+    }
+
+    function assetRejected(index) {
+        const asset = assetAt(index)
+        return Boolean(asset.rejected)
+    }
+
+    function assetMetadataLine(index) {
+        const asset = assetAt(index)
+        const parts = []
+        const captureDate = String(asset.captureDate || "")
+        const cameraLabel = String(asset.cameraLabel || "")
+        const lensModel = String(asset.lensModel || "")
+        if (captureDate.length > 0)
+            parts.push(captureDate)
+        if (cameraLabel.length > 0)
+            parts.push(cameraLabel)
+        if (lensModel.length > 0 && lensModel !== cameraLabel)
+            parts.push(lensModel)
+        return parts.length > 0 ? parts.join("  -  ") : "Metadata pending"
+    }
+
+    function selectedMetadataRows() {
+        const rows = []
+        function add(label, value) {
+            const text = String(value || "")
+            if (text.length > 0)
+                rows.push([label, text])
+        }
+        add("Camera", catalogAssets.selectedCameraLabel)
+        add("Lens", catalogAssets.selectedLensModel)
+        add("Captured", catalogAssets.selectedCaptureDate)
+        add("ISO", catalogAssets.selectedIso)
+        add("Shutter", catalogAssets.selectedShutterSpeed)
+        add("Aperture", catalogAssets.selectedAperture)
+        add("Imported", catalogAssets.selectedImportedAt)
+        add("Project", catalogAssets.selectedProjectSummary)
+        add("Path", catalogAssets.selectedFilePath)
+        if (rows.length === 0)
+            rows.push(["Metadata", "Pending"])
+        return rows
+    }
+
+    function mediaFilterLabel() {
+        if (catalogAssets.mediaTypeFilter === "photos")
+            return "Photos"
+        if (catalogAssets.mediaTypeFilter === "videos")
+            return "Videos"
+        if (catalogAssets.mediaTypeFilter === "timelines")
+            return "Timelines"
+        return "All Media"
+    }
+
+    function projectFilterLabel() {
+        if (catalogAssets.projectFilter === "unassigned")
+            return "Unassigned"
+        if (catalogAssets.projectFilter !== "all")
+            return catalogAssets.projectFilter
+        return "All Projects"
+    }
+
+    function timeFilterLabel() {
+        if (catalogAssets.importDateFilter === "today")
+            return "Today"
+        if (catalogAssets.importDateFilter === "7d")
+            return "7 Days"
+        if (catalogAssets.importDateFilter === "30d")
+            return "30 Days"
+        if (catalogAssets.importDateFilter === "year")
+            return "This Year"
+        return "All Time"
+    }
+
+    function reviewFilterLabel() {
+        if (catalogAssets.minimumRatingFilter > 0)
+            return String(catalogAssets.minimumRatingFilter) + "+ Stars"
+        if (catalogAssets.reviewFilter === "picked")
+            return "Picked"
+        if (catalogAssets.reviewFilter === "rejected")
+            return "Rejected"
+        if (catalogAssets.reviewFilter === "rated")
+            return "Rated"
+        if (catalogAssets.reviewFilter === "unrated")
+            return "Unrated"
+        if (catalogAssets.reviewFilter === "unmarked")
+            return "Unmarked"
+        return "All Reviews"
+    }
+
+    function filtersActive() {
+        return catalogAssets.projectFilter !== "all" ||
+               catalogAssets.importDateFilter !== "all" ||
+               catalogAssets.captureYearFilter !== "all" ||
+               catalogAssets.mediaTypeFilter !== "all" ||
+               catalogAssets.reviewFilter !== "all" ||
+               catalogAssets.availabilityFilter !== "all" ||
+               catalogAssets.minimumRatingFilter > 0 ||
+               catalogAssets.searchFilter.length > 0
+    }
+
+    function mediaFilterActive() {
+        return catalogAssets.mediaTypeFilter !== "all"
+    }
+
+    function projectFilterActive() {
+        return catalogAssets.projectFilter !== "all"
+    }
+
+    function timeFilterActive() {
+        return catalogAssets.importDateFilter !== "all" || catalogAssets.captureYearFilter !== "all"
+    }
+
+    function reviewFilterActive() {
+        return catalogAssets.reviewFilter !== "all" || catalogAssets.minimumRatingFilter > 0
+    }
+
+    function cycleMediaFilter() {
+        const values = ["all", "photos", "videos", "timelines"]
+        const next = (values.indexOf(catalogAssets.mediaTypeFilter) + 1) % values.length
+        catalogAssets.mediaTypeFilter = values[next]
+    }
+
+    function cycleProjectFilter() {
+        const values = ["all", "unassigned"].concat(catalogAssets.projectNames)
+        const next = (values.indexOf(catalogAssets.projectFilter) + 1) % values.length
+        catalogAssets.projectFilter = values[next]
+    }
+
+    function cycleTimeFilter() {
+        const values = ["all", "today", "7d", "30d", "year"]
+        const next = (values.indexOf(catalogAssets.importDateFilter) + 1) % values.length
+        catalogAssets.importDateFilter = values[next]
+    }
+
+    function cycleReviewFilter() {
+        const values = ["all", "picked", "rejected", "rated", "unrated", "unmarked"]
+        const next = (values.indexOf(catalogAssets.reviewFilter) + 1) % values.length
+        catalogAssets.minimumRatingFilter = 0
+        catalogAssets.reviewFilter = values[next]
     }
 
     function aspectRatioText(width, height) {
@@ -1083,55 +2883,66 @@ Rectangle {
         return "Midtones"
     }
 
+    function rainbowTrack() {
+        return ["#d45a62", "#dd8a39", "#d7bd42", "#61b56f", "#49b8c4", "#4e86d9", "#8b6be3", "#c85ac1", "#d45a62"]
+    }
+
+    function gradingPreviewColor(hueValue, saturationValue, luminanceValue) {
+        const hue = ((hueValue % 1.0) + 1.0) % 1.0
+        const saturation = Math.max(0.18, Math.min(1.0, Math.abs(saturationValue) / 100.0))
+        const lightness = Math.max(0.38, Math.min(0.76, 0.56 + luminanceValue / 280.0))
+        return Qt.hsla(hue, saturation, lightness, 1.0)
+    }
+
     function selectedToneWheelHue() {
         if (selectedToneWheel === 0)
-            return editorPreview.gradingShadowsHue
+            return root.primaryNestedAdjustmentValue("colorGrading", "shadows", "hue", editorPreview.gradingShadowsHue)
         if (selectedToneWheel === 2)
-            return editorPreview.gradingHighlightsHue
-        return editorPreview.gradingMidtonesHue
+            return root.primaryNestedAdjustmentValue("colorGrading", "highlights", "hue", editorPreview.gradingHighlightsHue)
+        return root.primaryNestedAdjustmentValue("colorGrading", "midtones", "hue", editorPreview.gradingMidtonesHue)
     }
 
     function selectedToneWheelSaturation() {
         if (selectedToneWheel === 0)
-            return editorPreview.gradingShadowsSaturation
+            return root.primaryNestedAdjustmentValue("colorGrading", "shadows", "saturation", editorPreview.gradingShadowsSaturation)
         if (selectedToneWheel === 2)
-            return editorPreview.gradingHighlightsSaturation
-        return editorPreview.gradingMidtonesSaturation
+            return root.primaryNestedAdjustmentValue("colorGrading", "highlights", "saturation", editorPreview.gradingHighlightsSaturation)
+        return root.primaryNestedAdjustmentValue("colorGrading", "midtones", "saturation", editorPreview.gradingMidtonesSaturation)
     }
 
     function selectedToneWheelLuminance() {
         if (selectedToneWheel === 0)
-            return editorPreview.gradingShadowsLuminance
+            return root.primaryNestedAdjustmentValue("colorGrading", "shadows", "luminance", editorPreview.gradingShadowsLuminance)
         if (selectedToneWheel === 2)
-            return editorPreview.gradingHighlightsLuminance
-        return editorPreview.gradingMidtonesLuminance
+            return root.primaryNestedAdjustmentValue("colorGrading", "highlights", "luminance", editorPreview.gradingHighlightsLuminance)
+        return root.primaryNestedAdjustmentValue("colorGrading", "midtones", "luminance", editorPreview.gradingMidtonesLuminance)
     }
 
     function setSelectedToneWheelHue(value) {
         if (selectedToneWheel === 0)
-            editorPreview.gradingShadowsHue = value
+            root.setPrimaryAdjustmentValue("gradingShadowsHue", value)
         else if (selectedToneWheel === 2)
-            editorPreview.gradingHighlightsHue = value
+            root.setPrimaryAdjustmentValue("gradingHighlightsHue", value)
         else
-            editorPreview.gradingMidtonesHue = value
+            root.setPrimaryAdjustmentValue("gradingMidtonesHue", value)
     }
 
     function setSelectedToneWheelSaturation(value) {
         if (selectedToneWheel === 0)
-            editorPreview.gradingShadowsSaturation = value
+            root.setPrimaryAdjustmentValue("gradingShadowsSaturation", value)
         else if (selectedToneWheel === 2)
-            editorPreview.gradingHighlightsSaturation = value
+            root.setPrimaryAdjustmentValue("gradingHighlightsSaturation", value)
         else
-            editorPreview.gradingMidtonesSaturation = value
+            root.setPrimaryAdjustmentValue("gradingMidtonesSaturation", value)
     }
 
     function setSelectedToneWheelLuminance(value) {
         if (selectedToneWheel === 0)
-            editorPreview.gradingShadowsLuminance = value
+            root.setPrimaryAdjustmentValue("gradingShadowsLuminance", value)
         else if (selectedToneWheel === 2)
-            editorPreview.gradingHighlightsLuminance = value
+            root.setPrimaryAdjustmentValue("gradingHighlightsLuminance", value)
         else
-            editorPreview.gradingMidtonesLuminance = value
+            root.setPrimaryAdjustmentValue("gradingMidtonesLuminance", value)
     }
 
     function selectAsset(index) {
@@ -1193,7 +3004,32 @@ Rectangle {
         catalogAssets.importFolder()
     }
 
+    function maskToolKeepsActiveMask(toolName) {
+        return toolName === "masks" || toolName === "brush" || toolName === "retouch"
+    }
+
+    function clearTransientToolStateFor(toolName) {
+        if (editorPreview.brushStrokeActive)
+            editorPreview.endActiveBrushStroke()
+        root.clearTransientMaskTools()
+        if (!root.maskToolKeepsActiveMask(toolName) && editorPreview.hasActiveMask)
+            editorPreview.deselectActiveMask()
+        if (toolName !== "crop")
+            editorPreview.cropEditing = false
+        if (toolName !== "compare")
+            editorPreview.compareMode = false
+    }
+
+    function transientToolStateSignature() {
+        return "tool:" + root.editTool +
+               "|activeMask:" + String(editorPreview.hasActiveMask) +
+               "|stroke:" + String(editorPreview.brushStrokeActive) +
+               "|crop:" + String(editorPreview.cropEditing) +
+               "|compare:" + String(editorPreview.compareMode)
+    }
+
     function activateEditTool(toolName) {
+        root.clearTransientToolStateFor(toolName)
         root.editTool = toolName
         if (toolName === "adjust") {
             root.selectedEditLayer = "adjustments"
@@ -1204,6 +3040,7 @@ Rectangle {
         }
         if (toolName === "crop") {
             root.cropToolMode = "crop"
+            root.editInspectorTab = "crop"
             editorPreview.compareMode = false
             editorPreview.cropEditing = true
             return
@@ -1231,11 +3068,195 @@ Rectangle {
         }
     }
 
+    function cancelActiveTool() {
+        if (root.cancelActivePolygonDrawing())
+            return true
+        if (root.cancelActiveCanvasTool())
+            return true
+        if (root.diagnosticsPanelOpen) {
+            root.diagnosticsPanelOpen = false
+            return true
+        }
+        if (root.editTool === "adjust")
+            return false
+        root.activateEditTool("adjust")
+        return true
+    }
+
+    function activePolygonShortcutReady() {
+        return page === "edit" &&
+               editorPreview.hasActiveMask &&
+               editorPreview.activeMaskKind === "polygon"
+    }
+
+    function activeLassoShortcutReady() {
+        return page === "edit" &&
+               editorPreview.hasActiveMask &&
+               editorPreview.activeMaskKind === "lasso"
+    }
+
+    function activeCanvasToolChipVisible() {
+        return !editorPreview.compareMode &&
+               (root.brushToolReady() ||
+                root.objectPickArmed ||
+                root.activePolygonShortcutReady() ||
+                root.activeLassoShortcutReady())
+    }
+
+    function activeCanvasToolName() {
+        if (root.brushToolReady())
+            return "Brush"
+        if (root.objectPickArmed)
+            return "Object"
+        if (root.activeLassoShortcutReady())
+            return "Lasso"
+        if (root.activePolygonShortcutReady())
+            return "Polygon"
+        return "Selection"
+    }
+
+    function activeCanvasToolModeText() {
+        if (root.brushToolReady())
+            return root.maskOperationLabel(editorPreview.activeMaskOperation) + " / " +
+                   root.brushSizeValueText() + " / Flow " + root.brushFlowValueText()
+        if (root.objectPickArmed)
+            return editorPreview.smartSelectPreviewActive
+                    ? String(editorPreview.smartSelectCandidateHudText || "Candidate ready")
+                    : "Hover or drag / " + root.maskOperationLabel(root.objectPickMode)
+        if (root.activeLassoShortcutReady())
+            return editorPreview.activeMaskPolygonPointCount + " pts / " +
+                   root.maskOperationLabel(editorPreview.activeMaskOperation)
+        if (root.activePolygonShortcutReady())
+            return editorPreview.activeMaskPolygonPointCount + " pts / " +
+                   root.maskOperationLabel(editorPreview.activeMaskOperation)
+        return ""
+    }
+
+    function activeCanvasToolCanComplete() {
+        if (root.brushToolReady())
+            return true
+        if (root.objectPickArmed && editorPreview.smartSelectPreviewActive)
+            return true
+        if ((root.activePolygonShortcutReady() || root.activeLassoShortcutReady()) &&
+                editorPreview.activeMaskPolygonPointCount >= 3 &&
+                !editorPreview.activeMaskPolygonSelfIntersecting)
+            return true
+        return false
+    }
+
+    function finishActiveCanvasTool() {
+        if (root.brushToolReady()) {
+            if (editorPreview.brushStrokeActive)
+                editorPreview.endActiveBrushStroke()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.objectPickArmed && editorPreview.smartSelectPreviewActive) {
+            editorPreview.acceptSmartSelectPreview(root.objectPickMode, root.objectPickCreateNew)
+            root.clearTransientMaskTools()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.activePolygonShortcutReady())
+            return root.completeActivePolygonSelection()
+        if (root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()) {
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        return false
+    }
+
+    function cancelActiveCanvasTool() {
+        if (root.brushToolReady()) {
+            if (editorPreview.brushStrokeActive)
+                editorPreview.endActiveBrushStroke()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.objectPickArmed) {
+            editorPreview.rejectSmartSelectPreview()
+            root.clearTransientMaskTools()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.activeLassoShortcutReady()) {
+            if (editorPreview.activeMaskPolygonPointCount < 3)
+                editorPreview.removeActiveMask()
+            root.clearTransientMaskTools()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.activePolygonShortcutReady() &&
+                editorPreview.activeMaskPolygonPointCount >= 3) {
+            root.clearTransientMaskTools()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        return false
+    }
+
+    function completeActivePolygonSelection() {
+        if (!root.activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount < 3 ||
+                editorPreview.activeMaskPolygonSelfIntersecting)
+            return false
+        root.clearTransientMaskTools()
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        return true
+    }
+
+    function activePolygonSnapClose(normalizedX, normalizedY, canvasWidth, canvasHeight) {
+        if (!root.activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount < 3 ||
+                editorPreview.activeMaskPolygonSelfIntersecting)
+            return false
+        const points = editorPreview.activeMaskPolygonPoints || []
+        if (points.length < 3)
+            return false
+        const first = points[0]
+        const dx = (Number(normalizedX) - Number(first.x || 0)) * Math.max(1, Number(canvasWidth || 1))
+        const dy = (Number(normalizedY) - Number(first.y || 0)) * Math.max(1, Number(canvasHeight || 1))
+        return Math.sqrt(dx * dx + dy * dy) <= 18
+    }
+
+    function completeActivePolygonIfSnappingToFirst(normalizedX, normalizedY, canvasWidth, canvasHeight) {
+        if (!root.activePolygonSnapClose(normalizedX, normalizedY, canvasWidth, canvasHeight))
+            return false
+        return root.completeActivePolygonSelection()
+    }
+
+    function cancelActivePolygonDrawing() {
+        if (!root.activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount >= 3)
+            return false
+        editorPreview.removeActiveMask()
+        root.clearTransientMaskTools()
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        return true
+    }
+
+    function removeLastActivePolygonPointFromShortcut() {
+        if (!root.activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount <= 0)
+            return false
+        editorPreview.removeLastActivePolygonPoint()
+        return true
+    }
+
     function setCropToolMode(modeName) {
         root.editTool = "crop"
         root.selectedEditLayer = "crop"
         root.cropToolMode = modeName === "transform" ? "transform" : (modeName === "horizon" ? "horizon" : "crop")
-        root.editInspectorTab = "detail"
+        root.editInspectorTab = "crop"
         editorPreview.compareMode = false
         editorPreview.cropEditing = root.cropToolMode === "crop"
     }
@@ -1264,32 +3285,307 @@ Rectangle {
 
     function normalizedMaskCreationOperation(operationName) {
         const normalized = String(operationName || "").trim().toLowerCase()
-        if (normalized === "add" || normalized === "subtract" || normalized === "intersect")
+        if (normalized === "add" || normalized === "subtract" ||
+                normalized === "intersect" || normalized === "replace")
             return normalized
         return "add"
+    }
+
+    function maskShortcutContextActive(requireActiveMask) {
+        if (page !== "edit" || !editorPreview.hasAsset || editorPreview.compareMode)
+            return false
+        if (root.shortcutTextInputActive())
+            return false
+        if (requireActiveMask && !editorPreview.hasActiveMask)
+            return false
+        return root.editTool === "masks" || root.editTool === "brush" ||
+               root.editTool === "retouch" || !requireActiveMask
+    }
+
+    function outlinePointCount(outlines) {
+        if (!outlines || outlines.length === undefined)
+            return 0
+        let total = 0
+        for (let i = 0; i < outlines.length; ++i) {
+            const entry = outlines[i]
+            if (!entry)
+                continue
+            if (entry.x !== undefined && entry.y !== undefined) {
+                total += 1
+            } else if (entry.length !== undefined) {
+                total += entry.length
+            }
+        }
+        return total
+    }
+
+    function activeSelectionOutlinePointCount() {
+        const pathPointCount = root.outlinePointCount(editorPreview.activeMaskOutlinePaths)
+        if (pathPointCount > 0)
+            return pathPointCount
+        return root.outlinePointCount(editorPreview.activeMaskOutlinePoints)
+    }
+
+    function smartSelectionPreviewOutlinePointCount() {
+        return root.outlinePointCount(editorPreview.smartSelectPreviewOutlinePoints)
+    }
+
+    function selectionOutlineAnimationPointCount() {
+        const activePointCount = root.activeSelectionOutlinePointCount()
+        if (activePointCount >= 2)
+            return activePointCount
+        return root.smartSelectionPreviewOutlinePointCount()
+    }
+
+    function selectionOutlineAnimationShouldRun() {
+        if (editorPreview.maskPreviewDisplayMode !== "marching-ants")
+            return false
+        if (!root.visible || page !== "edit" || !editorPreview.hasActiveMask)
+            return false
+        if (root.editTool !== "masks" && root.editTool !== "brush" && root.editTool !== "retouch")
+            return false
+        if (editorPreview.maskPreviewTemporarilyHidden === true || editorPreview.compareMode ||
+                editorPreview.cropEditing)
+            return false
+        if (editorPreview.brushStrokeActive || editorPreview.smartSelectStrokeActive)
+            return false
+        const pointCount = root.selectionOutlineAnimationPointCount()
+        return pointCount >= 2 && pointCount <= root.selectionOutlineAnimationPointBudget
+    }
+
+    function createMaskFromShortcut() {
+        if (!root.maskShortcutContextActive(false))
+            return false
+        root.startMaskBrushSource(root.maskCreationOperation)
+        return true
+    }
+
+    function selectMaskMoveFromShortcut() {
+        if (!root.maskShortcutContextActive(false))
+            return false
+        root.activateEditTool("masks")
+        return true
+    }
+
+    function targetShortcutContextActive(requireAsset) {
+        if (page !== "edit" || editorPreview.compareMode)
+            return false
+        if (root.shortcutTextInputActive())
+            return false
+        if (requireAsset && !editorPreview.hasAsset)
+            return false
+        return true
+    }
+
+    function shortcutTextInputActive() {
+        if (activeMaskRenameDialog.opened)
+            return true
+        const windowObject = root.Window.window
+        const focusItem = windowObject ? windowObject.activeFocusItem : null
+        if (!focusItem)
+            return false
+        if (focusItem.visible === false || focusItem.enabled === false)
+            return false
+        return focusItem.cursorPosition !== undefined ||
+               focusItem.selectedText !== undefined ||
+               focusItem.echoMode !== undefined ||
+               focusItem.acceptableInput !== undefined
+    }
+
+    function brushShortcutContextActive() {
+        return root.brushToolReady() && !root.shortcutTextInputActive()
+    }
+
+    function switchLayerTargetFromShortcut(delta) {
+        if (!root.targetShortcutContextActive(true) || editorPreview.photoLayerCount <= 0)
+            return false
+        const count = editorPreview.photoLayerCount
+        const direction = Number(delta || 0) < 0 ? -1 : 1
+        let currentIndex = root.activeEditTargetLayerIndex()
+        if (currentIndex < 0)
+            currentIndex = root.normalizedActivePhotoLayerIndex()
+        const nextIndex = (Math.max(0, currentIndex) + direction + count) % count
+        return root.editPhotoLayerInspectorTarget(nextIndex)
+    }
+
+    function switchMaskTargetFromShortcut(delta) {
+        if (!root.targetShortcutContextActive(true) || editorPreview.maskSetCount <= 0)
+            return false
+        const count = editorPreview.maskSetCount
+        const direction = Number(delta || 0) < 0 ? -1 : 1
+        let currentIndex = -1
+        for (let index = 0; index < count; ++index) {
+            if (root.maskSetActive(editorPreview.maskSets[index] || ({}))) {
+                currentIndex = index
+                break
+            }
+        }
+        if (currentIndex < 0)
+            currentIndex = Math.max(0, Math.min(count - 1, root.selectedMaskSetIndex))
+        const nextIndex = (Math.max(0, currentIndex) + direction + count) % count
+        root.selectMaskSetAndLayer(editorPreview.maskSets[nextIndex] || ({}), false)
+        return true
+    }
+
+    function returnToBaseImageFromShortcut() {
+        if (!root.targetShortcutContextActive(true))
+            return false
+        return root.activateBaseImageLayerTarget()
+    }
+
+    function activateBaseImageLayerTarget() {
+        const retainedLayerSelection = root.normalizedPhotoLayerSelection()
+        if (retainedLayerSelection.length === 0 && root.normalizedActivePhotoLayerIndex() >= 0)
+            retainedLayerSelection.push(root.normalizedActivePhotoLayerIndex())
+        root.clearTransientToolStateFor("adjust")
+        root.selectedPhotoLayerIndices = retainedLayerSelection
+        root.setSelectedEditTarget("base-image", -1, ({}), -1)
+        root.selectedEditLayer = "adjustments"
+        root.editTool = "adjust"
+        root.editInspectorTab = "adjust"
+        editorPreview.maskPreviewTemporarilyHidden = false
+        return true
+    }
+
+    function toggleMaskOutlineFromShortcut() {
+        if (!root.maskShortcutContextActive(true))
+            return false
+        editorPreview.maskPreviewMode = editorPreview.maskPreviewDisplayMode === "outline" ? "overlay" : "outline"
+        return true
+    }
+
+    function startMaskLassoFromShortcut() {
+        if (!root.maskShortcutContextActive(false))
+            return false
+        const operation = root.maskCreationOperation
+        root.clearTransientMaskTools()
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        root.lassoDrawArmed = true
+        root.beginMaskShapeEditTransaction()
+        editorPreview.startLassoSelection(operation === "subtract")
+        if (editorPreview.hasActiveMask)
+            editorPreview.activeMaskOperation = operation
+        root.selectActiveSelectionAdjustmentLayer()
+        return true
+    }
+
+    function startMaskPolygonFromShortcut() {
+        if (!root.maskShortcutContextActive(false))
+            return false
+        const operation = root.maskCreationOperation
+        root.clearTransientMaskTools()
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        root.polygonDrawArmed = true
+        root.beginMaskShapeEditTransaction()
+        editorPreview.startPolygonSelection(operation === "subtract")
+        if (editorPreview.hasActiveMask)
+            editorPreview.activeMaskOperation = operation
+        root.selectActiveSelectionAdjustmentLayer()
+        return true
+    }
+
+    function setMaskOperationFromShortcut(operationName) {
+        if (!root.maskShortcutContextActive(false))
+            return false
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        root.setMaskCreationOperation(operationName)
+        return true
+    }
+
+    function invertActiveMaskFromShortcut() {
+        if (!root.maskShortcutContextActive(true) ||
+                editorPreview.activeMaskToolRole === "retouch" ||
+                String(editorPreview.activeMaskEditDisabledReason || "").length > 0)
+            return false
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+        return true
+    }
+
+    function toggleActiveMaskOverlayFromShortcut() {
+        if (!root.maskShortcutContextActive(true))
+            return false
+        root.setActiveMaskPreviewVisible(editorPreview.maskPreviewDisplayMode === "hidden")
+        return true
+    }
+
+    function setMaskPreviewTemporarilyHiddenFromShortcut(hidden) {
+        const hidePreview = hidden === true
+        if (!root.maskShortcutContextActive(true)) {
+            if (!hidePreview)
+                editorPreview.maskPreviewTemporarilyHidden = false
+            return false
+        }
+        editorPreview.maskPreviewTemporarilyHidden = hidePreview
+        return true
+    }
+
+    function deleteActiveMaskFromShortcut() {
+        if (!root.maskShortcutContextActive(true))
+            return false
+        editorPreview.removeActiveMask()
+        return true
+    }
+
+    function renameActiveMaskFromShortcut() {
+        if (!root.maskShortcutContextActive(true) ||
+                String(editorPreview.activeMaskEditDisabledReason || "").length > 0)
+            return false
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        root.activeMaskRenameDraft = String(editorPreview.activeMaskName || "Selection")
+        activeMaskRenameDialog.open()
+        return true
+    }
+
+    function maskShortcutSignature() {
+        return "select:V|brush:B|erase:E|lasso:L|polygon:P|" +
+               "create:Ctrl+Shift+M|add:Ctrl+Shift+A|subtract:Ctrl+Shift+S|" +
+               "intersect:Ctrl+Shift+I|invert:Ctrl+Shift+V|overlay:Ctrl+Shift+O|" +
+               "outline:Ctrl+Shift+U|layer-target:Ctrl+Shift+L|layer-target-prev:Ctrl+Alt+Shift+L|" +
+               "mask-target:Ctrl+Shift+K|mask-target-prev:Ctrl+Alt+Shift+K|" +
+               "base-image:Ctrl+Shift+B|temp-erase:X-hold|temporary-hide:H-hold|" +
+               "delete:Delete|rename:F2"
     }
 
     function maskKindLabel(kindName) {
         const kind = String(kindName || "").trim().toLowerCase()
         if (kind === "linear")
-            return "Linear source"
+            return "Linear selection"
         if (kind === "radial")
-            return "Radial source"
+            return "Radial selection"
+        if (kind === "ellipse")
+            return "Ellipse selection"
+        if (kind === "rectangle")
+            return "Rectangle selection"
         if (kind === "brush")
-            return "Brush source"
+            return "Brush selection"
         if (kind === "object")
-            return "Object source"
+            return "Object selection"
         if (kind === "polygon")
-            return "Polygon source"
+            return "Polygon selection"
         if (kind === "lasso")
-            return "Lasso source"
+            return "Lasso selection"
         if (kind === "luminance")
             return "Luminance range"
         if (kind === "color")
             return "Color range"
         if (kind === "depth")
             return "Depth range"
-        return "Mask source"
+        return "Selection"
     }
 
     function maskOperationLabel(operationName) {
@@ -1307,20 +3603,87 @@ Rectangle {
         return "Add"
     }
 
+    function maskOutlineQualityLabel(tierName) {
+        const tier = String(tierName || "hidden").trim().toLowerCase()
+        if (tier === "live-vector")
+            return "Outline: Live"
+        if (tier === "preview-alpha")
+            return "Outline: Preview alpha"
+        if (tier === "vector-path")
+            return "Outline: Vector"
+        if (tier === "settled-alpha")
+            return "Outline: Alpha"
+        if (tier === "unavailable")
+            return "Outline: Unavailable"
+        return "Outline: Hidden"
+    }
+
+    function selectionOperationOverlayColor(operationName) {
+        const customColor = String(editorPreview.maskPreviewOverlayColor || "")
+        if (customColor.length > 0)
+            return customColor
+        const operation = String(operationName || "add").trim().toLowerCase()
+        if (operation === "subtract")
+            return "#ff8a4c"
+        if (operation === "intersect")
+            return "#8fa8ff"
+        return "#24dcc2"
+    }
+
+    function maskVocabularyTooltip() {
+        return "Selection: non-destructive adjustment matte. Retouch: repair patch stored in the edit recipe. Selection group: combined result. Component: one brush, object, lasso, or gradient. Operation: Add/Subtract/Intersect/Replace. Overlay: canvas visualization only."
+    }
+
     function activeMaskToolbarStatusText() {
+        const emptySuffix = editorPreview.emptyMaskCount > 0 ? " / Empty selections: " + editorPreview.emptyMaskCount : ""
+        const staleSuffix = editorPreview.staleGeneratedMaskCount > 0 ? " / Update AI: " + editorPreview.staleGeneratedMaskCount : ""
         if (!editorPreview.hasActiveMask)
-            return "No active mask set"
+            return "No active selection / Next tool creates a new selection" + emptySuffix + staleSuffix
         const state = editorPreview.activeMaskInverted ? "Inverted" : "Normal"
+        const target = String(editorPreview.activeMaskSetName || editorPreview.activeMaskName || "Selection")
         return root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
                root.maskOperationLabel(editorPreview.activeMaskOperation) + " / " +
-               state
+               state + " / Target: " + target + " / Adjustment layer" + emptySuffix + staleSuffix
+               + " / " + root.maskOutlineQualityLabel(editorPreview.activeMaskOutlineQualityTier)
+    }
+
+    function maskCreationContextSignature() {
+        if (!editorPreview.hasActiveMask)
+            return "component:none|operation:" + root.maskCreationOperation + "|targetGroup:new|target:Adjustment layer"
+        const target = String(editorPreview.activeMaskSetName || editorPreview.activeMaskName || "Selection")
+        return "component:" + root.maskKindLabel(editorPreview.activeMaskKind) +
+                "|operation:" + root.maskOperationLabel(editorPreview.activeMaskOperation) +
+                "|state:" + (editorPreview.activeMaskInverted ? "Inverted" : "Normal") +
+                "|targetGroup:" + target +
+                "|target:Adjustment layer"
+    }
+
+    function maskActionRetrySignature() {
+        return "available:" + String(editorPreview.maskActionRetryAvailable) +
+                "|label:" + String(editorPreview.maskActionRetryLabel || "") +
+                "|detail:" + String(editorPreview.maskActionRetryDetail || "")
+    }
+
+    function maskCreationOperationTooltip(operationName) {
+        const operation = root.maskOperationLabel(operationName)
+        if (!editorPreview.hasActiveMask)
+            return operation + " creates the first component in a new selection."
+        const target = String(editorPreview.activeMaskSetName || editorPreview.activeMaskName || "Mask")
+        if (String(operationName || "").trim().toLowerCase() === "replace")
+            return "Replace the result of " + target + " with the next component."
+        return operation + " the next component in " + target + "."
+    }
+
+    function activeMaskDisabledTooltipSuffix() {
+        const reason = String(editorPreview.activeMaskEditDisabledReason || "")
+        return reason.length > 0 ? " " + reason : ""
     }
 
     function maskStackSourceSummary(maskSet) {
         const sourceCount = Number(maskSet.sourceCount || 0)
         if (sourceCount === 1)
-            return "1 source"
-        return sourceCount + " sources"
+            return "1 component"
+        return sourceCount + " components"
     }
 
     function setMaskCreationOperation(operationName) {
@@ -1330,33 +3693,301 @@ Rectangle {
         return root.maskCreationOperation
     }
 
+    function selectActiveSelectionAdjustmentLayer() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole === "retouch")
+            return -1
+        const layerIndex = editorPreview.ensureActiveSelectionAdjustmentLayer()
+        if (layerIndex >= 0)
+            root.setActivePhotoLayerSelection(layerIndex, false)
+        return layerIndex
+    }
+
     function createMaskSource(kindName) {
+        const kind = String(kindName || "").trim().toLowerCase()
+        root.clearTransientMaskTools()
         root.editTool = "masks"
         root.editInspectorTab = "adjust"
         editorPreview.compareMode = false
         editorPreview.cropEditing = false
         editorPreview.maskPreviewMode = "overlay"
+        if (kind === "object") {
+            root.objectPickArmed = true
+            root.objectPickCreateNew = true
+            root.objectPickMode = "selection"
+            return
+        }
         editorPreview.addMask(kindName)
+        const layerIndex = root.selectActiveSelectionAdjustmentLayer()
         if (editorPreview.hasActiveMask)
             editorPreview.activeMaskOperation = root.maskCreationOperation
+        if (layerIndex >= 0)
+            root.editInspectorTab = "adjust"
     }
 
-    function startMaskBrushSource() {
+    function createGeneratedSelectionSource(kindName) {
+        root.clearTransientMaskTools()
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        editorPreview.addAIMask(kindName)
+        const layerIndex = root.selectActiveSelectionAdjustmentLayer()
+        if (editorPreview.hasActiveMask)
+            editorPreview.activeMaskOperation = root.maskCreationOperation
+        if (layerIndex >= 0)
+            root.editInspectorTab = "adjust"
+    }
+
+    function startMaskBrushSource(operationName) {
+        const operation = operationName === undefined
+                ? root.maskCreationOperation
+                : root.normalizedMaskCreationOperation(operationName)
+        root.clearTransientMaskTools()
+        root.maskCreationOperation = operation
         root.editTool = "brush"
         root.editInspectorTab = "adjust"
         editorPreview.compareMode = false
         editorPreview.cropEditing = false
         editorPreview.maskPreviewMode = "overlay"
-        editorPreview.startSelectionBrush(root.maskCreationOperation === "subtract")
+        editorPreview.startSelectionBrush(operation === "subtract")
+        const layerIndex = root.selectActiveSelectionAdjustmentLayer()
         if (editorPreview.hasActiveMask)
-            editorPreview.activeMaskOperation = root.maskCreationOperation
+            editorPreview.activeMaskOperation = operation
+        if (layerIndex >= 0)
+            root.editInspectorTab = "adjust"
     }
 
     function brushToolReady() {
         return page === "edit" &&
+               root.editTool === "brush" &&
                editorPreview.hasActiveMask &&
                editorPreview.activeMaskKind === "brush" &&
                editorPreview.activeMaskToolRole !== "retouch"
+    }
+
+    function studioAiMaskKind(kindName) {
+        const kind = String(kindName || "").trim().toLowerCase()
+        return kind === "subject" || kind === "sky" || kind === "background" ||
+               kind === "people" || kind === "face" || kind === "hair" ||
+               kind === "clothing" || kind === "object"
+    }
+
+    function studioMaskSupportsSelectionRefine() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole === "retouch")
+            return false
+        const kind = String(editorPreview.activeMaskKind || "").trim().toLowerCase()
+        return kind === "linear" || kind === "radial" || kind === "ellipse" ||
+               kind === "rectangle" || kind === "brush" ||
+               kind === "polygon" || kind === "lasso" || kind === "alpha" ||
+               kind === "luminance" || kind === "color" || kind === "depth" ||
+               root.studioAiMaskKind(kind)
+    }
+
+    function startStudioSelectionRefine(subtract) {
+        if (!root.studioMaskSupportsSelectionRefine())
+            return false
+        root.editTool = "masks"
+        root.editInspectorTab = "adjust"
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        if (root.studioAiMaskKind(editorPreview.activeMaskKind))
+            editorPreview.startAIMaskRefineBrush(subtract)
+        else
+            editorPreview.startSelectionEdgeBrush(subtract)
+        return true
+    }
+
+    function resetStudioSelectionEdge() {
+        if (!root.studioMaskSupportsSelectionRefine())
+            return false
+        return editorPreview.resetActiveMaskRefinement()
+    }
+
+    function setStudioRefinementPreviewMode(modeName) {
+        if (!root.studioMaskSupportsSelectionRefine())
+            return false
+        editorPreview.maskRefinementPreviewMode = modeName
+        return true
+    }
+
+    function maskRefinementPreviewSignature() {
+        return "refinement-preview:" + String(editorPreview.maskRefinementPreviewMode || "refined") +
+                "|quality:" + (editorPreview.maskRefinementHighQualityPreview ? "high" : "normal") +
+                "|full:" + String(editorPreview.maskFullResolutionPreview)
+    }
+
+    function setStudioRefinementHighQualityPreview(enabled) {
+        if (!root.studioMaskSupportsSelectionRefine())
+            return false
+        editorPreview.maskRefinementHighQualityPreview = Boolean(enabled)
+        return true
+    }
+
+    function setStudioFullResolutionMaskPreview(enabled) {
+        if (!root.studioMaskSupportsSelectionRefine())
+            return false
+        editorPreview.maskFullResolutionPreview = Boolean(enabled)
+        return true
+    }
+
+    function maskCreateRefineSplitSignature() {
+        return "create:true|refine:" + String(root.studioMaskSupportsSelectionRefine()) +
+                "|active:" + String(editorPreview.hasActiveMask) +
+                "|role:" + String(editorPreview.activeMaskToolRole || "")
+    }
+
+    function activeMaskEditingContextSignature() {
+        const maskToolbarActive = root.editTool === "masks" || (root.editTool === "brush" && !root.brushToolReady())
+        const brushActive = root.brushToolReady() && !editorPreview.compareMode
+        const retouchActive = root.editTool === "retouch" &&
+                editorPreview.hasActiveMask &&
+                editorPreview.activeMaskToolRole === "retouch" &&
+                !editorPreview.compareMode
+        const activeCount = (maskToolbarActive ? 1 : 0) + (brushActive ? 1 : 0) + (retouchActive ? 1 : 0)
+        return "tool:" + root.editTool +
+                "|mask:" + String(maskToolbarActive) +
+                "|brush:" + String(brushActive) +
+                "|retouch:" + String(retouchActive) +
+                "|count:" + activeCount
+    }
+
+    function activeMaskLayerContextSignature() {
+        const layer = root.currentPhotoLayerData()
+        const layerName = editorPreview.photoLayerCount > 0
+                ? String(layer.displayName || layer.name || "Layer")
+                : "Base image"
+        const maskName = editorPreview.hasActiveMask
+                ? String(editorPreview.activeMaskName || "Mask")
+                : "No active mask"
+        return "layer:" + layerName +
+                "|mask:" + maskName +
+                "|operation:" + root.maskOperationLabel(editorPreview.activeMaskOperation) +
+                "|preview:" + String(editorPreview.maskPreviewDisplayMode || "overlay") +
+                "|exposure:" + Number(editorPreview.activeMaskExposure || 0).toFixed(2) +
+                "|temp:" + Math.round(Number(editorPreview.activeMaskTemperature || 0))
+    }
+
+    function activeMaskPreviewLabel() {
+        const mode = String(editorPreview.maskPreviewDisplayMode || "overlay").trim().toLowerCase()
+        if (mode === "hidden")
+            return "Hidden"
+        if (mode === "outline")
+            return "Outline"
+        if (mode === "isolated-mask")
+            return "Isolated Mask"
+        if (mode === "grayscale-alpha")
+            return "Grayscale Alpha"
+        if (mode === "marching-ants")
+            return "Marching Ants"
+        return "Overlay"
+    }
+
+    function activeMaskPreviewQualityLabel() {
+        const tier = String(editorPreview.activeMaskPreviewQualityTier || "hidden").trim().toLowerCase()
+        if (tier === "full")
+            return "Full Res"
+        if (tier === "high")
+            return "High Res"
+        if (tier === "draft")
+            return "Draft"
+        if (tier === "outline")
+            return "Outline Only"
+        return "Hidden"
+    }
+
+    function maskTargetInspectorActive() {
+        return root.editInspectorTab === "adjust" &&
+               root.activeEditTargetScope() === "mask" &&
+               editorPreview.hasActiveMask
+    }
+
+    function maskFirstInspectorSignature() {
+        return "active:" + String(root.maskTargetInspectorActive()) +
+                "|mode:" + String(editorPreview.maskPreviewDisplayMode || "overlay") +
+                "|visible:" + String(editorPreview.activeMaskEnabled !== false) +
+                "|inverted:" + String(editorPreview.activeMaskSelectionInverted === true) +
+                "|feather:" + Math.round(root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5) * 100).toString() +
+                "|density:" + Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100).toString() +
+                "|opacity:" + Math.round(root.clamp(editorPreview.activeMaskOpacity, 0.0, 1.0) * 100).toString() +
+                "|brush:" + String(editorPreview.activeMaskKind === "brush")
+    }
+
+    function selectedMaskHeaderActive() {
+        return editorPreview.hasActiveMask &&
+               root.activeEditTargetScope() === "mask" &&
+               (root.editInspectorTab === "adjust" || root.editInspectorTab === "layers")
+    }
+
+    function selectedMaskHeaderSignature() {
+        const feather = Math.round(root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5) * 100)
+        const density = Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100)
+        return "selected-mask-header:v1" +
+                "|mask:" + root.activeEditTargetMaskName() +
+                "|layer:" + root.activeEditTargetPrimaryName() +
+                "|operation:" + root.maskOperationLabel(editorPreview.activeMaskOperation) +
+                "|overlay:" + root.activeMaskPreviewLabel() +
+                "|quality:" + root.activeMaskPreviewQualityLabel() +
+                "|feather:" + feather.toString() +
+                "|density:" + density.toString() +
+                "|invert:" + String(editorPreview.activeMaskSelectionInverted === true)
+    }
+
+    function layerTargetInspectorActive() {
+        const scope = root.activeEditTargetScope()
+        return root.editInspectorTab === "adjust" &&
+               (scope === "adjustment-layer" || scope === "photo-layer")
+    }
+
+    function activeLayerLinkedMaskSets() {
+        return root.maskSetsForAdjustmentLayer(root.activeEditTargetLayerIndex())
+    }
+
+    function activeLayerMaskChildrenSignature() {
+        const linked = root.activeLayerLinkedMaskSets()
+        return "active:" + String(root.layerTargetInspectorActive()) +
+                "|layer:" + root.activeEditTargetLayerIndex().toString() +
+                "|children:" + linked.length.toString() +
+                "|full-adjustments:" + String(root.layerTargetInspectorActive() &&
+                                              !root.maskTargetInspectorActive())
+    }
+
+    function setActiveMaskPreviewVisible(visible) {
+        editorPreview.maskPreviewMode = visible ? "overlay" : "hidden"
+        return editorPreview.maskPreviewDisplayMode
+    }
+
+    function setActiveMaskQuickAdjustment(kindName, value) {
+        const kind = String(kindName || "").trim().toLowerCase()
+        const numericValue = Number(value)
+        if (!editorPreview.hasActiveMask || !isFinite(numericValue))
+            return false
+        let layerIndex = root.activeMaskAdjustmentLayerIndex()
+        if (layerIndex < 0)
+            layerIndex = editorPreview.ensureActiveSelectionAdjustmentLayer()
+        if (layerIndex >= 0) {
+            root.setActivePhotoLayerSelection(layerIndex, false)
+            const layerKey = kind === "temp" ? "temperature" : kind
+            return editorPreview.setPhotoLayerAdjustmentValue(layerIndex, layerKey, numericValue)
+        }
+        if (kind === "exposure") {
+            editorPreview.activeMaskExposure = root.clamp(numericValue, -2.0, 2.0)
+            return true
+        }
+        if (kind === "temperature" || kind === "temp") {
+            editorPreview.activeMaskTemperature = root.clamp(numericValue, -100.0, 100.0)
+            return true
+        }
+        if (kind === "contrast") {
+            editorPreview.activeMaskContrast = root.clamp(numericValue, -100.0, 100.0)
+            return true
+        }
+        if (kind === "shadows") {
+            editorPreview.activeMaskShadows = root.clamp(numericValue, -100.0, 100.0)
+            return true
+        }
+        return false
     }
 
     function latestBrushPressureText() {
@@ -1368,10 +3999,65 @@ Rectangle {
         return "Pressure " + Math.round(root.clamp(pressure, 0.0, 1.0) * 100) + "%"
     }
 
+    function brushSizeValueText() {
+        return editorPreview.activeMaskBrushSizeSummary || "Preview -- px | Stored -- radius | Final -- px"
+    }
+
+    function brushSizePercentValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskBrushSize, 0.01, 0.35) * 100).toString()
+    }
+
+    function brushFlowValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskBrushFlow, 0.05, 1.0) * 100) + "%"
+    }
+
+    function brushHardnessValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskBrushHardness, 0.0, 1.0) * 100) + "%"
+    }
+
+    function brushDensityValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100) + "%"
+    }
+
+    function brushOpacityValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskOpacity, 0.0, 1.0) * 100) + "%"
+    }
+
+    function brushSpacingValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskBrushSpacing, 0.05, 2.0) * 100) + "% of diameter"
+    }
+
+    function brushSmoothingValueText() {
+        return Math.round(root.clamp(editorPreview.activeMaskBrushSmoothing, 0.0, 1.0) * 100) + "%"
+    }
+
+    function brushPressureValueText() {
+        return "Pressure S/F/O " +
+               Math.round(root.clamp(editorPreview.activeMaskBrushPressureSize, 0.0, 1.0) * 100) + "/" +
+               Math.round(root.clamp(editorPreview.activeMaskBrushPressureFlow, 0.0, 1.0) * 100) + "/" +
+               Math.round(root.clamp(editorPreview.activeMaskBrushPressureOpacity, 0.0, 1.0) * 100)
+    }
+
+    function brushHudValueSignature() {
+        return "Size " + root.brushSizeValueText() +
+               "|Flow " + root.brushFlowValueText() +
+               "|Hard " + root.brushHardnessValueText() +
+               "|Density " + root.brushDensityValueText() +
+               "|Opacity " + root.brushOpacityValueText() +
+               "|Spacing " + root.brushSpacingValueText() +
+               "|Smooth " + root.brushSmoothingValueText() +
+               "|" + root.brushPressureValueText()
+    }
+
     function brushHudStatusText() {
-        return "Size " + Math.round(editorPreview.activeMaskBrushSize * 1000) +
-               "  Flow " + Math.round(editorPreview.activeMaskBrushFlow * 100) + "%" +
-               "  Hard " + Math.round(editorPreview.activeMaskBrushHardness * 100) + "%" +
+        return "Size " + root.brushSizeValueText() +
+               "  Flow " + root.brushFlowValueText() +
+               "  Hard " + root.brushHardnessValueText() +
+               "  Density " + root.brushDensityValueText() +
+               "  Opacity " + root.brushOpacityValueText() +
+               "  Spacing " + root.brushSpacingValueText() +
+               "  Smooth " + root.brushSmoothingValueText() +
+               "  " + root.brushPressureValueText() +
                "  " + root.latestBrushPressureText()
     }
 
@@ -1393,11 +4079,80 @@ Rectangle {
         return operation
     }
 
+    function setTemporaryBrushEraseFromShortcut(active) {
+        const requestedActive = active === true
+        if (!root.brushToolReady()) {
+            if (!requestedActive) {
+                root.temporaryBrushEraseActive = false
+                root.temporaryBrushErasePreviousOperation = ""
+            }
+            return false
+        }
+        if (requestedActive) {
+            if (!root.temporaryBrushEraseActive) {
+                root.temporaryBrushErasePreviousOperation =
+                        root.normalizedMaskCreationOperation(editorPreview.activeMaskOperation)
+                root.temporaryBrushEraseActive = true
+            }
+            editorPreview.activeMaskOperation = "subtract"
+            return true
+        }
+        if (!root.temporaryBrushEraseActive)
+            return false
+        const restoredOperation = root.temporaryBrushErasePreviousOperation.length > 0
+                ? root.temporaryBrushErasePreviousOperation
+                : root.maskCreationOperation
+        root.temporaryBrushEraseActive = false
+        root.temporaryBrushErasePreviousOperation = ""
+        editorPreview.activeMaskOperation = root.normalizedMaskCreationOperation(restoredOperation)
+        return true
+    }
+
     function adjustActiveBrushSize(delta) {
         if (!root.brushToolReady())
             return false
         editorPreview.activeMaskBrushSize = root.clamp(editorPreview.activeMaskBrushSize + delta, 0.01, 0.35)
         return true
+    }
+
+    function setActiveBrushSizePercent(percent) {
+        if (!root.brushToolReady())
+            return false
+        const numericValue = Number(percent)
+        if (!Number.isFinite(numericValue))
+            return false
+        editorPreview.activeMaskBrushSize = root.clamp(numericValue / 100.0, 0.01, 0.35)
+        return true
+    }
+
+    function setActiveBrushSizeText(valueText) {
+        const normalizedText = String(valueText || "").replace("%", "").trim()
+        if (normalizedText.length === 0)
+            return false
+        return root.setActiveBrushSizePercent(normalizedText)
+    }
+
+    function beginBrushHudSizeDrag(sceneX) {
+        if (!root.brushToolReady())
+            return false
+        root.brushHudSizeDragActive = true
+        root.brushHudSizeDragStartX = Number(sceneX)
+        root.brushHudSizeDragStartSize = editorPreview.activeMaskBrushSize
+        return true
+    }
+
+    function updateBrushHudSizeDrag(sceneX) {
+        if (!root.brushHudSizeDragActive || !root.brushToolReady())
+            return false
+        const sizeDelta = (Number(sceneX) - root.brushHudSizeDragStartX) / 180.0 * 0.18
+        editorPreview.activeMaskBrushSize = root.clamp(root.brushHudSizeDragStartSize + sizeDelta, 0.01, 0.35)
+        return true
+    }
+
+    function endBrushHudSizeDrag() {
+        const wasActive = root.brushHudSizeDragActive
+        root.brushHudSizeDragActive = false
+        return wasActive
     }
 
     function adjustActiveBrushFlow(delta) {
@@ -1411,6 +4166,20 @@ Rectangle {
         if (!root.brushToolReady())
             return false
         editorPreview.activeMaskBrushHardness = root.clamp(editorPreview.activeMaskBrushHardness + delta, 0.0, 1.0)
+        return true
+    }
+
+    function adjustActiveMaskDensity(delta) {
+        if (!root.brushToolReady())
+            return false
+        editorPreview.activeMaskDensity = root.clamp(editorPreview.activeMaskDensity + delta, 0.0, 1.0)
+        return true
+    }
+
+    function adjustActiveMaskOpacity(delta) {
+        if (!root.brushToolReady())
+            return false
+        editorPreview.activeMaskOpacity = root.clamp(editorPreview.activeMaskOpacity + delta, 0.0, 1.0)
         return true
     }
 
@@ -1455,10 +4224,45 @@ Rectangle {
         if (mode === "red-eye")
             return "Red Eye"
         if (mode === "skin-cleanup")
-            return "Skin Cleanup"
+            return "Skin Cleanup (Heuristic)"
         if (mode === "frequency-smoothing")
             return "Frequency Smoothing"
         return "Retouch"
+    }
+
+    function retouchModeCapabilityState(modeName) {
+        const mode = String(modeName || "").trim().toLowerCase()
+        if (mode === "remove" || mode === "heal" || mode === "patch")
+            return editorPreview.aiInpaintAvailable ? "model-ready" : "local-fallback"
+        if (mode === "clone")
+            return "deterministic"
+        if (mode === "dust" || mode === "red-eye")
+            return "local-staged"
+        if (mode === "skin-cleanup" || mode === "frequency-smoothing")
+            return "experimental-hidden"
+        return "unsupported-hidden"
+    }
+
+    function retouchModeIsPrimary(modeName) {
+        const state = root.retouchModeCapabilityState(modeName)
+        return state !== "experimental-hidden" && state !== "unsupported-hidden"
+    }
+
+    function retouchCapabilityText() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
+            return "Ready"
+        const state = root.retouchModeCapabilityState(editorPreview.activeMaskRetouchMode)
+        if (state === "model-ready")
+            return editorPreview.inpaintRuntimeLabel
+        if (state === "local-fallback")
+            return editorPreview.inpaintRuntimeLabel + " fallback"
+        if (state === "deterministic")
+            return "Deterministic"
+        if (state === "local-staged")
+            return "Local staged"
+        if (state === "experimental-hidden")
+            return "Experimental"
+        return "Unsupported"
     }
 
     function retouchRequirementText() {
@@ -1476,9 +4280,162 @@ Rectangle {
     function retouchHudStatusText() {
         if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
             return "Retouch"
+        if (editorPreview.inpaintProgressActive)
+            return String(editorPreview.inpaintProgressLabel || "Final inpaint") + " / " +
+                   Math.round(Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))) * 100) + "%"
         return root.retouchModeLabel(editorPreview.activeMaskRetouchMode) + " / " +
                root.retouchRequirementText() + " / " +
-               (editorPreview.retouchBeforeAfterEnabled ? "Before" : "After")
+               (editorPreview.retouchBeforeAfterEnabled ? "Before" : "After") + " / " +
+               root.retouchCapabilityText()
+    }
+
+    function retouchWorkflowSignature() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
+            return "mode:none|label:Retouch|stage:inactive|source:none|apply:false|regenerate:false|beforeAfter:after"
+        const mode = editorPreview.activeMaskRetouchMode
+        const inpaintMode = mode === "remove" || mode === "heal" || mode === "patch"
+        const canRegenerate = inpaintMode &&
+                (!editorPreview.activeMaskCommitted || editorPreview.activeInpaintRegenerationAvailable)
+        const sourceState = mode === "clone"
+                ? (editorPreview.activeMaskCloneSourceSet ? "set" : "required")
+                : (mode === "patch"
+                   ? (editorPreview.activeMaskPatchSourceSet ? "region" : "required")
+                   : "none")
+        return "mode:" + mode +
+               "|label:" + root.retouchModeLabel(mode) +
+               "|stage:" + root.retouchRequirementText() +
+               "|source:" + sourceState +
+               "|apply:" + String(!editorPreview.activeMaskCommitted) +
+               "|regenerate:" + String(canRegenerate) +
+                 "|capability:" + root.retouchModeCapabilityState(mode) +
+                 "|beforeAfter:" + (editorPreview.retouchBeforeAfterEnabled ? "before" : "after") +
+                 (editorPreview.inpaintProgressActive
+                  ? "|inpaintProgress:" + Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))).toFixed(3)
+                    + "|inpaintProgressLabel:" + String(editorPreview.inpaintProgressLabel || "")
+                  : "")
+    }
+
+    function retouchAllWorkflowStateSignature() {
+        return editorPreview.retouchWorkflowStateSignature
+    }
+
+    function retouchVariationPickerSignature() {
+        return "visible:" + String(editorPreview.activeInpaintVariationPickerVisible) +
+               "|count:" + String(editorPreview.activeInpaintCandidateCount) +
+               "|index:" + String(editorPreview.activeInpaintCandidateIndex)
+    }
+
+    function activeCloneMaskDefinition() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskIndex < 0)
+            return ({})
+        const stack = editorPreview.maskStack || []
+        if (editorPreview.activeMaskIndex >= stack.length)
+            return ({})
+        return stack[editorPreview.activeMaskIndex] || ({})
+    }
+
+    function activeCloneTargetX() {
+        const mask = root.activeCloneMaskDefinition()
+        return root.clamp(Number(mask.cloneSourceX !== undefined ? mask.cloneSourceX : editorPreview.activeMaskCloneSourceX) -
+                          Number(mask.cloneOffsetX || 0), 0.0, 1.0)
+    }
+
+    function activeCloneTargetY() {
+        const mask = root.activeCloneMaskDefinition()
+        return root.clamp(Number(mask.cloneSourceY !== undefined ? mask.cloneSourceY : editorPreview.activeMaskCloneSourceY) -
+                          Number(mask.cloneOffsetY || 0), 0.0, 1.0)
+    }
+
+    function retouchCloneOverlaySignature() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskRetouchMode !== "clone")
+            return "visible:false"
+        return "visible:" + String(editorPreview.activeMaskCloneSourceSet) +
+               "|source:" + Math.round(editorPreview.activeMaskCloneSourceX * 100).toString() + "," +
+                    Math.round(editorPreview.activeMaskCloneSourceY * 100).toString() +
+               "|target:" + Math.round(root.activeCloneTargetX() * 100).toString() + "," +
+                    Math.round(root.activeCloneTargetY() * 100).toString() +
+               "|scale:" + Number(editorPreview.activeMaskCloneScale).toFixed(2) +
+               "|rotation:" + Math.round(editorPreview.activeMaskCloneRotation).toString() +
+               "|mode:" + (editorPreview.activeMaskCloneAligned ? "aligned" : "non-aligned")
+    }
+
+    function retouchCloneSourcePanelSignature() {
+        const sources = editorPreview.activeMaskCloneSources || []
+        const first = sources.length > 0 ? String(sources[0].name || "Source 1") : "none"
+        return "visible:" + String(editorPreview.hasActiveMask && editorPreview.activeMaskRetouchMode === "clone") +
+               "|count:" + String(editorPreview.activeMaskCloneSourceCount) +
+               "|index:" + String(editorPreview.activeMaskCloneSourceIndex) +
+               "|first:" + first
+    }
+
+    function retouchPatchSourceSignature() {
+        return "visible:" + String(editorPreview.hasActiveMask && editorPreview.activeMaskRetouchMode === "patch") +
+               "|set:" + String(editorPreview.activeMaskPatchSourceSet) +
+               "|x:" + Math.round(editorPreview.activeMaskPatchSourceX * 100).toString() +
+               "|y:" + Math.round(editorPreview.activeMaskPatchSourceY * 100).toString() +
+               "|w:" + Math.round(editorPreview.activeMaskPatchSourceWidth * 100).toString() +
+               "|h:" + Math.round(editorPreview.activeMaskPatchSourceHeight * 100).toString()
+    }
+
+    function retouchPatchSourceNudge(deltaX, deltaY) {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskRetouchMode !== "patch")
+            return
+        editorPreview.setActiveMaskPatchSourceRegion(
+                    editorPreview.activeMaskPatchSourceX + deltaX,
+                    editorPreview.activeMaskPatchSourceY + deltaY,
+                    editorPreview.activeMaskPatchSourceWidth,
+                    editorPreview.activeMaskPatchSourceHeight)
+    }
+
+    function retouchBeforeAfterSignature() {
+        return "view:" + (editorPreview.retouchBeforeAfterEnabled ? "before" : "after") +
+               "|button:" + (editorPreview.retouchBeforeAfterEnabled ? "Show After" : "Show Before") +
+               "|recipe:unchanged"
+    }
+
+    function retouchHealBlendSignature() {
+        return "visible:" + String(editorPreview.hasActiveMask && editorPreview.activeMaskRetouchMode === "heal") +
+               "|texture:" + Math.round(editorPreview.activeMaskHealTextureBlend * 100).toString() +
+               "|color:" + Math.round(editorPreview.activeMaskHealColorBlend * 100).toString()
+    }
+
+    function retouchActionSignature() {
+        const active = editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+        const committed = active && editorPreview.activeMaskCommitted
+        return "apply:" + String(active && !committed) +
+               "|cancel:" + String(active && !committed) +
+               "|reset:" + String(active && !committed) +
+               "|delete:" + String(committed) +
+               "|reopen:" + String(committed)
+    }
+
+    function retouchRecoverabilitySignature() {
+        const mode = editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+                ? editorPreview.activeMaskRetouchMode
+                : "none"
+        const state = root.retouchModeCapabilityState(mode)
+        const inpaintMode = mode === "remove" || mode === "heal" || mode === "patch"
+        const canRegenerate = editorPreview.hasActiveMask && inpaintMode &&
+                (!editorPreview.activeMaskCommitted || editorPreview.activeInpaintRegenerationAvailable)
+        const canApply = editorPreview.hasActiveMask &&
+                editorPreview.activeMaskToolRole === "retouch" &&
+                !editorPreview.activeMaskCommitted
+        return "mode:" + mode +
+               "|state:" + state +
+               "|canvasBlocking:false" +
+               "|apply:" + String(canApply) +
+               "|regenerate:" + String(canRegenerate) +
+               "|modelReason:" + root.disabledCapabilityReason("model-inpaint")
+    }
+
+    function retouchPrimaryToolSignature() {
+        const modes = ["remove", "heal", "patch", "clone", "dust", "red-eye", "skin-cleanup", "frequency-smoothing"]
+        const parts = []
+        for (let index = 0; index < modes.length; ++index) {
+            const mode = modes[index]
+            parts.push(mode + ":" + (root.retouchModeIsPrimary(mode) ? "primary" : root.retouchModeCapabilityState(mode)))
+        }
+        return parts.join("|")
     }
 
     function photoLayerBlendModes() {
@@ -1492,6 +4449,69 @@ Rectangle {
         if (mode === "hard-light")
             return "Hard Light"
         return mode.length > 0 ? mode.charAt(0).toUpperCase() + mode.slice(1) : "Normal"
+    }
+
+    function photoLayerKindLabel(layer) {
+        const kind = String(layer && layer.kind !== undefined ? layer.kind : "layer").trim().toLowerCase()
+        if (kind === "source")
+            return "Base Image"
+        if (kind === "adjustment")
+            return "Adjustment Layer"
+        if (kind === "pixel")
+            return "Pixel Layer"
+        if (kind === "fill")
+            return "Fill Layer"
+        if (kind === "text")
+            return "Text Layer"
+        if (kind === "group")
+            return "Group"
+        return "Layer"
+    }
+
+    function photoLayerVisibilityLabel(layer) {
+        if (layer && layer.enabled === false)
+            return "Hidden"
+        return "Visible"
+    }
+
+    function photoLayerMaskLinkLabel(layer, layerIndex) {
+        const linked = root.maskSetsForAdjustmentLayer(layerIndex)
+        if (linked.length > 0)
+            return linked.length + " mask" + (linked.length === 1 ? "" : "s")
+        if (layer && layer.hasLayerMask === true)
+            return "Layer mask"
+        return "No mask"
+    }
+
+    function selectedLayerHeaderSignature(layer, layerIndex) {
+        const opacity = Math.round(root.clamp(Number(layer && layer.opacity !== undefined ? layer.opacity : 1.0), 0.0, 1.0) * 100)
+        return "selected-layer-header:v1" +
+                "|index:" + layerIndex.toString() +
+                "|kind:" + root.photoLayerKindLabel(layer) +
+                "|visible:" + root.photoLayerVisibilityLabel(layer) +
+                "|opacity:" + opacity.toString() +
+                "|blend:" + root.photoLayerBlendLabel(layer && layer.blendMode !== undefined ? layer.blendMode : "normal") +
+                "|mask:" + root.photoLayerMaskLinkLabel(layer, layerIndex) +
+                "|changed:" + root.layerChangedAdjustmentGroupSignature(layer)
+    }
+
+    function photoLayerBlendLabels() {
+        const labels = []
+        const modes = root.photoLayerBlendModes()
+        for (let index = 0; index < modes.length; ++index)
+            labels.push(root.photoLayerBlendLabel(modes[index]))
+        return labels
+    }
+
+    function photoLayerBlendModeAt(index) {
+        const modes = root.photoLayerBlendModes()
+        return modes[Math.max(0, Math.min(modes.length - 1, Number(index || 0)))]
+    }
+
+    function photoLayerBlendModeIndex(modeName) {
+        const modes = root.photoLayerBlendModes()
+        const index = modes.indexOf(String(modeName || "normal").trim().toLowerCase())
+        return index < 0 ? 0 : index
     }
 
     function nextPhotoLayerBlendMode(modeName) {
@@ -1511,10 +4531,160 @@ Rectangle {
         return editorPreview.setPhotoLayerOpacity(layerIndex, nextOpacity)
     }
 
+    function selectedLayerTargetScope(layerIndex) {
+        const index = Math.floor(Number(layerIndex))
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return "base-image"
+        return root.photoLayerKind(index) === "adjustment" ? "adjustment-layer" : "photo-layer"
+    }
+
+    function selectedEditTargetScope() {
+        const scope = String(root.selectedEditTarget.scope || "base-image")
+        return scope.length > 0 ? scope : "base-image"
+    }
+
+    function selectedEditTargetLayerIndex() {
+        const index = Math.floor(Number(root.selectedEditTarget.layerIndex))
+        return index >= 0 && index < editorPreview.photoLayerCount ? index : -1
+    }
+
+    function selectedEditTargetMaskSetId() {
+        return String(root.selectedEditTarget.maskSetId || "").trim()
+    }
+
+    function selectedEditTargetSignature() {
+        return "selected-target:v1|scope:" + root.selectedEditTargetScope() +
+                "|layer:" + root.selectedEditTargetLayerIndex().toString() +
+                "|mask:" + root.selectedEditTargetMaskSetId() +
+                "|source:" + Math.floor(Number(root.selectedEditTarget.sourceIndex || -1)).toString() +
+                "|legacy-layer:" + Math.floor(Number(root.activePhotoLayerIndex || -1)).toString() +
+                "|legacy-mask:" + Math.floor(Number(root.selectedMaskSetIndex || -1)).toString() +
+                "|base:" + String(root.baseImageTargetActive === true)
+    }
+
+    function setSelectedEditTarget(scope, layerIndex, maskSet, sourceIndex) {
+        const nextScope = String(scope || "base-image")
+        const normalizedLayerIndex = Math.floor(Number(layerIndex))
+        const validLayerIndex = normalizedLayerIndex >= 0 && normalizedLayerIndex < editorPreview.photoLayerCount
+                ? normalizedLayerIndex
+                : -1
+        const maskSetId = String(maskSet && maskSet.id !== undefined ? maskSet.id : "").trim()
+        const maskSetName = String(maskSet && maskSet.name !== undefined ? maskSet.name : "").trim()
+        const normalizedSourceIndex = Math.floor(Number(sourceIndex !== undefined ? sourceIndex : -1))
+        root.selectedEditTarget = {
+            scope: nextScope,
+            layerIndex: validLayerIndex,
+            maskSetId: maskSetId,
+            maskSetName: maskSetName,
+            sourceIndex: normalizedSourceIndex
+        }
+        root.baseImageTargetActive = nextScope === "base-image"
+        if (validLayerIndex >= 0)
+            root.activePhotoLayerIndex = validLayerIndex
+        if (nextScope === "mask") {
+            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+                const candidate = editorPreview.maskSets[index] || ({})
+                if ((maskSetId.length > 0 && String(candidate.id || "").trim() === maskSetId) ||
+                        (maskSetId.length === 0 && maskSetName.length > 0 && String(candidate.name || "").trim() === maskSetName)) {
+                    root.selectedMaskSetIndex = index
+                    break
+                }
+            }
+        }
+        return true
+    }
+
     function normalizedActivePhotoLayerIndex() {
         if (editorPreview.photoLayerCount <= 0)
             return -1
         return Math.max(0, Math.min(editorPreview.photoLayerCount - 1, root.activePhotoLayerIndex))
+    }
+
+    function normalizedPhotoLayerSelection() {
+        const selected = []
+        const seen = ({})
+        const source = root.selectedPhotoLayerIndices || []
+        for (let index = 0; index < source.length; ++index) {
+            const layerIndex = Number(source[index])
+            if (!isFinite(layerIndex) || layerIndex < 0 || layerIndex >= editorPreview.photoLayerCount)
+                continue
+            const normalizedIndex = Math.floor(layerIndex)
+            const key = String(normalizedIndex)
+            if (seen[key] === true)
+                continue
+            seen[key] = true
+            selected.push(normalizedIndex)
+        }
+        return selected
+    }
+
+    function photoLayerSelected(layerIndex) {
+        return root.normalizedPhotoLayerSelection().indexOf(Number(layerIndex)) >= 0
+    }
+
+    function photoLayerHasSelectedMask(layerIndex) {
+        const linkedMaskSets = root.maskSetsForAdjustmentLayer(layerIndex)
+        for (let index = 0; index < linkedMaskSets.length; ++index) {
+            if (root.maskSetActive(linkedMaskSets[index]))
+                return true
+        }
+        return false
+    }
+
+    function photoLayerStateSummary(layer, layerIndex) {
+        const states = [layer.enabled === false ? "Hidden" : "Visible"]
+        if (layer.locked === true)
+            states.push("Locked")
+        if (layer.solo === true)
+            states.push("Solo")
+        if (root.photoLayerSelected(layerIndex))
+            states.push("Selected")
+        if (root.photoLayerHasSelectedMask(layerIndex))
+            states.push("Mask selected")
+        return states.join(" / ")
+    }
+
+    function photoLayerStateSignature(layer, layerIndex) {
+        return "visible:" + String(layer.enabled !== false) +
+                "|hidden:" + String(layer.enabled === false) +
+                "|locked:" + String(layer.locked === true) +
+                "|solo:" + String(layer.solo === true) +
+                "|selected:" + String(root.photoLayerSelected(layerIndex)) +
+                "|mask-selected:" + String(root.photoLayerHasSelectedMask(layerIndex))
+    }
+
+    function selectedAdjustmentLayerIndices(excludeIndex) {
+        const selected = root.normalizedPhotoLayerSelection()
+        const targets = []
+        for (let index = 0; index < selected.length; ++index) {
+            const layerIndex = selected[index]
+            if (layerIndex === excludeIndex)
+                continue
+            const layer = editorPreview.photoLayers[layerIndex] || ({})
+            if (String(layer.kind || "").trim().toLowerCase() === "adjustment" && layer.locked !== true)
+                targets.push(layerIndex)
+        }
+        return targets
+    }
+
+    function setActivePhotoLayerSelection(index, extendSelection) {
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return false
+        let selected = root.normalizedPhotoLayerSelection()
+        if (extendSelection) {
+            const existing = selected.indexOf(index)
+            if (existing >= 0)
+                selected.splice(existing, 1)
+            else
+                selected.push(index)
+            if (selected.length === 0)
+                selected.push(index)
+        } else {
+            selected = [index]
+        }
+        root.selectedPhotoLayerIndices = selected
+        root.setSelectedEditTarget(root.selectedLayerTargetScope(index), index, ({}), -1)
+        return true
     }
 
     function currentPhotoLayerData() {
@@ -1524,11 +4694,1140 @@ Rectangle {
         return editorPreview.photoLayers[index] || ({})
     }
 
+    function activeAdjustmentLayerIndex() {
+        if (root.selectedEditTargetScope() === "base-image" || root.baseImageTargetActive)
+            return -1
+        const selectedIndex = root.selectedEditTargetLayerIndex()
+        const index = selectedIndex >= 0 ? selectedIndex : root.normalizedActivePhotoLayerIndex()
+        if (index < 0)
+            return -1
+        const layer = editorPreview.photoLayers[index] || ({})
+        return String(layer.kind || "").trim().toLowerCase() === "adjustment" ? index : -1
+    }
+
+    function activeAdjustmentLayerData() {
+        const index = root.activeAdjustmentLayerIndex()
+        return index >= 0 ? (editorPreview.photoLayers[index] || ({})) : ({})
+    }
+
+    function photoLayerKind(index) {
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return ""
+        const layer = editorPreview.photoLayers[index] || ({})
+        return String(layer.kind || "").trim().toLowerCase()
+    }
+
+    function editTargetCanShowMask() {
+        return editorPreview.hasActiveMask &&
+               editorPreview.activeMaskToolRole !== "retouch" &&
+               (root.editTool === "masks" || root.editTool === "brush")
+    }
+
+    function activeEditTargetLayerIndex() {
+        if (root.selectedEditTargetScope() === "base-image" || root.baseImageTargetActive)
+            return -1
+        const selectedLayerIndex = root.selectedEditTargetLayerIndex()
+        if (selectedLayerIndex >= 0)
+            return selectedLayerIndex
+        const maskLayerIndex = root.activeMaskAdjustmentLayerIndex()
+        if (root.editTargetCanShowMask() && maskLayerIndex >= 0)
+            return maskLayerIndex
+        if (root.editInspectorTab === "layers")
+            return root.normalizedActivePhotoLayerIndex()
+        if (root.editInspectorTab === "adjust")
+            return root.activeAdjustmentLayerIndex()
+        return -1
+    }
+
+    function activeEditTargetLayerData() {
+        const index = root.activeEditTargetLayerIndex()
+        return index >= 0 ? (editorPreview.photoLayers[index] || ({})) : ({})
+    }
+
+    function activeMaskSetData() {
+        const selectedMaskId = root.selectedEditTargetMaskSetId()
+        const selectedMaskName = String(root.selectedEditTarget.maskSetName || "").trim()
+        if (root.selectedEditTargetScope() === "mask") {
+            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+                const maskSet = editorPreview.maskSets[index] || ({})
+                if ((selectedMaskId.length > 0 && String(maskSet.id || "").trim() === selectedMaskId) ||
+                        (selectedMaskId.length === 0 && selectedMaskName.length > 0 && String(maskSet.name || "").trim() === selectedMaskName))
+                    return maskSet
+            }
+        }
+        if (!editorPreview.hasActiveMask)
+            return ({})
+        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+            const maskSet = editorPreview.maskSets[index] || ({})
+            if (root.maskSetActive(maskSet))
+                return maskSet
+        }
+        return ({})
+    }
+
+    function activeEditTargetThumbnailData() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask")
+            return root.activeMaskSetData()
+        if (scope === "adjustment-layer" || scope === "photo-layer")
+            return root.activeEditTargetLayerData()
+        return ({})
+    }
+
+    function activeEditTargetMaskActive() {
+        const maskLayerIndex = root.activeMaskAdjustmentLayerIndex()
+        return root.editTargetCanShowMask() &&
+               maskLayerIndex >= 0 &&
+               maskLayerIndex === root.activeEditTargetLayerIndex()
+    }
+
+    function activeEditTargetScope() {
+        const selectedScope = root.selectedEditTargetScope()
+        if (selectedScope === "base-image")
+            return "base-image"
+        if (root.activeEditTargetMaskActive())
+            return "mask"
+        if (selectedScope === "mask" && root.selectedEditTargetLayerIndex() >= 0)
+            return "mask"
+        if (selectedScope === "adjustment-layer" || selectedScope === "photo-layer")
+            return selectedScope
+        const layerIndex = root.activeEditTargetLayerIndex()
+        if (layerIndex < 0)
+            return "base-image"
+        const layer = editorPreview.photoLayers[layerIndex] || ({})
+        return String(layer.kind || "").trim().toLowerCase() === "adjustment"
+                ? "adjustment-layer"
+                : "photo-layer"
+    }
+
+    function activeEditTargetPrimaryName() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "base-image")
+            return "Base Image"
+        const layer = root.activeEditTargetLayerData()
+        return String(layer.displayName || layer.name || "Layer")
+    }
+
+    function activeEditTargetMaskName() {
+        if (!editorPreview.hasActiveMask)
+            return ""
+        return String(editorPreview.activeMaskName || editorPreview.activeMaskSetName || "Mask")
+    }
+
+    function activeEditTargetBreadcrumbText() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "base-image")
+            return "Base Image"
+        const layerName = root.activeEditTargetPrimaryName()
+        if (scope === "mask")
+            return "Base Image > " + layerName + " > " + root.activeEditTargetMaskName()
+        return "Base Image > " + layerName
+    }
+
+    function activeEditTargetModeLabel() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask")
+            return "Editing Mask"
+        if (scope === "adjustment-layer")
+            return "Editing Adjustment Layer"
+        if (scope === "photo-layer")
+            return "Editing Photo Layer"
+        return root.editInspectorTab === "presets" ? "Preset Target" : "Editing Base Image"
+    }
+
+    function activeEditTargetBadgeText() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask")
+            return "MASK"
+        if (scope === "adjustment-layer")
+            return "LAYER"
+        if (scope === "photo-layer")
+            return "PHOTO LAYER"
+        return "BASE"
+    }
+
+    function activeEditTargetAccentColor() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "base-image")
+            return theme.accentCool300
+        if (scope === "photo-layer")
+            return theme.accentWarm400
+        return root.mint
+    }
+
+    function activeEditTargetVisualSignature() {
+        const scope = root.activeEditTargetScope()
+        const thumbnail = root.activeEditTargetThumbnailData()
+        const hasThumbnail = String(thumbnail.thumbnailSource || "").length > 0
+        return "scope:" + scope +
+                "|badge:" + root.activeEditTargetBadgeText() +
+                "|rail:true|separation:hard" +
+                "|thumbnail:" + String(scope !== "base-image") +
+                "|thumbnail-source:" + String(hasThumbnail) +
+                "|base:" + String(scope === "base-image") +
+                "|layer:" + String(scope === "adjustment-layer" || scope === "mask")
+    }
+
+    function activeAdjustmentTargetGuardSignature() {
+        const scope = root.activeEditTargetScope()
+        const layerTarget = scope === "adjustment-layer" || scope === "photo-layer"
+        const maskTarget = scope === "mask"
+        const baseTarget = scope === "base-image"
+        return "target-guard:v1" +
+                "|scope:" + scope +
+                "|base:" + String(baseTarget) +
+                "|layer:" + String(layerTarget) +
+                "|mask:" + String(maskTarget) +
+                "|global-controls:" + (baseTarget ? "enabled" : "disabled") +
+                "|layer-controls:" + (layerTarget ? "enabled" : "disabled") +
+                "|mask-controls:" + (maskTarget ? "enabled" : "disabled") +
+                "|color-controls:" + (maskTarget ? "hidden" : "enabled")
+    }
+
+    function activeAdjustmentTargetGuardText() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask")
+            return "Mask target: color controls are hidden; use Mask Controls here or Edit Layer for full color edits."
+        if (scope === "adjustment-layer")
+            return "Layer target: color controls write only to this adjustment layer; Base Image controls are disabled."
+        if (scope === "photo-layer")
+            return "Photo layer target: controls write only to this layer; Base Image controls are disabled."
+        return "Base Image target: controls write to the global recipe."
+    }
+
+    function globalAdjustmentWritesAllowed() {
+        return root.activeEditTargetScope() === "base-image" &&
+               (root.selectedEditTargetScope() === "base-image" || editorPreview.photoLayerCount <= 0)
+    }
+
+    function globalAdjustmentWriteGuardSignature() {
+        return "global-write-guard:v1" +
+                "|scope:" + root.activeEditTargetScope() +
+                "|selected-target:" + root.selectedEditTargetContract +
+                "|allowed:" + String(root.globalAdjustmentWritesAllowed())
+    }
+
+    function activeEditTargetSummaryText() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask") {
+            return root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
+                   root.maskOperationLabel(editorPreview.activeMaskOperation) + " / " +
+                   root.activeMaskPreviewLabel() + " overlay / " +
+                   root.activeMaskPreviewQualityLabel()
+        }
+        if (scope === "adjustment-layer") {
+            const layer = root.activeEditTargetLayerData()
+            const maskName = String(layer.selectionMaskSetName || "")
+            return "Layer adjustments" + (maskName.length > 0 ? " / Masked to " + maskName : "")
+        }
+        if (scope === "photo-layer") {
+            const layer = root.activeEditTargetLayerData()
+            const kind = String(layer.kind || "layer").trim()
+            return kind.length > 0 ? kind.charAt(0).toUpperCase() + kind.slice(1) + " layer controls"
+                                   : "Photo layer controls"
+        }
+        if (root.editInspectorTab === "presets")
+            return "Applies presets to the Base Image/global recipe"
+        return "Global image adjustments"
+    }
+
+    function activeEditTargetIconName() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "mask")
+            return "masks"
+        if (scope === "adjustment-layer")
+            return "adjust"
+        if (scope === "photo-layer")
+            return "layers"
+        return "media"
+    }
+
+    function activeEditTargetSignature() {
+        return "scope:" + root.activeEditTargetScope() +
+                "|breadcrumb:" + root.activeEditTargetBreadcrumbText() +
+                "|summary:" + root.activeEditTargetSummaryText()
+    }
+
+    function adjustmentLayerIndexForMaskSet(maskSet) {
+        const setId = String(maskSet && maskSet.id !== undefined ? maskSet.id : "").trim()
+        const setName = String(maskSet && maskSet.name !== undefined ? maskSet.name : "").trim()
+        for (let index = 0; index < editorPreview.photoLayerCount; ++index) {
+            const layer = editorPreview.photoLayers[index] || ({})
+            if (String(layer.kind || "").trim().toLowerCase() !== "adjustment" ||
+                    layer.selectionScoped !== true)
+                continue
+            const layerSetIds = root.photoLayerMaskSetIds(layer)
+            const layerSetNames = root.photoLayerMaskSetNames(layer)
+            if (setId.length > 0 && layerSetIds.indexOf(setId) >= 0)
+                return index
+            if (setName.length > 0 && layerSetNames.indexOf(setName) >= 0)
+                return index
+        }
+        return -1
+    }
+
+    function photoLayerMaskSetIds(layer) {
+        return root.normalizedPhotoLayerMaskSetValues(
+                    layer,
+                    "selectionMaskSetIds",
+                    "selectionMaskSetId")
+    }
+
+    function photoLayerMaskSetNames(layer) {
+        return root.normalizedPhotoLayerMaskSetValues(
+                    layer,
+                    "selectionMaskSetNames",
+                    "selectionMaskSetName")
+    }
+
+    function normalizedPhotoLayerMaskSetValues(layer, listKey, singleKey) {
+        const values = []
+        function appendValue(rawValue) {
+            const value = String(rawValue || "").trim()
+            if (value.length > 0 && values.indexOf(value) < 0)
+                values.push(value)
+        }
+        const listValue = layer && layer[listKey] !== undefined ? layer[listKey] : []
+        if (Array.isArray(listValue)) {
+            for (let index = 0; index < listValue.length; ++index)
+                appendValue(listValue[index])
+        }
+        appendValue(layer && layer[singleKey] !== undefined ? layer[singleKey] : "")
+        return values
+    }
+
+    function maskSetsForAdjustmentLayer(layerIndex) {
+        const normalizedLayerIndex = Math.floor(Number(layerIndex))
+        if (normalizedLayerIndex < 0)
+            return []
+        const layer = editorPreview.photoLayers[normalizedLayerIndex] || ({})
+        const orderedSetIds = root.photoLayerMaskSetIds(layer)
+        const orderedSetNames = root.photoLayerMaskSetNames(layer)
+        const linked = []
+        function appendMaskSet(targetId, targetName) {
+            for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+                const maskSet = editorPreview.maskSets[index] || ({})
+                const maskSetId = String(maskSet.id || "").trim()
+                const maskSetName = String(maskSet.name || "").trim()
+                const matches = (targetId.length > 0 && maskSetId === targetId) ||
+                        (targetId.length === 0 && targetName.length > 0 && maskSetName === targetName)
+                if (!matches)
+                    continue
+                let alreadyLinked = false
+                for (let linkedIndex = 0; linkedIndex < linked.length; ++linkedIndex) {
+                    if (String(linked[linkedIndex].id || "").trim() === maskSetId)
+                        alreadyLinked = true
+                }
+                if (!alreadyLinked)
+                    linked.push(maskSet)
+            }
+        }
+        const orderedCount = Math.max(orderedSetIds.length, orderedSetNames.length)
+        for (let orderIndex = 0; orderIndex < orderedCount; ++orderIndex) {
+            appendMaskSet(orderIndex < orderedSetIds.length ? orderedSetIds[orderIndex] : "",
+                          orderIndex < orderedSetNames.length ? orderedSetNames[orderIndex] : "")
+        }
+        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+            const maskSet = editorPreview.maskSets[index] || ({})
+            if (root.adjustmentLayerIndexForMaskSet(maskSet) === normalizedLayerIndex)
+                appendMaskSet(String(maskSet.id || "").trim(), String(maskSet.name || "").trim())
+        }
+        return linked
+    }
+
+    function moveLayerMaskSet(layerIndex, maskSet, targetMaskIndex) {
+        const setId = String(maskSet && maskSet.id !== undefined ? maskSet.id : "").trim()
+        if (setId.length === 0)
+            return false
+        return editorPreview.moveMaskSetInPhotoLayer(Math.floor(Number(layerIndex)), setId, Math.floor(Number(targetMaskIndex)))
+    }
+
+    function photoLayerMaskSectionKey(layerIndex, layer) {
+        const layerId = String(layer && layer.id !== undefined ? layer.id : "").trim()
+        if (layerId.length > 0)
+            return "id:" + layerId
+        return "index:" + Math.floor(Number(layerIndex)).toString()
+    }
+
+    function photoLayerMaskSectionCollapsed(layerIndex, layer) {
+        const key = root.photoLayerMaskSectionKey(layerIndex, layer)
+        return root.collapsedLayerMaskSections[key] === true
+    }
+
+    function setPhotoLayerMaskSectionCollapsed(layerIndex, layer, collapsed) {
+        const key = root.photoLayerMaskSectionKey(layerIndex, layer)
+        const next = ({})
+        for (let existingKey in root.collapsedLayerMaskSections)
+            next[existingKey] = root.collapsedLayerMaskSections[existingKey]
+        next[key] = collapsed === true
+        root.collapsedLayerMaskSections = next
+    }
+
+    function unlinkedMaskSets() {
+        const unlinked = []
+        for (let index = 0; index < editorPreview.maskSetCount; ++index) {
+            const maskSet = editorPreview.maskSets[index] || ({})
+            if (root.adjustmentLayerIndexForMaskSet(maskSet) < 0)
+                unlinked.push(maskSet)
+        }
+        return unlinked
+    }
+
+    function maskSetIdentity(maskSet) {
+        const setId = String(maskSet && maskSet.id !== undefined ? maskSet.id : "").trim()
+        if (setId.length > 0)
+            return "id:" + setId
+        return "name:" + String(maskSet && maskSet.name !== undefined ? maskSet.name : "").trim()
+    }
+
+    function maskSetIdentityList(maskSets) {
+        const identities = []
+        const sets = Array.isArray(maskSets) ? maskSets : []
+        for (let index = 0; index < sets.length; ++index) {
+            const identity = root.maskSetIdentity(sets[index])
+            if (identity !== "name:" && identities.indexOf(identity) < 0)
+                identities.push(identity)
+        }
+        return identities
+    }
+
+    function linkedMaskSetIdentities() {
+        const identities = []
+        for (let layerIndex = 0; layerIndex < editorPreview.photoLayerCount; ++layerIndex) {
+            const layerIdentities = root.maskSetIdentityList(root.maskSetsForAdjustmentLayer(layerIndex))
+            for (let index = 0; index < layerIdentities.length; ++index) {
+                if (identities.indexOf(layerIdentities[index]) < 0)
+                    identities.push(layerIdentities[index])
+            }
+        }
+        return identities
+    }
+
+    function maskSetListPartitionSignature() {
+        const linked = root.linkedMaskSetIdentities()
+        const unlinked = root.maskSetIdentityList(root.unlinkedMaskSets())
+        let duplicateCount = 0
+        for (let index = 0; index < unlinked.length; ++index) {
+            if (linked.indexOf(unlinked[index]) >= 0)
+                duplicateCount += 1
+        }
+        return "mask-list-partition:v1|total:" + editorPreview.maskSetCount +
+                "|linked:" + linked.length +
+                "|unlinked:" + unlinked.length +
+                "|duplicates:" + duplicateCount
+    }
+
+    function activeMaskAdjustmentLayerIndex() {
+        const mask = root.activeCloneMaskDefinition()
+        if (!mask || Object.keys(mask).length === 0)
+            return -1
+        return root.adjustmentLayerIndexForMaskSet({
+            id: String(mask.maskSetId || ""),
+            name: String(mask.maskSetName || mask.name || "")
+        })
+    }
+
+    function activeMaskAdjustmentValue(adjustment, fallbackValue) {
+        const layerIndex = root.activeMaskAdjustmentLayerIndex()
+        const key = String(adjustment || "")
+        if (layerIndex >= 0) {
+            const layer = editorPreview.photoLayers[layerIndex] || ({})
+            return Number(layer[key] !== undefined && layer[key] !== null ? layer[key] : 0)
+        }
+        return Number(fallbackValue || 0)
+    }
+
+    function maskSetActive(maskSet) {
+        const sources = maskSet && maskSet.sources ? maskSet.sources : []
+        for (let index = 0; index < sources.length; ++index) {
+            if (Number(sources[index].flatIndex) === editorPreview.activeMaskIndex)
+                return true
+        }
+        return false
+    }
+
+    function selectMaskSetAndLayer(maskSet, showAdjustments, preserveInspectorTab) {
+        const previousInspectorTab = root.editInspectorTab
+        const sources = maskSet && maskSet.sources ? maskSet.sources : []
+        const sourceIndex = sources.length > 0 && sources[0].flatIndex !== undefined
+                ? Number(sources[0].flatIndex)
+                : -1
+        if (sourceIndex >= 0)
+            editorPreview.activeMaskIndex = sourceIndex
+        let layerIndex = root.adjustmentLayerIndexForMaskSet(maskSet)
+        if (showAdjustments && layerIndex < 0)
+            layerIndex = editorPreview.ensureActiveSelectionAdjustmentLayer()
+        if (layerIndex >= 0)
+            root.setActivePhotoLayerSelection(layerIndex, false)
+        root.setSelectedEditTarget(showAdjustments && layerIndex >= 0 ? root.selectedLayerTargetScope(layerIndex) : "mask",
+                                   layerIndex,
+                                   maskSet || ({}),
+                                   sourceIndex)
+        root.selectedEditLayer = "adjustments"
+        if (showAdjustments && layerIndex >= 0) {
+            root.activateEditTool("adjust")
+            if (preserveInspectorTab === true)
+                root.editInspectorTab = previousInspectorTab
+        } else {
+            root.editTool = "masks"
+            if (preserveInspectorTab !== true)
+                root.editInspectorTab = "layers"
+        }
+        editorPreview.maskPreviewMode = "overlay"
+    }
+
+    function layerAdjustmentKeySupported(adjustment) {
+        const key = String(adjustment || "").trim()
+        return [
+            "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
+            "brightness", "filmicShoulder", "filmicToe", "adaptiveContrast",
+            "levelsBlackPoint", "levelsGamma", "levelsWhitePoint",
+            "zoneDeepShadows", "zoneShadows", "zoneMidtones", "zoneLights", "zoneHighlights",
+            "temperature", "tint", "vibrance", "saturation", "hueShift",
+            "saturationShift", "colorizeHue", "colorizeStrength",
+            "curveShadows", "curveDarks", "curveLights", "curveHighlights",
+            "texture", "clarity", "dehaze", "sharpening", "sharpenRadius",
+            "sharpenDetail", "sharpenMasking", "luminanceNr", "colorNr",
+            "lensDistortion", "lensVignette", "chromaticAberration",
+            "perspectiveVertical", "perspectiveHorizontal", "transformRotation",
+            "transformScale", "transformSkewX", "transformSkewY",
+            "liquifyCenterX", "liquifyCenterY", "liquifyRadius", "liquifyStrength"
+        ].indexOf(key) >= 0
+    }
+
+    function layerAdjustmentNeutralValue(adjustment) {
+        const key = String(adjustment || "").trim()
+        if (key === "sharpenRadius" || key === "transformScale")
+            return 1
+        if (key === "liquifyCenterX" || key === "liquifyCenterY")
+            return 0.5
+        if (key === "liquifyRadius")
+            return 0.25
+        return 0
+    }
+
+    function layerStoredAdjustmentValue(layer, key) {
+        const field = String(key || "").trim()
+        if (field.length === 0 || !layer)
+            return undefined
+        if (layer[field] !== undefined && layer[field] !== null)
+            return layer[field]
+        const adjustments = layer.adjustments || ({})
+        if (adjustments[field] !== undefined && adjustments[field] !== null)
+            return adjustments[field]
+        return undefined
+    }
+
+    function layerNumericAdjustmentChanged(layer, key, neutralValue) {
+        const value = root.layerStoredAdjustmentValue(layer, key)
+        if (value === undefined || value === null)
+            return false
+        const numericValue = Number(value)
+        const neutral = Number(neutralValue !== undefined ? neutralValue : root.layerAdjustmentNeutralValue(key))
+        return isFinite(numericValue) && Math.abs(numericValue - neutral) > 0.0001
+    }
+
+    function layerAnyNumericAdjustmentChanged(layer, keys) {
+        for (let index = 0; index < keys.length; ++index) {
+            const key = String(keys[index] || "")
+            if (root.layerNumericAdjustmentChanged(layer, key, root.layerAdjustmentNeutralValue(key)))
+                return true
+        }
+        return false
+    }
+
+    function layerObjectHasChangedValues(objectValue) {
+        if (!objectValue)
+            return false
+        for (let key in objectValue) {
+            const value = objectValue[key]
+            if (value === undefined || value === null)
+                continue
+            if (typeof value === "number" && isFinite(value) && Math.abs(value) > 0.0001)
+                return true
+            if (typeof value === "boolean" && value)
+                return true
+            if (typeof value === "string" && value.trim().length > 0)
+                return true
+            if (typeof value === "object" && root.layerObjectHasChangedValues(value))
+                return true
+        }
+        return false
+    }
+
+    function layerLutStack(layer) {
+        const adjustments = layer && layer.adjustments ? layer.adjustments : ({})
+        const stack = adjustments.lutStack || layer.lutStack || []
+        return stack && stack.length !== undefined ? stack : []
+    }
+
+    function layerCurveAdjustmentChanged(layer) {
+        const curveKeys = [
+            "curveShadows", "curveDarks", "curveLights", "curveHighlights"
+        ]
+        const pointKeys = [
+            "masterCurvePoints", "lumaCurvePoints", "redCurvePoints",
+            "greenCurvePoints", "blueCurvePoints"
+        ]
+        if (root.layerAnyNumericAdjustmentChanged(layer, curveKeys))
+            return true
+        for (let index = 0; index < pointKeys.length; ++index) {
+            const points = root.layerStoredAdjustmentValue(layer, pointKeys[index])
+            if (points && points.length !== undefined && points.length >= 2)
+                return true
+        }
+        return false
+    }
+
+    function layerHslAdjustmentChanged(layer) {
+        const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+        const channels = colorMixer.channels || ({})
+        return root.layerObjectHasChangedValues(channels)
+    }
+
+    function layerDominantHslChannelName(layer) {
+        const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+        const channels = colorMixer.channels || ({})
+        const fields = [
+            "hue", "saturation", "luminance",
+            "selectiveCyan", "selectiveMagenta", "selectiveYellow", "selectiveBlack"
+        ]
+        let bestChannel = ""
+        let bestMagnitude = 0
+        for (const channelName in channels) {
+            const channel = channels[channelName] || ({})
+            let magnitude = 0
+            for (let fieldIndex = 0; fieldIndex < fields.length; ++fieldIndex)
+                magnitude = Math.max(magnitude, Math.abs(Number(channel[fields[fieldIndex]] || 0)))
+            if (magnitude > bestMagnitude) {
+                bestMagnitude = magnitude
+                bestChannel = String(channelName || "")
+            }
+        }
+        if (bestChannel.length > 0)
+            return bestChannel
+        const activeChannel = String(colorMixer.channel || layer.hslChannel || "")
+        return activeChannel.length > 0 && root.layerHslAdjustmentChanged(layer) ? activeChannel : ""
+    }
+
+    function layerGradingAdjustmentChanged(layer) {
+        return root.layerObjectHasChangedValues(root.layerAdjustmentObject(layer, "colorGrading"))
+    }
+
+    function layerLutAdjustmentChanged(layer) {
+        return root.layerLutStack(layer).length > 0
+    }
+
+    function layerChangedAdjustmentGroups(layer) {
+        const groups = []
+        if (String(layer && layer.kind || "").trim().toLowerCase() !== "adjustment")
+            return groups
+        function appendGroup(key, label) {
+            const nextLabel = String(label || "").trim()
+            if (nextLabel.length === 0)
+                return
+            const nextKey = String(key || nextLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-"))
+            for (let groupIndex = 0; groupIndex < groups.length; ++groupIndex) {
+                if (groups[groupIndex].label === nextLabel || groups[groupIndex].key === nextKey)
+                    return
+            }
+            groups.push({ key: nextKey, label: nextLabel })
+        }
+        const suppliedGroups = layer && layer.changedAdjustmentGroups !== undefined
+                ? layer.changedAdjustmentGroups : undefined
+        if (suppliedGroups !== undefined && suppliedGroups !== null &&
+                suppliedGroups.length !== undefined) {
+            for (let index = 0; index < suppliedGroups.length; ++index) {
+                const supplied = suppliedGroups[index] || ({})
+                const label = String(supplied.label || supplied || "").trim()
+                if (label.length === 0)
+                    continue
+                appendGroup(supplied.key, label)
+            }
+        }
+        if (root.layerAnyNumericAdjustmentChanged(layer, ["temperature", "tint"]))
+            appendGroup("white-balance", "WB")
+        if (root.layerAnyNumericAdjustmentChanged(layer, [
+                "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
+                "brightness", "filmicShoulder", "filmicToe", "adaptiveContrast",
+                "levelsBlackPoint", "levelsGamma", "levelsWhitePoint",
+                "zoneDeepShadows", "zoneShadows", "zoneMidtones", "zoneLights", "zoneHighlights"
+            ]))
+            appendGroup("light", "Light")
+        if (root.layerCurveAdjustmentChanged(layer))
+            appendGroup("tone-curve", "Curve")
+        if (root.layerAnyNumericAdjustmentChanged(layer, [
+                "vibrance", "saturation", "hueShift", "saturationShift",
+                "colorizeHue", "colorizeStrength"
+            ]))
+            appendGroup("color", "Color")
+        if (root.layerHslAdjustmentChanged(layer))
+            appendGroup("hsl", "HSL")
+        if (root.layerGradingAdjustmentChanged(layer))
+            appendGroup("grading", "Grade")
+        if (root.layerLutAdjustmentChanged(layer))
+            appendGroup("lut", "LUT")
+        if (root.layerAnyNumericAdjustmentChanged(layer, [
+                "texture", "clarity", "dehaze", "sharpening", "sharpenRadius",
+                "sharpenDetail", "sharpenMasking", "luminanceNr", "colorNr"
+            ]))
+            appendGroup("detail", "Detail")
+        if (root.layerAnyNumericAdjustmentChanged(layer, [
+                "lensDistortion", "lensVignette", "chromaticAberration",
+                "perspectiveVertical", "perspectiveHorizontal", "transformRotation",
+                "transformScale", "transformSkewX", "transformSkewY",
+                "liquifyCenterX", "liquifyCenterY", "liquifyRadius", "liquifyStrength"
+            ]) || Boolean(root.layerStoredAdjustmentValue(layer, "contentAwareCropFill")))
+            appendGroup("lens-transform", "Lens")
+        const suppliedLabel = String(layer && layer.changedAdjustmentGroupLabel || "")
+        const suppliedParts = suppliedLabel.split(",")
+        for (let suppliedIndex = 0; suppliedIndex < suppliedParts.length; ++suppliedIndex)
+            appendGroup("", suppliedParts[suppliedIndex])
+        return groups
+    }
+
+    function layerChangedAdjustmentGroupSignature(layer) {
+        const groups = root.layerChangedAdjustmentGroups(layer)
+        const labels = []
+        for (let index = 0; index < groups.length; ++index)
+            labels.push(groups[index].label)
+        return "groups:" + labels.join(",") + "|count:" + groups.length.toString()
+    }
+
+    function signedLayerValueText(value, suffix) {
+        const numericValue = Number(value || 0)
+        const sign = numericValue > 0 ? "+" : ""
+        const rounded = Math.abs(numericValue) < 10 && Math.abs(numericValue % 1) > 0.001
+                ? numericValue.toFixed(1)
+                : Math.round(numericValue).toString()
+        return sign + rounded + String(suffix || "")
+    }
+
+    function layerLocalAdjustmentSummary(layer) {
+        const parts = []
+        if (root.layerNumericAdjustmentChanged(layer, "exposure", 0))
+            parts.push("Exposure " + root.signedLayerValueText(root.layerStoredAdjustmentValue(layer, "exposure"), " EV"))
+        if (root.layerNumericAdjustmentChanged(layer, "temperature", 0))
+            parts.push("WB " + root.signedLayerValueText(root.layerStoredAdjustmentValue(layer, "temperature"), ""))
+        if (root.layerCurveAdjustmentChanged(layer))
+            parts.push("Curve")
+        if (root.layerHslAdjustmentChanged(layer)) {
+            const hslChannel = root.layerDominantHslChannelName(layer)
+            parts.push(hslChannel.length > 0 ? "HSL " + hslChannel : "HSL")
+        }
+        if (root.layerGradingAdjustmentChanged(layer))
+            parts.push("Grade")
+        if (root.layerLutAdjustmentChanged(layer))
+            parts.push("LUT")
+        const suppliedLabel = String(layer && layer.changedAdjustmentGroupLabel || "")
+        const suppliedParts = suppliedLabel.split(",")
+        for (let suppliedIndex = 0; suppliedIndex < suppliedParts.length; ++suppliedIndex) {
+            const label = String(suppliedParts[suppliedIndex] || "").trim()
+            if (label.length > 0 && parts.indexOf(label) < 0)
+                parts.push(label)
+        }
+        if (parts.length === 0) {
+            const groups = root.layerChangedAdjustmentGroups(layer)
+            for (let index = 0; index < Math.min(3, groups.length); ++index)
+                parts.push(groups[index].label)
+        }
+        return parts.length > 0 ? "Layer edits: " + parts.join(", ") : "No layer-local adjustments"
+    }
+
+    function globalNumericAdjustmentChanged(key, neutralValue) {
+        const field = String(key || "").trim()
+        if (field.length === 0)
+            return false
+        const numericValue = Number(editorPreview[field] !== undefined && editorPreview[field] !== null
+                                    ? editorPreview[field] : 0)
+        const neutral = Number(neutralValue !== undefined ? neutralValue : root.layerAdjustmentNeutralValue(field))
+        return isFinite(numericValue) && Math.abs(numericValue - neutral) > 0.0001
+    }
+
+    function globalAnyNumericAdjustmentChanged(keys) {
+        for (let index = 0; index < keys.length; ++index) {
+            const key = String(keys[index] || "")
+            if (root.globalNumericAdjustmentChanged(key, root.layerAdjustmentNeutralValue(key)))
+                return true
+        }
+        return false
+    }
+
+    function globalChangedAdjustmentGroups() {
+        const groups = []
+        if (root.globalAnyNumericAdjustmentChanged(["temperature", "tint"]))
+            groups.push({ key: "white-balance", label: "WB" })
+        if (root.globalAnyNumericAdjustmentChanged([
+                "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
+                "brightness", "filmicShoulder", "filmicToe", "adaptiveContrast",
+                "levelsBlackPoint", "levelsGamma", "levelsWhitePoint",
+                "zoneDeepShadows", "zoneShadows", "zoneMidtones", "zoneLights", "zoneHighlights"
+            ]))
+            groups.push({ key: "light", label: "Light" })
+        if (root.globalAnyNumericAdjustmentChanged([
+                "curveShadows", "curveDarks", "curveLights", "curveHighlights"
+            ]))
+            groups.push({ key: "tone-curve", label: "Curve" })
+        if (root.globalAnyNumericAdjustmentChanged([
+                "vibrance", "saturation", "hueShift", "saturationShift",
+                "colorizeHue", "colorizeStrength"
+            ]))
+            groups.push({ key: "color", label: "Color" })
+        if (root.globalAnyNumericAdjustmentChanged([
+                "texture", "clarity", "dehaze", "sharpening", "sharpenRadius",
+                "sharpenDetail", "sharpenMasking", "luminanceNr", "colorNr"
+            ]))
+            groups.push({ key: "detail", label: "Detail" })
+        if (root.globalAnyNumericAdjustmentChanged([
+                "lensDistortion", "lensVignette", "chromaticAberration",
+                "perspectiveVertical", "perspectiveHorizontal", "transformRotation",
+                "transformScale", "transformSkewX", "transformSkewY",
+                "liquifyCenterX", "liquifyCenterY", "liquifyRadius", "liquifyStrength"
+            ]) || Boolean(editorPreview.contentAwareCropFill))
+            groups.push({ key: "lens-transform", label: "Lens" })
+        return groups
+    }
+
+    function globalChangedAdjustmentGroupSignature() {
+        const groups = root.globalChangedAdjustmentGroups()
+        const labels = []
+        for (let index = 0; index < groups.length; ++index)
+            labels.push(groups[index].label)
+        return "base-groups:" + labels.join(",") + "|count:" + groups.length.toString()
+    }
+
+    function globalAdjustmentSummary() {
+        const parts = []
+        if (root.globalNumericAdjustmentChanged("exposure", 0))
+            parts.push("Exposure " + root.signedLayerValueText(editorPreview.exposure, " EV"))
+        if (root.globalNumericAdjustmentChanged("temperature", 0))
+            parts.push("WB " + root.signedLayerValueText(editorPreview.temperature, ""))
+        const groups = root.globalChangedAdjustmentGroups()
+        for (let index = 0; index < groups.length && parts.length < 3; ++index) {
+            if (parts.indexOf(groups[index].label) < 0)
+                parts.push(groups[index].label)
+        }
+        return parts.length > 0 ? parts.join(", ") : "No global adjustments"
+    }
+
+    function baseImageMetadataSummary() {
+        const parts = []
+        if (editorPreview.cameraLabel.length > 0)
+            parts.push(editorPreview.cameraLabel)
+        if (editorPreview.lensModel.length > 0 &&
+                editorPreview.lensModel !== editorPreview.cameraLabel)
+            parts.push(editorPreview.lensModel)
+        if (editorPreview.captureDate.length > 0)
+            parts.push(editorPreview.captureDate)
+        return parts.length > 0 ? parts.join(" / ") : "Original image"
+    }
+
+    function primaryAdjustmentValue(adjustment, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        const key = String(adjustment || "")
+        if (key.length > 0 && layer[key] !== undefined && layer[key] !== null)
+            return Number(layer[key])
+        if (root.activeAdjustmentLayerIndex() >= 0 && root.layerAdjustmentKeySupported(key))
+            return root.layerAdjustmentNeutralValue(key)
+        return Number(fallbackValue || 0)
+    }
+
+    function setPrimaryAdjustmentValue(adjustment, value) {
+        const numericValue = Number(value)
+        if (!isFinite(numericValue))
+            return false
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0)
+            return editorPreview.setPhotoLayerAdjustmentValue(layerIndex, adjustment, numericValue)
+        if (!root.globalAdjustmentWritesAllowed())
+            return false
+        editorPreview[adjustment] = numericValue
+        return true
+    }
+
+    function layerAdjustmentObject(layer, objectName) {
+        const adjustments = layer && layer.adjustments ? layer.adjustments : ({})
+        const value = adjustments[objectName] !== undefined && adjustments[objectName] !== null
+                ? adjustments[objectName]
+                : (layer && layer[objectName] !== undefined ? layer[objectName] : ({}))
+        return value || ({})
+    }
+
+    function layerAdjustmentChildObject(parent, childName) {
+        const value = parent && parent[childName] !== undefined && parent[childName] !== null
+                ? parent[childName]
+                : ({})
+        return value || ({})
+    }
+
+    function primaryStringAdjustmentValue(adjustment, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        const key = String(adjustment || "")
+        if (root.activeAdjustmentLayerIndex() >= 0) {
+            const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+            if (key === "colorMixerModel")
+                return String(colorMixer.model !== undefined ? colorMixer.model : (layer.colorMixerModel !== undefined ? layer.colorMixerModel : fallbackValue))
+            if (key === "hslChannel")
+                return String(colorMixer.channel !== undefined ? colorMixer.channel : (layer.hslChannel !== undefined ? layer.hslChannel : fallbackValue))
+            if (key === "colorHarmonyMode") {
+                const harmony = root.layerAdjustmentChildObject(colorMixer, "colorHarmony")
+                return String(harmony.mode !== undefined ? harmony.mode : fallbackValue)
+            }
+        }
+        return String(fallbackValue || "")
+    }
+
+    function setPrimaryStringAdjustmentValue(adjustment, value) {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0)
+            return editorPreview.setPhotoLayerAdjustmentString(layerIndex, adjustment, String(value || ""))
+        if (!root.globalAdjustmentWritesAllowed())
+            return false
+        editorPreview[adjustment] = String(value || "")
+        return true
+    }
+
+    function primaryBoolAdjustmentValue(adjustment, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        const key = String(adjustment || "")
+        if (root.activeAdjustmentLayerIndex() >= 0) {
+            if (key === "contentAwareCropFill")
+                return Boolean(layer[key] !== undefined ? layer[key] : fallbackValue)
+            const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+            const childName = key === "blackAndWhiteEnabled" ? "blackAndWhite"
+                    : key.indexOf("colorReplacement") === 0 ? "colorReplacement"
+                    : key.indexOf("skinToneProtection") === 0 ? "skinToneProtection"
+                    : key.indexOf("colorHarmony") === 0 ? "colorHarmony"
+                    : ""
+            const fieldName = key === "blackAndWhiteEnabled" || key === "colorReplacementEnabled" ||
+                    key === "skinToneProtectionEnabled" || key === "colorHarmonyEnabled" ? "enabled"
+                    : key === "colorReplacementPreserveLuminance" ? "preserveLuminance"
+                    : key === "colorReplacementPreserveSaturation" ? "preserveSaturation"
+                    : ""
+            if (childName.length > 0 && fieldName.length > 0) {
+                const child = root.layerAdjustmentChildObject(colorMixer, childName)
+                return Boolean(child[fieldName] !== undefined ? child[fieldName] : fallbackValue)
+            }
+        }
+        return Boolean(fallbackValue)
+    }
+
+    function setPrimaryBoolAdjustmentValue(adjustment, value) {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0)
+            return editorPreview.setPhotoLayerAdjustmentBool(layerIndex, adjustment, Boolean(value))
+        if (!root.globalAdjustmentWritesAllowed())
+            return false
+        editorPreview[adjustment] = Boolean(value)
+        return true
+    }
+
+    function primaryColorMixerChannelValue(fieldName, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        if (root.activeAdjustmentLayerIndex() >= 0) {
+            const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+            const channels = colorMixer.channels || ({})
+            const channelName = root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel)
+            const channel = channels[channelName] || ({})
+            if (channel[fieldName] !== undefined && channel[fieldName] !== null)
+                return Number(channel[fieldName])
+            return 0
+        }
+        return Number(fallbackValue || 0)
+    }
+
+    function primaryNestedAdjustmentValue(objectName, childName, fieldName, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        if (root.activeAdjustmentLayerIndex() >= 0) {
+            const object = root.layerAdjustmentObject(layer, objectName)
+            const child = childName.length > 0 ? root.layerAdjustmentChildObject(object, childName) : object
+            if (child[fieldName] !== undefined && child[fieldName] !== null)
+                return Number(child[fieldName])
+            return Number(fallbackValue || 0)
+        }
+        return Number(fallbackValue || 0)
+    }
+
+    function primaryChannelMixerValue(fieldName, fallbackValue) {
+        return root.primaryNestedAdjustmentValue("colorMixer", "rgbChannelMixer", fieldName, fallbackValue)
+    }
+
+    function primaryBlackAndWhiteValue(channelName, fallbackValue) {
+        const layer = root.activeAdjustmentLayerData()
+        if (root.activeAdjustmentLayerIndex() >= 0) {
+            const colorMixer = root.layerAdjustmentObject(layer, "colorMixer")
+            const blackAndWhite = root.layerAdjustmentChildObject(colorMixer, "blackAndWhite")
+            const channels = blackAndWhite.channels || ({})
+            if (channels[channelName] !== undefined && channels[channelName] !== null)
+                return Number(channels[channelName])
+            return 0
+        }
+        return Number(fallbackValue || 0)
+    }
+
+    function primaryColorReplacementValue(fieldName, fallbackValue) {
+        return root.primaryNestedAdjustmentValue("colorMixer", "colorReplacement", fieldName, fallbackValue)
+    }
+
+    function primarySkinToneValue(fieldName, fallbackValue) {
+        return root.primaryNestedAdjustmentValue("colorMixer", "skinToneProtection", fieldName, fallbackValue)
+    }
+
+    function primaryHarmonyValue(fieldName, fallbackValue) {
+        return root.primaryNestedAdjustmentValue("colorMixer", "colorHarmony", fieldName, fallbackValue)
+    }
+
+    function primaryGradingValue(zoneName, fieldName, fallbackValue) {
+        return root.primaryNestedAdjustmentValue("colorGrading", zoneName, fieldName, fallbackValue)
+    }
+
+    function resetPrimaryAdjustmentGroup(groupName) {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        const group = String(groupName || "")
+        const layerGroupKey = group.replace(/[ _-]/g, "").toLowerCase()
+        const layerResetGroups = [
+            "whitebalance", "wb", "light", "tone", "color", "colormixer", "hsl",
+            "rgbmixer", "channelmixer", "rgbchannelmixer", "blackandwhite", "bw",
+            "colorreplacement", "skintone", "skinprotection", "skintoneprotection",
+            "colorharmony", "harmony", "colorgrading", "grading", "lut", "tonecurve", "curve",
+            "presence", "detail", "effects", "lens", "transform", "geometry"
+        ]
+        if (layerIndex >= 0 && layerResetGroups.indexOf(layerGroupKey) >= 0)
+            return editorPreview.resetPhotoLayerAdjustmentGroup(layerIndex, group)
+        if (!root.globalAdjustmentWritesAllowed())
+            return false
+        return editorPreview.resetAdjustmentGroup(group)
+    }
+
+    function resetActiveAdjustmentLayerRecipe() {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex < 0)
+            return false
+        return editorPreview.resetPhotoLayerAdjustments(layerIndex)
+    }
+
+    function curvePoint(x, y) {
+        return { "x": Number(x), "y": Number(y) }
+    }
+
+    function defaultCurvePoints() {
+        return [
+            root.curvePoint(0.0, 0.0),
+            root.curvePoint(1.0, 1.0)
+        ]
+    }
+
+    function layerCurvePointOutput(x, delta) {
+        return Math.max(0, Math.min(1, Number(x) + (Number(delta || 0) / 100.0) * 0.34))
+    }
+
+    function layerParametricCurvePoints(layer) {
+        return [
+            root.curvePoint(0.0, 0.0),
+            root.curvePoint(0.20, root.layerCurvePointOutput(0.20, layer.curveShadows)),
+            root.curvePoint(0.40, root.layerCurvePointOutput(0.40, layer.curveDarks)),
+            root.curvePoint(0.65, root.layerCurvePointOutput(0.65, layer.curveLights)),
+            root.curvePoint(0.85, root.layerCurvePointOutput(0.85, layer.curveHighlights)),
+            root.curvePoint(1.0, 1.0)
+        ]
+    }
+
+    function layerCurvePointKey(channel) {
+        const normalized = String(channel || "RGB").trim()
+        if (normalized === "RGB" || normalized === "Master")
+            return "masterCurvePoints"
+        if (normalized === "Luma")
+            return "lumaCurvePoints"
+        if (normalized === "Red")
+            return "redCurvePoints"
+        if (normalized === "Green")
+            return "greenCurvePoints"
+        return "blueCurvePoints"
+    }
+
+    function primaryCurveMode() {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex < 0)
+            return editorPreview.activeCurveMode
+        const layer = editorPreview.photoLayers[layerIndex] || ({})
+        const key = root.layerCurvePointKey(editorPreview.curveChannel)
+        const points = layer[key]
+        if (points && points.length >= 2)
+            return "Point"
+        const channel = String(editorPreview.curveChannel || "RGB")
+        if ((channel === "RGB" || channel === "Master") &&
+                (Number(layer.curveShadows || 0) !== 0 || Number(layer.curveDarks || 0) !== 0 ||
+                 Number(layer.curveLights || 0) !== 0 || Number(layer.curveHighlights || 0) !== 0))
+            return "Parametric"
+        return "Neutral"
+    }
+
+    function primaryCurvePoints() {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex < 0)
+            return editorPreview.activeCurvePoints
+        const layer = editorPreview.photoLayers[layerIndex] || ({})
+        const key = root.layerCurvePointKey(editorPreview.curveChannel)
+        const points = layer[key]
+        if (points && points.length >= 2)
+            return points
+        const channel = String(editorPreview.curveChannel || "RGB")
+        if ((channel === "RGB" || channel === "Master") &&
+                (Number(layer.curveShadows || 0) !== 0 || Number(layer.curveDarks || 0) !== 0 ||
+                 Number(layer.curveLights || 0) !== 0 || Number(layer.curveHighlights || 0) !== 0))
+            return root.layerParametricCurvePoints(layer)
+        return root.defaultCurvePoints()
+    }
+
+    function setPrimaryCurvePoints(points) {
+        const layerIndex = root.activeAdjustmentLayerIndex()
+        if (layerIndex >= 0)
+            return editorPreview.setPhotoLayerCurvePoints(layerIndex, editorPreview.curveChannel, points)
+        editorPreview.activeCurvePoints = points
+        return true
+    }
+
     function photoLayerHasDirectTransform(layer) {
         const kind = String(layer.kind || "").trim().toLowerCase()
         return (kind === "pixel" || kind === "text" || kind === "source") &&
                Number(layer.pixelWidth || 0) > 0 &&
                Number(layer.pixelHeight || 0) > 0
+    }
+
+    function photoLayerIconName(layer) {
+        const kind = String(layer.kind || "").trim().toLowerCase()
+        if (kind === "source")
+            return "source"
+        if (kind === "pixel")
+            return "media"
+        if (kind === "text")
+            return "edit"
+        if (kind === "group")
+            return "grid"
+        return "adjust"
+    }
+
+    function maskSourceIconName(kindName) {
+        const kind = String(kindName || "").trim().toLowerCase()
+        if (kind === "brush")
+            return "brush-tool"
+        if (kind === "lasso")
+            return "lasso"
+        if (kind === "polygon")
+            return "polygon-tool"
+        if (kind === "object" || kind === "subject" || kind === "sky" || kind === "background")
+            return "smart-select"
+        if (kind === "linear" || kind === "rectangle")
+            return "geometry"
+        if (kind === "radial" || kind === "ellipse")
+            return "masks"
+        if (kind === "luminance" || kind === "color" || kind === "depth" ||
+                kind === "luminance_range" || kind === "color_range" ||
+                kind === "depth_range")
+            return "filter"
+        if (kind === "composite")
+            return "masks"
+        return "masks"
     }
 
     function sourceCanvasWidthForLayers(layer) {
@@ -1548,9 +5847,39 @@ Rectangle {
     function setActivePhotoLayer(index) {
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return false
-        root.activePhotoLayerIndex = index
-        root.editTool = "adjustments"
+        root.setActivePhotoLayerSelection(index, false)
+        root.editTool = "layers"
+        root.editInspectorTab = "layers"
+        return true
+    }
+
+    function editPhotoLayerInspectorTarget(index) {
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return false
+        root.setActivePhotoLayerSelection(index, false)
+        if (root.photoLayerKind(index) === "adjustment") {
+            root.activateEditTool("adjust")
+        } else {
+            root.editTool = "layers"
+            root.editInspectorTab = "layers"
+        }
+        return true
+    }
+
+    function activateLayerAdjustmentGroup(layerIndex, groupKey) {
+        const index = Math.floor(Number(layerIndex))
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return false
+        root.setActivePhotoLayerSelection(index, false)
+        root.activateEditTool("adjust")
+        root.selectedEditLayer = root.adjustmentGroupEditStack(groupKey)
+        root.editTool = root.selectedEditLayer === "adjustments" ? "adjust" : root.selectedEditLayer
         root.editInspectorTab = "adjust"
+        root.editAdjustmentFilterText = root.adjustmentGroupFilterText(groupKey)
+        if (root.selectedEditLayer === "curve")
+            editorPreview.curveChannel = "RGB"
+        else if (root.selectedEditLayer === "hsl")
+            root.setPrimaryStringAdjustmentValue("hslChannel", "Blues")
         return true
     }
 
@@ -1558,9 +5887,9 @@ Rectangle {
         const keys = ["adjustments", "color", "hsl", "curve", "detail", "lens", "crop"]
         root.selectedEditLayer = keys[Math.max(0, Math.min(keys.length - 1, index))]
         root.editTool = root.selectedEditLayer
-        root.editInspectorTab = root.selectedEditLayer === "detail" ? "detail" : "adjust"
+        root.editInspectorTab = root.selectedEditLayer === "crop" ? "crop" : "adjust"
         if (index === 2)
-            editorPreview.hslChannel = "Blues"
+            root.setPrimaryStringAdjustmentValue("hslChannel", "Blues")
         else if (index === 3)
             editorPreview.curveChannel = "RGB"
         else if (index === 6) {
@@ -1572,10 +5901,117 @@ Rectangle {
     }
 
     Shortcut {
+        objectName: "cancelActiveToolShortcut"
+        sequence: "Esc"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" &&
+                 !root.cancelActivePolygonShortcutReady &&
+                 (root.diagnosticsPanelOpen || root.editTool !== "adjust")
+        onActivated: root.cancelActiveTool()
+    }
+
+    Shortcut {
+        objectName: "undoEditShortcut"
+        sequence: "Ctrl+Z"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && editorPreview.canUndo
+        onActivated: editorPreview.undo()
+    }
+
+    Shortcut {
+        objectName: "redoEditShortcut"
+        sequence: "Ctrl+Shift+Z"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && editorPreview.canRedo
+        onActivated: editorPreview.redo()
+    }
+
+    readonly property bool cancelActivePolygonShortcutReady: root.activePolygonShortcutReady() &&
+                                                            editorPreview.activeMaskPolygonPointCount < 3
+    readonly property bool completeActivePolygonShortcutReady: root.activePolygonShortcutReady() &&
+                                                              editorPreview.activeMaskPolygonPointCount >= 3 &&
+                                                              !editorPreview.activeMaskPolygonSelfIntersecting
+    readonly property bool removeLastPolygonPointShortcutReady: root.activePolygonShortcutReady() &&
+                                                               editorPreview.activeMaskPolygonPointCount > 0
+
+    Shortcut {
+        objectName: "polygonCancelShortcut"
+        sequence: "Esc"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.cancelActivePolygonShortcutReady
+        onActivated: root.cancelActivePolygonDrawing()
+    }
+
+    Shortcut {
+        objectName: "polygonCompleteReturnShortcut"
+        sequence: "Return"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.completeActivePolygonShortcutReady
+        onActivated: root.completeActivePolygonSelection()
+    }
+
+    Shortcut {
+        objectName: "polygonCompleteEnterShortcut"
+        sequence: "Enter"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.completeActivePolygonShortcutReady
+        onActivated: root.completeActivePolygonSelection()
+    }
+
+    Shortcut {
+        objectName: "brushDoneReturnShortcut"
+        sequence: "Return"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.brushShortcutContextActive()
+        onActivated: root.finishActiveCanvasTool()
+    }
+
+    Shortcut {
+        objectName: "brushDoneEnterShortcut"
+        sequence: "Enter"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.brushShortcutContextActive()
+        onActivated: root.finishActiveCanvasTool()
+    }
+
+    Shortcut {
+        objectName: "lassoCompleteReturnShortcut"
+        sequence: "Return"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()
+        onActivated: root.finishActiveCanvasTool()
+    }
+
+    Shortcut {
+        objectName: "lassoCompleteEnterShortcut"
+        sequence: "Enter"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()
+        onActivated: root.finishActiveCanvasTool()
+    }
+
+    Shortcut {
+        objectName: "polygonRemoveLastPointBackspaceShortcut"
+        sequence: "Backspace"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.removeLastPolygonPointShortcutReady
+        onActivated: root.removeLastActivePolygonPointFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "polygonRemoveLastPointDeleteShortcut"
+        sequence: "Delete"
+        context: Qt.WindowShortcut
+        enabled: page === "edit" && root.removeLastPolygonPointShortcutReady
+        onActivated: root.removeLastActivePolygonPointFromShortcut()
+    }
+
+    Shortcut {
         objectName: "brushAddShortcut"
         sequence: "B"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare"
+        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
+                 !root.shortcutTextInputActive()
         onActivated: root.setBrushPaintMode("add")
     }
 
@@ -1583,15 +6019,40 @@ Rectangle {
         objectName: "brushEraseShortcut"
         sequence: "E"
         context: Qt.WindowShortcut
-        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare"
+        enabled: page === "edit" && editorPreview.hasAsset && root.editTool !== "compare" &&
+                 !root.shortcutTextInputActive()
         onActivated: root.setBrushPaintMode("subtract")
+    }
+
+    Shortcut {
+        objectName: "maskSelectMoveShortcut"
+        sequence: "V"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.selectMaskMoveFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskLassoShortcut"
+        sequence: "L"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.startMaskLassoFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskPolygonShortcut"
+        sequence: "P"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.startMaskPolygonFromShortcut()
     }
 
     Shortcut {
         objectName: "brushSizeDownShortcut"
         sequence: "["
         context: Qt.WindowShortcut
-        enabled: root.brushToolReady()
+        enabled: root.brushShortcutContextActive()
         onActivated: root.adjustActiveBrushSize(-0.02)
     }
 
@@ -1599,7 +6060,7 @@ Rectangle {
         objectName: "brushSizeUpShortcut"
         sequence: "]"
         context: Qt.WindowShortcut
-        enabled: root.brushToolReady()
+        enabled: root.brushShortcutContextActive()
         onActivated: root.adjustActiveBrushSize(0.02)
     }
 
@@ -1607,7 +6068,7 @@ Rectangle {
         objectName: "brushHardnessDownShortcut"
         sequence: "Shift+["
         context: Qt.WindowShortcut
-        enabled: root.brushToolReady()
+        enabled: root.brushShortcutContextActive()
         onActivated: root.adjustActiveBrushHardness(-0.08)
     }
 
@@ -1615,8 +6076,221 @@ Rectangle {
         objectName: "brushHardnessUpShortcut"
         sequence: "Shift+]"
         context: Qt.WindowShortcut
-        enabled: root.brushToolReady()
+        enabled: root.brushShortcutContextActive()
         onActivated: root.adjustActiveBrushHardness(0.08)
+    }
+
+    Shortcut {
+        objectName: "brushFlowDownShortcut"
+        sequence: "Alt+["
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveBrushFlow(-0.08)
+    }
+
+    Shortcut {
+        objectName: "brushFlowUpShortcut"
+        sequence: "Alt+]"
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveBrushFlow(0.08)
+    }
+
+    Shortcut {
+        objectName: "brushDensityDownShortcut"
+        sequence: "Ctrl+["
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveMaskDensity(-0.08)
+    }
+
+    Shortcut {
+        objectName: "brushDensityUpShortcut"
+        sequence: "Ctrl+]"
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveMaskDensity(0.08)
+    }
+
+    Shortcut {
+        objectName: "brushOpacityDownShortcut"
+        sequence: "Ctrl+Alt+["
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveMaskOpacity(-0.08)
+    }
+
+    Shortcut {
+        objectName: "brushOpacityUpShortcut"
+        sequence: "Ctrl+Alt+]"
+        context: Qt.WindowShortcut
+        enabled: root.brushShortcutContextActive()
+        onActivated: root.adjustActiveMaskOpacity(0.08)
+    }
+
+    Shortcut {
+        objectName: "maskCreateShortcut"
+        sequence: "Ctrl+Shift+M"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.createMaskFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskOperationAddShortcut"
+        sequence: "Ctrl+Shift+A"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.setMaskOperationFromShortcut("add")
+    }
+
+    Shortcut {
+        objectName: "maskOperationSubtractShortcut"
+        sequence: "Ctrl+Shift+S"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.setMaskOperationFromShortcut("subtract")
+    }
+
+    Shortcut {
+        objectName: "maskOperationIntersectShortcut"
+        sequence: "Ctrl+Shift+I"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(false)
+        onActivated: root.setMaskOperationFromShortcut("intersect")
+    }
+
+    Shortcut {
+        objectName: "maskInvertShortcut"
+        sequence: "Ctrl+Shift+V"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(true) &&
+                 editorPreview.activeMaskToolRole !== "retouch" &&
+                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+        onActivated: root.invertActiveMaskFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskOverlayShortcut"
+        sequence: "Ctrl+Shift+O"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(true)
+        onActivated: root.toggleActiveMaskOverlayFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskOutlineShortcut"
+        sequence: "Ctrl+Shift+U"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(true)
+        onActivated: root.toggleMaskOutlineFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "layerTargetNextShortcut"
+        sequence: "Ctrl+Shift+L"
+        context: Qt.WindowShortcut
+        enabled: root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0
+        onActivated: root.switchLayerTargetFromShortcut(1)
+    }
+
+    Shortcut {
+        objectName: "layerTargetPreviousShortcut"
+        sequence: "Ctrl+Alt+Shift+L"
+        context: Qt.WindowShortcut
+        enabled: root.targetShortcutContextActive(true) && editorPreview.photoLayerCount > 0
+        onActivated: root.switchLayerTargetFromShortcut(-1)
+    }
+
+    Shortcut {
+        objectName: "maskTargetNextShortcut"
+        sequence: "Ctrl+Shift+K"
+        context: Qt.WindowShortcut
+        enabled: root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0
+        onActivated: root.switchMaskTargetFromShortcut(1)
+    }
+
+    Shortcut {
+        objectName: "maskTargetPreviousShortcut"
+        sequence: "Ctrl+Alt+Shift+K"
+        context: Qt.WindowShortcut
+        enabled: root.targetShortcutContextActive(true) && editorPreview.maskSetCount > 0
+        onActivated: root.switchMaskTargetFromShortcut(-1)
+    }
+
+    Shortcut {
+        objectName: "baseImageTargetShortcut"
+        sequence: "Ctrl+Shift+B"
+        context: Qt.WindowShortcut
+        enabled: root.targetShortcutContextActive(true)
+        onActivated: root.returnToBaseImageFromShortcut()
+    }
+
+    Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Space &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat &&
+                root.maskSpacePanShortcutActive()) {
+            root.spacePanActive = true
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_H &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat &&
+                root.setMaskPreviewTemporarilyHiddenFromShortcut(true)) {
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_X &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat &&
+                root.setTemporaryBrushEraseFromShortcut(true)) {
+            event.accepted = true
+        }
+    }
+
+    Keys.onReleased: function(event) {
+        if (event.key === Qt.Key_Space &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat) {
+            if (root.spacePanActive) {
+                root.spacePanActive = false
+                event.accepted = true
+            }
+            return
+        }
+        if (event.key === Qt.Key_H &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat &&
+                root.setMaskPreviewTemporarilyHiddenFromShortcut(false)) {
+            event.accepted = true
+            return
+        }
+        if (event.key === Qt.Key_X &&
+                event.modifiers === Qt.NoModifier &&
+                !event.isAutoRepeat &&
+                root.setTemporaryBrushEraseFromShortcut(false)) {
+            event.accepted = true
+        }
+    }
+
+    Shortcut {
+        objectName: "maskDeleteShortcut"
+        sequence: "Delete"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(true) &&
+                 !root.removeLastPolygonPointShortcutReady
+        onActivated: root.deleteActiveMaskFromShortcut()
+    }
+
+    Shortcut {
+        objectName: "maskRenameShortcut"
+        sequence: "F2"
+        context: Qt.WindowShortcut
+        enabled: root.maskShortcutContextActive(true) &&
+                 String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+        onActivated: root.renameActiveMaskFromShortcut()
     }
 
     component Panel: Rectangle {
@@ -1691,7 +6365,9 @@ Rectangle {
         property bool active: false
         property color accent: root.mint
         property string iconName: ""
+        property color iconColor: "transparent"
         property string tooltip: ""
+        property string a11yName: ""
         property bool labelVisible: true
         property bool square: false
         property string role: square ? "icon" : "secondary"
@@ -1700,13 +6376,34 @@ Rectangle {
         readonly property bool segmented: role === "segmented"
         readonly property bool iconOnly: role === "icon" || square
         readonly property bool visualIconOnly: iconOnly || (!labelVisible && iconName.length > 0)
+        readonly property bool customIconColor: iconColor.a > 0
         readonly property bool commandShape: !iconOnly && !segmented && !ghost
         readonly property bool slashEdge: commandShape
         readonly property int commandCut: commandShape ? 12 : 0
+        readonly property real availableContentWidth: Math.max(0, width - 16)
+        readonly property real labelAvailableWidth: Math.max(0, availableContentWidth - (iconName.length > 0 && !visualIconOnly ? 21 : 0))
+        readonly property bool contentFitsControl: !visible || buttonContent.width <= availableContentWidth + 1
+        readonly property bool labelFitsControl: !visible || visualIconOnly || label.width <= labelAvailableWidth + 1
+        readonly property string resolvedAccessibleName: {
+            const explicitName = String(a11yName || "").trim()
+            if (explicitName.length > 0)
+                return explicitName
+            const visibleText = String(text || "").trim()
+            if (visibleText.length > 0)
+                return visibleText
+            const helpText = String(tooltip || "").trim()
+            if (helpText.length > 0)
+                return helpText
+            return String(iconName || "").trim()
+        }
+        readonly property bool accessibilityReady: resolvedAccessibleName.length > 0
         implicitHeight: 30
         implicitWidth: visualIconOnly ? 30 : Math.max(62, label.implicitWidth + (iconName.length > 0 ? 32 : 20))
+        clip: true
         hoverEnabled: true
         focusPolicy: Qt.TabFocus
+        Accessible.name: resolvedAccessibleName
+        Accessible.description: tooltip
         ToolTip.visible: hovered && tooltip.length > 0
         ToolTip.delay: 300
         ToolTip.timeout: 4200
@@ -1784,13 +6481,15 @@ Rectangle {
         }
 
         contentItem: RowLayout {
+            id: buttonContent
             anchors.centerIn: parent
-            spacing: 8
+            width: Math.min(implicitWidth, mini.availableContentWidth)
+            spacing: mini.visualIconOnly ? 0 : 8
 
             AppIcon {
                 visible: mini.iconName.length > 0
                 name: mini.iconName
-                color: mini.destructive ? theme.error : (mini.role === "primary" && mini.active ? "#EFFFFB" : (mini.active ? mini.accent : theme.textMain))
+                color: mini.customIconColor ? mini.iconColor : (mini.destructive ? theme.error : (mini.role === "primary" && mini.active ? "#EFFFFB" : (mini.active ? mini.accent : theme.textMain)))
                 Layout.preferredWidth: 13
                 Layout.preferredHeight: 13
             }
@@ -1804,6 +6503,11 @@ Rectangle {
                 font.pixelSize: 11
                 font.weight: mini.active || mini.role === "primary" ? Font.DemiBold : Font.Medium
                 font.letterSpacing: 0
+                Layout.fillWidth: true
+                Layout.maximumWidth: mini.labelAvailableWidth
+                maximumLineCount: 1
+                elide: Text.ElideRight
+                clip: true
             }
         }
     }
@@ -1812,6 +6516,9 @@ Rectangle {
         id: field
         property alias text: input.text
         property string placeholder: ""
+        readonly property bool userEditing: input.activeFocus
+        function forceInputFocus() { input.forceActiveFocus() }
+        function clearInputFocus() { input.focus = false }
         Layout.preferredHeight: 34
         color: "#0A0D0F"
         border.width: theme.chromeBorderWidth
@@ -1848,154 +6555,102 @@ Rectangle {
         id: card
         property int assetIndex: 0
         property bool selected: catalogAssets && catalogAssets.selectedIndex === assetIndex
+        property string thumbnailSource: root.assetThumb(assetIndex)
+        property int ratingValue: root.assetRating(assetIndex)
+        property bool pickedValue: root.assetPicked(assetIndex)
+        property bool rejectedValue: root.assetRejected(assetIndex)
         property string badge: "RAW"
         property bool filmstrip: false
+        property real fallbackAspectRatio: 1.5
+        property bool filmstripAspectBadgeVisible: false
+        property int filmstripImageMargin: 0
+        readonly property real sourceAspectRatio: thumbnailImage.status === Image.Ready &&
+                                                   thumbnailImage.sourceSize.width > 0 &&
+                                                   thumbnailImage.sourceSize.height > 0
+                                                   ? thumbnailImage.sourceSize.width / thumbnailImage.sourceSize.height
+                                                   : fallbackAspectRatio
+        readonly property int assetRating: ratingValue
+        readonly property bool assetPicked: pickedValue
+        readonly property bool assetRejected: rejectedValue
         signal activated()
         signal doubleActivated()
 
-        radius: 4
-        color: filmstrip ? (selected ? "#12181B" : "#0B0F11") : (selected ? "#182124" : "#111719")
-        border.width: theme.chromeBorderWidth
-        border.color: filmstrip ? (selected ? "#C8D0D6" : root.hairline) : (selected ? root.mint : root.hairline)
+        radius: 0
+        color: filmstrip ? (selected ? theme.alpha(root.mint, 0.08) : "transparent") : "transparent"
+        border.width: filmstrip && selected ? theme.chromeBorderWidth : 0
+        border.color: filmstrip && selected ? root.mint : "transparent"
         clip: true
 
         Image {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: parent.height - 68
-            source: root.assetThumb(card.assetIndex)
-            fillMode: Image.PreserveAspectCrop
+            id: thumbnailImage
+            anchors.fill: parent
+            source: card.thumbnailSource
+            fillMode: Image.PreserveAspectFit
             asynchronous: true
-            cache: root.assetThumbCacheable(card.assetIndex)
+            cache: card.thumbnailSource.length > 0
             visible: !card.filmstrip && source.toString().length > 0
         }
 
         Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: parent.height - 68
-            color: "#172026"
-            visible: !card.filmstrip && root.assetThumb(card.assetIndex).length === 0
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 68
-            color: "#0E1315"
-            border.width: 0
-            visible: !card.filmstrip
-
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 4
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: 8
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.assetName(card.assetIndex)
-                        color: theme.textStrong
-                        font.family: theme.fontMono
-                        font.pixelSize: 11
-                        elide: Text.ElideRight
-                    }
-
-                    Label {
-                        text: card.badge
-                        color: theme.textMain
-                        font.family: theme.fontMono
-                        font.pixelSize: 8
-                        padding: 3
-                        background: Rectangle {
-                            color: "#172024"
-                            border.width: theme.chromeBorderWidth
-                            border.color: root.hairlineStrong
-                            radius: 2
-                        }
-                    }
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: "Oct 1, 2025  -  DJI \"ZH20T\""
-                    color: root.dimText
-                    font.family: theme.fontUi
-                    font.pixelSize: 10
-                    elide: Text.ElideRight
-                }
-
-                Row {
-                    spacing: 2
-                    Repeater {
-                        model: 5
-                        Label {
-                            required property int index
-                            text: "*"
-                            color: index < 1 ? root.mint : root.faintText
-                            font.pixelSize: 10
-                        }
-                    }
-                }
-            }
+            anchors.fill: parent
+            color: "#10171A"
+            visible: !card.filmstrip && card.thumbnailSource.length === 0
         }
 
         RowLayout {
             anchors.fill: parent
-            anchors.margins: 6
+            anchors.margins: 0
             spacing: 0
             visible: card.filmstrip
 
             Rectangle {
                 id: filmstripImageFrame
+                objectName: "filmstripImageFrame"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                radius: 3
-                color: "#050708"
-                border.width: theme.chromeBorderWidth
-                border.color: card.selected ? "#C8D0D6" : root.hairline
+                radius: 2
+                color: card.thumbnailSource.length > 0 ? "transparent" : "#172026"
+                border.width: 0
+                border.color: "transparent"
                 clip: true
 
                 Image {
                     id: filmstripImage
+                    objectName: "filmstripImage"
                     anchors.fill: parent
-                    anchors.margins: 5
-                    source: root.assetThumb(card.assetIndex)
+                    anchors.margins: card.filmstripImageMargin
+                    source: card.thumbnailSource
                     fillMode: Image.PreserveAspectFit
                     asynchronous: true
-                    cache: root.assetThumbCacheable(card.assetIndex)
+                    cache: card.thumbnailSource.length > 0
                     visible: source.toString().length > 0
                 }
 
                 Rectangle {
+                    objectName: "filmstripPlaceholder"
                     anchors.fill: parent
-                    anchors.margins: 5
+                    anchors.margins: 0
                     color: "#172026"
                     visible: filmstripImage.source.toString().length === 0
                 }
 
                 Rectangle {
+                    objectName: "filmstripSelectionIndicator"
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    anchors.margins: 5
-                    width: 16
-                    height: 16
-                    radius: 2
-                    visible: root.selectionMode || card.selected
-                    color: card.selected ? "#C8D0D6" : theme.alpha(theme.ink950, 0.72)
-                    border.width: theme.chromeBorderWidth
-                    border.color: card.selected ? "#EEF2F4" : root.hairlineStrong
+                    anchors.margins: 4
+                    width: 14
+                    height: 14
+                    radius: 7
+                    visible: card.selected
+                    color: root.mint
+                    border.width: 0
+                    border.color: "transparent"
 
                     AppIcon {
                         anchors.centerIn: parent
-                        width: 10
-                        height: 10
+                        width: 9
+                        height: 9
                         name: "check"
                         color: "#07110F"
                         visible: card.selected
@@ -2003,7 +6658,10 @@ Rectangle {
                 }
 
                 Label {
-                    visible: filmstripImage.status === Image.Ready && root.aspectRatioText(filmstripImage.sourceSize.width, filmstripImage.sourceSize.height).length > 0
+                    objectName: "filmstripAspectBadge"
+                    visible: card.filmstripAspectBadgeVisible
+                             && filmstripImage.status === Image.Ready
+                             && root.aspectRatioText(filmstripImage.sourceSize.width, filmstripImage.sourceSize.height).length > 0
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     anchors.margins: 5
@@ -2025,7 +6683,7 @@ Rectangle {
         Rectangle {
             anchors.right: parent.right
             anchors.top: parent.top
-            anchors.margins: 8
+            anchors.margins: 6
             width: 18
             height: 18
             radius: 2
@@ -2042,6 +6700,65 @@ Rectangle {
                 color: "#07110F"
                 visible: card.selected
             }
+        }
+
+        Rectangle {
+            visible: !card.filmstrip && (card.assetPicked || card.assetRejected)
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: 6
+            width: 18
+            height: 18
+            radius: 9
+            color: card.assetRejected ? theme.alpha(theme.error, 0.88) : theme.alpha(root.mint, 0.88)
+            border.width: theme.chromeBorderWidth
+            border.color: card.assetRejected ? theme.error : root.mintSoft
+
+            AppIcon {
+                anchors.centerIn: parent
+                width: 10
+                height: 10
+                name: card.assetRejected ? "close" : "check"
+                color: "#07110F"
+            }
+        }
+
+        Row {
+            visible: !card.filmstrip && card.assetRating > 0
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            anchors.margins: 6
+            spacing: 1
+
+            Repeater {
+                model: card.assetRating
+                AppIcon {
+                    width: 10
+                    height: 10
+                    name: "star"
+                    color: root.mint
+                }
+            }
+        }
+
+        Rectangle {
+            id: luminanceRangeSamplePatch
+            objectName: "luminanceRangeSamplePatch"
+            readonly property var samplePreview: editorPreview.activeMaskLuminanceSamplePreview || ({})
+            readonly property bool viewportAvailable: typeof viewport !== "undefined"
+            visible: viewportAvailable &&
+                     Boolean(samplePreview.active) &&
+                     editorPreview.activeMaskKind === "luminance" &&
+                     previewImage.visible
+            x: viewportAvailable ? viewport.paintedContentX + Number(samplePreview.x || 0) * viewport.paintedContentWidth : 0
+            y: viewportAvailable ? viewport.paintedContentY + Number(samplePreview.y || 0) * viewport.paintedContentHeight : 0
+            width: viewportAvailable ? Math.max(8, Number(samplePreview.width || 0) * viewport.paintedContentWidth) : 0
+            height: viewportAvailable ? Math.max(8, Number(samplePreview.height || 0) * viewport.paintedContentHeight) : 0
+            radius: 2
+            color: theme.alpha(root.mint, 0.12)
+            border.width: 2
+            border.color: theme.alpha(root.mintSoft, 0.88)
+            z: 18
         }
 
         MouseArea {
@@ -2062,7 +6779,9 @@ Rectangle {
         property real panX: 0
         property real panY: 0
         property string fitMode: "fit"
+        property int topChromeInset: 0
         property bool syncViewport: false
+        property bool publishPreviewViewport: false
         property bool loupeEnabled: false
         property bool focusCheckOverlayEnabled: false
         property bool focusPeakingOverlayEnabled: false
@@ -2075,11 +6794,12 @@ Rectangle {
         property real pointerY: height / 2
         readonly property real loupeSize: 168
         readonly property int contentMargin: framed ? 10 : 0
+        readonly property int contentTopMargin: contentMargin + topChromeInset
         readonly property real paintedContentX: contentMargin
             + ((width - contentMargin * 2) - previewImage.paintedWidth) / 2
             + panX - previewImage.paintedWidth * (zoom - 1) / 2
-        readonly property real paintedContentY: contentMargin
-            + ((height - contentMargin * 2) - previewImage.paintedHeight) / 2
+        readonly property real paintedContentY: contentTopMargin
+            + ((height - contentTopMargin - contentMargin) - previewImage.paintedHeight) / 2
             + panY - previewImage.paintedHeight * (zoom - 1) / 2
         readonly property real paintedContentWidth: previewImage.paintedWidth * zoom
         readonly property real paintedContentHeight: previewImage.paintedHeight * zoom
@@ -2095,6 +6815,37 @@ Rectangle {
                 panX = 0
                 panY = 0
             }
+        }
+
+        function inspectDetailAtOneToOne() {
+            if (!editorPreview.hasAsset)
+                return false
+            const fittedWidth = Math.max(1, paintedContentWidth / Math.max(0.01, zoom))
+            const fittedHeight = Math.max(1, paintedContentHeight / Math.max(0.01, zoom))
+            const sourceWidth = Math.max(1, editorPreview.sourceImageWidth)
+            const sourceHeight = Math.max(1, editorPreview.sourceImageHeight)
+            const targetZoom = root.clamp(Math.max(sourceWidth / fittedWidth, sourceHeight / fittedHeight), 1.25, 4.0)
+            setZoom(targetZoom)
+            panX = 0
+            panY = 0
+            root.loupeEnabled = true
+            root.focusPeakingOverlayEnabled = true
+            root.focusCheckOverlayEnabled = false
+            root.clippingOverlayEnabled = false
+            root.falseColorOverlayEnabled = false
+            root.gamutOverlayEnabled = false
+            root.zoneMapOverlayEnabled = false
+            schedulePublishedPreviewViewportUpdate()
+            return true
+        }
+
+        function setFitMode(nextFitMode) {
+            if (nextFitMode !== "fit" && nextFitMode !== "fill")
+                return
+            fitMode = nextFitMode
+            zoom = 1.0
+            panX = 0
+            panY = 0
         }
 
         function publishSynchronizedView() {
@@ -2116,10 +6867,7 @@ Rectangle {
         }
 
         function resetView() {
-            fitMode = "fit"
-            zoom = 1.0
-            panX = 0
-            panY = 0
+            setFitMode("fit")
         }
 
         function zoomIn() {
@@ -2142,6 +6890,70 @@ Rectangle {
             }
         }
 
+        function clearPublishedPreviewViewport() {
+            if (publishPreviewViewport)
+                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+        }
+
+        function thumbnailScreenDevicePixelRatio() {
+            return Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+        }
+
+        function thumbnailSourceSizeForDisplay(displayPixels, backingPixels) {
+            return Math.max(0, Math.max(Number(backingPixels || 0),
+                                       Math.round(Math.max(1, Number(displayPixels || 1)) *
+                                                  root.thumbnailScreenDevicePixelRatio())))
+        }
+
+        function updatePublishedPreviewQuality() {
+            if (!publishPreviewViewport || !editorPreview.hasAsset || editorPreview.compareMode || !visible)
+                return
+            const deviceScale = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
+            const contentEdge = Math.max(width, height, paintedContentWidth, paintedContentHeight)
+            const supersample = root.maskWorkActive ? 2.0 : 1.5
+            const qualityFloor = root.maskWorkActive ? 2048 : 1600
+            editorPreview.previewTargetEdge = Math.round(Math.max(qualityFloor, contentEdge * deviceScale * supersample))
+        }
+
+        function updatePublishedPreviewViewport() {
+            if (!publishPreviewViewport)
+                return
+            updatePublishedPreviewQuality()
+            if (!editorPreview.hasAsset || editorPreview.compareMode || !visible ||
+                    previewImage.source.toString().length === 0 || zoom <= 1.01 ||
+                    paintedContentWidth <= 1 || paintedContentHeight <= 1) {
+                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+                return
+            }
+
+            const visibleLeft = Math.max(paintedContentX, contentMargin)
+            const visibleTop = Math.max(paintedContentY, contentTopMargin)
+            const visibleRight = Math.min(paintedContentX + paintedContentWidth, width - contentMargin)
+            const visibleBottom = Math.min(paintedContentY + paintedContentHeight, height - contentMargin)
+            const visibleWidth = visibleRight - visibleLeft
+            const visibleHeight = visibleBottom - visibleTop
+            if (visibleWidth <= 1 || visibleHeight <= 1) {
+                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+                return
+            }
+
+            editorPreview.setPreviewViewport(
+                        (visibleLeft - paintedContentX) / paintedContentWidth,
+                        (visibleTop - paintedContentY) / paintedContentHeight,
+                        visibleWidth / paintedContentWidth,
+                        visibleHeight / paintedContentHeight,
+                        Math.round(Math.max(root.maskWorkActive ? 1536 : 1,
+                                            Math.max(visibleWidth, visibleHeight) *
+                                            Screen.devicePixelRatio *
+                                            (root.maskWorkActive ? 1.5 : 1.0))),
+                        true)
+        }
+
+        function schedulePublishedPreviewViewportUpdate() {
+            if (publishPreviewViewport)
+                Qt.callLater(updatePublishedPreviewViewport)
+        }
+
         function updatePixelInspectorAt(x, y) {
             const point = normalizedPointForViewport(x, y)
             if (point.valid)
@@ -2150,11 +6962,161 @@ Rectangle {
                 editorPreview.clearPixelInspector()
         }
 
+        function handleSamplingPointerPressed(mouse) {
+            if (!editorPreview.hasAsset || editorPreview.compareMode)
+                return false
+            const point = normalizedPointForViewport(mouse.x, mouse.y)
+            if (!point.valid)
+                return false
+            if (editorPreview.whiteBalanceSampling) {
+                editorPreview.sampleWhiteBalanceAt(point.x, point.y)
+                return true
+            }
+            if (editorPreview.colorToolSamplingTarget.length > 0) {
+                editorPreview.sampleColorToolAt(point.x, point.y)
+                return true
+            }
+            if (root.maskColorRangeSampling && editorPreview.activeMaskKind === "color") {
+                const sampled = editorPreview.sampleActiveColorRangeAt(point.x, point.y)
+                if (sampled)
+                    root.maskColorRangeSampling = false
+                return true
+            }
+            if (root.maskLuminanceRangeSampling && editorPreview.activeMaskKind === "luminance")
+                return editorPreview.beginActiveLuminanceRangeSample(point.x, point.y)
+            if (root.maskDepthRangeSampling && editorPreview.activeMaskKind === "depth") {
+                const sampled = editorPreview.sampleActiveDepthRangeAt(point.x, point.y)
+                if (sampled)
+                    root.maskDepthRangeSampling = false
+                return true
+            }
+            return false
+        }
+
+        function handleSamplingPointerMoved(mouse) {
+            if (!root.maskLuminanceRangeSampling || editorPreview.activeMaskKind !== "luminance")
+                return false
+            const point = normalizedPointForViewport(mouse.x, mouse.y)
+            if (!point.valid)
+                return false
+            return editorPreview.updateActiveLuminanceRangeSample(point.x, point.y)
+        }
+
+        function handleSamplingPointerReleased(mouse) {
+            if (!root.maskLuminanceRangeSampling || editorPreview.activeMaskKind !== "luminance")
+                return false
+            const point = normalizedPointForViewport(mouse.x, mouse.y)
+            if (!point.valid) {
+                editorPreview.cancelActiveLuminanceRangeSample()
+                return true
+            }
+            const sampled = editorPreview.commitActiveLuminanceRangeSample(point.x, point.y)
+            if (sampled)
+                root.maskLuminanceRangeSampling = false
+            return true
+        }
+
+        function maskPointerActive() {
+            return viewport.masked &&
+                   previewImage.visible &&
+                   !root.spacePanActive &&
+                   !editorPreview.compareMode &&
+                   (root.brushToolReady() || root.editTool === "masks")
+        }
+
+        function handleMaskPointerPressed(mouse) {
+            if (!maskPointerActive())
+                return false
+            const point = normalizedPointForViewport(mouse.x, mouse.y)
+            if (!point.valid)
+                return false
+
+            if (root.brushToolReady()) {
+                root.applyMaskOperationForModifierState(mouse.modifiers)
+                editorPreview.beginActiveBrushStroke()
+                editorPreview.addBrushPointWithPressure(point.x, point.y, 1.0)
+                return true
+            }
+
+            const kind = String(editorPreview.activeMaskKind || "")
+            if (kind === "lasso" || kind === "polygon") {
+                const operation = root.applyMaskOperationForModifierState(mouse.modifiers)
+                if (kind === "polygon" &&
+                        root.completeActivePolygonIfSnappingToFirst(
+                            point.x, point.y, viewport.paintedContentWidth, viewport.paintedContentHeight))
+                    return true
+                if (editorPreview.hasActiveMask)
+                    editorPreview.activeMaskOperation = operation
+                editorPreview.appendActivePolygonPoint(point.x, point.y)
+                return true
+            }
+
+            if (!editorPreview.hasActiveMask || kind === "object") {
+                const objectMode = root.applyObjectPickModeForModifierState(mouse.modifiers)
+                if (objectMode === "selection-subtract")
+                    editorPreview.smartSelectSubtractAt(point.x, point.y, !editorPreview.hasActiveMask)
+                else
+                    editorPreview.smartSelectAddAt(point.x, point.y, !editorPreview.hasActiveMask)
+                return true
+            }
+
+            return false
+        }
+
+        function handleMaskPointerMoved(mouse) {
+            if (!maskPointerActive())
+                return false
+            const point = normalizedPointForViewport(mouse.x, mouse.y)
+            if (!point.valid)
+                return false
+
+            if (root.brushToolReady() && editorPreview.brushStrokeActive) {
+                editorPreview.addBrushPointWithPressure(point.x, point.y, 1.0)
+                return true
+            }
+
+            const kind = String(editorPreview.activeMaskKind || "")
+            if ((kind === "lasso" || kind === "polygon") && viewportMouse.pressed) {
+                editorPreview.appendActivePolygonPoint(point.x, point.y)
+                return true
+            }
+
+            return false
+        }
+
+        function handleMaskPointerReleased() {
+            if (editorPreview.brushStrokeActive)
+                editorPreview.endActiveBrushStroke()
+            if (editorPreview.activeMaskKind === "lasso") {
+                if (editorPreview.activeMaskPolygonPointCount >= 3)
+                    editorPreview.closeActiveLassoPath()
+                else {
+                    editorPreview.clearActivePolygonPoints()
+                    editorPreview.removeActiveMask()
+                }
+                root.editTool = "masks"
+            }
+        }
+
         onResetKeyChanged: resetView()
         onSyncViewportChanged: applySynchronizedView()
-        onZoomChanged: publishSynchronizedView()
-        onPanXChanged: publishSynchronizedView()
-        onPanYChanged: publishSynchronizedView()
+        onZoomChanged: {
+            publishSynchronizedView()
+            schedulePublishedPreviewViewportUpdate()
+        }
+        onPanXChanged: {
+            publishSynchronizedView()
+            schedulePublishedPreviewViewportUpdate()
+        }
+        onPanYChanged: {
+            publishSynchronizedView()
+            schedulePublishedPreviewViewportUpdate()
+        }
+        onWidthChanged: schedulePublishedPreviewViewportUpdate()
+        onHeightChanged: schedulePublishedPreviewViewportUpdate()
+        onVisibleChanged: schedulePublishedPreviewViewportUpdate()
+        onSourceChanged: schedulePublishedPreviewViewportUpdate()
+        Component.onCompleted: schedulePublishedPreviewViewportUpdate()
 
         Connections {
             target: root
@@ -2164,10 +7126,20 @@ Rectangle {
             function onSyncEnabledChanged() { viewport.applySynchronizedView() }
         }
 
+        Connections {
+            target: editorPreview
+            function onAssetChanged() { viewport.schedulePublishedPreviewViewportUpdate() }
+            function onCompareModeChanged() { viewport.schedulePublishedPreviewViewportUpdate() }
+            function onPreviewChanged() { viewport.schedulePublishedPreviewViewportUpdate() }
+        }
+
         Image {
             id: previewImage
             anchors.fill: parent
-            anchors.margins: viewport.contentMargin
+            anchors.leftMargin: viewport.contentMargin
+            anchors.rightMargin: viewport.contentMargin
+            anchors.topMargin: viewport.contentTopMargin
+            anchors.bottomMargin: viewport.contentMargin
             source: viewport.source
             fillMode: viewport.fitMode === "fill" ? Image.PreserveAspectCrop : Image.PreserveAspectFit
             asynchronous: true
@@ -2178,6 +7150,28 @@ Rectangle {
                 x: viewport.panX
                 y: viewport.panY
             }
+            onPaintedWidthChanged: viewport.schedulePublishedPreviewViewportUpdate()
+            onPaintedHeightChanged: viewport.schedulePublishedPreviewViewportUpdate()
+            onStatusChanged: viewport.schedulePublishedPreviewViewportUpdate()
+        }
+
+        Rectangle {
+            id: topChromeBacking
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: viewport.contentTopMargin
+            visible: viewport.topChromeInset > 0
+            color: viewport.color
+            z: 19
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: theme.chromeBorderWidth
+                color: root.hairline
+            }
         }
 
         Rectangle {
@@ -2186,87 +7180,139 @@ Rectangle {
             visible: previewImage.source.toString().length === 0
         }
 
-        Canvas {
-            id: focusCheckOverlay
-            objectName: "focusCheckOverlay"
-            anchors.fill: previewImage
-            visible: root.focusCheckOverlayEnabled && viewport.focusCheckOverlayEnabled && previewImage.visible
-            opacity: 0.72
-            z: 11
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-                ctx.strokeStyle = theme.alpha(root.mint, 0.88)
-                ctx.lineWidth = 1
-                const step = 18
-                for (let y = step; y < height; y += step) {
-                    ctx.beginPath()
-                    ctx.moveTo(0, y)
-                    ctx.lineTo(width, y)
-                    ctx.stroke()
+        Rectangle {
+            id: previewUpdateBadge
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "PreviewUpdateBadge" : "previewUpdateBadge"
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 14
+            anchors.bottomMargin: 14
+            width: previewUpdateBadgeRow.implicitWidth + 18
+            height: 30
+            radius: 3
+            visible: (editorPreview.processing && previewImage.visible) || root.previewRenderFailed()
+            color: theme.alpha(theme.ink950, 0.76)
+            border.width: theme.chromeBorderWidth
+            border.color: theme.alpha(root.previewRenderFailed() ? theme.error : root.mint, 0.42)
+            z: 1.4
+
+            RowLayout {
+                id: previewUpdateBadgeRow
+                anchors.fill: parent
+                anchors.leftMargin: 9
+                anchors.rightMargin: 9
+                spacing: 7
+
+                Rectangle {
+                    Layout.preferredWidth: 6
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: root.previewRenderFailed() ? theme.error : root.mint
                 }
-                ctx.strokeStyle = theme.alpha(theme.accentWarm400, 0.72)
-                for (let x = step * 0.5; x < width; x += step) {
-                    ctx.beginPath()
-                    ctx.moveTo(x, 0)
-                    ctx.lineTo(x, height)
-                    ctx.stroke()
+
+                Label {
+                    objectName: viewport.objectName.length > 0 ? viewport.objectName + "PreviewUpdateBadgeLabel" : "previewUpdateBadgeLabel"
+                    text: root.previewUpdateBadgeText()
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+
+                Button {
+                    objectName: viewport.objectName.length > 0 ? viewport.objectName + "PreviewRetryButton" : "previewRetryButton"
+                    visible: root.previewRenderFailed()
+                    text: "Retry"
+                    flat: true
+                    padding: 3
+                    leftPadding: 6
+                    rightPadding: 6
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                    onClicked: editorPreview.retryPreviewRender()
                 }
             }
         }
 
-        Canvas {
+        Rectangle {
+            id: maskActivityStatusChip
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskActivityStatusChip" : "maskActivityStatusChip"
+            readonly property string activityAnimationContract: "nonblocking|persistent|animated-dot:v1"
+            anchors.left: parent.left
+            anchors.bottom: previewUpdateBadge.visible ? previewUpdateBadge.top : parent.bottom
+            anchors.leftMargin: 14
+            anchors.bottomMargin: previewUpdateBadge.visible ? 8 : 14
+            width: maskActivityStatusRow.implicitWidth + 18
+            height: 30
+            radius: 3
+            visible: previewImage.visible && root.maskActivityChipVisible()
+            color: theme.alpha(theme.ink950, 0.78)
+            border.width: theme.chromeBorderWidth
+            border.color: theme.alpha("#d98962", 0.48)
+            z: 1.45
+
+            RowLayout {
+                id: maskActivityStatusRow
+                anchors.fill: parent
+                anchors.leftMargin: 9
+                anchors.rightMargin: 9
+                spacing: 7
+
+                Rectangle {
+                    objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskActivityStatusDot" : "maskActivityStatusDot"
+                    Layout.preferredWidth: 6
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: "#d98962"
+                    opacity: 0.95
+
+                    SequentialAnimation on opacity {
+                        running: maskActivityStatusChip.visible
+                        loops: Animation.Infinite
+                        NumberAnimation { from: 0.95; to: 0.36; duration: 520; easing.type: Easing.InOutSine }
+                        NumberAnimation { from: 0.36; to: 0.95; duration: 520; easing.type: Easing.InOutSine }
+                    }
+                }
+
+                Label {
+                    objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskActivityStatusLabel" : "maskActivityStatusLabel"
+                    text: root.maskActivityChipText()
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        Image {
+            id: focusCheckOverlay
+            objectName: "focusCheckOverlay"
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.focusCheckOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.focusCheckOverlayEnabled && viewport.focusCheckOverlayEnabled &&
+                     previewImage.visible && source.toString().length > 0
+            z: 11
+        }
+
+        Image {
             id: clippingOverlay
             objectName: "clippingOverlay"
-            anchors.fill: previewImage
-            visible: root.clippingOverlayEnabled && viewport.clippingOverlayEnabled && previewImage.visible
-            opacity: 0.82
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.clippingOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.clippingOverlayEnabled && viewport.clippingOverlayEnabled &&
+                     previewImage.visible && source.toString().length > 0
             z: 12
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-
-            Connections {
-                target: editorPreview
-                function onHistogramChanged() { clippingOverlay.requestPaint() }
-            }
-
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-
-                const sampleCount = Math.max(1, editorPreview.histogramSampleCount)
-                const shadowRatio = editorPreview.histogramShadowClipCount / sampleCount
-                const highlightRatio = editorPreview.histogramHighlightClipCount / sampleCount
-                const shadowBand = Math.max(10, Math.min(height * 0.35, height * (0.12 + shadowRatio * 8)))
-                const highlightBand = Math.max(10, Math.min(height * 0.35, height * (0.12 + highlightRatio * 8)))
-
-                ctx.fillStyle = "rgba(0, 92, 255, 0.26)"
-                ctx.fillRect(0, height - shadowBand, width, shadowBand)
-                ctx.strokeStyle = "rgba(64, 160, 255, 0.78)"
-                ctx.lineWidth = 1
-                for (let x = -height; x < width; x += 16) {
-                    ctx.beginPath()
-                    ctx.moveTo(x, height)
-                    ctx.lineTo(x + shadowBand, height - shadowBand)
-                    ctx.stroke()
-                }
-
-                ctx.fillStyle = "rgba(255, 54, 72, 0.24)"
-                ctx.fillRect(0, 0, width, highlightBand)
-                ctx.strokeStyle = "rgba(255, 104, 112, 0.82)"
-                for (let x = 0; x < width + highlightBand; x += 16) {
-                    ctx.beginPath()
-                    ctx.moveTo(x, 0)
-                    ctx.lineTo(x - highlightBand, highlightBand)
-                    ctx.stroke()
-                }
-            }
         }
 
         Label {
@@ -2290,116 +7336,56 @@ Rectangle {
             }
         }
 
-        Canvas {
+        Image {
             id: focusPeakingOverlay
             objectName: "focusPeakingOverlay"
-            anchors.fill: previewImage
-            visible: root.focusPeakingOverlayEnabled && viewport.focusPeakingOverlayEnabled && previewImage.visible
-            opacity: 0.84
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.focusPeakingOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.focusPeakingOverlayEnabled && viewport.focusPeakingOverlayEnabled &&
+                     previewImage.visible && source.toString().length > 0
             z: 13
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-
-                const step = 14
-                const radius = 1.35
-                for (let y = step * 0.5; y < height; y += step) {
-                    const phase = Math.floor(y / step) % 2 === 0 ? 0 : step * 0.5
-                    for (let x = phase; x < width; x += step) {
-                        const edgeStrength = (Math.sin(x * 0.13) + Math.cos(y * 0.17) + 2) / 4
-                        if (edgeStrength < 0.42)
-                            continue
-                        ctx.fillStyle = edgeStrength > 0.72
-                            ? "rgba(255, 70, 96, 0.92)"
-                            : "rgba(25, 224, 176, 0.82)"
-                        ctx.beginPath()
-                        ctx.arc(x, y, radius + edgeStrength * 1.4, 0, Math.PI * 2)
-                        ctx.fill()
-                    }
-                }
-
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.34)"
-                ctx.lineWidth = 1
-                for (let x = -height; x < width; x += 36) {
-                    ctx.beginPath()
-                    ctx.moveTo(x, height)
-                    ctx.lineTo(x + height, 0)
-                    ctx.stroke()
-                }
-            }
         }
 
-        Canvas {
+        Image {
             id: falseColorOverlay
             objectName: "falseColorOverlay"
-            anchors.fill: previewImage
-            visible: root.falseColorOverlayEnabled && viewport.falseColorOverlayEnabled && previewImage.visible
-            opacity: 0.58
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.falseColorOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.falseColorOverlayEnabled && viewport.falseColorOverlayEnabled &&
+                     previewImage.visible && source.toString().length > 0
             z: 14
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-                const bands = [
-                    "#1016a8", "#004dff", "#00a6ff", "#00d084",
-                    "#f7e85b", "#ff9f1a", "#ff2e2e", "#ffffff"
-                ]
-                const bandHeight = Math.max(1, height / bands.length)
-                for (let i = 0; i < bands.length; ++i) {
-                    ctx.fillStyle = bands[i]
-                    ctx.fillRect(0, height - (i + 1) * bandHeight, width, bandHeight + 1)
-                }
-                ctx.globalCompositeOperation = "destination-in"
-                const gradient = ctx.createLinearGradient(0, 0, width, height)
-                gradient.addColorStop(0, "rgba(255,255,255,0.62)")
-                gradient.addColorStop(0.5, "rgba(255,255,255,0.34)")
-                gradient.addColorStop(1, "rgba(255,255,255,0.68)")
-                ctx.fillStyle = gradient
-                ctx.fillRect(0, 0, width, height)
-                ctx.globalCompositeOperation = "source-over"
-            }
         }
 
-        Canvas {
+        Image {
             id: gamutOverlay
             objectName: "gamutOverlay"
-            anchors.fill: previewImage
-            visible: root.gamutOverlayEnabled && viewport.gamutOverlayEnabled && previewImage.visible
-            opacity: 0.66
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.gamutOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.gamutOverlayEnabled && viewport.gamutOverlayEnabled &&
+                     previewImage.visible && source.toString().length > 0
             z: 15
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-                ctx.lineWidth = 1
-                ctx.strokeStyle = "rgba(255, 72, 112, 0.74)"
-                ctx.fillStyle = "rgba(255, 72, 112, 0.14)"
-                const step = 22
-                for (let y = 0; y < height; y += step) {
-                    for (let x = (Math.floor(y / step) % 2) * step * 0.5; x < width; x += step) {
-                        const risk = (Math.sin(x * 0.07) + Math.cos(y * 0.11) + 2) / 4
-                        if (risk < 0.62)
-                            continue
-                        ctx.beginPath()
-                        ctx.rect(x, y, step * 0.72, step * 0.72)
-                        ctx.fill()
-                        ctx.stroke()
-                    }
-                }
-            }
         }
 
         Label {
+            id: gamutOverlayTargetLabel
             objectName: "gamutOverlayTargetLabel"
             anchors.left: previewImage.left
             anchors.top: clippingOverlayTargetLabel.visible ? clippingOverlayTargetLabel.bottom : previewImage.top
@@ -2420,30 +7406,56 @@ Rectangle {
             }
         }
 
-        Canvas {
+        Image {
             id: zoneMapOverlay
             objectName: "zoneMapOverlay"
-            anchors.fill: previewImage
-            visible: root.zoneMapOverlayEnabled && viewport.zoneMapOverlayEnabled && previewImage.visible
-            opacity: 0.62
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.zoneMapOverlaySource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: root.zoneMapOverlayEnabled && viewport.zoneMapOverlayEnabled &&
+                      previewImage.visible && source.toString().length > 0
             z: 16
-            onVisibleChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-                const zones = 11
-                const bandWidth = Math.max(1, width / zones)
-                for (let i = 0; i < zones; ++i) {
-                    const value = i / (zones - 1)
-                    ctx.fillStyle = Qt.rgba(value, value, value, 0.34)
-                    ctx.fillRect(i * bandWidth, 0, bandWidth + 1, height)
-                    ctx.fillStyle = value > 0.48 ? "rgba(0,0,0,0.58)" : "rgba(255,255,255,0.72)"
-                    ctx.font = "10px sans-serif"
-                    ctx.fillText(String(i), i * bandWidth + 5, 16)
-                }
+        }
+
+        Image {
+            id: colorToolMaskPreviewOverlay
+            objectName: "colorToolMaskPreviewOverlay"
+            x: viewport.paintedContentX
+            y: viewport.paintedContentY
+            width: viewport.paintedContentWidth
+            height: viewport.paintedContentHeight
+            source: editorPreview.colorToolMaskPreviewSource
+            fillMode: Image.Stretch
+            asynchronous: true
+            cache: false
+            visible: editorPreview.colorToolMaskPreviewEnabled && previewImage.visible &&
+                     source.toString().length > 0 && !editorPreview.compareMode
+            z: 16.5
+        }
+
+        Label {
+            objectName: "colorToolMaskPreviewOverlayLabel"
+            anchors.left: previewImage.left
+            anchors.top: gamutOverlayTargetLabel.visible ? gamutOverlayTargetLabel.bottom : previewImage.top
+            anchors.leftMargin: 10
+            anchors.topMargin: gamutOverlayTargetLabel.visible ? 6 : 10
+            visible: colorToolMaskPreviewOverlay.visible
+            z: 17
+            text: "Color tool mask"
+            color: "#f4f7fa"
+            font.family: theme.fontMono
+            font.pixelSize: 10
+            padding: 5
+            background: Rectangle {
+                color: theme.alpha(theme.ink950, 0.82)
+                border.width: theme.chromeBorderWidth
+                border.color: theme.alpha(root.mint, 0.45)
+                radius: 3
             }
         }
 
@@ -2493,89 +7505,27 @@ Rectangle {
             }
         }
 
-        Rectangle {
-            objectName: viewport.objectName.length > 0 ? viewport.objectName + "GenericMaskTint" : "genericMaskTint"
-            readonly property real targetOpacity: 0.18
-            anchors.fill: previewImage
-            visible: viewport.masked && !editorPreview.hasActiveMask
-            color: "#24DCC2"
-            opacity: targetOpacity
-        }
-
-        Item {
-            objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskCanvasOverlay" : "maskCanvasOverlay"
+        SharedMaskOverlay {
             x: viewport.paintedContentWidth > 1 ? viewport.paintedContentX : viewport.contentMargin
             y: viewport.paintedContentHeight > 1 ? viewport.paintedContentY : viewport.contentMargin
             width: viewport.paintedContentWidth > 1 ? viewport.paintedContentWidth : Math.max(1, viewport.width - viewport.contentMargin * 2)
             height: viewport.paintedContentHeight > 1 ? viewport.paintedContentHeight : Math.max(1, viewport.height - viewport.contentMargin * 2)
-            readonly property string previewSource: String(editorPreview.activeMaskPreviewSource || "")
-            readonly property real previewOverlayOpacity: 0.42
-            readonly property real selectionOverlayOpacity: 0.64
-            readonly property real geometricOverlayOpacity: 0.52
-            readonly property real geometricFillOpacity: 0.10
-            readonly property real geometricStrokeOpacity: 0.74
-            visible: viewport.masked &&
-                     editorPreview.hasActiveMask &&
-                     editorPreview.maskPreviewMode !== "marching-ants" &&
-                     !editorPreview.compareMode
+            objectNamePrefix: viewport.objectName
+            masked: viewport.masked
+            hasActiveMask: editorPreview.hasActiveMask
+            compareMode: editorPreview.compareMode
+            activeBrushPainting: root.brushToolReady() && editorPreview.brushStrokeActive
+            accentColor: root.mint
+            outlinePhase: root.selectionOutlinePhase
+            outlineAnimationEnabled: root.selectionOutlineAnimationEnabled
+            cropX: editorPreview.cropRectX
+            cropY: editorPreview.cropRectY
+            cropWidth: editorPreview.cropRectWidth
+            cropHeight: editorPreview.cropRectHeight
+            transformRotation: editorPreview.transformRotation
+            enablePolygonHandles: true
+            onActiveOutlineClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), false, true)
             z: 17
-
-            Image {
-                anchors.fill: parent
-                visible: parent.previewSource.length > 0
-                source: parent.previewSource
-                fillMode: Image.Stretch
-                smooth: true
-                mipmap: false
-                cache: false
-                opacity: editorPreview.maskPreviewMode === "overlay" ? parent.previewOverlayOpacity : parent.selectionOverlayOpacity
-            }
-
-            Canvas {
-                id: geometricMaskCanvas
-                objectName: viewport.objectName.length > 0 ? viewport.objectName + "GeometricMaskCanvas" : "geometricMaskCanvas"
-                anchors.fill: parent
-                visible: parent.previewSource.length === 0
-                opacity: parent.geometricOverlayOpacity
-                onVisibleChanged: requestPaint()
-                onWidthChanged: requestPaint()
-                onHeightChanged: requestPaint()
-
-                Connections {
-                    target: editorPreview
-                    function onControlsChanged() { geometricMaskCanvas.requestPaint() }
-                    function onMaskOverlayChanged() { geometricMaskCanvas.requestPaint() }
-                }
-
-                onPaint: {
-                    const ctx = getContext("2d")
-                    ctx.reset()
-                    ctx.clearRect(0, 0, width, height)
-                    ctx.lineWidth = 2
-                    ctx.strokeStyle = theme.alpha(root.mint, parent.geometricStrokeOpacity)
-                    ctx.fillStyle = theme.alpha(root.mint, parent.geometricFillOpacity)
-                    if (editorPreview.activeMaskKind === "radial") {
-                        const cx = width * editorPreview.activeMaskCenterX
-                        const cy = height * editorPreview.activeMaskCenterY
-                        const rx = Math.max(12, width * editorPreview.activeMaskRadiusX)
-                        const ry = Math.max(12, height * editorPreview.activeMaskRadiusY)
-                        ctx.beginPath()
-                        ctx.ellipse(cx, cy, rx, ry, editorPreview.activeMaskRotation * Math.PI / 180.0, 0, Math.PI * 2)
-                        ctx.fill()
-                        ctx.stroke()
-                    } else if (editorPreview.activeMaskKind === "linear") {
-                        const position = height * editorPreview.activeMaskPosition
-                        const feather = Math.max(18, height * editorPreview.activeMaskFeather)
-                        ctx.fillRect(0, root.clamp(position - feather / 2, 0, height), width, Math.min(feather, height))
-                        ctx.beginPath()
-                        ctx.moveTo(0, position)
-                        ctx.lineTo(width, position)
-                        ctx.stroke()
-                    } else {
-                        ctx.strokeRect(1, 1, Math.max(0, width - 2), Math.max(0, height - 2))
-                    }
-                }
-            }
         }
 
         Rectangle {
@@ -2586,9 +7536,10 @@ Rectangle {
                 Math.min(viewport.paintedContentWidth, viewport.paintedContentHeight) *
                     editorPreview.activeMaskBrushSize * 2)
             readonly property real hardnessDiameter: Math.max(2, brushDiameter * editorPreview.activeMaskBrushHardness)
+            readonly property string brushCursorVisibilityContract: "persistent-last-position|dual-contrast-ring|hardness-inner-ring:v1"
             readonly property string brushModeLabel: editorPreview.activeMaskOperation === "subtract" ? "Erase" : "Add"
             readonly property string pressureText: root.latestBrushPressureText()
-            visible: root.brushToolReady() && viewportMouse.containsMouse && previewImage.visible
+            visible: root.brushToolReady() && previewImage.visible
             x: root.clamp(viewport.pointerX - width / 2,
                           viewport.paintedContentX - width / 2,
                           viewport.paintedContentX + viewport.paintedContentWidth - width / 2)
@@ -2599,9 +7550,26 @@ Rectangle {
             height: brushDiameter
             radius: width / 2
             color: "transparent"
-            border.width: 1
-            border.color: editorPreview.activeMaskOperation === "subtract" ? "#d98962" : root.mint
             z: 22
+
+            Rectangle {
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "BrushCursorOuterHaloRing" : "brushCursorOuterHaloRing"
+                anchors.fill: parent
+                radius: width / 2
+                color: "transparent"
+                border.width: 3.0
+                border.color: theme.alpha(theme.ink950, 0.92)
+            }
+
+            Rectangle {
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "BrushCursorFeatherRing" : "brushCursorFeatherRing"
+                anchors.fill: parent
+                anchors.margins: 1
+                radius: width / 2
+                color: "transparent"
+                border.width: 1.5
+                border.color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
+            }
 
             Rectangle {
                 objectName: viewport.objectName.length > 0 ? viewport.objectName + "BrushCursorHardnessRing" : "brushCursorHardnessRing"
@@ -2610,8 +7578,8 @@ Rectangle {
                 height: width
                 radius: width / 2
                 color: "transparent"
-                border.width: 1
-                border.color: theme.alpha(theme.polar, 0.62)
+                border.width: 1.5
+                border.color: theme.alpha(theme.polar, 0.92)
             }
 
             Label {
@@ -2620,8 +7588,10 @@ Rectangle {
                 anchors.top: parent.bottom
                 anchors.topMargin: 5
                 text: brushCursorRing.brushModeLabel + " " +
-                      Math.round(editorPreview.activeMaskBrushSize * 1000) +
-                      " / Hard " + Math.round(editorPreview.activeMaskBrushHardness * 100) + "%"
+                      root.brushSizeValueText() +
+                      " / Hard " + root.brushHardnessValueText() +
+                      " / Flow " + root.brushFlowValueText() +
+                      " / Density " + root.brushDensityValueText()
                 color: theme.textStrong
                 font.family: theme.fontMono
                 font.pixelSize: 10
@@ -2630,6 +7600,187 @@ Rectangle {
                     color: theme.alpha(theme.ink950, 0.78)
                     border.width: theme.chromeBorderWidth
                     border.color: theme.alpha(theme.polar, 0.28)
+                    radius: 2
+                }
+            }
+        }
+
+        Rectangle {
+            id: cloneOffsetLine
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneOffsetLine" : "cloneOffsetLine"
+            property real sourceScreenX: viewport.paintedContentX + editorPreview.activeMaskCloneSourceX * viewport.paintedContentWidth
+            property real sourceScreenY: viewport.paintedContentY + editorPreview.activeMaskCloneSourceY * viewport.paintedContentHeight
+            property real targetScreenX: viewport.paintedContentX + root.activeCloneTargetX() * viewport.paintedContentWidth
+            property real targetScreenY: viewport.paintedContentY + root.activeCloneTargetY() * viewport.paintedContentHeight
+            property real offsetLength: Math.sqrt(Math.pow(targetScreenX - sourceScreenX, 2) +
+                                                  Math.pow(targetScreenY - sourceScreenY, 2))
+            property string cloneMode: editorPreview.activeMaskCloneAligned ? "aligned" : "non-aligned"
+            visible: root.page === "edit" &&
+                     editorPreview.hasActiveMask &&
+                     editorPreview.activeMaskToolRole === "retouch" &&
+                     editorPreview.activeMaskRetouchMode === "clone" &&
+                     editorPreview.activeMaskCloneSourceSet
+            x: sourceScreenX
+            y: sourceScreenY - height / 2
+            width: Math.max(1, offsetLength)
+            height: 2
+            radius: 1
+            z: 21
+            color: theme.alpha("#7cb5ff", 0.78)
+            rotation: Math.atan2(targetScreenY - sourceScreenY, targetScreenX - sourceScreenX) * 180 / Math.PI
+            transformOrigin: Item.Left
+        }
+
+        Rectangle {
+            id: patchSourceRegion
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "PatchSourceRegion" : "patchSourceRegion"
+            property real sourceX: editorPreview.activeMaskPatchSourceX
+            property real sourceY: editorPreview.activeMaskPatchSourceY
+            property real sourceWidth: editorPreview.activeMaskPatchSourceWidth
+            property real sourceHeight: editorPreview.activeMaskPatchSourceHeight
+            property string sourceSignature: root.retouchPatchSourceSignature()
+            visible: root.page === "edit" &&
+                     editorPreview.hasActiveMask &&
+                     editorPreview.activeMaskToolRole === "retouch" &&
+                     editorPreview.activeMaskRetouchMode === "patch" &&
+                     editorPreview.activeMaskPatchSourceSet
+            x: viewport.paintedContentX + sourceX * viewport.paintedContentWidth
+            y: viewport.paintedContentY + sourceY * viewport.paintedContentHeight
+            width: Math.max(10, sourceWidth * viewport.paintedContentWidth)
+            height: Math.max(10, sourceHeight * viewport.paintedContentHeight)
+            z: 23
+            color: theme.alpha("#72cbb2", patchSourceMouse.containsMouse || patchSourceMouse.pressed ? 0.18 : 0.09)
+            border.width: 2
+            border.color: "#d4fff8"
+
+            function moveRegion(normalizedX, normalizedY) {
+                editorPreview.setActiveMaskPatchSourceRegion(
+                    root.clamp(normalizedX, 0.0, 1.0 - editorPreview.activeMaskPatchSourceWidth),
+                    root.clamp(normalizedY, 0.0, 1.0 - editorPreview.activeMaskPatchSourceHeight),
+                    editorPreview.activeMaskPatchSourceWidth,
+                    editorPreview.activeMaskPatchSourceHeight)
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 4
+                color: "transparent"
+                border.width: 1
+                border.color: theme.alpha("#18130b", 0.85)
+            }
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 28
+                height: 2
+                radius: 1
+                color: "#f4f7fa"
+            }
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: 2
+                height: 28
+                radius: 1
+                color: "#f4f7fa"
+            }
+
+            Label {
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "PatchSourceLabel" : "patchSourceLabel"
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.bottom
+                anchors.topMargin: 4
+                text: "Patch source"
+                color: theme.textStrong
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                padding: 4
+                background: Rectangle {
+                    color: theme.alpha(theme.ink950, 0.82)
+                    border.width: theme.chromeBorderWidth
+                    border.color: theme.alpha("#72cbb2", 0.45)
+                    radius: 2
+                }
+            }
+
+            MouseArea {
+                id: patchSourceMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.SizeAllCursor
+                property real pressOffsetX: 0
+                property real pressOffsetY: 0
+
+                onPressed: function(mouse) {
+                    pressOffsetX = mouse.x
+                    pressOffsetY = mouse.y
+                }
+
+                onPositionChanged: function(mouse) {
+                    if (!pressed)
+                        return
+                    const mapped = mapToItem(viewport, mouse.x - pressOffsetX, mouse.y - pressOffsetY)
+                    patchSourceRegion.moveRegion(
+                        (mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth),
+                        (mapped.y - viewport.paintedContentY) / Math.max(1, viewport.paintedContentHeight))
+                }
+            }
+        }
+
+        Item {
+            id: cloneTargetPreview
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneTargetPreview" : "cloneTargetPreview"
+            property real targetX: root.activeCloneTargetX()
+            property real targetY: root.activeCloneTargetY()
+            property real cloneScale: editorPreview.activeMaskCloneScale
+            property real cloneRotation: editorPreview.activeMaskCloneRotation
+            property string cloneMode: editorPreview.activeMaskCloneAligned ? "aligned" : "non-aligned"
+            visible: root.page === "edit" &&
+                     editorPreview.hasActiveMask &&
+                     editorPreview.activeMaskToolRole === "retouch" &&
+                     editorPreview.activeMaskRetouchMode === "clone" &&
+                     editorPreview.activeMaskCloneSourceSet
+            x: viewport.paintedContentX + targetX * viewport.paintedContentWidth - width / 2
+            y: viewport.paintedContentY + targetY * viewport.paintedContentHeight - height / 2
+            width: root.clamp(editorPreview.activeMaskBrushSize * viewport.paintedContentWidth *
+                              editorPreview.activeMaskCloneScale, 22, 92)
+            height: width
+            z: 22
+
+            Rectangle {
+                anchors.fill: parent
+                radius: width / 2
+                color: theme.alpha("#d4fff8", 0.08)
+                border.width: 2
+                border.color: "#d4fff8"
+                rotation: cloneTargetPreview.cloneRotation
+            }
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: Math.max(8, parent.width * 0.55)
+                height: 2
+                radius: 1
+                color: "#d4fff8"
+                rotation: cloneTargetPreview.cloneRotation
+            }
+
+            Label {
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneTransformBadge" : "cloneTransformBadge"
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.bottom
+                anchors.topMargin: 4
+                text: (editorPreview.activeMaskCloneAligned ? "Aligned" : "Non-aligned") + " / " +
+                      editorPreview.activeMaskCloneScale.toFixed(2) + "x / " +
+                      Math.round(editorPreview.activeMaskCloneRotation).toString() + " deg"
+                color: theme.textStrong
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                padding: 4
+                background: Rectangle {
+                    color: theme.alpha(theme.ink950, 0.82)
+                    border.width: theme.chromeBorderWidth
+                    border.color: theme.alpha("#d4fff8", 0.44)
                     radius: 2
                 }
             }
@@ -2724,30 +7875,16 @@ Rectangle {
             }
         }
 
-        Canvas {
-            anchors.fill: previewImage
-            visible: viewport.masked
-            opacity: 0.23
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.reset()
-                ctx.strokeStyle = "#D4FFF8"
-                ctx.lineWidth = 1
-                for (let x = -height; x < width; x += 14) {
-                    ctx.beginPath()
-                    ctx.moveTo(x, height)
-                    ctx.lineTo(x + height, 0)
-                    ctx.stroke()
-                }
-            }
-        }
-
         MouseArea {
             id: viewportMouse
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "PanZoomInputHandler" : "panZoomInputHandler"
+            readonly property string inputHandlerRole: "pan-zoom"
+            readonly property string pointerGrabPolicy: viewport.masked ? "defer-to-mask-overlay" : "viewport-pan-zoom"
             anchors.fill: parent
             acceptedButtons: Qt.LeftButton
             hoverEnabled: true
-            cursorShape: viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+            preventStealing: false
+            cursorShape: root.spacePanActive || viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
             property real pressX: 0
             property real pressY: 0
             property real startPanX: 0
@@ -2762,10 +7899,31 @@ Rectangle {
             }
 
             onPressed: function(mouse) {
+                if (root.spacePanActive) {
+                    pressX = mouse.x
+                    pressY = mouse.y
+                    startPanX = viewport.panX
+                    startPanY = viewport.panY
+                    mouse.accepted = true
+                    cursorShape = Qt.ClosedHandCursor
+                    return
+                }
+                if (viewport.handleSamplingPointerPressed(mouse)) {
+                    mouse.accepted = true
+                    cursorShape = root.maskLuminanceRangeSampling ? Qt.CrossCursor
+                                                                  : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
+                    return
+                }
+                if (viewport.handleMaskPointerPressed(mouse)) {
+                    mouse.accepted = true
+                    cursorShape = Qt.CrossCursor
+                    return
+                }
                 pressX = mouse.x
                 pressY = mouse.y
                 root.loupeX = mouse.x
                 root.loupeY = mouse.y
+                root.beginPixelInspectorSampling()
                 viewport.updatePixelInspectorAt(mouse.x, mouse.y)
                 startPanX = viewport.panX
                 startPanY = viewport.panY
@@ -2777,17 +7935,57 @@ Rectangle {
                 viewport.pointerY = mouse.y
                 root.loupeX = mouse.x
                 root.loupeY = mouse.y
-                viewport.updatePixelInspectorAt(mouse.x, mouse.y)
+                if (pressed && root.spacePanActive) {
+                    if (viewport.zoom > 1.0) {
+                        viewport.panX = startPanX + mouse.x - pressX
+                        viewport.panY = startPanY + mouse.y - pressY
+                    }
+                    mouse.accepted = true
+                    return
+                }
+                if (pressed && viewport.handleSamplingPointerMoved(mouse)) {
+                    mouse.accepted = true
+                    return
+                }
+                if (viewport.handleMaskPointerMoved(mouse)) {
+                    mouse.accepted = true
+                    return
+                }
+                if (pressed && root.pixelInspectorSamplingActive)
+                    viewport.updatePixelInspectorAt(mouse.x, mouse.y)
                 if (!pressed || viewport.zoom <= 1.0)
                     return
                 viewport.panX = startPanX + mouse.x - pressX
                 viewport.panY = startPanY + mouse.y - pressY
             }
 
-            onExited: editorPreview.clearPixelInspector()
-            onReleased: cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
-            onCanceled: cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
-            onDoubleClicked: viewport.resetView()
+            onExited: root.finishPixelInspectorSampling()
+            onReleased: function(mouse) {
+                if (root.spacePanActive) {
+                    cursorShape = Qt.OpenHandCursor
+                    mouse.accepted = true
+                    return
+                }
+                if (viewport.handleSamplingPointerReleased(mouse)) {
+                    cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+                    return
+                }
+                viewport.handleMaskPointerReleased()
+                root.finishPixelInspectorSampling()
+                cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+            }
+            onCanceled: {
+                if (root.maskLuminanceRangeSampling)
+                    editorPreview.cancelActiveLuminanceRangeSample()
+                viewport.handleMaskPointerReleased()
+                root.finishPixelInspectorSampling()
+                cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+            }
+            onDoubleClicked: {
+                if (root.completeActivePolygonSelection())
+                    return
+                viewport.resetView()
+            }
         }
     }
 
@@ -2858,7 +8056,44 @@ Rectangle {
         from: -100
         to: 100
         stepSize: 1
+        onInteractionStarted: editorPreview.beginCoalescedEdit()
+        onInteractionFinished: editorPreview.endCoalescedEdit()
         onResetRequested: valueDragged(defaultValue)
+    }
+
+    component CompactCheckBox: CheckBox {
+        id: compactCheck
+        property color accent: root.mint
+        implicitHeight: 24
+        spacing: 8
+        hoverEnabled: true
+        indicator: Rectangle {
+            implicitWidth: 16
+            implicitHeight: 16
+            x: compactCheck.leftPadding
+            y: compactCheck.topPadding + (compactCheck.availableHeight - height) / 2
+            radius: 2
+            color: compactCheck.checked ? theme.alpha(compactCheck.accent, 0.18) : "#070A0B"
+            border.width: 1
+            border.color: compactCheck.checked ? compactCheck.accent : root.hairlineStrong
+            AppIcon {
+                anchors.centerIn: parent
+                width: 10
+                height: 10
+                visible: compactCheck.checked
+                name: "check"
+                color: theme.textStrong
+            }
+        }
+        contentItem: Label {
+            text: compactCheck.text
+            leftPadding: compactCheck.indicator.width + compactCheck.spacing
+            verticalAlignment: Text.AlignVCenter
+            color: compactCheck.checked ? theme.textStrong : theme.textMain
+            font.family: theme.fontUi
+            font.pixelSize: 12
+            font.letterSpacing: 0
+        }
     }
 
     component RailButton: Button {
@@ -2900,6 +8135,8 @@ Rectangle {
         property string title: ""
         property string resetGroup: ""
         property string resetObjectName: ""
+        property string compareGroup: ""
+        property string beforeAfterObjectName: ""
         property bool expanded: true
         Layout.fillWidth: true
         spacing: 8
@@ -2908,18 +8145,29 @@ Rectangle {
             Layout.fillWidth: true
             SectionTitle { Layout.fillWidth: true; label: group.title }
             MiniButton {
+                objectName: group.beforeAfterObjectName
+                visible: group.compareGroup.length > 0
+                text: "Before / after"
+                iconName: "compare"
+                square: true
+                role: "icon"
+                active: root.compareEditGroupActive(group.compareGroup)
+                tooltip: root.compareEditGroupActive(group.compareGroup)
+                         ? "Restore this section in before/after comparison."
+                         : "Compare before and after for this section only."
+                onClicked: root.toggleCompareEditGroup(group.compareGroup)
+            }
+            MiniButton {
                 objectName: group.resetObjectName
                 visible: group.resetGroup.length > 0
                 text: "Reset"
-                role: "secondary"
-                tooltip: "Reset this panel only."
-                onClicked: editorPreview.resetAdjustmentGroup(group.resetGroup)
-            }
-            Label {
-                text: group.expanded ? "v" : ">"
-                color: root.dimText
-                font.family: theme.fontMono
-                font.pixelSize: 10
+                iconName: "reset"
+                square: true
+                role: "icon"
+                tooltip: root.activeAdjustmentLayerIndex() >= 0
+                         ? "Reset this panel on the active adjustment layer only."
+                         : "Reset this panel only."
+                onClicked: root.resetPrimaryAdjustmentGroup(group.resetGroup)
             }
         }
 
@@ -2936,34 +8184,62 @@ Rectangle {
         default property alias content: body.data
         property string title: ""
         property bool expanded: true
+        property string resetObjectName: ""
+        property bool resetVisible: false
         signal toggled()
+        signal resetRequested()
         Layout.fillWidth: true
         spacing: 7
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
-            color: headerMouse.containsMouse ? "#11191B" : "transparent"
-
-            RowLayout {
-                anchors.fill: parent
-                spacing: 8
-
-                SectionTitle { Layout.fillWidth: true; label: group.title }
-                AppIcon {
-                    name: "chevron-right"
-                    rotation: group.expanded ? 90 : 0
-                    color: root.dimText
-                    Layout.preferredWidth: 12
-                    Layout.preferredHeight: 12
-                }
-            }
+            Layout.preferredHeight: 32
+            color: headerMouse.containsMouse ? "#11191B" : theme.alpha(theme.polar, 0.025)
+            border.width: theme.chromeBorderWidth
+            border.color: headerMouse.containsMouse ? theme.alpha(root.mint, 0.34) : theme.alpha(root.lineColor, 0.30)
+            radius: 3
 
             MouseArea {
                 id: headerMouse
                 anchors.fill: parent
                 hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
                 onClicked: group.toggled()
+            }
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 8
+                anchors.rightMargin: 8
+                spacing: 7
+
+                AppIcon {
+                    name: "chevron-right"
+                    rotation: group.expanded ? 90 : 0
+                    color: group.expanded ? root.mint : root.dimText
+                    Layout.preferredWidth: 12
+                    Layout.preferredHeight: 12
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: group.title
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0
+                    elide: Text.ElideRight
+                }
+                MiniButton {
+                    objectName: group.resetObjectName
+                    visible: group.resetVisible
+                    text: "Reset"
+                    iconName: "reset"
+                    square: true
+                    role: "icon"
+                    tooltip: "Reset this group."
+                    onClicked: group.resetRequested()
+                }
             }
         }
 
@@ -2980,7 +8256,9 @@ Rectangle {
         property string kind: "Waveform"
         property bool large: false
         Layout.fillWidth: true
-        Layout.preferredHeight: large ? 280 : 142
+        Layout.fillHeight: large
+        Layout.minimumHeight: large ? 220 : 112
+        Layout.preferredHeight: large ? (root.scopeLayoutPreset === "Quad" ? 320 : 260) : 142
         radius: 3
         color: theme.alpha(theme.ink950, 0.52)
         border.width: theme.chromeBorderWidth
@@ -3029,6 +8307,7 @@ Rectangle {
 
             onWidthChanged: requestPaint()
             onHeightChanged: requestPaint()
+            onVisibleChanged: requestPaint()
 
             onPaint: {
                 const ctx = getContext("2d")
@@ -3155,7 +8434,9 @@ Rectangle {
                 if (scopeTile.kind === "Vectorscope") {
                     const cx = w / 2
                     const cy = h / 2
-                    const radius = Math.min(w, h) * 0.40
+                    const radius = Math.max(0, Math.min(w, h) * 0.40)
+                    if (radius <= 0)
+                        return
                     ctx.save()
                     ctx.strokeStyle = theme.alpha(theme.polar, 0.18)
                     ctx.lineWidth = 1
@@ -3336,6 +8617,384 @@ Rectangle {
         }
     }
 
+    Dialog {
+        id: agentRunDialog
+        objectName: "agentRunDialog"
+        title: "Agent"
+        modal: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        anchors.centerIn: parent
+        width: Math.min(560, Math.max(360, root.width - 72))
+        onClosed: root.forceActiveFocus()
+
+        background: Rectangle {
+            radius: 6
+            color: theme.ink900
+            border.width: 1
+            border.color: theme.alpha(root.lineBright, 0.78)
+        }
+
+        contentItem: ColumnLayout {
+            objectName: "agentRunDialogContent"
+            width: agentRunDialog.width - 48
+            spacing: 12
+
+            Rectangle {
+                objectName: "agentScopeCard"
+                Layout.fillWidth: true
+                implicitHeight: agentScopeColumn.implicitHeight + 18
+                radius: 4
+                color: theme.alpha(root.mint, 0.08)
+                border.width: 1
+                border.color: theme.alpha(root.mint, 0.42)
+
+                ColumnLayout {
+                    id: agentScopeColumn
+                    anchors.fill: parent
+                    anchors.margins: 9
+                    spacing: 6
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        AppIcon {
+                            Layout.preferredWidth: 15
+                            Layout.preferredHeight: 15
+                            name: "scope"
+                            color: root.mint
+                        }
+
+                        Label {
+                            objectName: "agentScopeHeadline"
+                            Layout.fillWidth: true
+                            text: root.agentScopeHeadline()
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    Repeater {
+                        model: root.agentScopeRows()
+
+                        RowLayout {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Label {
+                                Layout.preferredWidth: 96
+                                text: modelData[0]
+                                color: root.dimText
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                elide: Text.ElideRight
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData[1]
+                                color: theme.textMain
+                                font.family: theme.fontMono
+                                font.pixelSize: 9
+                                elide: Text.ElideRight
+                            }
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Style · " + root.agentSelectedStyleName()
+                    color: theme.textMain
+                    font.family: theme.fontUi
+                    font.pixelSize: 12
+                    font.weight: Font.DemiBold
+                    elide: Text.ElideRight
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.agentModelStatusText()
+                    color: root.dimText
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                }
+            }
+
+            Flow {
+                objectName: "agentStyleChooser"
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: root.agentAvailableStyles()
+
+                    MiniButton {
+                        required property var modelData
+                        text: String(modelData.name || modelData.id || "Style")
+                        iconName: "adjust"
+                        role: "segmented"
+                        active: String(agentEdit.selectedStyleId || "") === String(modelData.id || "")
+                        enabled: !agentEdit.running && String(modelData.id || "").length > 0
+                        onClicked: agentEdit.selectedStyleId = String(modelData.id || "")
+                    }
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: root.agentAvailableStyles().length === 0
+                text: "No agent styles are available."
+                color: theme.warning
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
+
+            TextArea {
+                objectName: "agentInstructionsField"
+                Layout.fillWidth: true
+                Layout.preferredHeight: 86
+                text: agentEdit.userInstructions
+                placeholderText: "Style notes"
+                wrapMode: TextEdit.WordWrap
+                enabled: !agentEdit.running
+                color: theme.textStrong
+                selectedTextColor: theme.ink950
+                selectionColor: root.mint
+                font.family: theme.fontUi
+                font.pixelSize: 11
+                onTextChanged: {
+                    if (activeFocus)
+                        agentEdit.userInstructions = text
+                }
+                background: Rectangle {
+                    radius: 4
+                    color: "#0A0D0F"
+                    border.width: 1
+                    border.color: theme.alpha(root.lineBright, 0.52)
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    Layout.preferredWidth: 72
+                    text: "Base"
+                    color: root.dimText
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                }
+
+                MiniButton {
+                    Layout.fillWidth: true
+                    text: "Current"
+                    iconName: "adjust"
+                    role: "segmented"
+                    active: agentEdit.recipeBaseMode === "current"
+                    enabled: !agentEdit.running
+                    onClicked: agentEdit.recipeBaseMode = "current"
+                }
+
+                MiniButton {
+                    Layout.fillWidth: true
+                    text: "Neutral"
+                    iconName: "reset"
+                    role: "segmented"
+                    active: agentEdit.recipeBaseMode === "neutral"
+                    enabled: !agentEdit.running
+                    onClicked: agentEdit.recipeBaseMode = "neutral"
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: "Scope"
+                color: root.dimText
+                font.family: theme.fontMono
+                font.pixelSize: 10
+            }
+
+            Flow {
+                objectName: "agentScopeModeChooser"
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: ["current-photo", "selected-assets", "project", "filtered-library"]
+
+                    MiniButton {
+                        required property string modelData
+                        text: root.agentScopeModeLabel(modelData)
+                        iconName: root.agentScopeModeIcon(modelData)
+                        role: "segmented"
+                        active: root.agentScopeMode === modelData
+                        enabled: !agentEdit.running && root.agentScopeEstimatedCount(modelData) > 0
+                        tooltip: root.agentScopeEstimatedCount(modelData) + " assets"
+                        onClicked: root.agentScopeMode = modelData
+                    }
+                }
+            }
+
+            Flow {
+                objectName: "agentRunModeChooser"
+                Layout.fillWidth: true
+                spacing: 6
+
+                Repeater {
+                    model: ["analyze", "draft", "validate-batch", "export-preflight"]
+
+                    MiniButton {
+                        required property string modelData
+                        text: root.agentRunModeLabel(modelData)
+                        iconName: root.agentRunModeIcon(modelData)
+                        role: "segmented"
+                        active: root.agentRunMode === modelData
+                        enabled: !agentEdit.running
+                        onClicked: root.agentRunMode = modelData
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                MiniButton {
+                    objectName: "agentRunButton"
+                    Layout.fillWidth: true
+                    text: "Run " + root.agentRunModeLabel(root.agentRunMode)
+                    iconName: root.agentRunModeIcon(root.agentRunMode)
+                    role: "primary"
+                    enabled: root.agentCanRunMode(root.agentRunMode)
+                    onClicked: root.runSelectedAgentMode()
+                }
+
+                MiniButton {
+                    objectName: "agentCancelButton"
+                    text: "Cancel & Roll Back"
+                    iconName: "close"
+                    role: "secondary"
+                    enabled: agentEdit.running
+                    onClicked: agentEdit.cancelRun("user_cancelled")
+                }
+            }
+
+            Rectangle {
+                objectName: "agentProofSurface"
+                Layout.fillWidth: true
+                visible: root.agentProofImages().length > 0
+                implicitHeight: visible ? agentProofColumn.implicitHeight + 16 : 0
+                radius: 4
+                color: theme.alpha(root.panelAlt, 0.78)
+                border.width: 1
+                border.color: theme.alpha(root.lineBright, 0.38)
+
+                ColumnLayout {
+                    id: agentProofColumn
+                    anchors.fill: parent
+                    anchors.margins: 8
+                    spacing: 7
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Label {
+                            objectName: "agentProofTitle"
+                            Layout.fillWidth: true
+                            text: "Proof"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 12
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+
+                        Label {
+                            objectName: "agentMaskLocalProofLabel"
+                            visible: root.agentMaskLocalProofText().length > 0
+                            text: root.agentMaskLocalProofText()
+                            color: root.mint
+                            font.family: theme.fontMono
+                            font.pixelSize: 9
+                            horizontalAlignment: Text.AlignRight
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    RowLayout {
+                        objectName: "agentProofImageRow"
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Repeater {
+                            model: root.agentProofImages()
+
+                            Rectangle {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 92
+                                radius: 4
+                                clip: true
+                                color: "#06080A"
+                                border.width: 1
+                                border.color: theme.alpha(root.lineBright, 0.30)
+
+                                Image {
+                                    anchors.fill: parent
+                                    source: String(modelData.source || "")
+                                    fillMode: Image.PreserveAspectCrop
+                                    asynchronous: true
+                                    cache: false
+                                }
+
+                                Label {
+                                    anchors.left: parent.left
+                                    anchors.top: parent.top
+                                    anchors.margins: 6
+                                    text: String(modelData.label || "")
+                                    color: theme.textStrong
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    font.weight: Font.DemiBold
+                                    padding: 3
+                                    background: Rectangle {
+                                        radius: 3
+                                        color: theme.alpha(theme.ink950, 0.72)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Label {
+                objectName: "agentStatusLabel"
+                Layout.fillWidth: true
+                text: agentEdit.errorMessage.length > 0 ? agentEdit.errorMessage : agentEdit.status
+                color: agentEdit.errorMessage.length > 0 ? theme.error : root.dimText
+                font.family: theme.fontMono
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+            }
+        }
+    }
+
     Loader {
         anchors.fill: parent
         sourceComponent: root.page === "library" ? libraryPage
@@ -3344,10 +9003,19 @@ Rectangle {
     }
 
     HealthStatusStrip {
-        anchors.top: parent.top
+        visible: root.page !== "edit" && !root.libraryImportActive
+        anchors.bottom: parent.bottom
         anchors.right: parent.right
-        anchors.topMargin: 12
-        anchors.rightMargin: 12
+        anchors.bottomMargin: root.page === "edit" && root.editingChromeVisible
+                             && !root.activeCanvasToolChromeReduced
+                             && root.editTool !== "compare"
+                             && !(root.largeScopesMode && root.editInspectorTab === "scopes")
+                             ? 104
+                             : 12
+        anchors.rightMargin: root.page === "edit" && root.editingChromeVisible && root.editInspectorPanelVisible
+                             && !(root.largeScopesMode && root.editInspectorTab === "scopes")
+                             ? root.editInspectorPanelWidth + 24
+                             : 12
         z: 120
     }
 
@@ -3359,8 +9027,8 @@ Rectangle {
 
             Panel {
                 objectName: "librarySourcesPanel"
-                visible: root.librarySourcesPanelVisible
-                Layout.preferredWidth: root.librarySourcesPanelVisible ? root.librarySourcesPanelWidth : 0
+                visible: root.librarySourcesPanelVisible && !root.importModeOpen
+                Layout.preferredWidth: visible ? root.librarySourcesPanelWidth : 0
                 Layout.fillHeight: true
                 title: "Sources"
 
@@ -3422,21 +9090,15 @@ Rectangle {
                     }
                     RowRule {}
                     SectionTitle { label: "Smart Collections"; Layout.topMargin: 10 }
-                    SidebarRow { label: "All Images"; value: root.formatInt(catalogAssets.totalAssetCount); onClicked: catalogAssets.clearFilters() }
+                    SidebarRow { label: "All Images"; value: root.formatInt(catalogAssets.totalAssetCount); active: !root.filtersActive(); onClicked: catalogAssets.clearFilters() }
                     SidebarRow { label: "Visible"; value: root.formatInt(catalogAssets.assetCount) }
-                    SidebarRow { label: "Picked"; value: root.formatInt(catalogAssets.visiblePickedCount); onClicked: catalogAssets.reviewFilter = "picked" }
-                    SidebarRow { label: "Rejected"; value: root.formatInt(catalogAssets.visibleRejectedCount); onClicked: catalogAssets.reviewFilter = "rejected" }
-                    SidebarRow { label: "Rated"; value: root.formatInt(catalogAssets.visibleRatedCount); onClicked: catalogAssets.reviewFilter = "rated" }
-                    SidebarRow { label: "Unrated"; value: root.formatInt(catalogAssets.visibleUnratedCount) }
-                    SidebarRow { label: "Unmarked"; value: root.formatInt(catalogAssets.visibleUnmarkedCount); onClicked: catalogAssets.reviewFilter = "unmarked" }
-                    SidebarRow { label: "Online"; value: root.formatInt(catalogAssets.visibleOnlineCount); onClicked: catalogAssets.availabilityFilter = "online" }
-                    SidebarRow { label: "Offline"; value: root.formatInt(catalogAssets.visibleOfflineCount); onClicked: catalogAssets.availabilityFilter = "offline" }
-                    RowRule {}
-                    SectionTitle { label: "Filters"; Layout.topMargin: 10 }
-                    Repeater {
-                        model: ["Media Type", "Camera", "Lens", "Date Captured", "Rating", "Pick Status", "Color Label", "Keywords"]
-                        SidebarRow { required property string modelData; label: modelData; value: "v" }
-                    }
+                    SidebarRow { label: "Picked"; value: root.formatInt(catalogAssets.visiblePickedCount); active: catalogAssets.reviewFilter === "picked"; onClicked: catalogAssets.reviewFilter = "picked" }
+                    SidebarRow { label: "Rejected"; value: root.formatInt(catalogAssets.visibleRejectedCount); active: catalogAssets.reviewFilter === "rejected"; onClicked: catalogAssets.reviewFilter = "rejected" }
+                    SidebarRow { label: "Rated"; value: root.formatInt(catalogAssets.visibleRatedCount); active: catalogAssets.reviewFilter === "rated"; onClicked: catalogAssets.reviewFilter = "rated" }
+                    SidebarRow { label: "Unrated"; value: root.formatInt(catalogAssets.visibleUnratedCount); active: catalogAssets.reviewFilter === "unrated"; onClicked: catalogAssets.reviewFilter = "unrated" }
+                    SidebarRow { label: "Unmarked"; value: root.formatInt(catalogAssets.visibleUnmarkedCount); active: catalogAssets.reviewFilter === "unmarked"; onClicked: catalogAssets.reviewFilter = "unmarked" }
+                    SidebarRow { label: "Online"; value: root.formatInt(catalogAssets.visibleOnlineCount); active: catalogAssets.availabilityFilter === "online"; onClicked: catalogAssets.availabilityFilter = "online" }
+                    SidebarRow { label: "Offline"; value: root.formatInt(catalogAssets.visibleOfflineCount); active: catalogAssets.availabilityFilter === "offline"; onClicked: catalogAssets.availabilityFilter = "offline" }
                     Item { Layout.fillHeight: true }
                     Label { text: "Catalog"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
                     ProgressBar {
@@ -3466,13 +9128,21 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    Layout.preferredHeight: 36
+                    spacing: 6
 
                     TinyInput {
+                        visible: !root.importModeOpen
                         Layout.fillWidth: true
+                        Layout.minimumWidth: 180
+                        Layout.preferredWidth: 280
+                        Layout.maximumWidth: 360
                         placeholder: "Search images..."
                         text: root.searchText
-                        onTextChanged: root.searchText = text
+                        onTextChanged: {
+                            root.searchText = text
+                            catalogAssets.searchFilter = text
+                        }
                     }
                     MiniButton {
                         visible: root.importModeOpen
@@ -3481,80 +9151,284 @@ Rectangle {
                         iconName: "chevron-left"
                         onClicked: root.importModeOpen = false
                     }
-                    MiniButton { text: "All Media"; iconName: "filter"; role: "segmented"; onClicked: catalogAssets.mediaTypeFilter = "all" }
-                    MiniButton { text: "All Projects"; iconName: "folder"; role: "segmented"; onClicked: catalogAssets.projectFilter = "all" }
-                    MiniButton { text: "All Time"; iconName: "clock"; role: "segmented" }
-                    MiniButton { text: "More Filters"; iconName: "adjust"; role: "segmented" }
-                    MiniButton { text: "Sources"; role: "segmented"; active: root.librarySourcesPanelVisible; onClicked: root.librarySourcesPanelVisible = !root.librarySourcesPanelVisible }
-                    MiniButton { text: "Inspector"; role: "segmented"; active: root.libraryInspectorPanelVisible; onClicked: root.libraryInspectorPanelVisible = !root.libraryInspectorPanelVisible }
-                    MiniButton { text: root.compactMode ? "Pro" : "Compact"; role: "segmented"; active: root.compactMode; onClicked: root.toggleInterfaceMode() }
-                }
-
-                RowLayout {
-                    visible: !root.importModeOpen
-                    Layout.fillWidth: true
                     Label {
+                        visible: root.importModeOpen
                         Layout.fillWidth: true
+                        text: "Import from local sources"
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 13
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideRight
+                    }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 108
+                        text: root.mediaFilterLabel()
+                        iconName: "media"
+                        role: "secondary"
+                        accent: root.dimText
+                        active: root.mediaFilterActive()
+                        tooltip: "Media filter"
+                        onClicked: root.cycleMediaFilter()
+                    }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 126
+                        text: root.projectFilterLabel()
+                        iconName: "folder"
+                        role: "secondary"
+                        accent: root.dimText
+                        active: root.projectFilterActive()
+                        tooltip: "Project filter"
+                        onClicked: root.cycleProjectFilter()
+                    }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 104
+                        text: root.timeFilterLabel()
+                        iconName: "clock"
+                        role: "secondary"
+                        accent: root.dimText
+                        active: root.timeFilterActive()
+                        tooltip: "Import date filter"
+                        onClicked: root.cycleTimeFilter()
+                    }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 118
+                        text: root.reviewFilterLabel()
+                        iconName: "star"
+                        role: "secondary"
+                        accent: root.dimText
+                        active: root.reviewFilterActive()
+                        tooltip: "Review filter"
+                        onClicked: root.cycleReviewFilter()
+                    }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        square: true
+                        iconName: "close"
+                        role: "icon"
+                        enabled: root.filtersActive()
+                        accent: root.dimText
+                        tooltip: "Clear filters"
+                        onClicked: {
+                            root.searchText = ""
+                            catalogAssets.clearFilters()
+                        }
+                    }
+                    Label {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 72
                         text: root.formatInt(root.assetCount()) + " results"
                         color: root.dimText
                         font.family: theme.fontUi
-                        font.pixelSize: 12
+                        font.pixelSize: 11
+                        horizontalAlignment: Text.AlignRight
+                        elide: Text.ElideRight
                     }
-                    MiniButton { text: "Grid"; iconName: "grid"; role: "segmented"; active: root.catalogViewMode === "grid"; onClicked: root.catalogViewMode = "grid" }
-                    MiniButton { text: "Survey"; iconName: "survey"; role: "segmented"; active: root.catalogViewMode === "survey"; onClicked: root.catalogViewMode = "survey" }
-                    MiniButton { text: "List"; iconName: "list"; role: "segmented" }
                     MiniButton {
-                        role: "segmented"
-                        text: root.selectionMode ? "Done" : "Select"
+                        objectName: "libraryAgentButton"
+                        visible: !root.importModeOpen
+                        square: true
+                        iconName: "adjust"
+                        role: "icon"
+                        accent: root.mint
+                        active: agentRunDialog.visible
+                        tooltip: "Open the local editing agent for the current library selection."
+                        onClicked: agentRunDialog.open()
+                    }
+                    Rectangle {
+                        visible: !root.importModeOpen
+                        Layout.preferredWidth: 1
+                        Layout.preferredHeight: 24
+                        color: root.hairline
+                    }
+                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "grid"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "grid"; tooltip: "Grid"; onClicked: root.catalogViewMode = "grid" }
+                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "survey"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "survey"; tooltip: "Survey"; onClicked: root.catalogViewMode = "survey" }
+                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "panel-left"; role: "icon"; accent: root.dimText; active: root.librarySourcesPanelVisible; tooltip: "Sources"; onClicked: root.librarySourcesPanelVisible = !root.librarySourcesPanelVisible }
+                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "panel-right"; role: "icon"; accent: root.dimText; active: root.libraryInspectorPanelVisible; tooltip: "Inspector"; onClicked: root.libraryInspectorPanelVisible = !root.libraryInspectorPanelVisible }
+                    MiniButton {
+                        visible: !root.importModeOpen
+                        square: true
+                        role: "icon"
+                        iconName: "check"
+                        accent: root.dimText
                         active: root.selectionMode
+                        tooltip: root.selectionMode ? "Done selecting" : "Select"
                         onClicked: root.selectionMode = !root.selectionMode
                     }
-                    MiniButton { text: "..."; square: true; role: "icon" }
                 }
 
-                GridView {
-                    id: libraryGrid
+                ScrollView {
+                    id: libraryGridScroll
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     visible: !root.importModeOpen && root.catalogViewMode === "grid" && root.assetCount() > 0
                     clip: true
-                    cellWidth: Math.max(224, Math.floor(width / Math.max(1, Math.floor(width / 250))))
-                    cellHeight: 206
-                    model: catalogAssets
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
                     function updateVisibleAssetRange() {
                         if (!catalogAssets)
                             return
-                        if (!visible || count <= 0 || cellWidth <= 0 || cellHeight <= 0) {
+                        if (!visible || root.assetCount() <= 0) {
                             catalogAssets.setVisibleAssetRange(-1, -1)
                             return
                         }
-                        const columns = Math.max(1, Math.floor(width / cellWidth))
-                        const firstRow = Math.max(0, Math.floor(contentY / cellHeight))
-                        const visibleRows = Math.max(1, Math.ceil(height / cellHeight) + 1)
-                        const first = Math.max(0, firstRow * columns)
-                        const last = Math.min(count - 1, ((firstRow + visibleRows) * columns) - 1)
-                        catalogAssets.setVisibleAssetRange(first, last)
+                        catalogAssets.setVisibleAssetRange(0, root.assetCount() - 1)
                     }
 
                     Component.onCompleted: updateVisibleAssetRange()
-                    onContentYChanged: updateVisibleAssetRange()
                     onHeightChanged: updateVisibleAssetRange()
                     onWidthChanged: updateVisibleAssetRange()
-                    onCountChanged: updateVisibleAssetRange()
                     onVisibleChanged: updateVisibleAssetRange()
 
-                    delegate: ThumbnailCard {
-                        required property int index
-                        required property string assetId
-                        width: libraryGrid.cellWidth - 16
-                        height: 188
-                        assetIndex: index
-                        selected: catalogAssets.assetSelected(assetId)
-                        onActivated: root.selectAsset(index)
-                        onDoubleActivated: {
-                            root.selectAsset(index)
-                            root.assetActivated("edit")
+                    Item {
+                        id: libraryJustifiedGrid
+                        width: libraryGridScroll.availableWidth
+                        height: layoutHeight
+
+                        property int layoutRevision: 0
+                        property var aspectRatios: []
+                        property var layoutItems: []
+                        property real layoutHeight: 0
+                        readonly property real tileSpacing: 4
+                        readonly property real targetRowHeight: Math.max(150, Math.min(190, width / 5.4))
+
+                        function clampedAspectRatio(value) {
+                            const ratio = Number(value || 0)
+                            if (!isFinite(ratio) || ratio <= 0)
+                                return 1.5
+                            return Math.max(0.42, Math.min(3.2, ratio))
+                        }
+
+                        function setAspectRatio(index, value) {
+                            const next = aspectRatios.slice()
+                            const ratio = clampedAspectRatio(value)
+                            if (Math.abs(Number(next[index] || 0) - ratio) < 0.01)
+                                return
+                            next[index] = ratio
+                            aspectRatios = next
+                            rebuildLayout()
+                        }
+
+                        function appendRow(items, rowStart, rowEnd, rowHeight, rowTop, fillWidth) {
+                            const count = rowEnd - rowStart
+                            if (count <= 0)
+                                return rowTop
+
+                            let ratioSum = 0
+                            for (let index = rowStart; index < rowEnd; ++index)
+                                ratioSum += clampedAspectRatio(aspectRatios[index])
+
+                            const available = Math.max(1, width - tileSpacing * Math.max(0, count - 1))
+                            const desiredHeight = fillWidth ? available / Math.max(0.01, ratioSum) : rowHeight
+                            const height = Math.max(112, Math.min(230, desiredHeight))
+                            let left = 0
+                            for (let index = rowStart; index < rowEnd; ++index) {
+                                const itemWidth = Math.max(44, clampedAspectRatio(aspectRatios[index]) * height)
+                                items[index] = {
+                                    x: left,
+                                    y: rowTop,
+                                    width: itemWidth,
+                                    height: height
+                                }
+                                left += itemWidth + tileSpacing
+                            }
+                            return rowTop + height + tileSpacing
+                        }
+
+                        function rebuildLayout() {
+                            const count = root.assetCount()
+                            const items = []
+                            const availableWidth = Math.max(1, width)
+                            if (count <= 0 || availableWidth <= 1) {
+                                layoutItems = items
+                                layoutHeight = 0
+                                layoutRevision += 1
+                                return
+                            }
+
+                            let rowTop = 0
+                            let rowStart = 0
+                            let ratioSum = 0
+                            for (let index = 0; index < count; ++index) {
+                                ratioSum += clampedAspectRatio(aspectRatios[index])
+                                const rowCount = index - rowStart + 1
+                                const naturalWidth = ratioSum * targetRowHeight + tileSpacing * Math.max(0, rowCount - 1)
+                                if (naturalWidth >= availableWidth && rowCount > 1) {
+                                    rowTop = appendRow(items, rowStart, index + 1, targetRowHeight, rowTop, true)
+                                    rowStart = index + 1
+                                    ratioSum = 0
+                                }
+                            }
+
+                            const remainder = count - rowStart
+                            if (remainder === 1 && rowStart > 0) {
+                                const previousStart = Math.max(0, rowStart - 1)
+                                const previousTop = items[previousStart] ? items[previousStart].y : 0
+                                for (let index = previousStart; index < count; ++index)
+                                    items[index] = undefined
+                                rowTop = previousTop
+                                rowTop = appendRow(items, previousStart, count, targetRowHeight, rowTop, count - previousStart > 1)
+                            } else if (remainder > 0) {
+                                const fillLast = remainder > 1
+                                rowTop = appendRow(items, rowStart, count, targetRowHeight, rowTop, fillLast)
+                            }
+
+                            layoutItems = items
+                            layoutHeight = Math.max(0, rowTop - tileSpacing)
+                            layoutRevision += 1
+                        }
+
+                        function tileItem(index) {
+                            layoutRevision
+                            return layoutItems[index] || {
+                                x: 0,
+                                y: 0,
+                                width: targetRowHeight * 1.5,
+                                height: targetRowHeight
+                            }
+                        }
+
+                        Component.onCompleted: rebuildLayout()
+                        onWidthChanged: rebuildLayout()
+
+                        Repeater {
+                            model: catalogAssets
+
+                            delegate: Item {
+                                id: tileDelegate
+                                required property int index
+                                required property string assetId
+                                required property string thumbnailSource
+                                required property int rating
+                                required property bool picked
+                                required property bool rejected
+                                x: libraryJustifiedGrid.tileItem(index).x
+                                y: libraryJustifiedGrid.tileItem(index).y
+                                width: libraryJustifiedGrid.tileItem(index).width
+                                height: libraryJustifiedGrid.tileItem(index).height
+
+                                ThumbnailCard {
+                                    id: tile
+                                    anchors.fill: parent
+                                    assetIndex: tileDelegate.index
+                                    thumbnailSource: tileDelegate.thumbnailSource
+                                    ratingValue: tileDelegate.rating
+                                    pickedValue: tileDelegate.picked
+                                    rejectedValue: tileDelegate.rejected
+                                    selected: catalogAssets.assetSelected(tileDelegate.assetId)
+                                    onSourceAspectRatioChanged: libraryJustifiedGrid.setAspectRatio(tileDelegate.index, tile.sourceAspectRatio)
+                                    onActivated: root.selectAsset(tileDelegate.index)
+                                    onDoubleActivated: {
+                                        root.selectAsset(tileDelegate.index)
+                                        root.assetActivated("edit")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3621,70 +9495,139 @@ Rectangle {
 
             Panel {
                 objectName: "libraryInspectorPanel"
-                visible: root.libraryInspectorPanelVisible
-                Layout.preferredWidth: root.libraryInspectorPanelVisible ? root.libraryInspectorPanelWidth : 0
+                visible: root.libraryInspectorPanelVisible && !root.importModeOpen
+                Layout.preferredWidth: visible ? root.libraryInspectorPanelWidth : 0
                 Layout.fillHeight: true
                 title: "Inspector"
 
                 ColumnLayout {
                     anchors.fill: parent
-                    spacing: 12
+                    spacing: 10
 
                     ImageViewport {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 164
+                        Layout.preferredHeight: 132
                         source: root.displayImageSource(0)
                     }
-                    Label { Layout.fillWidth: true; text: root.selectedName(); color: theme.textStrong; font.pixelSize: 14; font.family: theme.fontUi; elide: Text.ElideRight }
-                    Row {
-                        spacing: 8
-                        Repeater { model: 5; Label { text: "*"; color: root.dimText; font.pixelSize: 16 } }
-                        Rectangle { width: 11; height: 11; radius: 2; color: root.mint; anchors.verticalCenter: parent.verticalCenter }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 5
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.selectedName()
+                            color: theme.textStrong
+                            font.pixelSize: 14
+                            font.family: theme.fontUi
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideMiddle
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 7
+
+                            Row {
+                                Layout.fillWidth: true
+                                spacing: 5
+                                Repeater {
+                                    model: 5
+                                    AppIcon {
+                                        required property int index
+                                        width: 12
+                                        height: 12
+                                        name: "star"
+                                        color: index < catalogAssets.selectedRating ? root.mint : root.faintText
+                                        anchors.verticalCenter: parent.verticalCenter
+                                    }
+                                }
+                            }
+                            Label {
+                                text: catalogAssets.selectedRejected ? "Rejected"
+                                      : catalogAssets.selectedPicked ? "Picked"
+                                      : "Unmarked"
+                                color: catalogAssets.selectedRejected ? theme.error
+                                      : catalogAssets.selectedPicked ? root.mint
+                                      : root.dimText
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                            }
+                        }
                     }
                     RowRule {}
                     SectionTitle { label: "Metadata" }
                     Repeater {
-                        model: [
-                            ["Camera", "DJI \"ZH20T\""],
-                            ["Lens", "6.8-119.9 mm f/4.0"],
-                            ["Captured", "Oct 1, 2025 9:57 PM"],
-                            ["Dimensions", "5472 x 3648"],
-                            ["File Size", "32.4 MB"],
-                            ["Color Profile", "sRGB IEC61966-2.1"],
-                            ["Imported", "Apr 8, 2026 9:57 PM"]
-                        ]
+                        model: root.selectedMetadataRows()
                         RowLayout {
                             required property var modelData
                             Layout.fillWidth: true
-                            Label { Layout.preferredWidth: 110; text: modelData[0]; color: root.dimText; font.pixelSize: 11 }
-                            Label { Layout.fillWidth: true; text: modelData[1]; color: theme.textMain; font.pixelSize: 11; elide: Text.ElideRight }
+                            spacing: 10
+                            Label {
+                                Layout.preferredWidth: 72
+                                text: modelData[0]
+                                color: root.dimText
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData[1]
+                                color: theme.textMain
+                                font.pixelSize: 10
+                                elide: Text.ElideMiddle
+                            }
                         }
                     }
                     RowRule {}
-                    SectionTitle { label: "Actions" }
-                    GridLayout {
+                    RowLayout {
                         Layout.fillWidth: true
-                        columns: 2
-                        columnSpacing: 8
-                        rowSpacing: 8
-                        MiniButton { Layout.fillWidth: true; text: "Edit"; iconName: "brush-tool"; role: "secondary"; onClicked: root.assetActivated("edit") }
-                        MiniButton { Layout.fillWidth: true; text: "Masks"; iconName: "masks"; role: "secondary"; onClicked: root.assetActivated("masks") }
-                        MiniButton { Layout.fillWidth: true; text: "Compare"; iconName: "compare"; role: "secondary"; onClicked: { root.assetActivated("edit"); root.activateEditTool("compare") } }
+                        spacing: 8
+                        MiniButton { Layout.fillWidth: true; text: "Edit"; iconName: "brush-tool"; role: "secondary"; accent: root.dimText; onClicked: root.assetActivated("edit") }
                         MiniButton { Layout.fillWidth: true; text: "Export"; iconName: "export"; role: "primary"; onClicked: root.assetActivated("export") }
                     }
-                    SectionTitle { label: "Pick Status" }
                     RowLayout {
                         Layout.fillWidth: true
-                        MiniButton { Layout.fillWidth: true; text: "Pick"; role: "segmented"; active: catalogAssets.selectedPicked; onClicked: catalogAssets.toggleSelectedPick() }
-                        MiniButton { Layout.fillWidth: true; text: "Reject"; role: "segmented"; active: catalogAssets.selectedRejected; onClicked: catalogAssets.toggleSelectedReject() }
-                        MiniButton { Layout.fillWidth: true; text: "Unmarked"; role: "segmented"; active: !catalogAssets.selectedPicked && !catalogAssets.selectedRejected; onClicked: catalogAssets.clearSelectedCullState() }
+                        spacing: 8
+                        MiniButton { objectName: "libraryInspectorAgentButton"; Layout.fillWidth: true; text: "Agent"; iconName: "adjust"; role: "primary"; tooltip: "Open the local editing agent for this selection."; onClicked: agentRunDialog.open() }
                     }
-                    SectionTitle { label: "Rating" }
                     RowLayout {
                         Layout.fillWidth: true
+                        spacing: 8
+                        MiniButton { Layout.fillWidth: true; text: "Selections"; iconName: "masks"; role: "secondary"; accent: root.dimText; onClicked: root.assetActivated("masks") }
+                        MiniButton { Layout.fillWidth: true; text: "Compare"; iconName: "compare"; role: "secondary"; accent: root.dimText; onClicked: { root.assetActivated("edit"); root.activateEditTool("compare") } }
+                    }
+                    SectionTitle { label: "Review" }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 7
+                        MiniButton { Layout.fillWidth: true; text: "Pick"; role: "segmented"; accent: root.dimText; active: catalogAssets.selectedPicked; onClicked: catalogAssets.toggleSelectedPick() }
+                        MiniButton { Layout.fillWidth: true; text: "Reject"; role: "segmented"; accent: root.dimText; active: catalogAssets.selectedRejected; onClicked: catalogAssets.toggleSelectedReject() }
+                        MiniButton { Layout.fillWidth: true; text: "Clear"; role: "segmented"; accent: root.dimText; active: !catalogAssets.selectedPicked && !catalogAssets.selectedRejected; onClicked: catalogAssets.clearSelectedCullState() }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 7
                         Repeater {
                             model: 5
-                            MiniButton { required property int index; Layout.fillWidth: true; text: String(index + 1); role: "segmented"; active: catalogAssets.selectedRating >= index + 1; onClicked: catalogAssets.setSelectedRating(index + 1) }
+                            MiniButton {
+                                required property int index
+                                Layout.fillWidth: true
+                                square: true
+                                iconName: "star"
+                                role: "icon"
+                                accent: root.dimText
+                                active: catalogAssets.selectedRating >= index + 1
+                                tooltip: String(index + 1) + (index === 0 ? " star" : " stars")
+                                onClicked: catalogAssets.setSelectedRating(catalogAssets.selectedRating === index + 1 ? 0 : index + 1)
+                            }
+                        }
+                        MiniButton {
+                            square: true
+                            iconName: "close"
+                            role: "icon"
+                            enabled: catalogAssets.selectedRating > 0
+                            tooltip: "Clear rating"
+                            onClicked: catalogAssets.setSelectedRating(0)
                         }
                     }
                     TinyInput { Layout.fillWidth: true; placeholder: "Add keywords..." }
@@ -3714,7 +9657,7 @@ Rectangle {
                         model: [
                             { icon: "adjust", tool: "adjust", label: "Adjust" },
                             { icon: "crop", tool: "crop", label: "Crop" },
-                            { icon: "masks", tool: "masks", label: "Masks" },
+                            { icon: "masks", tool: "masks", label: "Selections" },
                             { icon: "brush-tool", tool: "brush", label: "Brush" },
                             { icon: "compare", tool: "compare", label: "Compare" },
                             { icon: "export", tool: "export", label: "Export" }
@@ -3745,35 +9688,16 @@ Rectangle {
                 visible: root.editContextPanelActive
                 Layout.preferredWidth: visible ? root.editContextPanelWidth : 0
                 Layout.fillHeight: true
-                title: "Asset Context"
+                title: "Library"
 
                 ColumnLayout {
                     anchors.fill: parent
                     spacing: 10
-                    Label { Layout.fillWidth: true; text: root.selectedName(); color: theme.textMain; font.pixelSize: 12; elide: Text.ElideMiddle }
-                    RowRule {}
-                    Repeater {
-                        model: [
-                            ["Captured", "Oct 1, 2025 9:57 PM"],
-                            ["Camera", editorPreview.cameraLabel.length > 0 ? editorPreview.cameraLabel : "DJI \"ZH20T\""],
-                            ["Lens", editorPreview.lensModel.length > 0 ? editorPreview.lensModel : "6.8-119.9 mm f/4.0"],
-                            ["Resolution", "1676 x 1257"],
-                            ["Color Space", "sRGB  IEC61966-2.1"]
-                        ]
-                        RowLayout {
-                            required property var modelData
-                            Layout.fillWidth: true
-                            Label { Layout.preferredWidth: 82; text: modelData[0]; color: root.dimText; font.pixelSize: 11 }
-                            Label { Layout.fillWidth: true; text: modelData[1]; color: theme.textMain; font.pixelSize: 11; elide: Text.ElideRight }
-                        }
-                    }
-                    RowRule {}
                     CollapsibleGroup {
-                        title: "Library"
+                        title: "Projects"
                         expanded: root.editProjectsExpanded
                         onToggled: root.editProjectsExpanded = !root.editProjectsExpanded
 
-                        SectionTitle { label: "Projects" }
                         SidebarRow {
                             label: "All Projects"
                             value: root.formatInt(catalogAssets.assetCount)
@@ -3801,7 +9725,7 @@ Rectangle {
                         }
 
                         RowRule { Layout.topMargin: 6; Layout.bottomMargin: 4 }
-                        SectionTitle { label: "Collections" }
+                        SectionTitle { label: "Review" }
                         SidebarRow { label: "All Photos"; value: root.formatInt(catalogAssets.totalAssetCount); iconName: "grid"; active: catalogAssets.reviewFilter === "all" && catalogAssets.minimumRatingFilter === 0; onClicked: catalogAssets.clearFilters() }
                         SidebarRow { label: "Picked"; value: root.formatInt(catalogAssets.visiblePickedCount); iconName: "select"; active: catalogAssets.reviewFilter === "picked"; onClicked: catalogAssets.reviewFilter = "picked" }
                         SidebarRow { label: "Rejected"; value: root.formatInt(catalogAssets.visibleRejectedCount); iconName: "delete"; active: catalogAssets.reviewFilter === "rejected"; onClicked: catalogAssets.reviewFilter = "rejected" }
@@ -3829,72 +9753,258 @@ Rectangle {
 
                 Rectangle {
                     objectName: "maskCreationToolbar"
-                    visible: root.editTool === "masks" || root.editTool === "brush"
+                    visible: root.editTool === "masks" || (root.editTool === "brush" && !root.brushToolReady())
                     Layout.fillWidth: true
-                    Layout.preferredHeight: visible ? 72 : 0
+                    Layout.preferredHeight: visible ? 42 : 0
                     color: root.panelColor
                     border.width: theme.chromeBorderWidth
                     border.color: root.hairline
                     radius: 4
 
-                    ColumnLayout {
+                    RowLayout {
                         anchors.fill: parent
                         anchors.margins: 7
-                        spacing: 5
+                        spacing: 7
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: 8
+                        Label {
+                            objectName: "maskCreationVocabularyLabel"
+                            property string vocabularyTooltip: root.maskVocabularyTooltip()
+                            text: "Selection"
+                            color: root.dimText
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0
+                            ToolTip.visible: maskCreationGlossaryHover.hovered
+                            ToolTip.delay: 200
+                            ToolTip.text: vocabularyTooltip
+                            HoverHandler { id: maskCreationGlossaryHover }
+                        }
+                        MiniButton { objectName: "legacyMaskSourceObjectButton"; visible: false; text: "Object"; iconName: "smart-select"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("object") }
+                        MiniButton { objectName: "legacyMaskSourceSubjectButton"; visible: false; text: "Subject"; iconName: "smart-select"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createGeneratedSelectionSource("subject") }
+                        MiniButton { objectName: "legacyMaskSourceSkyButton"; visible: false; text: "Sky"; iconName: "masks"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createGeneratedSelectionSource("sky") }
+                        MiniButton { objectName: "legacyMaskSourceBackgroundButton"; visible: false; text: "Background"; iconName: "compare"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createGeneratedSelectionSource("background") }
+                        MiniButton { objectName: "legacyMaskSourceBrushAddButton"; visible: false; text: "Brush Add"; iconName: "brush-tool"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.startMaskBrushSource("add") }
+                        MiniButton { objectName: "legacyMaskSourceBrushEraseButton"; visible: false; text: "Brush Erase"; iconName: "brush-subtract"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.startMaskBrushSource("subtract") }
+                        MiniButton { objectName: "legacyMaskSourceLassoButton"; visible: false; text: "Lasso"; iconName: "lasso"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: { root.editTool = "masks"; editorPreview.maskPreviewMode = "overlay"; editorPreview.startLassoSelection(root.maskCreationOperation === "subtract") } }
+                        MiniButton { objectName: "legacyMaskSourceLinearButton"; visible: false; text: "Linear"; iconName: "geometry"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("linear") }
+                        MiniButton { objectName: "legacyMaskSourceRadialButton"; visible: false; text: "Radial"; iconName: "masks"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("radial") }
+                        MiniButton { objectName: "legacyMaskSourceEllipseButton"; visible: false; text: "Ellipse"; iconName: "masks"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("ellipse") }
+                        MiniButton { objectName: "legacyMaskSourceRectangleButton"; visible: false; text: "Rectangle"; iconName: "geometry"; role: "segmented"; tooltip: "Moved to the left selection rail."; onClicked: root.createMaskSource("rectangle") }
 
-                            Label {
-                                text: "Source"
-                                color: root.dimText
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.DemiBold
-                                font.letterSpacing: 0
-                            }
-                            MiniButton { objectName: "maskSourceObjectButton"; text: "Object"; iconName: "smart-select"; role: "segmented"; active: root.editTool === "masks"; tooltip: "Create an object selection source."; onClicked: root.createMaskSource("object") }
-                            MiniButton { objectName: "maskSourceBrushButton"; text: "Brush"; iconName: "brush-tool"; role: "segmented"; active: root.editTool === "brush"; tooltip: "Paint a manual mask source."; onClicked: root.startMaskBrushSource() }
-                            MiniButton { objectName: "maskSourceLassoButton"; text: "Lasso"; iconName: "lasso"; role: "segmented"; tooltip: "Draw a freeform selection source."; onClicked: { root.editTool = "masks"; editorPreview.maskPreviewMode = "overlay"; editorPreview.startLassoSelection(root.maskCreationOperation === "subtract") } }
-                            MiniButton { objectName: "maskSourceLinearButton"; text: "Linear"; iconName: "geometry"; role: "segmented"; tooltip: "Create a linear gradient mask source."; onClicked: root.createMaskSource("linear") }
-                            MiniButton { objectName: "maskSourceRadialButton"; text: "Radial"; iconName: "masks"; role: "segmented"; tooltip: "Create a radial mask source."; onClicked: root.createMaskSource("radial") }
-                            Item { Layout.fillWidth: true }
-                            MiniButton { text: "Done"; role: "primary"; active: editorPreview.hasActiveMask; enabled: editorPreview.hasActiveMask; onClicked: editorPreview.deselectActiveMask() }
+                        Rectangle {
+                            Layout.preferredWidth: 1
+                            Layout.fillHeight: true
+                            color: root.hairline
                         }
 
-                        RowLayout {
+                        MiniButton { objectName: "maskCombineAddButton"; text: "Add"; iconName: "plus"; role: "segmented"; active: root.maskCreationOperation === "add"; tooltip: root.maskCreationOperationTooltip("add"); onClicked: root.setMaskCreationOperation("add") }
+                        MiniButton { objectName: "maskCombineSubtractButton"; text: "Subtract"; iconName: "minus"; role: "segmented"; active: root.maskCreationOperation === "subtract"; tooltip: root.maskCreationOperationTooltip("subtract"); onClicked: root.setMaskCreationOperation("subtract") }
+                        MiniButton { objectName: "maskCombineIntersectButton"; text: "Intersect"; iconName: "compare"; role: "segmented"; active: root.maskCreationOperation === "intersect"; tooltip: root.maskCreationOperationTooltip("intersect"); onClicked: root.setMaskCreationOperation("intersect") }
+                        MiniButton { objectName: "maskCombineReplaceButton"; text: "Replace"; iconName: "reset"; role: "segmented"; active: root.maskCreationOperation === "replace"; tooltip: root.maskCreationOperationTooltip("replace"); onClicked: root.setMaskCreationOperation("replace") }
+                        Label {
+                            objectName: "activeMaskToolbarStatusLabel"
                             Layout.fillWidth: true
-                            spacing: 8
+                            text: root.activeMaskToolbarStatusText()
+                            horizontalAlignment: Text.AlignRight
+                            color: editorPreview.hasActiveMask ? root.mint : root.dimText
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        MiniButton {
+                            objectName: "maskDeleteEmptySelectionsButton"
+                            text: "Delete Empty"
+                            iconName: "delete"
+                            role: "secondary"
+                            visible: editorPreview.emptyMaskCount > 0
+                            enabled: editorPreview.emptyMaskCount > 0
+                            tooltip: "Delete empty selection components from the edit recipe. Original file is unchanged."
+                            onClicked: editorPreview.deleteEmptyMasks()
+                        }
+                        MiniButton {
+                            objectName: "maskUpdateGeneratedSelectionsButton"
+                            text: "Update AI"
+                            iconName: "reset"
+                            role: "secondary"
+                            visible: editorPreview.staleGeneratedMaskCount > 0
+                            enabled: editorPreview.staleGeneratedMaskCount > 0
+                            tooltip: editorPreview.staleGeneratedMaskSummary || "Regenerate stale generated selections after image size, crop, rotation, or model changes. Original file is unchanged."
+                            onClicked: editorPreview.updateStaleGeneratedMasks()
+                        }
+                        MiniButton {
+                            objectName: "maskActionRetryButton"
+                            text: editorPreview.maskActionRetryLabel || "Retry"
+                            iconName: "reset"
+                            role: "secondary"
+                            visible: editorPreview.maskActionRetryAvailable
+                            enabled: editorPreview.maskActionRetryAvailable
+                            tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed selection or retouch action."
+                            onClicked: editorPreview.retryLastMaskAction()
+                        }
+                        MiniButton { objectName: "maskCreationDoneButton"; text: "Done"; role: "primary"; active: editorPreview.hasActiveMask; enabled: editorPreview.hasActiveMask; onClicked: editorPreview.deselectActiveMask() }
+                    }
+                }
 
-                            Label {
-                                text: "Mode"
-                                color: root.dimText
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                font.weight: Font.DemiBold
-                                font.letterSpacing: 0
-                            }
-                            MiniButton { objectName: "maskCombineAddButton"; text: "Add"; iconName: "plus"; role: "segmented"; active: root.maskCreationOperation === "add"; tooltip: "Add the next source to the active mask set."; onClicked: root.setMaskCreationOperation("add") }
-                            MiniButton { objectName: "maskCombineSubtractButton"; text: "Subtract"; iconName: "minus"; role: "segmented"; active: root.maskCreationOperation === "subtract"; tooltip: "Subtract the next source from the active mask set."; onClicked: root.setMaskCreationOperation("subtract") }
-                            MiniButton { objectName: "maskCombineIntersectButton"; text: "Intersect"; iconName: "compare"; role: "segmented"; active: root.maskCreationOperation === "intersect"; tooltip: "Keep only the overlap with the next source."; onClicked: root.setMaskCreationOperation("intersect") }
-                            Label {
-                                objectName: "activeMaskToolbarStatusLabel"
-                                Layout.fillWidth: true
-                                text: root.activeMaskToolbarStatusText()
-                                horizontalAlignment: Text.AlignRight
-                                color: editorPreview.hasActiveMask ? root.mint : root.dimText
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                elide: Text.ElideRight
-                            }
+                Rectangle {
+                    objectName: "maskRefineToolbar"
+                    visible: root.editTool === "masks" && root.studioMaskSupportsSelectionRefine()
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: visible ? 38 : 0
+                    color: root.panelColor
+                    border.width: theme.chromeBorderWidth
+                    border.color: root.hairline
+                    radius: 4
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 7
+                        spacing: 7
+
+                        Label {
+                            objectName: "maskRefineToolbarLabel"
+                            text: "Refine"
+                            color: root.dimText
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            font.weight: Font.DemiBold
+                            font.letterSpacing: 0
+                        }
+                        MiniButton {
+                            objectName: "maskRefineEdgeAddButton"
+                            text: "Add"
+                            iconName: "brush-tool"
+                            role: "segmented"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Brush Refine adds pixels to the active selection without creating a new selection group." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: root.startStudioSelectionRefine(false)
+                        }
+                        MiniButton {
+                            objectName: "maskRefineEdgeEraseButton"
+                            text: "Erase"
+                            iconName: "brush-subtract"
+                            role: "segmented"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Brush Refine erases pixels from the active selection without creating a new selection group." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: root.startStudioSelectionRefine(true)
+                        }
+                        MiniButton {
+                            objectName: "maskRefineSmartSelectButton"
+                            text: "Smart"
+                            iconName: "target"
+                            role: "segmented"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Open a smart-selection preview from the active selection outline, then accept it into this selection group." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: editorPreview.refineActiveMaskWithSmartSelect()
+                        }
+                        MiniButton {
+                            objectName: "maskRefineShowOriginalButton"
+                            text: "Original"
+                            iconName: "compare"
+                            role: "segmented"
+                            active: editorPreview.maskRefinementPreviewMode === "original"
+                            tooltip: "Preview the active selection before edge refinement without changing the recipe."
+                            onClicked: root.setStudioRefinementPreviewMode("original")
+                        }
+                        MiniButton {
+                            objectName: "maskRefineShowRefinedButton"
+                            text: "Refined"
+                            iconName: "target"
+                            role: "segmented"
+                            active: editorPreview.maskRefinementPreviewMode !== "original"
+                            tooltip: "Preview the active selection with current edge refinement."
+                            onClicked: root.setStudioRefinementPreviewMode("refined")
+                        }
+                        MiniButton {
+                            objectName: "maskRefineHighQualityPreviewButton"
+                            text: "HQ"
+                            iconName: "sparkles"
+                            role: "segmented"
+                            active: editorPreview.maskRefinementHighQualityPreview
+                            tooltip: "Use a higher-resolution selection refinement preview for expensive edge checks."
+                            onClicked: root.setStudioRefinementHighQualityPreview(!editorPreview.maskRefinementHighQualityPreview)
+                        }
+                        MiniButton {
+                            objectName: "maskFullResolutionPreviewButton"
+                            text: "Full"
+                            iconName: "maximize"
+                            role: "segmented"
+                            active: editorPreview.maskFullResolutionPreview
+                            tooltip: "Use full-resolution mask alpha for the active preview without scheduling a full image render."
+                            onClicked: root.setStudioFullResolutionMaskPreview(!editorPreview.maskFullResolutionPreview)
+                        }
+                        MiniButton {
+                            objectName: "maskRefineEdgePreviewButton"
+                            visible: false
+                            text: "Edge"
+                            iconName: "focus-frame"
+                            role: "segmented"
+                            active: false
+                            enabled: false
+                            tooltip: "Show only the matte pixels changed by current refinement controls."
+                        }
+                        MiniButton {
+                            objectName: "maskRefineInvertButton"
+                            text: "Invert"
+                            iconName: "compare"
+                            role: "segmented"
+                            active: editorPreview.activeMaskSelectionInverted
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Invert the active selection result without creating a new component." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+                        }
+                        MiniButton {
+                            objectName: "maskRefineDuplicateButton"
+                            text: "Copy"
+                            iconName: "plus"
+                            role: "secondary"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Copy only the active selection component with a new id and name." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: editorPreview.duplicateActiveMask()
+                        }
+                        MiniButton {
+                            objectName: "maskRefineDuplicateInvertButton"
+                            text: "Copy Inv"
+                            iconName: "compare"
+                            role: "secondary"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Copy the active selection component, then invert the copy for background or opposite-region workflows." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: editorPreview.duplicateActiveMaskInverted()
+                        }
+                        MiniButton {
+                            objectName: "maskRefineDuplicateSetButton"
+                            text: "Copy All"
+                            iconName: "copy"
+                            role: "secondary"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Copy the whole active selection group, including every component and adjustment." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: editorPreview.duplicateActiveMaskSet()
+                        }
+                        MiniButton {
+                            objectName: "maskRefineResetEdgeButton"
+                            text: "Reset"
+                            iconName: "reset"
+                            role: "secondary"
+                            enabled: String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                            tooltip: "Reset matte refinement while preserving the selection geometry and local adjustments." + root.activeMaskDisabledTooltipSuffix()
+                            onClicked: root.resetStudioSelectionEdge()
+                        }
+                        Label {
+                            objectName: "maskRefineToolbarStatusLabel"
+                            Layout.fillWidth: true
+                            text: root.maskCreateRefineSplitSignature()
+                            horizontalAlignment: Text.AlignRight
+                            color: root.dimText
+                            font.family: theme.fontMono
+                            font.pixelSize: 10
+                            elide: Text.ElideRight
                         }
                     }
                 }
 
                 Rectangle {
                     objectName: "maskStackStrip"
-                    visible: (root.editTool === "masks" || root.editTool === "brush") && editorPreview.maskSetCount > 0
+                    visible: root.editTool === "masks" && editorPreview.maskSetCount > 0
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? 56 : 0
                     color: root.panelColor
@@ -3909,7 +10019,8 @@ Rectangle {
                         spacing: 8
 
                         Label {
-                            text: "Stack"
+                            objectName: "maskStackStripLabel"
+                            text: "Selections"
                             color: root.dimText
                             font.family: theme.fontUi
                             font.pixelSize: 10
@@ -3924,6 +10035,15 @@ Rectangle {
                                 required property var modelData
 
                                 readonly property string thumbnailSource: String(modelData.thumbnailSource || "")
+                                readonly property real measuredWidth: width > 0 ? width : 344
+                                readonly property real measuredHeight: height > 0 ? height : 48
+                                readonly property bool layoutFits: maskStackSetText.implicitHeight + 12 <= measuredHeight &&
+                                                                   maskStackSetThumbnail.width + maskStackSetText.implicitWidth + maskStackActions.implicitWidth + 34 <= measuredWidth
+                                readonly property string layoutSignature: "w:" + Math.round(measuredWidth) +
+                                                                          "|h:" + Math.round(measuredHeight) +
+                                                                          "|text:" + Math.round(maskStackSetText.implicitWidth) + "x" +
+                                                                          Math.round(maskStackSetText.implicitHeight) +
+                                                                          "|fits:" + String(layoutFits)
                                 readonly property bool isActiveSet: {
                                     for (let sourceIndex = 0; sourceIndex < modelData.sources.length; ++sourceIndex) {
                                         if (modelData.sources[sourceIndex].flatIndex === editorPreview.activeMaskIndex)
@@ -3931,15 +10051,35 @@ Rectangle {
                                     }
                                     return false
                                 }
+                                readonly property var primarySource: {
+                                    const sources = modelData.sources || []
+                                    if (sources.length === 0)
+                                        return ({})
+                                    for (let sourceIndex = 0; sourceIndex < sources.length; ++sourceIndex) {
+                                        if (sources[sourceIndex].flatIndex === editorPreview.activeMaskIndex)
+                                            return sources[sourceIndex]
+                                    }
+                                    return sources[0]
+                                }
+                                readonly property int primarySourceIndex: Number(primarySource.flatIndex === undefined ? -1 : primarySource.flatIndex)
+                                readonly property string clickRouteContract: "mask-row-click:select-mask|buttons:visibility-solo-details"
 
                                 objectName: "maskStackSetChip"
-                                Layout.preferredWidth: 176
-                                Layout.preferredHeight: 44
+                                Layout.preferredWidth: 344
+                                Layout.preferredHeight: 48
+                                implicitWidth: 344
+                                implicitHeight: 48
                                 radius: 4
                                 color: isActiveSet ? theme.alpha(root.mint, 0.10) : "#11171A"
                                 border.width: 1
                                 border.color: isActiveSet ? root.mint : root.hairline
                                 opacity: modelData.enabled ? 1.0 : 0.56
+
+                                MouseArea {
+                                    objectName: "maskStackSetChipTargetArea"
+                                    anchors.fill: parent
+                                    onClicked: root.selectMaskSetAndLayer(parent.modelData, false)
+                                }
 
                                 RowLayout {
                                     anchors.fill: parent
@@ -3947,6 +10087,7 @@ Rectangle {
                                     spacing: 7
 
                                     Rectangle {
+                                        id: maskStackSetThumbnail
                                         objectName: "maskStackSetThumbnail"
                                         Layout.preferredWidth: 38
                                         Layout.preferredHeight: 28
@@ -3968,6 +10109,7 @@ Rectangle {
                                     }
 
                                     ColumnLayout {
+                                        id: maskStackSetText
                                         Layout.fillWidth: true
                                         spacing: 1
 
@@ -3992,6 +10134,73 @@ Rectangle {
                                             elide: Text.ElideRight
                                         }
                                     }
+
+                                    RowLayout {
+                                        id: maskStackActions
+                                        spacing: 3
+
+                                        MiniButton {
+                                            objectName: "maskStackSetVisibilityButton"
+                                            square: true
+                                            iconName: modelData.enabled === false ? "delete" : "media"
+                                            role: "icon"
+                                            active: modelData.enabled !== false
+                                            tooltip: modelData.enabled === false ? "Show this selection group." : "Hide this selection group."
+                                            onClicked: editorPreview.setMaskSetEnabled(String(modelData.id || ""), !(modelData.enabled !== false))
+                                        }
+                                        MiniButton {
+                                            objectName: "maskStackSetSoloButton"
+                                            square: true
+                                            iconName: "select"
+                                            role: "icon"
+                                            active: modelData.solo === true
+                                            tooltip: modelData.solo === true ? "Clear selection group isolation." : "Show only this selection group."
+                                            onClicked: editorPreview.setMaskSetSolo(String(modelData.id || ""), !(modelData.solo === true))
+                                        }
+                                        MiniButton {
+                                            objectName: "maskAdvancedDetailsButton"
+                                            square: true
+                                            iconName: "info"
+                                            role: "icon"
+                                            active: root.maskAdvancedDetailsExpanded
+                                            tooltip: root.maskAdvancedDetailsExpanded
+                                                     ? "Hide component-level selection controls."
+                                                     : "Show component-level selection controls."
+                                            onClicked: root.maskAdvancedDetailsExpanded = !root.maskAdvancedDetailsExpanded
+                                        }
+                                        Rectangle {
+                                            visible: root.maskAdvancedDetailsExpanded
+                                            Layout.preferredWidth: 1
+                                            Layout.fillHeight: true
+                                            color: root.hairline
+                                        }
+                                        MiniButton {
+                                            objectName: "maskStackSourceVisibilityButton"
+                                            visible: root.maskAdvancedDetailsExpanded
+                                            square: true
+                                            iconName: primarySource.enabled === false ? "delete" : "media"
+                                            role: "icon"
+                                            enabled: primarySourceIndex >= 0
+                                            active: primarySource.enabled !== false
+                                            tooltip: primarySource.enabled === false
+                                                     ? "Show component: " + String(primarySource.sourceBadge || "Selection") + "."
+                                                     : "Hide component: " + String(primarySource.sourceBadge || "Selection") + "."
+                                            onClicked: editorPreview.setMaskSourceEnabled(primarySourceIndex, !(primarySource.enabled !== false))
+                                        }
+                                        MiniButton {
+                                            objectName: "maskStackSourceSoloButton"
+                                            visible: root.maskAdvancedDetailsExpanded
+                                            square: true
+                                            iconName: "source"
+                                            role: "icon"
+                                            enabled: primarySourceIndex >= 0
+                                            active: primarySource.solo === true
+                                            tooltip: primarySource.solo === true
+                                                     ? "Clear component isolation."
+                                                     : "Show only component: " + String(primarySource.sourceBadge || "Selection") + "."
+                                            onClicked: editorPreview.setMaskSourceSolo(primarySourceIndex, !(primarySource.solo === true))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -4005,16 +10214,22 @@ Rectangle {
                     objectName: "editImageViewport"
                     readonly property int toolbarCompactWidth: 1240
                     readonly property int toolbarTightWidth: 1000
-                    readonly property int toolbarStackWidth: 1320
+                    readonly property int toolbarStackWidth: 760
                     readonly property bool toolbarCompact: width < toolbarCompactWidth
                     readonly property bool toolbarTight: width < toolbarTightWidth
                     readonly property bool toolbarStacked: width < toolbarStackWidth
+                    readonly property bool primaryCanvasHudActive: root.editTool === "crop" ||
+                                                                    root.brushToolReady() ||
+                                                                    (editorPreview.hasActiveMask &&
+                                                                     editorPreview.activeMaskToolRole === "retouch" &&
+                                                                     !editorPreview.compareMode)
                     visible: root.editTool !== "compare" && !(root.largeScopesMode && root.editInspectorTab === "scopes")
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     source: root.displayImageSource(0)
                     resetKey: catalogAssets.selectedAssetId
                     masked: root.editTool === "masks" || root.editTool === "brush"
+                    publishPreviewViewport: true
                     loupeEnabled: true
                     focusCheckOverlayEnabled: true
                     focusPeakingOverlayEnabled: true
@@ -4022,6 +10237,182 @@ Rectangle {
                     falseColorOverlayEnabled: true
                     gamutOverlayEnabled: true
                     zoneMapOverlayEnabled: true
+                    topChromeInset: root.editTool === "crop" && !editorPreview.compareMode
+                                    ? 58
+                                    : ((root.brushToolReady() ||
+                                        (editorPreview.hasActiveMask &&
+                                         editorPreview.activeMaskToolRole === "retouch")) &&
+                                       !editorPreview.compareMode
+                                       ? 90
+                                       : (!primaryCanvasHudActive
+                                            ? (toolbarStacked ? 84 : 42)
+                                            : 0))
+
+                    Rectangle {
+                        id: maskToolRail
+                        objectName: "maskToolRail"
+                        readonly property bool expanded: root.maskToolRailExpanded
+                        readonly property string layoutContract: "left-rail|icon-first|expandable:v1"
+                        readonly property bool compactLabelsHidden: !expanded
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 10
+                        anchors.topMargin: 54
+                        anchors.bottomMargin: 12
+                        width: expanded ? 206 : 46
+                        visible: (root.editTool === "masks" || root.editTool === "brush") &&
+                                 !editorPreview.compareMode
+                        z: 30
+                        radius: 4
+                        color: theme.alpha(theme.ink950, 0.88)
+                        border.width: theme.chromeBorderWidth
+                        border.color: theme.alpha(root.mint, expanded ? 0.42 : 0.24)
+                        clip: true
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 6
+
+                            MiniButton {
+                                objectName: "maskToolRailToggleButton"
+                                Layout.fillWidth: true
+                                text: maskToolRail.expanded ? "Collapse" : "Tools"
+                                iconName: maskToolRail.expanded ? "panel-left" : "menu"
+                                role: maskToolRail.expanded ? "segmented" : "icon"
+                                labelVisible: maskToolRail.expanded
+                                active: maskToolRail.expanded
+                                tooltip: maskToolRail.expanded ? "Collapse the selection tool rail." : "Expand the selection tool rail."
+                                onClicked: root.maskToolRailExpanded = !root.maskToolRailExpanded
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: theme.alpha(root.lineColor, 0.62)
+                            }
+
+                            Label {
+                                objectName: "maskToolRailSectionLabel"
+                                visible: maskToolRail.expanded
+                                Layout.fillWidth: true
+                                text: "Selection"
+                                color: root.dimText
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                                font.weight: Font.DemiBold
+                                font.letterSpacing: 0
+                                elide: Text.ElideRight
+                            }
+
+                            MiniButton { objectName: "maskSourceObjectButton"; Layout.fillWidth: true; text: "Object"; iconName: "smart-select"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "object"; tooltip: "Create an object selection with " + editorPreview.smartSelectionRuntimeLabel + "."; onClicked: root.createMaskSource("object") }
+                            MiniButton { objectName: "maskSourceSubjectButton"; Layout.fillWidth: true; text: "Subject"; iconName: "smart-select"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "subject"; tooltip: "Create a foreground subject selection with " + editorPreview.smartSelectionRuntimeLabel + "."; onClicked: root.createGeneratedSelectionSource("subject") }
+                            MiniButton { objectName: "maskSourceSkyButton"; Layout.fillWidth: true; text: "Sky"; iconName: "masks"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "sky"; tooltip: "Create a heuristic sky selection, not semantic sky segmentation."; onClicked: root.createGeneratedSelectionSource("sky") }
+                            MiniButton { objectName: "maskSourceBackgroundButton"; Layout.fillWidth: true; text: "Background"; iconName: "compare"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "background"; tooltip: "Create a background selection by inverting the subject matte, not a separate background model."; onClicked: root.createGeneratedSelectionSource("background") }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 1
+                                color: theme.alpha(root.lineColor, 0.62)
+                            }
+
+                            MiniButton { objectName: "maskSourceBrushAddButton"; Layout.fillWidth: true; text: "Brush +"; iconName: "brush-tool"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "brush" && root.maskCreationOperation !== "subtract"; tooltip: "Paint an additive brush selection."; onClicked: root.startMaskBrushSource("add") }
+                            MiniButton { objectName: "maskSourceBrushEraseButton"; Layout.fillWidth: true; text: "Erase"; iconName: "brush-subtract"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "brush" && root.maskCreationOperation === "subtract"; tooltip: "Paint a subtractive brush selection."; onClicked: root.startMaskBrushSource("subtract") }
+                            MiniButton { objectName: "maskSourceLassoButton"; Layout.fillWidth: true; text: "Lasso"; iconName: "lasso"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "lasso"; tooltip: "Draw a freeform selection."; onClicked: root.startMaskLassoFromShortcut() }
+                            MiniButton { objectName: "maskSourcePolygonButton"; Layout.fillWidth: true; text: "Polygon"; iconName: "geometry"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "polygon"; tooltip: "Click points to build a polygon selection."; onClicked: root.startMaskPolygonFromShortcut() }
+                            MiniButton { objectName: "maskSourceLinearButton"; Layout.fillWidth: true; text: "Linear"; iconName: "geometry"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "linear"; tooltip: "Create a linear gradient selection."; onClicked: root.createMaskSource("linear") }
+                            MiniButton { objectName: "maskSourceRadialButton"; Layout.fillWidth: true; text: "Radial"; iconName: "masks"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "radial"; tooltip: "Create a radial selection."; onClicked: root.createMaskSource("radial") }
+                            MiniButton { objectName: "maskSourceEllipseButton"; Layout.fillWidth: true; text: "Ellipse"; iconName: "masks"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "ellipse"; tooltip: "Create an ellipse selection."; onClicked: root.createMaskSource("ellipse") }
+                            MiniButton { objectName: "maskSourceRectangleButton"; Layout.fillWidth: true; text: "Rect"; iconName: "geometry"; role: maskToolRail.expanded ? "segmented" : "icon"; labelVisible: maskToolRail.expanded; active: root.editTool === "masks" && editorPreview.activeMaskKind === "rectangle"; tooltip: "Create a rectangle selection."; onClicked: root.createMaskSource("rectangle") }
+
+                            Item { Layout.fillHeight: true }
+                        }
+                    }
+
+                    Rectangle {
+                        id: activeCanvasToolChip
+                        objectName: "activeCanvasToolChip"
+                        readonly property string layoutContract: "active-tool-chip|done-cancel|viewport:v1"
+                        anchors.left: parent.left
+                        anchors.top: parent.top
+                        anchors.leftMargin: maskToolRail.visible ? maskToolRail.x + maskToolRail.width + 10 : 12
+                        anchors.topMargin: 12
+                        width: Math.min(parent.width - anchors.leftMargin - 12,
+                                        activeCanvasToolChipContent.implicitWidth + 18)
+                        height: 42
+                        radius: 4
+                        visible: root.activeCanvasToolChipVisible()
+                        color: theme.alpha(theme.ink950, 0.90)
+                        border.width: theme.chromeBorderWidth
+                        border.color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
+                        z: 31
+                        clip: true
+
+                        RowLayout {
+                            id: activeCanvasToolChipContent
+                            anchors.fill: parent
+                            anchors.leftMargin: 9
+                            anchors.rightMargin: 7
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.preferredWidth: 8
+                                Layout.preferredHeight: 8
+                                radius: 4
+                                color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
+                            }
+
+                            ColumnLayout {
+                                Layout.preferredWidth: 156
+                                Layout.maximumWidth: 190
+                                Layout.fillWidth: true
+                                spacing: 1
+
+                                Label {
+                                    objectName: "activeCanvasToolChipNameLabel"
+                                    Layout.fillWidth: true
+                                    text: root.activeCanvasToolName()
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    font.letterSpacing: 0
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    objectName: "activeCanvasToolChipModeLabel"
+                                    Layout.fillWidth: true
+                                    text: root.activeCanvasToolModeText()
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    font.letterSpacing: 0
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            MiniButton {
+                                objectName: "activeCanvasToolDoneButton"
+                                text: "Done"
+                                iconName: "check"
+                                role: "primary"
+                                enabled: root.activeCanvasToolCanComplete()
+                                tooltip: "Finish the active canvas tool and keep the selection."
+                                onClicked: root.finishActiveCanvasTool()
+                            }
+
+                            MiniButton {
+                                objectName: "activeCanvasToolCancelButton"
+                                text: "Cancel"
+                                iconName: "close"
+                                role: "secondary"
+                                tooltip: "Cancel or exit the active canvas tool."
+                                onClicked: root.cancelActiveTool()
+                            }
+                        }
+                    }
 
                     CropOverlay {
                         objectName: "cropBoxOverlay"
@@ -4075,9 +10466,8 @@ Rectangle {
                         anchors.fill: parent
                         readonly property var layerData: root.currentPhotoLayerData()
                         readonly property int layerIndex: root.normalizedActivePhotoLayerIndex()
-                        active: root.page === "edit" &&
-                                root.editTool !== "crop" &&
-                                !editorPreview.compareMode &&
+                        active: root.editTool === "layers" &&
+                                editorPreview.photoLayerCount > 0 &&
                                 root.photoLayerHasDirectTransform(layerData)
                         locked: layerData.locked === true
                         imageX: editViewport.paintedContentX
@@ -4103,7 +10493,7 @@ Rectangle {
                         id: pixelInspectorHud
                         objectName: "pixelInspectorHud"
                         readonly property var inspector: editorPreview.pixelInspector
-                        visible: inspector && inspector.active === true && root.editTool !== "crop"
+                        visible: root.pixelInspectorSamplingActive && inspector && inspector.active === true && root.editTool !== "crop"
                         x: root.clamp(editViewport.pointerX + 14, 8, parent.width - width - 8)
                         y: root.clamp(editViewport.pointerY + 14, 8, parent.height - height - 8)
                         width: Math.max(238, pixelInspectorContent.implicitWidth + 18)
@@ -4215,7 +10605,17 @@ Rectangle {
                                 font.weight: Font.DemiBold
                                 font.letterSpacing: 0
                             }
+                            Label {
+                                objectName: "cropToolAspectLabel"
+                                text: root.cropHudAspectText()
+                                color: theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                font.letterSpacing: 0
+                                elide: Text.ElideRight
+                            }
                             MiniButton {
+                                objectName: "cropHudBoxButton"
                                 text: "Box"
                                 iconName: "crop"
                                 role: "segmented"
@@ -4224,6 +10624,7 @@ Rectangle {
                                 onClicked: root.setCropToolMode("crop")
                             }
                             MiniButton {
+                                objectName: "cropHudTransformButton"
                                 text: "Transform"
                                 iconName: "geometry"
                                 role: "segmented"
@@ -4232,6 +10633,7 @@ Rectangle {
                                 onClicked: root.setCropToolMode("transform")
                             }
                             MiniButton {
+                                objectName: "cropHudHorizonButton"
                                 text: "Horizon"
                                 iconName: "level"
                                 role: "segmented"
@@ -4239,6 +10641,7 @@ Rectangle {
                                 onClicked: root.setCropToolMode("horizon")
                             }
                             MiniButton {
+                                objectName: "cropHudDoneButton"
                                 text: "Done"
                                 iconName: "check"
                                 role: "primary"
@@ -4253,12 +10656,12 @@ Rectangle {
                         anchors.top: parent.top
                         anchors.topMargin: 12
                         width: Math.min(parent.width - 24, brushToolControls.implicitWidth + 18)
-                        height: 68
+                        height: 80
                         radius: 3
                         visible: root.brushToolReady() && !editorPreview.compareMode
                         color: theme.alpha(theme.ink950, 0.84)
                         border.width: theme.chromeBorderWidth
-                        border.color: editorPreview.activeMaskOperation === "subtract" ? "#d98962" : root.mint
+                        border.color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
                         z: 23
                         clip: true
 
@@ -4273,7 +10676,7 @@ Rectangle {
 
                                 Label {
                                     text: "Brush"
-                                    color: editorPreview.activeMaskOperation === "subtract" ? "#d98962" : root.mint
+                                    color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
                                     font.family: theme.fontUi
                                     font.pixelSize: 10
                                     font.weight: Font.DemiBold
@@ -4286,7 +10689,7 @@ Rectangle {
                                     role: "segmented"
                                     active: editorPreview.activeMaskOperation === "add"
                                     accent: root.mint
-                                    tooltip: "Paint into the active mask."
+                                    tooltip: "Paint into the active selection."
                                     onClicked: root.setBrushPaintMode("add")
                                 }
                                 MiniButton {
@@ -4296,7 +10699,7 @@ Rectangle {
                                     role: "segmented"
                                     active: editorPreview.activeMaskOperation === "subtract"
                                     accent: "#d98962"
-                                    tooltip: "Erase from the active mask."
+                                    tooltip: "Erase from the active selection."
                                     onClicked: root.setBrushPaintMode("subtract")
                                 }
                                 Label {
@@ -4309,12 +10712,14 @@ Rectangle {
                                 }
                                 MiniButton {
                                     objectName: "brushHudDoneButton"
-                                    text: "Done"
+                                    text: "Exit Brush"
                                     iconName: "check"
                                     role: "primary"
                                     onClicked: {
-                                        editorPreview.deselectActiveMask()
-                                        root.activateEditTool("adjust")
+                                        if (editorPreview.brushStrokeActive)
+                                            editorPreview.endActiveBrushStroke()
+                                        root.editTool = "masks"
+                                        root.editInspectorTab = "adjust"
                                     }
                                 }
                             }
@@ -4329,6 +10734,76 @@ Rectangle {
                                     iconName: "minus"
                                     tooltip: "Decrease brush size."
                                     onClicked: root.adjustActiveBrushSize(-0.02)
+                                }
+                                Rectangle {
+                                    id: brushHudSizeDragHandle
+                                    objectName: "brushHudSizeDragHandle"
+                                    Layout.preferredWidth: 96
+                                    Layout.preferredHeight: 24
+                                    radius: 3
+                                    color: root.brushHudSizeDragActive ? theme.alpha(root.mint, 0.20) : theme.alpha(theme.ink950, 0.72)
+                                    border.width: 1
+                                    border.color: root.brushHudSizeDragActive ? theme.alpha(root.mint, 0.72) : theme.alpha(theme.glassEdge, 0.24)
+
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: "Size " + root.brushSizePercentValueText() + "%"
+                                        color: theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                        font.weight: Font.DemiBold
+                                        font.letterSpacing: 0
+                                    }
+
+                                    MouseArea {
+                                        objectName: "brushHudSizeDragArea"
+                                        anchors.fill: parent
+                                        cursorShape: Qt.SizeHorCursor
+                                        onPressed: function(mouse) {
+                                            const mapped = brushHudSizeDragHandle.mapToItem(root, mouse.x, mouse.y)
+                                            root.beginBrushHudSizeDrag(mapped.x)
+                                        }
+                                        onPositionChanged: function(mouse) {
+                                            const mapped = brushHudSizeDragHandle.mapToItem(root, mouse.x, mouse.y)
+                                            root.updateBrushHudSizeDrag(mapped.x)
+                                        }
+                                        onReleased: root.endBrushHudSizeDrag()
+                                        onCanceled: root.endBrushHudSizeDrag()
+                                    }
+                                }
+                                TextField {
+                                    id: brushHudSizeField
+                                    objectName: "brushHudSizeField"
+                                    Layout.preferredWidth: 48
+                                    Layout.preferredHeight: 24
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: root.brushSizePercentValueText()
+                                    selectByMouse: true
+                                    inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                    color: theme.textMain
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    font.letterSpacing: 0
+                                    leftPadding: 6
+                                    rightPadding: 6
+                                    background: Rectangle {
+                                        radius: 3
+                                        color: brushHudSizeField.activeFocus ? theme.alpha(root.mint, 0.10) : theme.alpha(theme.ink950, 0.72)
+                                        border.width: 1
+                                        border.color: brushHudSizeField.activeFocus ? theme.alpha(root.mint, 0.76) : theme.alpha(theme.glassEdge, 0.24)
+                                    }
+                                    onAccepted: {
+                                        if (root.setActiveBrushSizeText(text))
+                                            focus = false
+                                        else
+                                            selectAll()
+                                    }
+                                    onActiveFocusChanged: {
+                                        if (!activeFocus)
+                                            root.setActiveBrushSizeText(text)
+                                    }
                                 }
                                 MiniButton {
                                     objectName: "brushHudSizeUpButton"
@@ -4370,12 +10845,481 @@ Rectangle {
                     }
 
                     Rectangle {
+                        objectName: "polygonToolHud"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.top: parent.top
+                        anchors.topMargin: 12
+                        width: Math.min(parent.width - 24, polygonToolControls.implicitWidth + 18)
+                        height: polygonToolControls.implicitHeight + 18
+                        radius: 3
+                        visible: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") &&
+                                 !editorPreview.compareMode
+                        color: theme.alpha(theme.ink950, 0.84)
+                        border.width: theme.chromeBorderWidth
+                        border.color: editorPreview.activeMaskPolygonSelfIntersecting ? theme.warning : root.mint
+                        z: 23
+                        clip: true
+
+                        ColumnLayout {
+                            id: polygonToolControls
+                            anchors.centerIn: parent
+                            spacing: 5
+
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+
+                                Label {
+                                    text: editorPreview.activeMaskKind === "lasso" ? "Lasso" : "Polygon"
+                                    color: editorPreview.activeMaskPolygonSelfIntersecting ? theme.warning : root.mint
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    font.letterSpacing: 0
+                                }
+                                Label {
+                                    text: editorPreview.activeMaskPolygonPointCount + " pts"
+                                    color: theme.textMain
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                }
+                                MiniButton {
+                                    objectName: "polygonHudUndoPointButton"
+                                    text: "Undo"
+                                    iconName: "undo"
+                                    role: "segmented"
+                                    enabled: editorPreview.activeMaskPolygonPointCount > 0
+                                    tooltip: "Remove the last polygon point."
+                                    onClicked: editorPreview.removeLastActivePolygonPoint()
+                                }
+                                MiniButton {
+                                    objectName: "polygonHudClearButton"
+                                    text: "Clear"
+                                    iconName: "delete"
+                                    role: "segmented"
+                                    enabled: editorPreview.activeMaskPolygonPointCount > 0
+                                    tooltip: "Clear all polygon points."
+                                    onClicked: editorPreview.clearActivePolygonPoints()
+                                }
+                                MiniButton {
+                                    objectName: "polygonHudCompleteButton"
+                                    text: "Complete"
+                                    iconName: "check"
+                                    role: "primary"
+                                    visible: editorPreview.activeMaskKind === "polygon"
+                                    enabled: root.completeActivePolygonShortcutReady
+                                    tooltip: editorPreview.activeMaskPolygonSelfIntersecting
+                                             ? "Undo the crossing point before completing this polygon."
+                                             : "Complete the polygon selection."
+                                    onClicked: root.completeActivePolygonSelection()
+                                }
+                                MiniButton {
+                                    objectName: "polygonHudCancelButton"
+                                    text: "Cancel"
+                                    iconName: "close"
+                                    role: "secondary"
+                                    visible: editorPreview.activeMaskKind === "polygon"
+                                    enabled: root.cancelActivePolygonShortcutReady
+                                    tooltip: "Cancel the unfinished polygon selection."
+                                    onClicked: root.cancelActivePolygonDrawing()
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+                                visible: editorPreview.activeMaskKind === "polygon"
+
+                                MiniButton {
+                                    objectName: "polygonHudSimplifyButton"
+                                    text: "Simplify"
+                                    iconName: "reset"
+                                    role: "segmented"
+                                    enabled: editorPreview.activeMaskPolygonPointCount > 3
+                                    tooltip: "Remove redundant polygon points."
+                                    onClicked: editorPreview.simplifyActivePolygon(0.012)
+                                }
+                                MiniButton {
+                                    objectName: "polygonHudSmoothButton"
+                                    text: "Smooth"
+                                    iconName: "geometry"
+                                    role: "segmented"
+                                    enabled: editorPreview.activeMaskPolygonPointCount >= 3
+                                    tooltip: "Smooth polygon corners."
+                                    onClicked: editorPreview.smoothActivePolygon()
+                                }
+                            }
+
+                            Label {
+                                objectName: "polygonSelfIntersectionWarning"
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.maximumWidth: Math.max(160, polygonToolControls.width - 8)
+                                visible: editorPreview.activeMaskKind === "polygon" &&
+                                         editorPreview.activeMaskPolygonSelfIntersecting
+                                text: "Self-intersecting polygon. Undo the last point or redraw."
+                                wrapMode: Text.WordWrap
+                                horizontalAlignment: Text.AlignHCenter
+                                color: theme.warning
+                                font.family: theme.fontUi
+                                font.pixelSize: 10
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: brushContextPanel
+                        objectName: "brushContextPanel"
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.rightMargin: 12
+                        anchors.topMargin: 92
+                        width: Math.min(310, Math.max(250, parent.width * 0.30))
+                        height: brushContextContent.implicitHeight + 18
+                        radius: 4
+                        visible: root.brushToolReady() && !editorPreview.compareMode
+                        color: theme.alpha(theme.ink950, 0.88)
+                        border.width: theme.chromeBorderWidth
+                        border.color: theme.alpha(root.mint, 0.54)
+                        z: 22
+                        clip: true
+
+                        ColumnLayout {
+                            id: brushContextContent
+                            anchors.fill: parent
+                            anchors.margins: 9
+                            spacing: 7
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                Label {
+                                    objectName: "brushContextLayerStackLabel"
+                                    Layout.fillWidth: true
+                                    text: editorPreview.photoLayerCount > 0 ? "Layers / Selections" : "Base / Selections"
+                                    color: root.dimText
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+
+                                MiniButton {
+                                    objectName: "brushContextShowLayersButton"
+                                    text: "Layers"
+                                    role: "segmented"
+                                    active: root.editInspectorTab === "layers"
+                                    tooltip: "Open the full Layers inspector without leaving brush mode."
+                                    onClicked: root.editInspectorTab = "layers"
+                                }
+                            }
+
+                            Rectangle {
+                                id: brushContextLayerCard
+                                objectName: "brushContextLayerCard"
+                                readonly property var activeLayer: root.currentPhotoLayerData()
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 42
+                                radius: 3
+                                color: theme.alpha(root.panelColor, 0.88)
+                                border.width: theme.chromeBorderWidth
+                                border.color: root.hairline
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 6
+                                    spacing: 7
+
+                                    Rectangle {
+                                        Layout.preferredWidth: 28
+                                        Layout.preferredHeight: 28
+                                        radius: 3
+                                        color: theme.alpha(theme.accentCool400, 0.12)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.textMain, 0.22)
+
+                                        AppIcon {
+                                            anchors.centerIn: parent
+                                            width: 13
+                                            height: 13
+                                            name: editorPreview.photoLayerCount > 0
+                                                  ? root.photoLayerIconName(brushContextLayerCard.activeLayer)
+                                                  : "media"
+                                            color: theme.textMain
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 1
+
+                                        Label {
+                                            objectName: "brushContextLayerNameLabel"
+                                            Layout.fillWidth: true
+                                            text: editorPreview.photoLayerCount > 0
+                                                  ? String(brushContextLayerCard.activeLayer.displayName || brushContextLayerCard.activeLayer.name || "Layer")
+                                                  : "Base image"
+                                            color: theme.textMain
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Label {
+                                            objectName: "brushContextLayerStateLabel"
+                                            Layout.fillWidth: true
+                                            text: editorPreview.photoLayerCount > 0
+                                                  ? (brushContextLayerCard.activeLayer.selectionScoped === true
+                                                     ? "Selection adjustment layer"
+                                                     : String(brushContextLayerCard.activeLayer.kindLabel || "Layer") + " layer")
+                                                  : "Direct adjustment"
+                                            color: root.dimText
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "brushContextMaskCard"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 50
+                                radius: 3
+                                color: theme.alpha(root.mint, 0.075)
+                                border.width: theme.chromeBorderWidth
+                                border.color: theme.alpha(root.mint, 0.44)
+
+                                ColumnLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 7
+                                    spacing: 2
+
+                                    Label {
+                                        objectName: "brushContextMaskNameLabel"
+                                        Layout.fillWidth: true
+                                        text: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Mask") : "No active mask"
+                                        color: root.mint
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 12
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Label {
+                                        objectName: "brushContextMaskStateLabel"
+                                        Layout.fillWidth: true
+                                        text: root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
+                                              root.maskOperationLabel(editorPreview.activeMaskOperation) +
+                                              " / " + root.activeMaskPreviewLabel() +
+                                              " / " + root.activeMaskPreviewQualityLabel()
+                                        color: theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "brushContextMaskStackRow"
+                                Layout.fillWidth: true
+                                spacing: 5
+
+                                Label {
+                                    objectName: "brushContextMaskCountLabel"
+                                    text: editorPreview.maskSetCount + " selection sets"
+                                    color: root.dimText
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    elide: Text.ElideRight
+                                }
+
+                                Rectangle {
+                                    objectName: "brushContextMaskChip"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 26
+                                    radius: 3
+                                    color: theme.alpha(root.mint, 0.16)
+                                    border.width: 1
+                                    border.color: root.mint
+
+                                    Label {
+                                        anchors.fill: parent
+                                        anchors.margins: 5
+                                        text: String(editorPreview.activeMaskName || "Active selection")
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        verticalAlignment: Text.AlignVCenter
+                                        elide: Text.ElideRight
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+
+                                MiniButton {
+                                    objectName: "brushContextAddButton"
+                                    Layout.fillWidth: true
+                                    text: "Add"
+                                    iconName: "brush-tool"
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskOperation === "add"
+                                    accent: root.mint
+                                    onClicked: root.setBrushPaintMode("add")
+                                }
+                                MiniButton {
+                                    objectName: "brushContextEraseButton"
+                                    Layout.fillWidth: true
+                                    text: "Erase"
+                                    iconName: "brush-subtract"
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskOperation === "subtract"
+                                    accent: "#d98962"
+                                    onClicked: root.setBrushPaintMode("subtract")
+                                }
+                                MiniButton {
+                                    objectName: "brushContextOverlayToggle"
+                                    Layout.fillWidth: true
+                                    text: root.activeMaskPreviewLabel()
+                                    role: "segmented"
+                                    active: editorPreview.maskPreviewDisplayMode !== "hidden"
+                                    tooltip: "Toggle the selection preview overlay."
+                                    onClicked: root.setActiveMaskPreviewVisible(editorPreview.maskPreviewDisplayMode === "hidden")
+                                }
+                            }
+
+                            Rectangle {
+                                objectName: "brushContextCompactBrushPanel"
+                                readonly property string brushPanelContract: "size-flow-hardness-density-opacity|compact:v1"
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 82
+                                radius: 3
+                                color: theme.alpha(theme.ink950, 0.54)
+                                border.width: 1
+                                border.color: theme.alpha(theme.glassEdge, 0.24)
+
+                                GridLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 7
+                                    columns: 3
+                                    columnSpacing: 6
+                                    rowSpacing: 5
+
+                                    Label {
+                                        objectName: "brushContextBrushSizeLabel"
+                                        Layout.fillWidth: true
+                                        text: "Size " + root.brushSizePercentValueText() + "%"
+                                        color: theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        objectName: "brushContextBrushFlowLabel"
+                                        Layout.fillWidth: true
+                                        text: "Flow " + root.brushFlowValueText()
+                                        color: theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+                                    Label {
+                                        objectName: "brushContextBrushHardnessLabel"
+                                        Layout.fillWidth: true
+                                        text: "Hard " + root.brushHardnessValueText()
+                                        color: theme.textMain
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+
+                                    RowLayout {
+                                        Layout.columnSpan: 3
+                                        Layout.fillWidth: true
+                                        spacing: 5
+
+                                        Label {
+                                            objectName: "brushContextBrushDensityLabel"
+                                            Layout.fillWidth: true
+                                            text: "Density " + root.brushDensityValueText()
+                                            color: theme.textMain
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+                                        MiniButton { objectName: "brushContextDensityDownButton"; square: true; iconName: "minus"; role: "icon"; tooltip: "Lower mask density."; onClicked: root.adjustActiveMaskDensity(-0.05) }
+                                        MiniButton { objectName: "brushContextDensityUpButton"; square: true; iconName: "plus"; role: "icon"; tooltip: "Raise mask density."; onClicked: root.adjustActiveMaskDensity(0.05) }
+                                    }
+
+                                    RowLayout {
+                                        Layout.columnSpan: 3
+                                        Layout.fillWidth: true
+                                        spacing: 5
+
+                                        Label {
+                                            objectName: "brushContextBrushOpacityLabel"
+                                            Layout.fillWidth: true
+                                            text: "Opacity " + root.brushOpacityValueText()
+                                            color: theme.textMain
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                            font.weight: Font.DemiBold
+                                            elide: Text.ElideRight
+                                        }
+                                        MiniButton { objectName: "brushContextOpacityDownButton"; square: true; iconName: "minus"; role: "icon"; tooltip: "Lower mask opacity."; onClicked: root.adjustActiveMaskOpacity(-0.05) }
+                                        MiniButton { objectName: "brushContextOpacityUpButton"; square: true; iconName: "plus"; role: "icon"; tooltip: "Raise mask opacity."; onClicked: root.adjustActiveMaskOpacity(0.05) }
+                                    }
+                                }
+                            }
+
+                            AdjustSlider {
+                                objectName: "brushContextExposureSlider"
+                                controlHeight: 34
+                                label: root.activeMaskAdjustmentLayerIndex() >= 0 ? "Layer Exposure" : "Selection Exposure"
+                                from: -2
+                                to: 2
+                                stepSize: 0.01
+                                defaultValue: 0
+                                value: root.activeMaskAdjustmentValue("exposure", editorPreview.activeMaskExposure)
+                                valueText: root.exposureText(value)
+                                onValueDragged: function(value) { root.setActiveMaskQuickAdjustment("exposure", value) }
+                            }
+
+                            AdjustSlider {
+                                objectName: "brushContextTemperatureSlider"
+                                controlHeight: 34
+                                label: root.activeMaskAdjustmentLayerIndex() >= 0 ? "Layer Temp" : "Selection Temp"
+                                from: -100
+                                to: 100
+                                stepSize: 1
+                                defaultValue: 0
+                                value: root.activeMaskAdjustmentValue("temperature", editorPreview.activeMaskTemperature)
+                                valueText: root.signedPercent(value)
+                                trackColors: ["#4FB5FF", "#F2C35B"]
+                                onValueDragged: function(value) { root.setActiveMaskQuickAdjustment("temperature", value) }
+                            }
+                        }
+                    }
+
+                    Rectangle {
                         objectName: "retouchToolHud"
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
                         anchors.topMargin: 12
                         width: Math.min(parent.width - 24, retouchToolControls.implicitWidth + 18)
-                        height: 68
+                        height: retouchToolControls.implicitHeight + 12
                         radius: 3
                         visible: editorPreview.hasActiveMask &&
                                  editorPreview.activeMaskToolRole === "retouch" &&
@@ -4422,6 +11366,28 @@ Rectangle {
                                     onClicked: root.startRetouchTool("remove")
                                 }
                                 MiniButton {
+                                    objectName: "retouchHudRemoveAddButton"
+                                    text: "Add"
+                                    iconName: "brush-add"
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskRetouchMode === "remove" &&
+                                            editorPreview.activeMaskOperation === "add"
+                                    accent: "#d98962"
+                                    tooltip: "Add to the pending remove selection before applying."
+                                    onClicked: editorPreview.startRemoveRefineBrush(false)
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudRemoveSubtractButton"
+                                    text: "Subtract"
+                                    iconName: "brush-subtract"
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskRetouchMode === "remove" &&
+                                            editorPreview.activeMaskOperation === "subtract"
+                                    accent: "#d36a5e"
+                                    tooltip: "Subtract from the pending remove selection before applying."
+                                    onClicked: editorPreview.startRemoveRefineBrush(true)
+                                }
+                                MiniButton {
                                     objectName: "retouchHudHealButton"
                                     text: "Heal"
                                     iconName: "brush-tool"
@@ -4457,6 +11423,9 @@ Rectangle {
                                     iconName: "check"
                                     role: "primary"
                                     enabled: !editorPreview.activeMaskCommitted
+                                    tooltip: editorPreview.activeMaskCommitted
+                                             ? "This retouch patch is stored in the edit recipe; the original file is unchanged."
+                                             : "Apply this retouch patch to the edit recipe; the original file is unchanged."
                                     onClicked: editorPreview.applyActiveRetouch()
                                 }
                                 MiniButton {
@@ -4497,42 +11466,366 @@ Rectangle {
                                 }
                                 MiniButton {
                                     objectName: "retouchHudSkinButton"
-                                    text: "Skin"
+                                    text: "Skin (Heuristic)"
                                     iconName: "brush-tool"
                                     role: "segmented"
+                                    visible: root.retouchModeIsPrimary("skin-cleanup")
                                     active: editorPreview.activeMaskRetouchMode === "skin-cleanup"
                                     accent: "#d7a08c"
-                                    tooltip: "Stage skin cleanup."
+                                    tooltip: "Heuristic skin cleanup is experimental and hidden from the primary retouch HUD."
                                     onClicked: root.startRetouchTool("skin-cleanup")
                                 }
                                 MiniButton {
                                     objectName: "retouchHudSmoothButton"
-                                    text: "Smooth"
+                                    text: "Smooth (Experimental)"
                                     iconName: "brush-tool"
                                     role: "segmented"
+                                    visible: root.retouchModeIsPrimary("frequency-smoothing")
                                     active: editorPreview.activeMaskRetouchMode === "frequency-smoothing"
                                     accent: "#c994d8"
-                                    tooltip: "Stage frequency smoothing."
+                                    tooltip: "Experimental frequency smoothing is hidden from the primary retouch HUD."
                                     onClicked: root.startRetouchTool("frequency-smoothing")
                                 }
                                 MiniButton {
                                     objectName: "retouchHudRegenerateButton"
                                     text: "Regenerate"
                                     role: "segmented"
-                                    enabled: !editorPreview.activeMaskCommitted &&
-                                             (editorPreview.activeMaskRetouchMode === "remove" ||
+                                    enabled: (editorPreview.activeMaskRetouchMode === "remove" ||
                                               editorPreview.activeMaskRetouchMode === "heal" ||
-                                              editorPreview.activeMaskRetouchMode === "patch")
-                                    tooltip: "Try another local inpaint seed."
-                                    onClicked: editorPreview.regenerateInpaintSeed()
+                                              editorPreview.activeMaskRetouchMode === "patch") &&
+                                             (!editorPreview.activeMaskCommitted ||
+                                              editorPreview.activeInpaintRegenerationAvailable)
+                                    tooltip: editorPreview.activeMaskCommitted
+                                             ? "Regenerate this applied retouch patch from its stored source mask; the original file is unchanged."
+                                             : "Advance the seed for the pending retouch patch candidate; the original file is unchanged."
+                                    onClicked: {
+                                        if (editorPreview.activeMaskCommitted)
+                                            editorPreview.regenerateActiveInpaintPatch()
+                                        else
+                                            editorPreview.regenerateInpaintSeed()
+                                    }
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudFinalizeInpaintButton"
+                                    text: "Finalize"
+                                    role: "segmented"
+                                    enabled: editorPreview.activeInpaintFinalizationAvailable
+                                    visible: editorPreview.activeMaskRetouchMode === "remove" ||
+                                             editorPreview.activeMaskRetouchMode === "heal" ||
+                                             editorPreview.activeMaskRetouchMode === "patch"
+                                    tooltip: editorPreview.activeInpaintFinalizationAvailable
+                                             ? "Queue full-resolution inpaint from the stored source mask; preview patches are not final output until this finishes."
+                                             : "Queue full-resolution inpaint from an applied preview patch; preview patches are not final output until this finishes."
+                                    onClicked: editorPreview.queueActiveFinalInpaintPatch()
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudRetryButton"
+                                    text: editorPreview.maskActionRetryLabel || "Retry"
+                                    iconName: "reset"
+                                    role: "secondary"
+                                    visible: editorPreview.maskActionRetryAvailable &&
+                                             String(editorPreview.maskActionRetryLabel || "").indexOf("Inpaint") >= 0
+                                    enabled: visible
+                                    tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed inpaint."
+                                    onClicked: editorPreview.retryLastMaskAction()
                                 }
                                 MiniButton {
                                     objectName: "retouchHudBeforeAfterButton"
-                                    text: editorPreview.retouchBeforeAfterEnabled ? "Before" : "After"
+                                    text: editorPreview.retouchBeforeAfterEnabled ? "Show After" : "Show Before"
                                     role: "segmented"
                                     active: editorPreview.retouchBeforeAfterEnabled
-                                    tooltip: "Toggle retouch before and after."
+                                    tooltip: editorPreview.retouchBeforeAfterEnabled
+                                             ? "Return to the retouched result; the edit recipe is unchanged."
+                                             : "Compare against the pre-retouch image; the edit recipe is unchanged."
                                     onClicked: editorPreview.retouchBeforeAfterEnabled = !editorPreview.retouchBeforeAfterEnabled
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "retouchHudHealBlendPanel"
+                                property string blendSignature: root.retouchHealBlendSignature()
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+                                visible: editorPreview.activeMaskRetouchMode === "heal"
+
+                                Label {
+                                    objectName: "retouchHudHealBlendLabel"
+                                    text: "Texture " + Math.round(editorPreview.activeMaskHealTextureBlend * 100).toString() +
+                                          " / Color " + Math.round(editorPreview.activeMaskHealColorBlend * 100).toString()
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudHealTextureDownButton"
+                                    text: "Texture -"
+                                    role: "secondary"
+                                    tooltip: "Reduce synthesized heal texture."
+                                    onClicked: editorPreview.activeMaskHealTextureBlend =
+                                               editorPreview.activeMaskHealTextureBlend - 0.08
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudHealTextureUpButton"
+                                    text: "Texture +"
+                                    role: "secondary"
+                                    tooltip: "Increase synthesized heal texture."
+                                    onClicked: editorPreview.activeMaskHealTextureBlend =
+                                               editorPreview.activeMaskHealTextureBlend + 0.08
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudHealColorDownButton"
+                                    text: "Color -"
+                                    role: "secondary"
+                                    tooltip: "Preserve more of the original heal color."
+                                    onClicked: editorPreview.activeMaskHealColorBlend =
+                                               editorPreview.activeMaskHealColorBlend - 0.08
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudHealColorUpButton"
+                                    text: "Color +"
+                                    role: "secondary"
+                                    tooltip: "Blend more repaired heal color."
+                                    onClicked: editorPreview.activeMaskHealColorBlend =
+                                               editorPreview.activeMaskHealColorBlend + 0.08
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "retouchHudPatchSourcePanel"
+                                property string sourceSignature: root.retouchPatchSourceSignature()
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+                                visible: editorPreview.activeMaskRetouchMode === "patch"
+
+                                Label {
+                                    objectName: "retouchHudPatchSourceLabel"
+                                    text: "Source " +
+                                          Math.round(editorPreview.activeMaskPatchSourceX * 100).toString() + "," +
+                                          Math.round(editorPreview.activeMaskPatchSourceY * 100).toString() +
+                                          " / " +
+                                          Math.round(editorPreview.activeMaskPatchSourceWidth * 100).toString() + "x" +
+                                          Math.round(editorPreview.activeMaskPatchSourceHeight * 100).toString()
+                                    color: theme.textMuted
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudPatchSourceLeftButton"
+                                    text: "Left"
+                                    role: "secondary"
+                                    tooltip: "Move the Patch source region left before applying."
+                                    onClicked: root.retouchPatchSourceNudge(-0.04, 0.0)
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudPatchSourceRightButton"
+                                    text: "Right"
+                                    role: "secondary"
+                                    tooltip: "Move the Patch source region right before applying."
+                                    onClicked: root.retouchPatchSourceNudge(0.04, 0.0)
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudPatchSourceUpButton"
+                                    text: "Up"
+                                    role: "secondary"
+                                    tooltip: "Move the Patch source region up before applying."
+                                    onClicked: root.retouchPatchSourceNudge(0.0, -0.04)
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudPatchSourceDownButton"
+                                    text: "Down"
+                                    role: "secondary"
+                                    tooltip: "Move the Patch source region down before applying."
+                                    onClicked: root.retouchPatchSourceNudge(0.0, 0.04)
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudPatchSourceResetButton"
+                                    text: "Reset"
+                                    role: "secondary"
+                                    tooltip: "Reset the Patch source region before applying."
+                                    onClicked: editorPreview.setActiveMaskPatchSourceRegion(0.62, 0.50, 0.18, 0.18)
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+                                visible: editorPreview.activeMaskRetouchMode === "clone"
+
+                                MiniButton {
+                                    objectName: "retouchHudCloneAlignedButton"
+                                    text: editorPreview.activeMaskCloneAligned ? "Aligned" : "Non-aligned"
+                                    role: "segmented"
+                                    active: editorPreview.activeMaskCloneAligned
+                                    tooltip: editorPreview.activeMaskCloneAligned
+                                             ? "Keep the clone source offset continuous across strokes."
+                                             : "Restart the clone source offset from the picked source for each stroke."
+                                    onClicked: editorPreview.activeMaskCloneAligned = !editorPreview.activeMaskCloneAligned
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudCloneScaleDownButton"
+                                    text: "Scale -"
+                                    role: "secondary"
+                                    tooltip: "Reduce Clone Stamp source scale."
+                                    onClicked: editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale - 0.1
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudCloneScaleUpButton"
+                                    text: "Scale +"
+                                    role: "secondary"
+                                    tooltip: "Increase Clone Stamp source scale."
+                                    onClicked: editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale + 0.1
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudCloneRotateLeftButton"
+                                    text: "Rot -15"
+                                    role: "secondary"
+                                    tooltip: "Rotate Clone Stamp source counterclockwise."
+                                    onClicked: editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation - 15
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudCloneRotateRightButton"
+                                    text: "Rot +15"
+                                    role: "secondary"
+                                    tooltip: "Rotate Clone Stamp source clockwise."
+                                    onClicked: editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation + 15
+                                }
+                            }
+
+                            ColumnLayout {
+                                objectName: "retouchHudCloneSourcePanel"
+                                property int sourceCount: editorPreview.activeMaskCloneSourceCount
+                                property int selectedSourceIndex: editorPreview.activeMaskCloneSourceIndex
+                                property string firstSourceName: editorPreview.activeMaskCloneSourceCount > 0
+                                                                 ? String(editorPreview.activeMaskCloneSources[0].name || "Source 1")
+                                                                 : ""
+                                Layout.fillWidth: true
+                                spacing: 5
+                                visible: editorPreview.activeMaskRetouchMode === "clone"
+
+                                RowLayout {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    spacing: 6
+
+                                    MiniButton {
+                                        objectName: "retouchHudCloneSaveSourceButton"
+                                        text: "Save Source"
+                                        role: "secondary"
+                                        enabled: editorPreview.activeMaskCloneSourceSet
+                                        tooltip: "Save the current Clone Stamp source, scale, rotation, and alignment."
+                                        onClicked: editorPreview.saveActiveCloneSource()
+                                    }
+
+                                    Label {
+                                        objectName: "retouchHudCloneSourceCountLabel"
+                                        text: editorPreview.activeMaskCloneSourceCount.toString() + " saved"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    spacing: 4
+                                    visible: editorPreview.activeMaskCloneSourceCount > 0
+
+                                    Repeater {
+                                        model: editorPreview.activeMaskCloneSources
+
+                                        RowLayout {
+                                            required property int index
+                                            required property var modelData
+                                            spacing: 2
+
+                                            MiniButton {
+                                                objectName: "retouchHudCloneSourceSelectButton" + index
+                                                text: String(modelData.name || ("Source " + (index + 1)))
+                                                role: "segmented"
+                                                active: editorPreview.activeMaskCloneSourceIndex === index
+                                                tooltip: "Load saved Clone Stamp source."
+                                                onClicked: editorPreview.selectActiveCloneSource(index)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "retouchHudCloneSourceDeleteButton" + index
+                                                text: "Delete"
+                                                role: "secondary"
+                                                tooltip: "Delete saved Clone Stamp source."
+                                                onClicked: editorPreview.deleteActiveCloneSource(index)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+
+                                MiniButton {
+                                    objectName: "retouchHudResetSelectionButton"
+                                    text: "Reset Selection"
+                                    iconName: "reset"
+                                    role: "secondary"
+                                    enabled: !editorPreview.activeMaskCommitted
+                                    tooltip: "Clear the pending retouch selection while keeping the active retouch tool."
+                                    onClicked: editorPreview.resetActiveRetouchSelection()
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudCancelButton"
+                                    text: "Cancel"
+                                    iconName: "close"
+                                    role: "secondary"
+                                    enabled: !editorPreview.activeMaskCommitted
+                                    tooltip: "Discard the pending retouch selection before it is applied."
+                                    onClicked: editorPreview.cancelActiveRetouch()
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudReopenSelectionButton"
+                                    text: "Reopen Selection"
+                                    iconName: "brush-tool"
+                                    role: "secondary"
+                                    enabled: editorPreview.activeMaskCommitted
+                                    tooltip: "Reopen the applied retouch selection for refinement; the original file is unchanged."
+                                    onClicked: editorPreview.reopenActiveRetouchSelection()
+                                }
+                                MiniButton {
+                                    objectName: "retouchHudDeletePatchButton"
+                                    text: "Delete Patch"
+                                    iconName: "trash"
+                                    role: "secondary"
+                                    enabled: editorPreview.activeMaskCommitted
+                                    tooltip: "Remove the applied retouch patch from the edit recipe."
+                                    onClicked: editorPreview.deleteActiveRetouchPatch()
+                                }
+                            }
+
+                            RowLayout {
+                                objectName: "retouchHudVariationPicker"
+                                Layout.alignment: Qt.AlignHCenter
+                                spacing: 6
+                                visible: editorPreview.activeInpaintVariationPickerVisible
+
+                                Label {
+                                    text: "Variation"
+                                    color: theme.textMuted
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    font.letterSpacing: 0
+                                }
+                                Repeater {
+                                    model: editorPreview.activeInpaintCandidateCount
+
+                                    MiniButton {
+                                        objectName: "retouchHudVariationButton" + String(index + 1)
+                                        text: String(index + 1)
+                                        role: "segmented"
+                                        active: editorPreview.activeInpaintCandidateIndex === index
+                                        accent: "#d98962"
+                                        tooltip: "Use inpaint variation " + String(index + 1) + " from the generated patch candidates."
+                                        onClicked: editorPreview.activeInpaintCandidateIndex = index
+                                    }
                                 }
                             }
                         }
@@ -4553,12 +11846,14 @@ Rectangle {
                     Rectangle {
                         id: editZoomToolbar
                         objectName: "editZoomToolbar"
+                        readonly property string toolGroupContract: "view-controls|zoom-fit-diagnostics|no-history-buttons:v1"
                         anchors.left: parent.left
                         anchors.top: parent.top
                         anchors.margins: 12
                         width: zoomControls.implicitWidth + 18
                         height: 36
                         radius: 3
+                        visible: !editViewport.primaryCanvasHudActive
                         color: theme.alpha(theme.ink950, 0.76)
                         border.width: theme.chromeBorderWidth
                         border.color: root.hairlineStrong
@@ -4569,24 +11864,128 @@ Rectangle {
                             anchors.centerIn: parent
                             spacing: 6
 
-                            MiniButton { objectName: "fitModeButton"; text: editViewport.fitMode === "fit" ? "Fit" : "Fill"; role: "segmented"; onClicked: editViewport.fitMode = editViewport.fitMode === "fit" ? "fill" : "fit" }
-                            MiniButton { objectName: "zoomStepButton"; text: Math.round(editViewport.zoom * 100) + "%"; role: "segmented"; labelVisible: !editViewport.toolbarTight; onClicked: editViewport.setZoom(editViewport.zoom >= 4 ? 1 : editViewport.zoom + 0.25) }
-                            MiniButton { objectName: "zoomOutButton"; square: true; iconName: "minus"; role: "icon"; onClicked: editViewport.zoomOut() }
-                            MiniButton { objectName: "zoomInButton"; square: true; iconName: "plus"; role: "icon"; onClicked: editViewport.zoomIn() }
-                            MiniButton { objectName: "loupeOverlayButton"; text: "Loupe"; iconName: "plus"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.loupeEnabled; tooltip: root.complexToolTooltip("loupe"); onClicked: root.loupeEnabled = !root.loupeEnabled }
-                            MiniButton { objectName: "focusOverlayButton"; text: "Focus"; iconName: "snap"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.focusCheckOverlayEnabled; tooltip: root.complexToolTooltip("focus-check"); onClicked: root.focusCheckOverlayEnabled = !root.focusCheckOverlayEnabled }
-                            MiniButton { objectName: "peakingOverlayButton"; text: "Peak"; iconName: "snap"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.focusPeakingOverlayEnabled; tooltip: root.complexToolTooltip("focus-peaking"); onClicked: root.focusPeakingOverlayEnabled = !root.focusPeakingOverlayEnabled }
-                            MiniButton { objectName: "clippingOverlayButton"; text: "Clips"; iconName: "scope"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.clippingOverlayEnabled; tooltip: root.complexToolTooltip("clipping"); onClicked: root.clippingOverlayEnabled = !root.clippingOverlayEnabled }
-                            MiniButton { objectName: "falseColorOverlayButton"; text: "False"; iconName: "scope"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.falseColorOverlayEnabled; tooltip: root.complexToolTooltip("false-color"); onClicked: root.falseColorOverlayEnabled = !root.falseColorOverlayEnabled }
-                            MiniButton { objectName: "gamutOverlayButton"; text: "Gamut"; iconName: "scope"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.gamutOverlayEnabled; tooltip: root.complexToolTooltip("gamut-warning"); onClicked: root.gamutOverlayEnabled = !root.gamutOverlayEnabled }
-                            MiniButton { objectName: "zoneMapOverlayButton"; text: "Zone"; iconName: "scope"; role: "segmented"; labelVisible: !editViewport.toolbarCompact; active: root.zoneMapOverlayEnabled; tooltip: root.complexToolTooltip("zone-map"); onClicked: root.zoneMapOverlayEnabled = !root.zoneMapOverlayEnabled }
-                            MiniButton { objectName: "resetViewButton"; text: "Reset"; iconName: "reset"; role: "segmented"; labelVisible: !editViewport.toolbarTight; onClicked: editViewport.resetView() }
+                            MiniButton {
+                                objectName: "fitToViewButton"
+                                text: "Fit"
+                                iconName: "fit"
+                                role: "segmented"
+                                active: editViewport.fitMode === "fit"
+                                labelVisible: false
+                                tooltip: "Fit the full image inside the preview."
+                                onClicked: editViewport.setFitMode("fit")
+                            }
+                            MiniButton {
+                                objectName: "fillViewButton"
+                                text: "Fill"
+                                iconName: "fill"
+                                role: "segmented"
+                                active: editViewport.fitMode === "fill"
+                                labelVisible: false
+                                tooltip: "Fill the preview area by cropping the visible edges."
+                                onClicked: editViewport.setFitMode("fill")
+                            }
+                            MiniButton { objectName: "zoomStepButton"; text: Math.round(editViewport.zoom * 100) + "%"; iconName: "zoom"; role: "segmented"; labelVisible: false; tooltip: "Step preview zoom. Current zoom: " + Math.round(editViewport.zoom * 100) + "%."; onClicked: editViewport.setZoom(editViewport.zoom >= 4 ? 1 : editViewport.zoom + 0.25) }
+                            MiniButton { objectName: "zoomOutButton"; square: true; iconName: "minus"; role: "icon"; tooltip: "Zoom out."; onClicked: editViewport.zoomOut() }
+                            MiniButton { objectName: "zoomInButton"; square: true; iconName: "plus"; role: "icon"; tooltip: "Zoom in."; onClicked: editViewport.zoomIn() }
+                            MiniButton {
+                                objectName: "diagnosticsOverlayButton"
+                                text: root.diagnosticsStatusText()
+                                iconName: "scope"
+                                role: "segmented"
+                                labelVisible: false
+                                active: root.diagnosticsPanelOpen || root.loupeEnabled || root.activeAnalysisOverlay().length > 0
+                                tooltip: "Open diagnostic overlays."
+                                onClicked: root.diagnosticsPanelOpen = !root.diagnosticsPanelOpen
+                            }
+                            MiniButton {
+                                objectName: "resetViewButton"
+                                text: "Reset"
+                                iconName: "reset"
+                                role: "segmented"
+                                labelVisible: false
+                                tooltip: "Reset all edit settings and the preview view."
+                                onClicked: {
+                                    editorPreview.resetAdjustments()
+                                    editViewport.resetView()
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: diagnosticsOverlayPanel
+                        objectName: "diagnosticsOverlayPanel"
+                        readonly property int contentSpacing: 6
+                        anchors.left: editZoomToolbar.left
+                        anchors.top: editZoomToolbar.bottom
+                        anchors.topMargin: 8
+                        width: Math.min(222, parent.width - 24)
+                        height: 16 + 30 + contentSpacing +
+                                diagnosticsOverlayGrid.effectiveRows * 30 +
+                                Math.max(0, diagnosticsOverlayGrid.effectiveRows - 1) *
+                                    diagnosticsOverlayGrid.rowSpacing
+                        radius: 3
+                        visible: root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive
+                        color: theme.alpha(theme.ink950, 0.88)
+                        border.width: theme.chromeBorderWidth
+                        border.color: root.hairlineStrong
+                        z: 21
+
+                        Item {
+                            id: diagnosticsOverlayContent
+                            anchors.fill: parent
+                            anchors.margins: 8
+
+                            RowLayout {
+                                id: diagnosticsOverlayHeader
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                height: 30
+                                spacing: 6
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.minimumWidth: 0
+                                    text: "Diagnostics"
+                                    color: root.dimText
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+                                MiniButton { objectName: "diagnosticsPanelCloseButton"; visible: diagnosticsOverlayPanel.visible; square: true; iconName: "close"; role: "icon"; tooltip: "Close diagnostics."; onClicked: root.diagnosticsPanelOpen = false }
+                            }
+
+                            Grid {
+                                id: diagnosticsOverlayGrid
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: diagnosticsOverlayHeader.bottom
+                                anchors.topMargin: diagnosticsOverlayPanel.contentSpacing
+                                readonly property int buttonCount: 7
+                                readonly property int effectiveColumns: 2
+                                readonly property int effectiveRows: Math.ceil(buttonCount / Math.max(1, effectiveColumns))
+                                readonly property real cellWidth: 94
+                                columns: effectiveColumns
+                                columnSpacing: 6
+                                rowSpacing: 6
+
+                                MiniButton { objectName: "loupeOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Loupe"; iconName: "plus"; role: "segmented"; labelVisible: true; active: root.loupeEnabled; tooltip: root.complexToolTooltip("loupe"); onClicked: root.loupeEnabled = !root.loupeEnabled }
+                                MiniButton { objectName: "focusOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Focus"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusCheckOverlayEnabled; tooltip: root.complexToolTooltip("focus-check"); onClicked: root.setAnalysisOverlay("focus-check") }
+                                MiniButton { objectName: "peakingOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Peak"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusPeakingOverlayEnabled; tooltip: root.complexToolTooltip("focus-peaking"); onClicked: root.setAnalysisOverlay("focus-peaking") }
+                                MiniButton { objectName: "clippingOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Clips"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.clippingOverlayEnabled; tooltip: root.complexToolTooltip("clipping"); onClicked: root.setAnalysisOverlay("clipping") }
+                                MiniButton { objectName: "falseColorOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "False"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.falseColorOverlayEnabled; tooltip: root.complexToolTooltip("false-color"); onClicked: root.setAnalysisOverlay("false-color") }
+                                MiniButton { objectName: "gamutOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Gamut"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.gamutOverlayEnabled; tooltip: root.complexToolTooltip("gamut-warning"); onClicked: root.setAnalysisOverlay("gamut") }
+                                MiniButton { objectName: "zoneMapOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Zone"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.zoneMapOverlayEnabled; tooltip: root.complexToolTooltip("zone-map"); onClicked: root.setAnalysisOverlay("zone-map") }
+                            }
                         }
                     }
 
                     Rectangle {
                         id: editActionToolbar
                         objectName: "editActionToolbar"
+                        readonly property string toolGroupContract: "canvas-actions|view-separated|no-history-buttons:v1"
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.margins: 12
@@ -4594,6 +11993,7 @@ Rectangle {
                         width: editActionControls.implicitWidth + 18
                         height: 36
                         radius: 3
+                        visible: !editViewport.primaryCanvasHudActive
                         color: theme.alpha(theme.ink950, 0.76)
                         border.width: theme.chromeBorderWidth
                         border.color: root.hairlineStrong
@@ -4604,19 +12004,18 @@ Rectangle {
                             anchors.centerIn: parent
                             spacing: 6
 
-                            MiniButton { objectName: "compareModeButton"; text: "Compare"; iconName: "compare"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: root.editTool === "compare"; tooltip: root.complexToolTooltip("compare"); onClicked: root.activateEditTool("compare") }
-                            MiniButton { objectName: "referenceImageButton"; text: editorPreview.hasReferenceImage ? "Ref Set" : "Ref"; iconName: "source"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: editorPreview.hasReferenceImage; tooltip: root.complexToolTooltip("reference"); onClicked: referenceImageDialog.open() }
-                            MiniButton { objectName: "clearReferenceImageButton"; text: "Clear"; iconName: "reset"; role: "secondary"; labelVisible: !editViewport.toolbarTight; visible: editorPreview.hasReferenceImage; onClicked: editorPreview.clearReferenceImage() }
-                            MiniButton { objectName: "cropModeButton"; text: root.editTool === "crop" ? "Done" : "Crop"; iconName: "crop"; role: "segmented"; active: root.editTool === "crop"; tooltip: root.complexToolTooltip("crop"); onClicked: root.activateEditTool(root.editTool === "crop" ? "adjust" : "crop") }
-                            MiniButton { objectName: "contextPanelToggleButton"; text: "Ctx"; iconName: "menu"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: root.editContextPanelVisible && !root.editSidebarCollapsed; tooltip: root.complexToolTooltip("context-panel"); onClicked: { root.editContextPanelVisible = !root.editContextPanelVisible; if (root.editContextPanelVisible) root.editSidebarCollapsed = false } }
-                            MiniButton { objectName: "inspectorPanelToggleButton"; text: "Insp"; iconName: "adjust"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: root.editInspectorPanelVisible; tooltip: root.complexToolTooltip("inspector-panel"); onClicked: root.editInspectorPanelVisible = !root.editInspectorPanelVisible }
-                            MiniButton { objectName: "interfaceDensityButton"; text: root.compactMode ? "Pro" : "Compact"; iconName: "grid"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: root.compactMode; tooltip: root.complexToolTooltip("compact-mode"); onClicked: root.toggleInterfaceMode() }
-                            MiniButton { objectName: "fullScreenEditButton"; text: root.fullScreenEditingEnabled ? "Exit" : "Full"; iconName: "media"; role: "segmented"; labelVisible: !editViewport.toolbarTight; active: root.fullScreenEditingEnabled; tooltip: root.complexToolTooltip("full-screen-edit"); onClicked: root.toggleFullScreenEditing() }
+                            MiniButton { objectName: "referenceImageButton"; text: editorPreview.hasReferenceImage ? "Reference set" : "Reference"; iconName: "source"; role: "segmented"; labelVisible: false; active: editorPreview.hasReferenceImage; tooltip: root.complexToolTooltip("reference"); onClicked: referenceImageDialog.open() }
+                            MiniButton { objectName: "clearReferenceImageButton"; text: "Clear reference"; iconName: "reset"; role: "secondary"; labelVisible: false; visible: editorPreview.hasReferenceImage; tooltip: "Clear the reference image."; onClicked: editorPreview.clearReferenceImage() }
+                            MiniButton { objectName: "editAgentButton"; text: "Agent"; iconName: "adjust"; role: "segmented"; labelVisible: false; active: agentRunDialog.visible; tooltip: "Open the local editing agent for the current edit selection."; onClicked: agentRunDialog.open() }
+                            MiniButton { objectName: "inspectorPanelToggleButton"; text: "Inspector panel"; iconName: "panel-right"; role: "segmented"; labelVisible: false; active: root.editInspectorPanelVisible; tooltip: root.complexToolTooltip("inspector-panel"); onClicked: root.editInspectorPanelVisible = !root.editInspectorPanelVisible }
+                            MiniButton { objectName: "interfaceDensityButton"; text: root.compactMode ? "Pro density" : "Compact density"; iconName: "density"; role: "segmented"; labelVisible: false; active: root.compactMode; tooltip: root.complexToolTooltip("compact-mode"); onClicked: root.toggleInterfaceMode() }
+                            MiniButton { objectName: "fullScreenEditButton"; text: root.fullScreenEditingEnabled ? "Exit full screen" : "Full screen"; iconName: "fullscreen"; role: "segmented"; labelVisible: false; active: root.fullScreenEditingEnabled; tooltip: root.complexToolTooltip("full-screen-edit"); onClicked: root.toggleFullScreenEditing() }
                         }
                     }
                 }
 
                 Rectangle {
+                    objectName: "largeScopesView"
                     visible: root.largeScopesMode && root.editInspectorTab === "scopes"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -4633,13 +12032,22 @@ Rectangle {
                         RowLayout {
                             Layout.fillWidth: true
                             SectionTitle { Layout.fillWidth: true; label: "Scopes" }
-                            MiniButton { text: "RGB"; role: "segmented"; active: root.scopeShowRgb; tooltip: root.complexToolTooltip("scope-rgb"); onClicked: root.scopeShowRgb = !root.scopeShowRgb }
-                            MiniButton { text: "Luma"; role: "segmented"; active: root.scopeShowLuma; tooltip: root.complexToolTooltip("scope-luma"); onClicked: root.scopeShowLuma = !root.scopeShowLuma }
-                            MiniButton { text: "Density"; role: "segmented"; active: root.scopeShowDensity; tooltip: root.complexToolTooltip("scope-density"); onClicked: root.scopeShowDensity = !root.scopeShowDensity }
-                            MiniButton { text: "Trace"; role: "segmented"; active: root.scopeShowTrace; tooltip: root.complexToolTooltip("scope-trace"); onClicked: root.scopeShowTrace = !root.scopeShowTrace }
-                            MiniButton { text: root.scopeLayoutPreset; role: "segmented"; onClicked: root.setScopeLayoutPreset(root.scopeLayoutPreset === "Stacked" ? "Quad" : root.scopeLayoutPreset === "Quad" ? "Tall" : "Stacked") }
-                            MiniButton { text: root.scopeSamplingMode; role: "segmented"; onClicked: root.setScopeSamplingMode(root.scopeSamplingMode === "Fast" ? "Balanced" : root.scopeSamplingMode === "Balanced" ? "Precise" : "Fast") }
-                            MiniButton { text: "Image"; role: "secondary"; onClicked: root.largeScopesMode = false }
+                            Label {
+                                objectName: "largeScopeProofingStatusLabel"
+                                text: root.proofingStatusText()
+                                color: editorPreview.softProofEnabled ? theme.accentCool400 : theme.textMuted
+                                font.family: theme.fontMono
+                                font.pixelSize: 10
+                                elide: Text.ElideRight
+                                Layout.maximumWidth: 260
+                            }
+                            MiniButton { objectName: "largeScopeRgbToggle"; text: "RGB"; role: "segmented"; active: root.scopeShowRgb; tooltip: root.complexToolTooltip("scope-rgb"); onClicked: root.scopeShowRgb = !root.scopeShowRgb }
+                            MiniButton { objectName: "largeScopeLumaToggle"; text: "Luma"; role: "segmented"; active: root.scopeShowLuma; tooltip: root.complexToolTooltip("scope-luma"); onClicked: root.scopeShowLuma = !root.scopeShowLuma }
+                            MiniButton { objectName: "largeScopeDensityToggle"; text: "Density"; role: "segmented"; active: root.scopeShowDensity; tooltip: root.complexToolTooltip("scope-density"); onClicked: root.scopeShowDensity = !root.scopeShowDensity }
+                            MiniButton { objectName: "largeScopeTraceToggle"; text: "Trace"; role: "segmented"; active: root.scopeShowTrace; tooltip: root.complexToolTooltip("scope-trace"); onClicked: root.scopeShowTrace = !root.scopeShowTrace }
+                            MiniButton { objectName: "largeScopeLayoutButton"; text: root.scopeLayoutPreset; role: "segmented"; onClicked: root.setScopeLayoutPreset(root.scopeLayoutPreset === "Stacked" ? "Quad" : root.scopeLayoutPreset === "Quad" ? "Tall" : "Stacked") }
+                            MiniButton { objectName: "largeScopeSamplingButton"; text: root.scopeSamplingMode; role: "segmented"; onClicked: root.setScopeSamplingMode(root.scopeSamplingMode === "Fast" ? "Balanced" : root.scopeSamplingMode === "Balanced" ? "Precise" : "Fast") }
+                            MiniButton { objectName: "largeScopesImageModeButton"; text: "Image"; role: "secondary"; onClicked: root.setScopesViewMode("image") }
                         }
 
                         ScopeGrid {
@@ -4711,7 +12119,7 @@ Rectangle {
                                         { label: "Tone", group: "tone" },
                                         { label: "Color", group: "color" },
                                         { label: "Detail", group: "detail" },
-                                        { label: "Masks", group: "masks" }
+                                        { label: "Selections", group: "masks" }
                                     ]
 
                                     MiniButton {
@@ -4877,7 +12285,8 @@ Rectangle {
                 }
 
                 Rectangle {
-                    visible: root.editingChromeVisible
+                    objectName: "editFilmstrip"
+                    visible: root.editingChromeVisible && !root.activeCanvasToolChromeReduced
                     Layout.fillWidth: true
                     Layout.preferredHeight: 86
                     color: root.panelColor
@@ -4898,6 +12307,7 @@ Rectangle {
                             clip: true
                             model: catalogAssets
                             delegate: ThumbnailCard {
+                                objectName: "editFilmstripThumbnailCard"
                                 required property int index
                                 width: 118
                                 height: 66
@@ -4914,6 +12324,7 @@ Rectangle {
             Panel {
                 objectName: "editInspectorPanel"
                 visible: root.editingChromeVisible && root.editInspectorPanelVisible
+                         && !(root.largeScopesMode && root.editInspectorTab === "scopes")
                 Layout.preferredWidth: visible ? root.editInspectorPanelWidth : 0
                 Layout.fillHeight: true
                 title: root.inspectorTabTitle(root.editInspectorTab)
@@ -4926,13 +12337,210 @@ Rectangle {
                         objectName: "editInspectorTabRow"
                         Layout.fillWidth: true
                         MiniButton { objectName: "adjustInspectorTabButton"; Layout.fillWidth: true; text: "Adjust"; role: "segmented"; active: root.editInspectorTab === "adjust"; onClicked: root.editInspectorTab = "adjust" }
+                        MiniButton { objectName: "presetsInspectorTabButton"; Layout.fillWidth: true; text: "Presets"; role: "segmented"; active: root.editInspectorTab === "presets"; onClicked: root.editInspectorTab = "presets" }
+                        MiniButton { objectName: "layersInspectorTabButton"; Layout.fillWidth: true; text: "Layers"; role: "segmented"; active: root.editInspectorTab === "layers"; onClicked: root.editInspectorTab = "layers" }
+                        MiniButton { objectName: "cropInspectorTabButton"; Layout.fillWidth: true; text: "Crop"; role: "segmented"; visible: root.editTool === "crop"; active: root.editInspectorTab === "crop"; onClicked: root.editInspectorTab = "crop" }
                         MiniButton { objectName: "scopesInspectorTabButton"; Layout.fillWidth: true; text: "Scopes"; role: "segmented"; active: root.editInspectorTab === "scopes"; onClicked: root.editInspectorTab = "scopes" }
-                        MiniButton { objectName: "detailInspectorTabButton"; Layout.fillWidth: true; text: "Detail"; role: "segmented"; active: root.editInspectorTab === "detail"; onClicked: root.editInspectorTab = "detail" }
+                        MiniButton { objectName: "detailInspectorTabButton"; Layout.fillWidth: true; text: "Detail"; role: "segmented"; visible: false; active: false; onClicked: root.editInspectorTab = "adjust" }
                         MiniButton { objectName: "infoInspectorTabButton"; Layout.fillWidth: true; text: "Info"; role: "segmented"; active: root.editInspectorTab === "info"; onClicked: root.editInspectorTab = "info" }
+                    }
+
+                    Rectangle {
+                        id: activeEditTargetBar
+                        objectName: "activeEditTargetBar"
+                        readonly property string targetScope: root.activeEditTargetScope()
+                        readonly property string targetContract: root.activeEditTargetSignature()
+                        readonly property string visualContract: root.activeEditTargetVisualSignature()
+                        readonly property color accentColor: root.activeEditTargetAccentColor()
+                        readonly property var layerData: root.activeEditTargetLayerData()
+                        readonly property var thumbnailData: root.activeEditTargetThumbnailData()
+                        readonly property string thumbnailSource: String(thumbnailData.thumbnailSource || "")
+                        readonly property int thumbnailBackingWidth: Math.max(0, Number(thumbnailData.thumbnailBackingWidth || 0))
+                        readonly property int thumbnailBackingHeight: Math.max(0, Number(thumbnailData.thumbnailBackingHeight || 0))
+                        visible: root.page === "edit"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 68
+                        radius: 4
+                        color: targetScope === "base-image"
+                               ? theme.alpha(theme.accentCool400, 0.10)
+                               : theme.alpha(root.mint, 0.14)
+                        border.width: targetScope === "base-image" ? theme.chromeBorderWidth : 2
+                        border.color: targetScope === "base-image"
+                                      ? theme.alpha(theme.accentCool400, 0.42)
+                                      : theme.alpha(root.mint, 0.78)
+
+                        Rectangle {
+                            objectName: "activeEditTargetAccentRail"
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: 4
+                            radius: 2
+                            color: activeEditTargetBar.accentColor
+                            opacity: activeEditTargetBar.targetScope === "base-image" ? 0.70 : 1.0
+                        }
+
+                        Item {
+                            objectName: "activeAdjustmentLayerTargetBar"
+                            readonly property var layerData: root.activeAdjustmentLayerData()
+                            visible: activeEditTargetBar.visible && root.activeAdjustmentLayerIndex() >= 0
+                            width: 0
+                            height: 0
+                        }
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 14
+                            anchors.rightMargin: 8
+                            anchors.topMargin: 8
+                            anchors.bottomMargin: 8
+                            spacing: 8
+
+                            AppIcon {
+                                objectName: "activeEditTargetIcon"
+                                Layout.preferredWidth: 16
+                                Layout.preferredHeight: 16
+                                name: root.activeEditTargetIconName()
+                                color: activeEditTargetBar.accentColor
+                            }
+
+                            Rectangle {
+                                objectName: "activeEditTargetThumbnail"
+                                readonly property string thumbnailSource: activeEditTargetBar.thumbnailSource
+                                readonly property bool thumbnailReady: thumbnailSource.length > 0
+                                readonly property string thumbnailContract: activeEditTargetBar.visualContract
+                                readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(36, activeEditTargetBar.thumbnailBackingWidth)
+                                readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(36, activeEditTargetBar.thumbnailBackingHeight)
+                                Layout.preferredWidth: 36
+                                Layout.preferredHeight: 36
+                                radius: 3
+                                color: activeEditTargetBar.targetScope === "base-image"
+                                       ? theme.alpha(theme.accentCool400, 0.12)
+                                       : theme.alpha(activeEditTargetBar.accentColor, 0.14)
+                                border.width: theme.chromeBorderWidth
+                                border.color: theme.alpha(activeEditTargetBar.accentColor, 0.62)
+                                clip: true
+
+                                Image {
+                                    objectName: "activeEditTargetThumbnailImage"
+                                    anchors.fill: parent
+                                    anchors.margins: 1
+                                    source: parent.thumbnailSource
+                                    sourceSize.width: parent.screenAwareThumbnailBackingWidth
+                                    sourceSize.height: parent.screenAwareThumbnailBackingHeight
+                                    visible: parent.thumbnailReady
+                                    fillMode: Image.PreserveAspectCrop
+                                    smooth: true
+                                    cache: false
+                                }
+
+                                AppIcon {
+                                    anchors.centerIn: parent
+                                    visible: !parent.thumbnailReady
+                                    name: root.activeEditTargetIconName()
+                                    width: 15
+                                    height: 15
+                                    color: activeEditTargetBar.accentColor
+                                }
+                            }
+
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 6
+
+                                    Label {
+                                        objectName: "activeEditTargetModeLabel"
+                                        Layout.fillWidth: true
+                                        text: root.activeEditTargetModeLabel()
+                                        color: activeEditTargetBar.accentColor
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 8
+                                        font.weight: Font.DemiBold
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Rectangle {
+                                        objectName: "activeEditTargetScopeBadge"
+                                        property alias text: activeEditTargetScopeBadgeLabel.text
+                                        Layout.preferredWidth: Math.max(48, activeEditTargetScopeBadgeLabel.implicitWidth + 14)
+                                        Layout.preferredHeight: 18
+                                        radius: 3
+                                        color: theme.alpha(activeEditTargetBar.accentColor,
+                                                           activeEditTargetBar.targetScope === "base-image" ? 0.16 : 0.24)
+                                        border.width: theme.chromeBorderWidth
+                                        border.color: theme.alpha(activeEditTargetBar.accentColor, 0.70)
+
+                                        Label {
+                                            id: activeEditTargetScopeBadgeLabel
+                                            objectName: "activeEditTargetScopeBadgeLabel"
+                                            anchors.centerIn: parent
+                                            text: root.activeEditTargetBadgeText()
+                                            color: activeEditTargetBar.accentColor
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 8
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+                                }
+
+                                Label {
+                                    objectName: "activeEditTargetBreadcrumbLabel"
+                                    Layout.fillWidth: true
+                                    text: root.activeEditTargetBreadcrumbText()
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    objectName: "activeAdjustmentLayerTargetNameLabel"
+                                    Layout.fillWidth: true
+                                    text: root.activeEditTargetPrimaryName()
+                                    visible: false
+                                }
+
+                                Label {
+                                    objectName: "activeAdjustmentLayerTargetStatusLabel"
+                                    Layout.fillWidth: true
+                                    text: root.activeEditTargetSummaryText()
+                                    color: root.dimText
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 8
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            MiniButton {
+                                objectName: "activeEditTargetReturnToBaseButton"
+                                text: "Base"
+                                iconName: "media"
+                                role: "segmented"
+                                visible: activeEditTargetBar.targetScope !== "base-image"
+                                tooltip: "Return to Base Image editing without closing the active layer or selection."
+                                onClicked: root.returnToBaseImageFromShortcut()
+                            }
+
+                            MiniButton {
+                                objectName: "activeAdjustmentLayerOpenLayersButton"
+                                square: true
+                                iconName: "layers"
+                                role: "icon"
+                                visible: editorPreview.photoLayerCount > 0
+                                tooltip: "Show the active target in Layers."
+                                onClicked: root.editInspectorTab = "layers"
+                            }
+                        }
                     }
 
                     ScrollView {
                         id: editInspectorScroll
+                        objectName: "editInspectorScroll"
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         clip: true
@@ -4944,19 +12552,682 @@ Rectangle {
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                visible: root.editInspectorTab === "adjust"
+                                visible: root.editInspectorTab === "adjust" || root.editInspectorTab === "presets" || root.editInspectorTab === "layers"
                                 spacing: 12
 
                                 HistogramDisplay {
+                                    objectName: "adjustInlineHistogramScope"
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 86
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive()
                                     redData: editorPreview.histogramRed
                                     greenData: editorPreview.histogramGreen
                                     blueData: editorPreview.histogramBlue
                                     luminanceData: editorPreview.histogramLuminance
                                 }
 
+                                ScopeTile {
+                                    objectName: "adjustInlineWaveformScope"
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 124
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive()
+                                    kind: "Waveform"
+                                    large: false
+                                }
+
+                                RowLayout {
+                                    objectName: "editAdjustmentFilterRow"
+                                    Layout.fillWidth: true
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive()
+                                    spacing: 6
+
+                                    TinyInput {
+                                        objectName: "editAdjustmentFilterField"
+                                        Layout.fillWidth: true
+                                        placeholder: "Filter adjustments..."
+                                        text: root.editAdjustmentFilterText
+                                        onTextChanged: root.editAdjustmentFilterText = text
+                                    }
+
+                                    MiniButton {
+                                        objectName: "clearEditAdjustmentFilterButton"
+                                        text: "Clear"
+                                        role: "secondary"
+                                        visible: root.editAdjustmentFilterNeedle().length > 0
+                                        onClicked: root.editAdjustmentFilterText = ""
+                                    }
+                                }
+
+                                Label {
+                                    objectName: "editAdjustmentFilterStatusLabel"
+                                    Layout.fillWidth: true
+                                    visible: root.editInspectorTab === "adjust" &&
+                                             !root.maskTargetInspectorActive() &&
+                                             root.editAdjustmentFilterNeedle().length > 0
+                                    text: root.editAdjustmentFilterStatusText()
+                                    color: root.filteredAdjustmentGroupKeys().length > 0 ? root.dimText : theme.warning
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 9
+                                    elide: Text.ElideRight
+                                }
+
+                                Rectangle {
+                                    id: activeAdjustmentTargetGuard
+                                    objectName: "activeAdjustmentTargetGuard"
+                                    readonly property string targetScope: root.activeEditTargetScope()
+                                    readonly property string guardSignature: root.activeAdjustmentTargetGuardSignature()
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 48
+                                    visible: root.editInspectorTab === "adjust"
+                                    radius: 4
+                                    color: targetScope === "base-image"
+                                           ? theme.alpha(theme.accentCool400, 0.08)
+                                           : theme.alpha(root.mint, 0.08)
+                                    border.width: theme.chromeBorderWidth
+                                    border.color: targetScope === "base-image"
+                                                  ? theme.alpha(theme.accentCool400, 0.36)
+                                                  : theme.alpha(root.mint, 0.44)
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 8
+                                        spacing: 8
+
+                                        AppIcon {
+                                            objectName: "activeAdjustmentTargetGuardIcon"
+                                            Layout.preferredWidth: 15
+                                            Layout.preferredHeight: 15
+                                            name: activeAdjustmentTargetGuard.targetScope === "mask" ? "masks"
+                                                  : activeAdjustmentTargetGuard.targetScope === "base-image" ? "media"
+                                                  : "layers"
+                                            color: activeAdjustmentTargetGuard.targetScope === "base-image"
+                                                   ? theme.accentCool300
+                                                   : root.mint
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 1
+
+                                            Label {
+                                                objectName: "activeAdjustmentTargetGuardTitleLabel"
+                                                Layout.fillWidth: true
+                                                text: root.activeEditTargetModeLabel()
+                                                color: activeAdjustmentTargetGuard.targetScope === "base-image"
+                                                       ? theme.accentCool300
+                                                       : root.mint
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                font.weight: Font.DemiBold
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Label {
+                                                objectName: "activeAdjustmentTargetGuardStatusLabel"
+                                                Layout.fillWidth: true
+                                                text: root.activeAdjustmentTargetGuardText()
+                                                color: root.dimText
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+
+                                        MiniButton {
+                                            objectName: "activeLayerFullResetButton"
+                                            visible: activeAdjustmentTargetGuard.targetScope === "adjustment-layer" &&
+                                                     root.activeAdjustmentLayerIndex() >= 0
+                                            text: "Reset Layer"
+                                            iconName: "reset"
+                                            role: "secondary"
+                                            tooltip: "Reset the active adjustment layer edits while preserving its mask."
+                                            onClicked: root.resetActiveAdjustmentLayerRecipe()
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    id: selectedMaskHeader
+                                    objectName: "selectedMaskHeader"
+                                    readonly property var maskData: root.activeMaskSetData()
+                                    readonly property string maskName: root.activeEditTargetMaskName()
+                                    readonly property string parentLayerName: root.activeEditTargetPrimaryName()
+                                    readonly property string operationLabel: root.maskOperationLabel(editorPreview.activeMaskOperation)
+                                    readonly property string overlayLabel: root.activeMaskPreviewLabel()
+                                    readonly property int featherPercent: Math.round(root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5) * 100)
+                                    readonly property int densityPercent: Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100)
+                                    readonly property bool inverted: editorPreview.activeMaskSelectionInverted === true
+                                    readonly property string headerSignature: root.selectedMaskHeaderSignature()
+                                    readonly property string thumbnailSource: String(maskData.thumbnailSource || "")
+                                    readonly property bool thumbnailReady: thumbnailSource.length > 0
+                                    readonly property int thumbnailBackingWidth: Math.max(0, Number(maskData.thumbnailBackingWidth || 0))
+                                    readonly property int thumbnailBackingHeight: Math.max(0, Number(maskData.thumbnailBackingHeight || 0))
+                                    readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingWidth)
+                                    readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingHeight)
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: 58
+                                    visible: root.selectedMaskHeaderActive()
+                                    radius: 4
+                                    color: theme.alpha(root.mint, 0.095)
+                                    border.width: theme.chromeBorderWidth
+                                    border.color: theme.alpha(root.mint, 0.56)
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.margins: 7
+                                        spacing: 8
+
+                                        Rectangle {
+                                            objectName: "selectedMaskHeaderThumbnail"
+                                            Layout.preferredWidth: 34
+                                            Layout.preferredHeight: 34
+                                            radius: 3
+                                            color: theme.alpha(root.mint, 0.12)
+                                            border.width: theme.chromeBorderWidth
+                                            border.color: theme.alpha(root.mint, 0.64)
+                                            clip: true
+
+                                            Image {
+                                                objectName: "selectedMaskHeaderThumbnailImage"
+                                                anchors.fill: parent
+                                                anchors.margins: 1
+                                                source: selectedMaskHeader.thumbnailSource
+                                                sourceSize.width: selectedMaskHeader.screenAwareThumbnailBackingWidth
+                                                sourceSize.height: selectedMaskHeader.screenAwareThumbnailBackingHeight
+                                                visible: selectedMaskHeader.thumbnailReady
+                                                fillMode: Image.PreserveAspectCrop
+                                                smooth: true
+                                                cache: false
+                                            }
+
+                                            AppIcon {
+                                                anchors.centerIn: parent
+                                                visible: !selectedMaskHeader.thumbnailReady
+                                                name: "masks"
+                                                width: 15
+                                                height: 15
+                                                color: root.mint
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 2
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 6
+
+                                                Label {
+                                                    objectName: "selectedMaskHeaderNameLabel"
+                                                    Layout.fillWidth: true
+                                                    text: selectedMaskHeader.maskName.length > 0 ? selectedMaskHeader.maskName : "Mask"
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    objectName: "selectedMaskHeaderModeLabel"
+                                                    text: "Editing Mask"
+                                                    color: root.mint
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    font.weight: Font.DemiBold
+                                                }
+                                            }
+
+                                            Label {
+                                                objectName: "selectedMaskHeaderStatusLabel"
+                                                Layout.fillWidth: true
+                                                text: selectedMaskHeader.parentLayerName + " / " +
+                                                      selectedMaskHeader.operationLabel + " / " +
+                                                      selectedMaskHeader.overlayLabel
+                                                color: root.dimText
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Label {
+                                                objectName: "selectedMaskHeaderSettingsLabel"
+                                                Layout.fillWidth: true
+                                                text: "Feather " + selectedMaskHeader.featherPercent + "% / Density " +
+                                                      selectedMaskHeader.densityPercent + "% / Invert " +
+                                                      (selectedMaskHeader.inverted ? "On" : "Off")
+                                                color: root.mint
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                    }
+                                }
+
                                 InspectorGroup {
+                                    id: activeLayerMaskChildrenGroup
+                                    objectName: "activeLayerMaskChildrenGroup"
+                                    readonly property var linkedMaskSets: root.activeLayerLinkedMaskSets()
+                                    readonly property string childContract: root.activeLayerMaskChildrenSignature()
+                                    visible: root.layerTargetInspectorActive() && activeLayerMaskChildrenGroup.linkedMaskSets.length > 0
+                                    title: "Linked Masks"
+
+                                    Label {
+                                        objectName: "activeLayerMaskChildrenStatusLabel"
+                                        Layout.fillWidth: true
+                                        text: activeLayerMaskChildrenGroup.linkedMaskSets.length + " mask" +
+                                              (activeLayerMaskChildrenGroup.linkedMaskSets.length === 1 ? "" : "s") +
+                                              " attached / full layer adjustments below"
+                                        color: root.dimText
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        elide: Text.ElideRight
+                                    }
+
+                                    Repeater {
+                                        model: activeLayerMaskChildrenGroup.linkedMaskSets
+
+                                        delegate: Rectangle {
+                                            id: activeLayerMaskChildRowRoot
+                                            objectName: "activeLayerMaskChildRow"
+                                            required property var modelData
+                                            readonly property bool activeMaskSet: root.maskSetActive(modelData)
+                                            readonly property int sourceCount: Number(modelData.sourceCount || 0)
+                                            readonly property string maskFailureStage: root.maskSetPreviewFailureStage(modelData)
+                                            readonly property string maskFailureLabel: root.previewFailureRowLabel(maskFailureStage)
+                                            readonly property bool thumbnailStale: modelData.thumbnailStale === true
+                                            readonly property bool thumbnailProgressive: modelData.thumbnailProgressive === true
+                                            readonly property string thumbnailProgressiveReason: String(modelData.thumbnailProgressiveReason || "")
+                                            readonly property string thumbnailProgressiveSignature: String(modelData.thumbnailProgressiveSignature || "")
+                                            readonly property bool thumbnailRefreshQueued: thumbnailProgressive && thumbnailStale && thumbnailProgressiveReason === "thumbnail_refresh_deferred"
+                                            readonly property string thumbnailQueueSignature: "thumbnail-queue|deferred:" + String(thumbnailRefreshQueued) + "|reason:" + thumbnailProgressiveReason
+                                            readonly property bool thumbnailFailureContained: modelData.thumbnailFailureContained === true
+                                            readonly property string thumbnailFailureStage: String(modelData.thumbnailFailureStage || "")
+                                            readonly property string thumbnailFailureDetail: String(modelData.thumbnailFailureDetail || "")
+                                            readonly property string thumbnailFailureSignature: String(modelData.thumbnailFailureSignature || "")
+                                            readonly property string thumbnailRetryActionSignature: root.thumbnailRetryActionSignature(modelData, "active-layer-mask-child")
+                                            readonly property string maskAlphaProviderContract: String(modelData.mask_alpha_provider_contract || "")
+                                            readonly property string maskAlphaProvider: String(modelData.mask_alpha_provider || "")
+                                            readonly property bool maskAlphaFullResolutionAvailable: modelData.mask_alpha_full_resolution_available === true
+                                            readonly property bool maskAlphaDeterministic: modelData.mask_alpha_deterministic === true
+                                             readonly property int maskAlphaTargetWidth: Math.max(0, Number(modelData.mask_alpha_target_width || 0))
+                                             readonly property int maskAlphaTargetHeight: Math.max(0, Number(modelData.mask_alpha_target_height || 0))
+                                             readonly property string maskAlphaProviderSignature: String(modelData.mask_alpha_provider_signature || "")
+                                             readonly property string maskAlphaProviderSummary: root.maskAlphaProviderSummary(modelData)
+                                             readonly property string maskSourceBrushContract: String(modelData.brushAlphaSourceContract || "")
+                                             readonly property string maskSourceBrushSourceOfTruth: String(modelData.brushAlphaSourceOfTruth || "")
+                                             readonly property int maskSourceBrushStrokeCount: Math.max(0, Number(modelData.brushAlphaStrokeCount || 0))
+                                             readonly property int maskSourceBrushPointCount: Math.max(0, Number(modelData.brushAlphaPointCount || 0))
+                                             readonly property string maskSourceBrushSignature: String(modelData.brushAlphaSourceSignature || "")
+                                             readonly property string maskSourceShapeContract: String(modelData.shapeAlphaSourceContract || "")
+                                             readonly property string maskSourceShapeSourceOfTruth: String(modelData.shapeAlphaSourceOfTruth || "")
+                                             readonly property int maskSourceShapePointCount: Math.max(0, Number(modelData.shapeAlphaPointCount || 0))
+                                             readonly property int maskSourceShapeRawPointCount: Math.max(0, Number(modelData.shapeAlphaRawPointCount || 0))
+                                             readonly property bool maskSourceShapeClosed: modelData.shapeAlphaClosed === true
+                                             readonly property bool maskSourceShapeEditable: modelData.shapeAlphaEditable === true
+                                             readonly property string maskSourceShapeSignature: String(modelData.shapeAlphaSourceSignature || "")
+                                             readonly property string maskSourceGeneratedContract: String(modelData.generatedAlphaSourceContract || "")
+                                             readonly property string maskSourceGeneratedModelName: String(modelData.generatedAlphaModelName || "")
+                                             readonly property string maskSourceGeneratedTargetType: String(modelData.generatedAlphaTargetType || "")
+                                             readonly property int maskSourceGeneratedWidth: Math.max(0, Number(modelData.generatedAlphaWidth || 0))
+                                             readonly property int maskSourceGeneratedHeight: Math.max(0, Number(modelData.generatedAlphaHeight || 0))
+                                             readonly property bool maskSourceGeneratedConfidenceAvailable: modelData.generatedAlphaConfidenceAvailable === true
+                                             readonly property string maskSourceGeneratedSignature: String(modelData.generatedAlphaSourceSignature || "")
+                                             readonly property string maskSourceGeneratedRefinementSignature: String(modelData.generatedAlphaRefinementStateSignature || "")
+                                             readonly property string maskSourceProvenanceSummary: root.maskSourceProvenanceSummary(modelData)
+                                             readonly property string rowContract: "layer-child-mask|edit-mask:true|edit-layer:true|active:" + String(activeMaskSet)
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 42
+                                            radius: 4
+                                            color: activeMaskSet ? theme.alpha(root.mint, 0.11)
+                                                                 : theme.alpha(root.panelLift, 0.46)
+                                            border.width: theme.chromeBorderWidth
+                                            border.color: activeMaskSet ? theme.alpha(root.mint, 0.74)
+                                                                        : root.hairline
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: 6
+                                                spacing: 7
+
+                                                Rectangle {
+                                                    objectName: "activeLayerMaskChildThumbnail"
+                                                    readonly property int thumbnailBackingWidth: Math.max(0, Number(modelData.thumbnailBackingWidth || 0))
+                                                    readonly property int thumbnailBackingHeight: Math.max(0, Number(modelData.thumbnailBackingHeight || 0))
+                                                    readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(28, thumbnailBackingWidth)
+                                                    readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(28, thumbnailBackingHeight)
+                                                    readonly property bool thumbnailProgressive: activeLayerMaskChildRowRoot.thumbnailProgressive
+                                                    readonly property string thumbnailProgressiveReason: activeLayerMaskChildRowRoot.thumbnailProgressiveReason
+                                                    readonly property string thumbnailProgressiveSignature: activeLayerMaskChildRowRoot.thumbnailProgressiveSignature
+                                                    readonly property bool thumbnailRefreshQueued: activeLayerMaskChildRowRoot.thumbnailRefreshQueued
+                                                    readonly property string thumbnailQueueSignature: activeLayerMaskChildRowRoot.thumbnailQueueSignature
+                                                    readonly property string thumbnailFailureStage: activeLayerMaskChildRowRoot.thumbnailFailureStage
+                                                    readonly property string thumbnailFailureDetail: activeLayerMaskChildRowRoot.thumbnailFailureDetail
+                                                    readonly property string thumbnailFailureSignature: activeLayerMaskChildRowRoot.thumbnailFailureSignature
+                                                    readonly property string maskAlphaProviderContract: activeLayerMaskChildRowRoot.maskAlphaProviderContract
+                                                    readonly property string maskAlphaProvider: activeLayerMaskChildRowRoot.maskAlphaProvider
+                                                    readonly property bool maskAlphaFullResolutionAvailable: activeLayerMaskChildRowRoot.maskAlphaFullResolutionAvailable
+                                                     readonly property bool maskAlphaDeterministic: activeLayerMaskChildRowRoot.maskAlphaDeterministic
+                                                     readonly property string maskAlphaProviderSignature: activeLayerMaskChildRowRoot.maskAlphaProviderSignature
+                                                     readonly property string maskAlphaProviderSummary: activeLayerMaskChildRowRoot.maskAlphaProviderSummary
+                                                     readonly property string maskSourceBrushContract: activeLayerMaskChildRowRoot.maskSourceBrushContract
+                                                     readonly property string maskSourceShapeContract: activeLayerMaskChildRowRoot.maskSourceShapeContract
+                                                     readonly property string maskSourceGeneratedContract: activeLayerMaskChildRowRoot.maskSourceGeneratedContract
+                                                     readonly property string maskSourceProvenanceSummary: activeLayerMaskChildRowRoot.maskSourceProvenanceSummary
+                                                     readonly property string thumbnailInvalidationKey: String(modelData.thumbnailInvalidationKey || "")
+                                                    readonly property string thumbnailInvalidationSignature: String(modelData.thumbnailInvalidationSignature || "")
+                                                    readonly property string thumbnailInvalidationMaskAlphaHash: String(modelData.thumbnailInvalidationMaskAlphaHash || "")
+                                                    readonly property string finalAlphaSourceKind: String(modelData.mask_source_kind || "")
+                                                    readonly property string finalAlphaTraceSignature: String(modelData.mask_alpha_trace_signature || "")
+                                                    readonly property bool finalAlphaComposite: finalAlphaSourceKind === "composite" &&
+                                                                                             finalAlphaTraceSignature.indexOf("mask-thumbnail-composite") >= 0
+                                                    Layout.preferredWidth: 28
+                                                    Layout.preferredHeight: 28
+                                                    radius: 3
+                                                    color: activeLayerMaskChildRowRoot.thumbnailFailureContained
+                                                           ? theme.alpha(theme.warning, 0.12)
+                                                           : theme.alpha(root.mint, 0.10)
+                                                    border.width: 1
+                                                    border.color: activeLayerMaskChildRowRoot.thumbnailFailureContained
+                                                                  ? theme.alpha(theme.warning, 0.72)
+                                                                  : theme.alpha(root.mint, 0.42)
+                                                    clip: true
+
+                                                    Image {
+                                                        objectName: "activeLayerMaskChildThumbnailImage"
+                                                        anchors.fill: parent
+                                                        anchors.margins: 1
+                                                        source: String(modelData.thumbnailSource || "")
+                                                        sourceSize.width: parent.screenAwareThumbnailBackingWidth
+                                                        sourceSize.height: parent.screenAwareThumbnailBackingHeight
+                                                        visible: source.toString().length > 0
+                                                        opacity: activeLayerMaskChildRowRoot.thumbnailStale ? 0.44 : 1.0
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        smooth: true
+                                                        cache: false
+                                                    }
+
+                                                    AppIcon {
+                                                        anchors.centerIn: parent
+                                                        visible: String(modelData.thumbnailSource || "").length === 0
+                                                        name: "masks"
+                                                        width: 13
+                                                        height: 13
+                                                        color: activeLayerMaskChildRowRoot.thumbnailFailureContained ? theme.warning : root.mint
+                                                    }
+
+                                                    MouseArea {
+                                                        objectName: "activeLayerMaskChildThumbnailTargetArea"
+                                                        anchors.fill: parent
+                                                        cursorShape: Qt.PointingHandCursor
+                                                        onClicked: root.selectMaskSetAndLayer(activeLayerMaskChildRowRoot.modelData, false)
+                                                    }
+                                                }
+
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 1
+
+                                                    Label {
+                                                        objectName: "activeLayerMaskChildNameLabel"
+                                                        Layout.fillWidth: true
+                                                        text: String(modelData.name || "Mask")
+                                                        color: activeLayerMaskChildRowRoot.activeMaskSet ? root.mint : theme.textMain
+                                                        font.family: theme.fontUi
+                                                        font.pixelSize: 10
+                                                        font.weight: Font.DemiBold
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Label {
+                                                        objectName: "activeLayerMaskChildStatusLabel"
+                                                        Layout.fillWidth: true
+                                                        text: activeLayerMaskChildRowRoot.maskFailureLabel.length > 0
+                                                              ? activeLayerMaskChildRowRoot.maskFailureLabel
+                                                              : root.thumbnailStatusLabel(
+                                                                     modelData,
+                                                                     activeLayerMaskChildRowRoot.maskSourceProvenanceSummary)
+                                                        color: activeLayerMaskChildRowRoot.maskFailureLabel.length > 0 ||
+                                                               activeLayerMaskChildRowRoot.thumbnailFailureContained
+                                                               ? theme.warning : root.dimText
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+
+                                                MiniButton {
+                                                    objectName: "activeLayerMaskChildEditMaskButton"
+                                                    text: "Edit Mask"
+                                                    role: "segmented"
+                                                    active: activeLayerMaskChildRowRoot.activeMaskSet
+                                                    tooltip: "Switch to this linked mask."
+                                                    onClicked: root.selectMaskSetAndLayer(modelData, false, true)
+                                                }
+
+                                                MiniButton {
+                                                    objectName: "activeLayerMaskChildThumbnailRetryButton"
+                                                    readonly property string retryActionSignature: activeLayerMaskChildRowRoot.thumbnailRetryActionSignature
+                                                    visible: activeLayerMaskChildRowRoot.thumbnailFailureContained
+                                                    square: true
+                                                    iconName: "reset"
+                                                    role: "icon"
+                                                    accent: theme.warning
+                                                    tooltip: activeLayerMaskChildRowRoot.thumbnailFailureDetail.length > 0
+                                                             ? activeLayerMaskChildRowRoot.thumbnailFailureDetail
+                                                             : "Retry this mask thumbnail."
+                                                    onClicked: editorPreview.retryThumbnailRender()
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "maskFirstInspectorGroup"
+                                    readonly property string maskControlContract: root.maskFirstInspectorSignature()
+                                    visible: root.maskTargetInspectorActive()
+                                    title: "Mask Controls"
+
+                                    Label {
+                                        objectName: "maskFirstInspectorStatusLabel"
+                                        Layout.fillWidth: true
+                                        text: root.activeMaskToolbarStatusText()
+                                        color: root.dimText
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    RowLayout {
+                                        objectName: "maskFirstPreviewModeRow"
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        MiniButton {
+                                            objectName: "maskFirstOverlayButton"
+                                            Layout.fillWidth: true
+                                            text: "Overlay"
+                                            role: "segmented"
+                                            active: editorPreview.maskPreviewDisplayMode === "overlay"
+                                            tooltip: "Show the selected mask as a single-color overlay."
+                                            onClicked: editorPreview.maskPreviewMode = "overlay"
+                                        }
+
+                                        MiniButton {
+                                            objectName: "maskFirstOutlineButton"
+                                            Layout.fillWidth: true
+                                            text: "Outline"
+                                            role: "segmented"
+                                            active: editorPreview.maskPreviewDisplayMode === "outline"
+                                            tooltip: "Show only the selected mask outline."
+                                            onClicked: editorPreview.maskPreviewMode = "outline"
+                                        }
+
+                                        MiniButton {
+                                            objectName: "maskFirstHiddenButton"
+                                            Layout.fillWidth: true
+                                            text: "Hidden"
+                                            role: "segmented"
+                                            active: editorPreview.maskPreviewDisplayMode === "hidden"
+                                            tooltip: "Hide the mask overlay."
+                                            onClicked: editorPreview.maskPreviewMode = "hidden"
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        objectName: "maskFirstActionRow"
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        MiniButton {
+                                            objectName: "maskFirstEditLayerButton"
+                                            Layout.fillWidth: true
+                                            text: "Edit Layer"
+                                            role: "segmented"
+                                            visible: root.activeMaskAdjustmentLayerIndex() >= 0
+                                            tooltip: "Switch to the linked adjustment layer without leaving this panel."
+                                            onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, true)
+                                        }
+
+                                        MiniButton {
+                                            objectName: "maskFirstVisibilityButton"
+                                            Layout.fillWidth: true
+                                            text: editorPreview.activeMaskEnabled === false ? "Show Mask" : "Hide Mask"
+                                            role: "segmented"
+                                            active: editorPreview.activeMaskEnabled !== false
+                                            tooltip: "Toggle whether this mask contributes to the layer."
+                                            onClicked: editorPreview.activeMaskEnabled = !(editorPreview.activeMaskEnabled !== false)
+                                        }
+
+                                        MiniButton {
+                                            objectName: "maskFirstInvertButton"
+                                            Layout.fillWidth: true
+                                            text: "Invert"
+                                            role: "segmented"
+                                            active: editorPreview.activeMaskSelectionInverted === true
+                                            enabled: editorPreview.activeMaskToolRole !== "retouch" &&
+                                                     String(editorPreview.activeMaskEditDisabledReason || "").length === 0
+                                            tooltip: "Invert the selected mask matte."
+                                            onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
+                                        }
+                                    }
+
+                                    AdjustSlider {
+                                        objectName: "maskFirstFeatherSlider"
+                                        label: "Feather"
+                                        from: 0
+                                        to: 0.5
+                                        stepSize: 0.005
+                                        defaultValue: 0
+                                        value: root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5)
+                                        valueText: Math.round(value * 100) + "%"
+                                        onValueDragged: function(value) { editorPreview.activeMaskFeather = value }
+                                    }
+
+                                    AdjustSlider {
+                                        objectName: "maskFirstDensitySlider"
+                                        label: "Density"
+                                        from: 0
+                                        to: 1
+                                        stepSize: 0.01
+                                        defaultValue: 1
+                                        value: root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0)
+                                        valueText: Math.round(value * 100) + "%"
+                                        onValueDragged: function(value) { editorPreview.activeMaskDensity = value }
+                                    }
+
+                                    AdjustSlider {
+                                        objectName: "maskFirstOpacitySlider"
+                                        label: "Opacity"
+                                        from: 0
+                                        to: 1
+                                        stepSize: 0.01
+                                        defaultValue: 1
+                                        value: root.clamp(editorPreview.activeMaskOpacity, 0.0, 1.0)
+                                        valueText: Math.round(value * 100) + "%"
+                                        onValueDragged: function(value) { editorPreview.activeMaskOpacity = value }
+                                    }
+
+                                    InspectorGroup {
+                                        objectName: "maskFirstRefineGroup"
+                                        title: "Refine"
+                                        Layout.fillWidth: true
+
+                                        AdjustSlider {
+                                            objectName: "maskFirstRefineSmoothSlider"
+                                            label: "Smooth"
+                                            from: 0
+                                            to: 1
+                                            stepSize: 0.01
+                                            defaultValue: 0
+                                            value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 1.0)
+                                            valueText: Math.round(value * 100) + "%"
+                                            onValueDragged: function(value) { editorPreview.activeMaskSelectionSmooth = value }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "maskFirstRefineEdgeSlider"
+                                            label: "Fine Edge"
+                                            from: 0
+                                            to: 1
+                                            stepSize: 0.01
+                                            defaultValue: 0
+                                            value: root.clamp(editorPreview.activeMaskSelectionFineEdge, 0.0, 1.0)
+                                            valueText: Math.round(value * 100) + "%"
+                                            onValueDragged: function(value) { editorPreview.activeMaskSelectionFineEdge = value }
+                                        }
+                                    }
+
+                                    InspectorGroup {
+                                        objectName: "maskFirstBrushSettingsGroup"
+                                        title: "Brush Settings"
+                                        Layout.fillWidth: true
+                                        visible: editorPreview.activeMaskKind === "brush"
+
+                                        AdjustSlider {
+                                            objectName: "maskFirstBrushSizeSlider"
+                                            label: "Size"
+                                            from: 1
+                                            to: 35
+                                            stepSize: 1
+                                            defaultValue: 6
+                                            value: Number(root.brushSizePercentValueText())
+                                            valueText: Math.round(value) + "%"
+                                            onValueDragged: function(value) { root.setActiveBrushSizePercent(value) }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "maskFirstBrushFlowSlider"
+                                            label: "Flow"
+                                            from: 5
+                                            to: 100
+                                            stepSize: 1
+                                            defaultValue: 100
+                                            value: Math.round(root.clamp(editorPreview.activeMaskBrushFlow, 0.05, 1.0) * 100)
+                                            valueText: Math.round(value) + "%"
+                                            onValueDragged: function(value) { editorPreview.activeMaskBrushFlow = root.clamp(value / 100.0, 0.05, 1.0) }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "maskFirstBrushHardnessSlider"
+                                            label: "Hardness"
+                                            from: 0
+                                            to: 100
+                                            stepSize: 1
+                                            defaultValue: 45
+                                            value: Math.round(root.clamp(editorPreview.activeMaskBrushHardness, 0.0, 1.0) * 100)
+                                            valueText: Math.round(value) + "%"
+                                            onValueDragged: function(value) { editorPreview.activeMaskBrushHardness = root.clamp(value / 100.0, 0.0, 1.0) }
+                                        }
+                                    }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "photoLayersInspectorGroup"
+                                    visible: root.editInspectorTab === "layers"
                                     title: "Layers"
 
                                     RowLayout {
@@ -4965,7 +13236,7 @@ Rectangle {
 
                                         Label {
                                             Layout.fillWidth: true
-                                            text: editorPreview.photoLayerSoloActive ? "ISOLATION ACTIVE" : editorPreview.photoLayerCount + " PHOTO LAYERS"
+                                            text: editorPreview.photoLayerSoloActive ? "ISOLATION ACTIVE" : (editorPreview.photoLayerCount + 1) + " TOTAL LAYERS"
                                             color: editorPreview.photoLayerSoloActive ? root.mint : root.dimText
                                             font.family: theme.fontMono
                                             font.pixelSize: 9
@@ -5021,6 +13292,604 @@ Rectangle {
                                         }
                                     }
 
+                                    Rectangle {
+                                        id: selectedLayerHeader
+                                        objectName: "selectedLayerHeader"
+                                        readonly property int layerIndex: root.normalizedActivePhotoLayerIndex()
+                                        readonly property var layerData: root.currentPhotoLayerData()
+                                        readonly property string layerName: String(layerData.displayName || layerData.name || "Layer")
+                                        readonly property string layerKindLabel: root.photoLayerKindLabel(layerData)
+                                        readonly property string maskLinkLabel: root.photoLayerMaskLinkLabel(layerData, layerIndex)
+                                        readonly property string visibilityLabel: root.photoLayerVisibilityLabel(layerData)
+                                        readonly property int opacityPercent: Math.round(root.clamp(Number(layerData.opacity !== undefined ? layerData.opacity : 1.0), 0.0, 1.0) * 100)
+                                        readonly property string blendLabel: root.photoLayerBlendLabel(layerData.blendMode)
+                                        readonly property string changedGroupSummary: root.layerLocalAdjustmentSummary(layerData)
+                                        readonly property string headerSignature: root.selectedLayerHeaderSignature(layerData, layerIndex)
+                                        readonly property string thumbnailSource: String(layerData.thumbnailSource || "")
+                                        readonly property bool thumbnailReady: layerData.thumbnailReady === true && thumbnailSource.length > 0
+                                        readonly property int thumbnailBackingWidth: Math.max(0, Number(layerData.thumbnailBackingWidth || 0))
+                                        readonly property int thumbnailBackingHeight: Math.max(0, Number(layerData.thumbnailBackingHeight || 0))
+                                        readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingWidth)
+                                        readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingHeight)
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 58
+                                        visible: editorPreview.photoLayerCount > 0
+                                        radius: 4
+                                        color: theme.alpha(root.mint, 0.075)
+                                        border.width: theme.chromeBorderWidth
+                                        border.color: theme.alpha(root.mint, 0.42)
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 7
+                                            spacing: 8
+
+                                            Rectangle {
+                                                objectName: "selectedLayerHeaderThumbnail"
+                                                Layout.preferredWidth: 34
+                                                Layout.preferredHeight: 34
+                                                radius: 3
+                                                color: theme.alpha(root.mint, 0.12)
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: theme.alpha(root.mint, 0.56)
+                                                clip: true
+
+                                                Image {
+                                                    objectName: "selectedLayerHeaderThumbnailImage"
+                                                    anchors.fill: parent
+                                                    anchors.margins: 1
+                                                    source: selectedLayerHeader.thumbnailSource
+                                                    sourceSize.width: selectedLayerHeader.screenAwareThumbnailBackingWidth
+                                                    sourceSize.height: selectedLayerHeader.screenAwareThumbnailBackingHeight
+                                                    visible: selectedLayerHeader.thumbnailReady
+                                                    fillMode: Image.PreserveAspectCrop
+                                                    smooth: true
+                                                    cache: false
+                                                }
+
+                                                AppIcon {
+                                                    anchors.centerIn: parent
+                                                    visible: !selectedLayerHeader.thumbnailReady
+                                                    name: root.photoLayerIconName(selectedLayerHeader.layerData)
+                                                    width: 15
+                                                    height: 15
+                                                    color: root.mint
+                                                }
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 2
+
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+
+                                                    Label {
+                                                        objectName: "selectedLayerHeaderNameLabel"
+                                                        Layout.fillWidth: true
+                                                        text: selectedLayerHeader.layerName
+                                                        color: theme.textMain
+                                                        font.family: theme.fontUi
+                                                        font.pixelSize: 12
+                                                        font.weight: Font.DemiBold
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Label {
+                                                        objectName: "selectedLayerHeaderModeLabel"
+                                                        text: "Editing Layer"
+                                                        color: root.mint
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                        font.weight: Font.DemiBold
+                                                    }
+                                                }
+
+                                                Label {
+                                                    objectName: "selectedLayerHeaderStatusLabel"
+                                                    Layout.fillWidth: true
+                                                    text: selectedLayerHeader.layerKindLabel + " / " +
+                                                          selectedLayerHeader.maskLinkLabel + " / " +
+                                                          selectedLayerHeader.visibilityLabel + " / " +
+                                                          selectedLayerHeader.opacityPercent + "% / " +
+                                                          selectedLayerHeader.blendLabel
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    objectName: "selectedLayerHeaderChangedGroupsLabel"
+                                                    Layout.fillWidth: true
+                                                    text: selectedLayerHeader.changedGroupSummary
+                                                    color: root.layerChangedAdjustmentGroups(selectedLayerHeader.layerData).length > 0 ? root.mint : root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        id: photoLayerAdjustmentCommandBar
+                                        objectName: "photoLayerAdjustmentCommandBar"
+                                        readonly property int activeLayerIndex: root.normalizedActivePhotoLayerIndex()
+                                        readonly property int activeAdjustmentIndex: root.activeAdjustmentLayerIndex()
+                                        readonly property var activeLayer: root.currentPhotoLayerData()
+                                        readonly property var syncTargets: root.selectedAdjustmentLayerIndices(photoLayerAdjustmentCommandBar.activeAdjustmentIndex)
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 48
+                                        visible: editorPreview.photoLayerCount > 0
+                                        radius: 4
+                                        color: theme.alpha(root.mint, 0.055)
+                                        border.width: theme.chromeBorderWidth
+                                        border.color: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 ? theme.alpha(root.mint, 0.42) : root.hairline
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 7
+                                            spacing: 7
+
+                                            AppIcon {
+                                                Layout.preferredWidth: 14
+                                                Layout.preferredHeight: 14
+                                                name: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 ? "adjust" : root.photoLayerIconName(photoLayerAdjustmentCommandBar.activeLayer)
+                                                color: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 ? root.mint : root.dimText
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 1
+
+                                                Label {
+                                                    objectName: "photoLayerAdjustmentCommandTargetLabel"
+                                                    Layout.fillWidth: true
+                                                    text: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0
+                                                          ? String(photoLayerAdjustmentCommandBar.activeLayer.displayName ||
+                                                                   photoLayerAdjustmentCommandBar.activeLayer.name ||
+                                                                   "Adjustment Layer")
+                                                          : "Select an adjustment layer"
+                                                    color: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 ? theme.textMain : root.dimText
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    objectName: "photoLayerAdjustmentCommandSelectionLabel"
+                                                    Layout.fillWidth: true
+                                                    text: root.normalizedPhotoLayerSelection().length + " selected / " +
+                                                          photoLayerAdjustmentCommandBar.syncTargets.length + " sync target" +
+                                                          (photoLayerAdjustmentCommandBar.syncTargets.length === 1 ? "" : "s")
+                                                    color: photoLayerAdjustmentCommandBar.syncTargets.length > 0 ? root.mint : root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            MiniButton {
+                                                objectName: "copyPhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "source"
+                                                role: "icon"
+                                                enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0
+                                                tooltip: "Copy active layer adjustments."
+                                                onClicked: editorPreview.copyPhotoLayerAdjustments(photoLayerAdjustmentCommandBar.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "pastePhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "insert"
+                                                role: "icon"
+                                                enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 &&
+                                                         editorPreview.hasCopiedPhotoLayerAdjustments &&
+                                                         photoLayerAdjustmentCommandBar.activeLayer.locked !== true
+                                                tooltip: "Paste copied adjustments onto the active layer."
+                                                onClicked: editorPreview.pastePhotoLayerAdjustments(photoLayerAdjustmentCommandBar.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "pasteGlobalAdjustmentsToPhotoLayerButton"
+                                                square: true
+                                                iconName: "media"
+                                                role: "icon"
+                                                enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 &&
+                                                         photoLayerAdjustmentCommandBar.activeLayer.locked !== true
+                                                tooltip: "Paste Base Image adjustments onto the active layer."
+                                                onClicked: editorPreview.pasteGlobalAdjustmentsToPhotoLayer(photoLayerAdjustmentCommandBar.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "togglePhotoLayerAdjustmentsPreviewButton"
+                                                square: true
+                                                iconName: "compare"
+                                                role: "icon"
+                                                active: photoLayerAdjustmentCommandBar.activeLayer.adjustmentsPreviewBypassed === true
+                                                enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 &&
+                                                         photoLayerAdjustmentCommandBar.activeLayer.hasNonNeutralAdjustments === true
+                                                tooltip: active ? "Show this layer with adjustments." : "Preview this layer before adjustments."
+                                                onClicked: editorPreview.setPhotoLayerAdjustmentsPreviewBypassed(
+                                                               photoLayerAdjustmentCommandBar.activeAdjustmentIndex,
+                                                               photoLayerAdjustmentCommandBar.activeLayer.adjustmentsPreviewBypassed !== true)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "syncPhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "effects"
+                                                role: "icon"
+                                                enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 &&
+                                                         photoLayerAdjustmentCommandBar.syncTargets.length > 0
+                                                tooltip: "Sync active layer adjustments to selected adjustment layers."
+                                                onClicked: editorPreview.syncPhotoLayerAdjustments(
+                                                               photoLayerAdjustmentCommandBar.activeAdjustmentIndex,
+                                                               photoLayerAdjustmentCommandBar.syncTargets)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "clearPhotoLayerSelectionButton"
+                                                square: true
+                                                iconName: "close"
+                                                role: "icon"
+                                                enabled: root.normalizedPhotoLayerSelection().length > 1
+                                                tooltip: "Clear multi-layer selection."
+                                                onClicked: root.selectedPhotoLayerIndices = [photoLayerAdjustmentCommandBar.activeLayerIndex]
+                                            }
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        id: photoLayersMaskSetList
+                                        objectName: "photoLayersMaskSetList"
+                                        readonly property var unlinkedMaskSets: root.unlinkedMaskSets()
+                                        readonly property string standaloneMaskListContract: "standalone-mask-list:unlinked-only|count:" + unlinkedMaskSets.length
+                                        readonly property string maskListPartitionSignature: root.maskSetListPartitionSignature()
+                                        readonly property bool sectionCollapsed: root.standaloneMaskSectionCollapsed
+                                        readonly property string standaloneMaskSectionContract: "mask-section:v1|scope:unlinked|count:" +
+                                                                                             unlinkedMaskSets.length +
+                                                                                             "|collapsed:" + String(sectionCollapsed)
+                                        visible: unlinkedMaskSets.length > 0
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        Rectangle {
+                                            objectName: "photoLayersMaskSetSectionHeader"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 30
+                                            radius: 3
+                                            color: theme.alpha(root.panelLift, 0.46)
+                                            border.width: theme.chromeBorderWidth
+                                            border.color: photoLayersMaskSetList.sectionCollapsed ? theme.alpha(root.hairline, 0.92)
+                                                                                                  : theme.alpha(root.mint, 0.36)
+
+                                            MouseArea {
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: root.standaloneMaskSectionCollapsed = !root.standaloneMaskSectionCollapsed
+                                            }
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 8
+                                                anchors.rightMargin: 6
+                                                spacing: 7
+
+                                                AppIcon {
+                                                    objectName: "photoLayersMaskSetSectionChevron"
+                                                    Layout.preferredWidth: 12
+                                                    Layout.preferredHeight: 12
+                                                    name: "chevron-right"
+                                                    rotation: photoLayersMaskSetList.sectionCollapsed ? 0 : 90
+                                                    color: photoLayersMaskSetList.sectionCollapsed ? root.dimText : root.mint
+                                                }
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: photoLayersMaskSetList.unlinkedMaskSets.length + " UNLINKED SELECTION" +
+                                                          (photoLayersMaskSetList.unlinkedMaskSets.length === 1 ? "" : "S")
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                MiniButton {
+                                                    objectName: "photoLayersMaskSetSectionToggle"
+                                                    square: true
+                                                    iconName: photoLayersMaskSetList.sectionCollapsed ? "chevron-right" : "move-up"
+                                                    role: "icon"
+                                                    active: !photoLayersMaskSetList.sectionCollapsed
+                                                    tooltip: photoLayersMaskSetList.sectionCollapsed ? "Expand unlinked selections." : "Collapse unlinked selections."
+                                                    onClicked: root.standaloneMaskSectionCollapsed = !root.standaloneMaskSectionCollapsed
+                                                }
+                                            }
+                                        }
+
+                                        Repeater {
+                                            model: photoLayersMaskSetList.sectionCollapsed ? [] : photoLayersMaskSetList.unlinkedMaskSets
+
+                                            delegate: Rectangle {
+                                                id: photoLayerMaskSetRowRoot
+                                                objectName: "photoLayerMaskSetRow"
+                                                required property var modelData
+                                                readonly property bool activeMaskSet: root.maskSetActive(modelData)
+                                                readonly property int linkedLayerIndex: root.adjustmentLayerIndexForMaskSet(modelData)
+                                                readonly property bool rowJobChipVisible: root.layerMaskJobChipVisible(activeMaskSet)
+                                                readonly property string rowJobChipSignature: root.layerMaskJobChipSignature("mask-set", activeMaskSet)
+                                                readonly property string maskFailureStage: root.maskSetPreviewFailureStage(modelData)
+                                                readonly property string maskFailureLabel: root.previewFailureRowLabel(maskFailureStage)
+                                                readonly property string maskFailureSignature: root.maskSetPreviewFailureSignature(modelData)
+                                                readonly property bool thumbnailStale: modelData.thumbnailStale === true
+                                                readonly property bool thumbnailProgressive: modelData.thumbnailProgressive === true
+                                                readonly property string thumbnailProgressiveReason: String(modelData.thumbnailProgressiveReason || "")
+                                                readonly property string thumbnailProgressiveSignature: String(modelData.thumbnailProgressiveSignature || "")
+                                                readonly property bool thumbnailRefreshQueued: thumbnailProgressive && thumbnailStale && thumbnailProgressiveReason === "thumbnail_refresh_deferred"
+                                                readonly property string thumbnailQueueSignature: "thumbnail-queue|deferred:" + String(thumbnailRefreshQueued) + "|reason:" + thumbnailProgressiveReason
+                                                readonly property bool thumbnailFailureContained: modelData.thumbnailFailureContained === true
+                                                readonly property string thumbnailFailureStage: String(modelData.thumbnailFailureStage || "")
+                                                readonly property string thumbnailFailureDetail: String(modelData.thumbnailFailureDetail || "")
+                                                readonly property string thumbnailFailureSignature: String(modelData.thumbnailFailureSignature || "")
+                                                readonly property string thumbnailRetryActionSignature: root.thumbnailRetryActionSignature(modelData, "photo-layer-mask-set")
+                                                readonly property string maskAlphaProviderContract: String(modelData.mask_alpha_provider_contract || "")
+                                                readonly property string maskAlphaProvider: String(modelData.mask_alpha_provider || "")
+                                                readonly property bool maskAlphaFullResolutionAvailable: modelData.mask_alpha_full_resolution_available === true
+                                                readonly property bool maskAlphaDeterministic: modelData.mask_alpha_deterministic === true
+                                                 readonly property int maskAlphaTargetWidth: Math.max(0, Number(modelData.mask_alpha_target_width || 0))
+                                                 readonly property int maskAlphaTargetHeight: Math.max(0, Number(modelData.mask_alpha_target_height || 0))
+                                                 readonly property string maskAlphaProviderSignature: String(modelData.mask_alpha_provider_signature || "")
+                                                 readonly property string maskAlphaProviderSummary: root.maskAlphaProviderSummary(modelData)
+                                                 readonly property string maskSourceBrushContract: String(modelData.brushAlphaSourceContract || "")
+                                                 readonly property string maskSourceBrushSourceOfTruth: String(modelData.brushAlphaSourceOfTruth || "")
+                                                 readonly property int maskSourceBrushStrokeCount: Math.max(0, Number(modelData.brushAlphaStrokeCount || 0))
+                                                 readonly property int maskSourceBrushPointCount: Math.max(0, Number(modelData.brushAlphaPointCount || 0))
+                                                 readonly property string maskSourceBrushSignature: String(modelData.brushAlphaSourceSignature || "")
+                                                 readonly property string maskSourceShapeContract: String(modelData.shapeAlphaSourceContract || "")
+                                                 readonly property string maskSourceShapeSourceOfTruth: String(modelData.shapeAlphaSourceOfTruth || "")
+                                                 readonly property int maskSourceShapePointCount: Math.max(0, Number(modelData.shapeAlphaPointCount || 0))
+                                                 readonly property int maskSourceShapeRawPointCount: Math.max(0, Number(modelData.shapeAlphaRawPointCount || 0))
+                                                 readonly property bool maskSourceShapeClosed: modelData.shapeAlphaClosed === true
+                                                 readonly property bool maskSourceShapeEditable: modelData.shapeAlphaEditable === true
+                                                 readonly property string maskSourceShapeSignature: String(modelData.shapeAlphaSourceSignature || "")
+                                                 readonly property string maskSourceGeneratedContract: String(modelData.generatedAlphaSourceContract || "")
+                                                 readonly property string maskSourceGeneratedModelName: String(modelData.generatedAlphaModelName || "")
+                                                 readonly property string maskSourceGeneratedTargetType: String(modelData.generatedAlphaTargetType || "")
+                                                 readonly property int maskSourceGeneratedWidth: Math.max(0, Number(modelData.generatedAlphaWidth || 0))
+                                                 readonly property int maskSourceGeneratedHeight: Math.max(0, Number(modelData.generatedAlphaHeight || 0))
+                                                 readonly property bool maskSourceGeneratedConfidenceAvailable: modelData.generatedAlphaConfidenceAvailable === true
+                                                 readonly property string maskSourceGeneratedSignature: String(modelData.generatedAlphaSourceSignature || "")
+                                                 readonly property string maskSourceGeneratedRefinementSignature: String(modelData.generatedAlphaRefinementStateSignature || "")
+                                                 readonly property string maskSourceProvenanceSummary: root.maskSourceProvenanceSummary(modelData)
+                                                 readonly property string thumbnailStateSignature: root.thumbnailStateSignature(modelData)
+                                                readonly property string clickRouteContract: "mask-row-click:select-mask|adjust-button:edit-layer"
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 48
+                                                radius: 4
+                                                color: activeMaskSet ? theme.alpha(root.mint, 0.09)
+                                                                     : theme.alpha(root.panelLift, 0.54)
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: activeMaskSet ? theme.alpha(root.mint, 0.72)
+                                                                            : root.hairline
+
+                                                MouseArea {
+                                                    objectName: "photoLayerMaskSetRowTargetArea"
+                                                    anchors.fill: parent
+                                                    onClicked: root.selectMaskSetAndLayer(parent.modelData, false)
+                                                }
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 6
+                                                    spacing: 8
+
+                                                    Rectangle {
+                                                        objectName: "photoLayerMaskSetThumbnail"
+                                                        readonly property bool thumbnailStale: photoLayerMaskSetRowRoot.thumbnailStale
+                                                        readonly property bool thumbnailFailureContained: photoLayerMaskSetRowRoot.thumbnailFailureContained
+                                                        readonly property string thumbnailStateSignature: photoLayerMaskSetRowRoot.thumbnailStateSignature
+                                                        readonly property int thumbnailBackingWidth: Math.max(0, Number(modelData.thumbnailBackingWidth || 0))
+                                                        readonly property int thumbnailBackingHeight: Math.max(0, Number(modelData.thumbnailBackingHeight || 0))
+                                                        readonly property real thumbnailDevicePixelRatio: Math.max(0, Number(modelData.thumbnailDevicePixelRatio || 0))
+                                                        readonly property string thumbnailPixelRatioSignature: String(modelData.thumbnailPixelRatioSignature || "")
+                                                        readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingWidth)
+                                                        readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingHeight)
+                                                        readonly property bool thumbnailProgressive: photoLayerMaskSetRowRoot.thumbnailProgressive
+                                                        readonly property string thumbnailProgressiveReason: photoLayerMaskSetRowRoot.thumbnailProgressiveReason
+                                                        readonly property string thumbnailProgressiveSignature: photoLayerMaskSetRowRoot.thumbnailProgressiveSignature
+                                                        readonly property bool thumbnailRefreshQueued: photoLayerMaskSetRowRoot.thumbnailRefreshQueued
+                                                        readonly property string thumbnailQueueSignature: photoLayerMaskSetRowRoot.thumbnailQueueSignature
+                                                        readonly property string thumbnailFailureStage: photoLayerMaskSetRowRoot.thumbnailFailureStage
+                                                        readonly property string thumbnailFailureDetail: photoLayerMaskSetRowRoot.thumbnailFailureDetail
+                                                        readonly property string thumbnailFailureSignature: photoLayerMaskSetRowRoot.thumbnailFailureSignature
+                                                        readonly property string maskAlphaProviderContract: photoLayerMaskSetRowRoot.maskAlphaProviderContract
+                                                        readonly property string maskAlphaProvider: photoLayerMaskSetRowRoot.maskAlphaProvider
+                                                        readonly property bool maskAlphaFullResolutionAvailable: photoLayerMaskSetRowRoot.maskAlphaFullResolutionAvailable
+                                                         readonly property bool maskAlphaDeterministic: photoLayerMaskSetRowRoot.maskAlphaDeterministic
+                                                         readonly property string maskAlphaProviderSignature: photoLayerMaskSetRowRoot.maskAlphaProviderSignature
+                                                         readonly property string maskAlphaProviderSummary: photoLayerMaskSetRowRoot.maskAlphaProviderSummary
+                                                         readonly property string maskSourceBrushContract: photoLayerMaskSetRowRoot.maskSourceBrushContract
+                                                         readonly property string maskSourceShapeContract: photoLayerMaskSetRowRoot.maskSourceShapeContract
+                                                         readonly property string maskSourceGeneratedContract: photoLayerMaskSetRowRoot.maskSourceGeneratedContract
+                                                         readonly property string maskSourceProvenanceSummary: photoLayerMaskSetRowRoot.maskSourceProvenanceSummary
+                                                         readonly property string thumbnailInvalidationKey: String(modelData.thumbnailInvalidationKey || "")
+                                                        readonly property string thumbnailInvalidationSignature: String(modelData.thumbnailInvalidationSignature || "")
+                                                        readonly property string thumbnailInvalidationMaskAlphaHash: String(modelData.thumbnailInvalidationMaskAlphaHash || "")
+                                                        readonly property string finalAlphaSourceKind: String(modelData.mask_source_kind || "")
+                                                        readonly property string finalAlphaTraceSignature: String(modelData.mask_alpha_trace_signature || "")
+                                                        readonly property bool finalAlphaComposite: finalAlphaSourceKind === "composite" &&
+                                                                                                 finalAlphaTraceSignature.indexOf("mask-thumbnail-composite") >= 0
+                                                        Layout.preferredWidth: 34
+                                                        Layout.preferredHeight: 34
+                                                        radius: 3
+                                                        color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.10)
+                                                                                         : theme.alpha(root.mint, 0.10)
+                                                        border.width: 1
+                                                        border.color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.72)
+                                                                                                : theme.alpha(root.mint, 0.40)
+                                                        clip: true
+
+                                                        Image {
+                                                            objectName: "photoLayerMaskSetThumbnailImage"
+                                                            anchors.fill: parent
+                                                            anchors.margins: 1
+                                                            source: String(modelData.thumbnailSource || "")
+                                                            sourceSize.width: parent.screenAwareThumbnailBackingWidth
+                                                            sourceSize.height: parent.screenAwareThumbnailBackingHeight
+                                                            visible: source.toString().length > 0
+                                                            opacity: parent.thumbnailStale ? 0.44 : 1.0
+                                                            fillMode: Image.PreserveAspectCrop
+                                                            smooth: true
+                                                            cache: false
+                                                        }
+
+                                                        AppIcon {
+                                                            anchors.centerIn: parent
+                                                            visible: String(modelData.thumbnailSource || "").length === 0
+                                                            name: "masks"
+                                                            width: 14
+                                                            height: 14
+                                                            color: parent.thumbnailFailureContained ? theme.warning : root.mint
+                                                        }
+
+                                                        MouseArea {
+                                                            objectName: "photoLayerMaskSetThumbnailTargetArea"
+                                                            anchors.fill: parent
+                                                            cursorShape: Qt.PointingHandCursor
+                                                            onClicked: root.selectMaskSetAndLayer(photoLayerMaskSetRowRoot.modelData, false)
+                                                        }
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 2
+
+                                                        Label {
+                                                            objectName: "photoLayerMaskSetNameLabel"
+                                                            Layout.fillWidth: true
+                                                            text: String(modelData.name || "Mask")
+                                                            color: theme.textMain
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: 11
+                                                            font.weight: Font.DemiBold
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        Label {
+                                                            objectName: "photoLayerMaskSetStatusLabel"
+                                                            Layout.fillWidth: true
+                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
+                                                                   : root.thumbnailStatusLabel(
+                                                                         modelData,
+                                                                         photoLayerMaskSetRowRoot.maskSourceProvenanceSummary +
+                                                                         (linkedLayerIndex >= 0
+                                                                          ? " / controls Adjustment Layer " + String(linkedLayerIndex + 1)
+                                                                          : " / no adjustment layer"))
+                                                            color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
+                                                                   : linkedLayerIndex >= 0 ? root.mint : root.dimText
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: 8
+                                                            elide: Text.ElideRight
+                                                        }
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "photoLayerMaskSetThumbnailRetryButton"
+                                                        readonly property string retryActionSignature: photoLayerMaskSetRowRoot.thumbnailRetryActionSignature
+                                                        visible: photoLayerMaskSetRowRoot.thumbnailFailureContained
+                                                        square: true
+                                                        iconName: "reset"
+                                                        role: "icon"
+                                                        accent: theme.warning
+                                                        tooltip: photoLayerMaskSetRowRoot.thumbnailFailureDetail.length > 0
+                                                                 ? photoLayerMaskSetRowRoot.thumbnailFailureDetail
+                                                                 : "Retry this mask thumbnail."
+                                                        onClicked: editorPreview.retryThumbnailRender()
+                                                    }
+
+                                                    Rectangle {
+                                                        objectName: "photoLayerMaskSetJobStatusChip"
+                                                        readonly property string jobStatusSignature: photoLayerMaskSetRowRoot.rowJobChipSignature
+                                                        visible: photoLayerMaskSetRowRoot.rowJobChipVisible
+                                                        Layout.preferredWidth: maskSetJobStatusRow.implicitWidth + 12
+                                                        Layout.preferredHeight: 22
+                                                        radius: 3
+                                                        color: theme.alpha(theme.ink950, 0.70)
+                                                        border.width: theme.chromeBorderWidth
+                                                        border.color: theme.alpha("#d98962", 0.54)
+
+                                                        RowLayout {
+                                                            id: maskSetJobStatusRow
+                                                            anchors.fill: parent
+                                                            anchors.leftMargin: 6
+                                                            anchors.rightMargin: 6
+                                                            spacing: 5
+
+                                                            Rectangle {
+                                                                Layout.preferredWidth: 5
+                                                                Layout.preferredHeight: 5
+                                                                radius: 2.5
+                                                                color: "#d98962"
+                                                                opacity: 0.95
+                                                            }
+
+                                                            Label {
+                                                                text: root.maskActivityChipText()
+                                                                color: theme.textStrong
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 8
+                                                                font.weight: Font.DemiBold
+                                                                elide: Text.ElideRight
+                                                            }
+                                                        }
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "photoLayerMaskSetPreviewButton"
+                                                        square: true
+                                                        iconName: "compare"
+                                                        role: "icon"
+                                                        active: modelData.maskSetPreviewBypassed === true
+                                                        enabled: String(modelData.id || "").length > 0 &&
+                                                                 Number(modelData.sourceCount || 0) > 0
+                                                        tooltip: active ? "Show this mask attachment in preview."
+                                                                        : "Preview before this mask attachment."
+                                                        onClicked: editorPreview.setMaskSetPreviewBypassed(
+                                                                       String(modelData.id || ""),
+                                                                       modelData.maskSetPreviewBypassed !== true)
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "photoLayerMaskSetAdjustButton"
+                                                        text: "Edit Layer"
+                                                        iconName: "adjust"
+                                                        role: "segmented"
+                                                        tooltip: linkedLayerIndex >= 0
+                                                                 ? "Edit this mask-backed adjustment layer."
+                                                                 : "Create and edit this mask-backed adjustment layer."
+                                                        onClicked: root.selectMaskSetAndLayer(modelData, true)
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "photoLayerMaskSetSelectButton"
+                                                        text: "Edit Mask"
+                                                        iconName: "select"
+                                                        role: "segmented"
+                                                        active: activeMaskSet
+                                                        tooltip: "Show this mask on the canvas."
+                                                        onClicked: root.selectMaskSetAndLayer(modelData, false)
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
@@ -5072,22 +13941,62 @@ Rectangle {
                                         model: editorPreview.photoLayerCount
 
                                         delegate: Rectangle {
+                                            id: photoLayerRowRoot
+                                            objectName: "photoLayerRow"
                                             required property int index
                                             readonly property var layerData: editorPreview.photoLayers[index] || ({})
                                             readonly property int layerIndex: Number(layerData.flatIndex !== undefined ? layerData.flatIndex : index)
                                             readonly property bool layerLocked: layerData.locked === true
+                                            readonly property bool layerSelected: root.photoLayerSelected(layerIndex)
+                                            readonly property bool layerVisible: layerData.enabled !== false
+                                            readonly property bool layerHidden: layerData.enabled === false
+                                            readonly property bool layerSoloed: layerData.solo === true
+                                            readonly property bool layerMaskSelected: root.photoLayerHasSelectedMask(layerIndex)
+                                            readonly property bool rowJobChipVisible: root.layerMaskJobChipVisible(layerSelected || layerMaskSelected || layerIndex === root.normalizedActivePhotoLayerIndex())
+                                            readonly property string rowJobChipSignature: root.layerMaskJobChipSignature("photo-layer", layerSelected || layerMaskSelected || layerIndex === root.normalizedActivePhotoLayerIndex())
+                                            readonly property string layerFailureStage: root.photoLayerPreviewFailureStage(layerIndex)
+                                            readonly property string layerFailureLabel: root.previewFailureRowLabel(layerFailureStage)
+                                            readonly property string layerFailureSignature: root.photoLayerPreviewFailureSignature(layerIndex)
+                                            readonly property string layerStateSummary: root.photoLayerStateSummary(layerData, layerIndex)
+                                            readonly property string layerStateSignature: root.photoLayerStateSignature(layerData, layerIndex)
+                                            readonly property bool thumbnailStale: layerData.thumbnailStale === true
+                                            readonly property bool thumbnailProgressive: layerData.thumbnailProgressive === true
+                                            readonly property string thumbnailProgressiveReason: String(layerData.thumbnailProgressiveReason || "")
+                                            readonly property string thumbnailProgressiveSignature: String(layerData.thumbnailProgressiveSignature || "")
+                                            readonly property bool thumbnailRefreshQueued: thumbnailProgressive && thumbnailStale && thumbnailProgressiveReason === "thumbnail_refresh_deferred"
+                                            readonly property string thumbnailQueueSignature: "thumbnail-queue|deferred:" + String(thumbnailRefreshQueued) + "|reason:" + thumbnailProgressiveReason
+                                            readonly property bool thumbnailFailureContained: layerData.thumbnailFailureContained === true
+                                            readonly property string thumbnailFailureStage: String(layerData.thumbnailFailureStage || "")
+                                            readonly property string thumbnailFailureDetail: String(layerData.thumbnailFailureDetail || "")
+                                            readonly property string thumbnailFailureSignature: String(layerData.thumbnailFailureSignature || "")
+                                            readonly property string thumbnailRetryActionSignature: root.thumbnailRetryActionSignature(layerData, "photo-layer")
+                                            readonly property string thumbnailStateSignature: root.thumbnailStateSignature(layerData)
                                             readonly property real layerOpacity: Number(layerData.opacity !== undefined ? layerData.opacity : 1.0)
                                             readonly property int layerOpacityPercent: Number(layerData.opacityPercent !== undefined ? layerData.opacityPercent : 100)
+                                            readonly property var changedAdjustmentGroups: root.layerChangedAdjustmentGroups(layerData)
+                                            readonly property string changedAdjustmentGroupSignature: root.layerChangedAdjustmentGroupSignature(layerData)
+                                            readonly property string localAdjustmentSummary: root.layerLocalAdjustmentSummary(layerData)
+                                            readonly property bool layoutFits: layerContent.implicitHeight + 12 <= height
+                                            readonly property string layoutSignature: "height:" + Math.round(height) + "|content:" + Math.round(layerContent.implicitHeight) + "|fits:" + String(layoutFits)
 
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: 82
+                                            Layout.preferredHeight: Math.max(72, layerContent.implicitHeight + 12)
                                             radius: 4
-                                            color: layerData.enabled === false ? theme.alpha(root.panelColor, 0.42) : theme.alpha(root.mint, 0.055)
+                                            color: layerData.enabled === false ? theme.alpha(root.panelColor, 0.42)
+                                                   : layerSelected ? theme.alpha(root.mint, 0.095)
+                                                   : theme.alpha(root.mint, 0.055)
                                             border.width: theme.chromeBorderWidth
                                             border.color: layerData.solo === true ? theme.alpha(root.mint, 0.78)
+                                                          : layerSelected ? theme.alpha(root.mint, 0.78)
                                                           : layerIndex === root.normalizedActivePhotoLayerIndex() ? theme.alpha(root.mint, 0.66)
                                                           : layerData.locked === true ? theme.alpha(root.dimText, 0.52)
                                                           : root.hairline
+
+                                            MouseArea {
+                                                objectName: "photoLayerRowEditTargetArea"
+                                                anchors.fill: parent
+                                                onClicked: root.editPhotoLayerInspectorTarget(parent.layerIndex)
+                                            }
 
                                             RowLayout {
                                                 anchors.fill: parent
@@ -5096,27 +14005,92 @@ Rectangle {
 
                                                 Rectangle {
                                                     objectName: "photoLayerThumbnail"
-                                                    Layout.preferredWidth: 40
-                                                    Layout.preferredHeight: 40
+                                                    readonly property string thumbnailSource: String(layerData.thumbnailSource || "")
+                                                    readonly property string thumbnailDisplaySource: String(layerData.thumbnailDisplaySource || thumbnailSource)
+                                                    readonly property string thumbnailEffectPreviewSource: String(layerData.thumbnailEffectPreviewSource || "")
+                                                    readonly property string thumbnailEffectPreviewContract: String(layerData.thumbnailEffectPreviewContract || "")
+                                                    readonly property string thumbnailEffectPreviewKind: String(layerData.thumbnailEffectPreviewKind || "")
+                                                    readonly property string thumbnailEffectPreviewSignature: String(layerData.thumbnailEffectPreviewSignature || "")
+                                                    readonly property bool thumbnailUsesEffectPreview: thumbnailEffectPreviewSource.length > 0 && thumbnailDisplaySource === thumbnailEffectPreviewSource
+                                                    readonly property bool thumbnailReady: layerData.thumbnailReady === true && thumbnailDisplaySource.length > 0
+                                                    readonly property string thumbnailSignature: String(layerData.thumbnailSignature || "")
+                                                    readonly property bool thumbnailStale: photoLayerRowRoot.thumbnailStale
+                                                    readonly property bool thumbnailFailureContained: photoLayerRowRoot.thumbnailFailureContained
+                                                    readonly property string thumbnailStateSignature: photoLayerRowRoot.thumbnailStateSignature
+                                                    readonly property int thumbnailBackingWidth: Math.max(0, Number(layerData.thumbnailBackingWidth || 0))
+                                                    readonly property int thumbnailBackingHeight: Math.max(0, Number(layerData.thumbnailBackingHeight || 0))
+                                                    readonly property real thumbnailDevicePixelRatio: Math.max(0, Number(layerData.thumbnailDevicePixelRatio || 0))
+                                                    readonly property string thumbnailPixelRatioSignature: String(layerData.thumbnailPixelRatioSignature || "")
+                                                    readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(32, thumbnailBackingWidth)
+                                                    readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(32, thumbnailBackingHeight)
+                                                    readonly property bool thumbnailProgressive: photoLayerRowRoot.thumbnailProgressive
+                                                    readonly property string thumbnailProgressiveReason: photoLayerRowRoot.thumbnailProgressiveReason
+                                                    readonly property string thumbnailProgressiveSignature: photoLayerRowRoot.thumbnailProgressiveSignature
+                                                    readonly property bool thumbnailRefreshQueued: photoLayerRowRoot.thumbnailRefreshQueued
+                                                    readonly property string thumbnailQueueSignature: photoLayerRowRoot.thumbnailQueueSignature
+                                                    readonly property string thumbnailFailureStage: photoLayerRowRoot.thumbnailFailureStage
+                                                    readonly property string thumbnailFailureDetail: photoLayerRowRoot.thumbnailFailureDetail
+                                                    readonly property string thumbnailFailureSignature: photoLayerRowRoot.thumbnailFailureSignature
+                                                    readonly property string layerThumbnailRenderPath: String(layerData.thumbnail_render_stage_contract || layerData.thumbnailRenderStageContract || "")
+                                                    readonly property string layerThumbnailStage: String(layerData.thumbnail_render_stage || "")
+                                                    readonly property string layerThumbnailAlphaTraceSignature: String(layerData.mask_alpha_trace_signature || "")
+                                                    readonly property string layerThumbnailAlphaProviderContract: String(layerData.mask_alpha_provider_contract || "")
+                                                    readonly property string layerThumbnailAlphaProvider: String(layerData.mask_alpha_provider || "")
+                                                    readonly property bool layerThumbnailAlphaFullResolutionAvailable: layerData.mask_alpha_full_resolution_available === true
+                                                    readonly property bool layerThumbnailAlphaDeterministic: layerData.mask_alpha_deterministic === true
+                                                    readonly property int layerThumbnailAlphaTargetWidth: Math.max(0, Number(layerData.mask_alpha_target_width || 0))
+                                                    readonly property int layerThumbnailAlphaTargetHeight: Math.max(0, Number(layerData.mask_alpha_target_height || 0))
+                                                    readonly property string layerThumbnailAlphaProviderSignature: String(layerData.mask_alpha_provider_signature || "")
+                                                    readonly property string layerThumbnailAlphaProviderSummary: root.maskAlphaProviderSummary(layerData)
+                                                    readonly property string layerThumbnailInvalidationColorPipeline: String(layerData.thumbnailInvalidationColorPipelineVersion || "")
+                                                    readonly property string layerThumbnailInvalidationKey: String(layerData.thumbnailInvalidationKey || "")
+                                                    readonly property string layerThumbnailInvalidationSignature: String(layerData.thumbnailInvalidationSignature || "")
+                                                    readonly property string layerThumbnailInvalidationRecipeHash: String(layerData.thumbnailInvalidationRecipeHash || "")
+                                                    readonly property string layerThumbnailInvalidationMaskAlphaHash: String(layerData.thumbnailInvalidationMaskAlphaHash || "")
+                                                    readonly property string layerThumbnailInvalidationBlendMode: String(layerData.thumbnailInvalidationBlendMode || "")
+                                                    readonly property string layerThumbnailInvalidationOpacity: String(layerData.thumbnailInvalidationOpacity || "")
+                                                    readonly property bool layerThumbnailInvalidationVisible: layerData.thumbnailInvalidationVisible === true
+                                                    readonly property bool layerThumbnailCompositePath: layerThumbnailAlphaTraceSignature.indexOf("layer-thumbnail-composite") >= 0
+                                                    readonly property bool layerThumbnailColorManaged: layerThumbnailInvalidationColorPipeline.length > 0
+                                                    readonly property string layerThumbnailPathSignature: "layer-thumbnail|stage:" + layerThumbnailStage + "|composite:" + String(layerThumbnailCompositePath) + "|color:" + layerThumbnailInvalidationColorPipeline + "|key:" + layerThumbnailInvalidationKey
+                                                    Layout.preferredWidth: 32
+                                                    Layout.preferredHeight: 32
                                                     radius: 3
-                                                    color: layerData.kind === "fill" ? String(layerData.fillColor || "#808080")
+                                                    color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.12)
+                                                           : layerData.kind === "fill" ? String(layerData.fillColor || "#808080")
                                                            : layerData.kind === "text" ? theme.alpha(root.mint, 0.16)
                                                            : layerData.kind === "group" ? theme.alpha(root.dimText, 0.18)
                                                            : theme.alpha(theme.accentCool400, 0.14)
                                                     border.width: 1
-                                                    border.color: theme.alpha(theme.textMain, 0.24)
+                                                    border.color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.72)
+                                                                                           : theme.alpha(theme.textMain, 0.24)
+                                                    clip: true
 
-                                                    Label {
-                                                        anchors.centerIn: parent
-                                                        text: layerData.kind === "text" ? "T"
-                                                              : layerData.kind === "fill" ? ""
-                                                              : layerData.kind === "group" ? "G"
-                                                              : layerData.kind === "source" ? "S"
-                                                              : "A"
-                                                        color: theme.textMain
-                                                        font.family: theme.fontMono
-                                                        font.pixelSize: 12
-                                                        font.weight: Font.DemiBold
+                                                    Image {
+                                                        objectName: "photoLayerThumbnailImage"
+                                                        anchors.fill: parent
+                                                        anchors.margins: 1
+                                                        source: parent.thumbnailDisplaySource
+                                                        sourceSize.width: parent.screenAwareThumbnailBackingWidth
+                                                        sourceSize.height: parent.screenAwareThumbnailBackingHeight
+                                                        visible: parent.thumbnailReady
+                                                        opacity: parent.thumbnailStale ? 0.44 : 1.0
+                                                        fillMode: Image.PreserveAspectCrop
+                                                        smooth: true
+                                                        cache: false
+                                                    }
+
+                                                    AppIcon {
+                                                        objectName: "photoLayerTypeIcon"
+                                                        anchors.right: parent.right
+                                                        anchors.bottom: parent.bottom
+                                                        anchors.margins: 3
+                                                        name: root.photoLayerIconName(layerData)
+                                                        color: parent.thumbnailFailureContained ? theme.warning
+                                                                                                 : parent.thumbnailReady ? "#06100E" : theme.textMain
+                                                        width: parent.thumbnailReady ? 10 : 14
+                                                        height: parent.thumbnailReady ? 10 : 14
+                                                        visible: !parent.thumbnailReady || layerData.kind === "adjustment" || layerData.kind === "group"
                                                     }
 
                                                     Rectangle {
@@ -5141,26 +14115,165 @@ Rectangle {
                                                 }
 
                                                 ColumnLayout {
+                                                    id: layerContent
                                                     Layout.fillWidth: true
                                                     spacing: 4
 
-                                                    Label {
+                                                    TinyInput {
+                                                        objectName: "photoLayerNameField"
                                                         Layout.fillWidth: true
-                                                        text: String(layerData.name || "Layer")
-                                                        color: layerData.enabled === false ? root.dimText : theme.textMain
-                                                        font.family: theme.fontUi
-                                                        font.pixelSize: 11
-                                                        font.weight: Font.DemiBold
-                                                        elide: Text.ElideRight
+                                                        Layout.preferredHeight: 22
+                                                        text: String(layerData.displayName || layerData.name || "Layer")
+                                                        enabled: !layerLocked
+                                                        placeholder: "Layer name"
+                                                        onTextChanged: {
+                                                            if (!userEditing)
+                                                                return
+                                                            const nextName = String(text || "").trim()
+                                                            const currentName = String(layerData.name || "").trim()
+                                                            const currentDisplayName = String(layerData.displayName || currentName).trim()
+                                                            if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
+                                                                editorPreview.renamePhotoLayer(layerIndex, nextName)
+                                                        }
                                                     }
 
                                                     Label {
                                                         Layout.fillWidth: true
-                                                        text: String(layerData.layerAuditLabel || "")
+                                                        text: String(layerData.displaySubtitle || layerData.layerAuditLabel || "")
                                                         color: root.dimText
                                                         font.family: theme.fontMono
                                                         font.pixelSize: 8
                                                         elide: Text.ElideRight
+                                                    }
+
+                                                    Label {
+                                                        objectName: "photoLayerStateLabel"
+                                                        Layout.fillWidth: true
+                                                        text: layerFailureLabel.length > 0
+                                                              ? layerFailureLabel + " / " + layerStateSummary
+                                                              : root.thumbnailStatusLabel(layerData, layerStateSummary)
+                                                        color: layerFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
+                                                                : layerHidden ? root.dimText
+                                                                : layerMaskSelected || layerSoloed || layerSelected ? root.mint
+                                                                : theme.textMain
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                        font.weight: layerFailureLabel.length > 0 ||
+                                                                     thumbnailFailureContained ||
+                                                                     layerMaskSelected || layerSoloed || layerSelected
+                                                                     ? Font.DemiBold : Font.Normal
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "photoLayerThumbnailRetryButton"
+                                                        readonly property string retryActionSignature: photoLayerRowRoot.thumbnailRetryActionSignature
+                                                        visible: photoLayerRowRoot.thumbnailFailureContained
+                                                        square: true
+                                                        iconName: "reset"
+                                                        role: "icon"
+                                                        accent: theme.warning
+                                                        tooltip: photoLayerRowRoot.thumbnailFailureDetail.length > 0
+                                                                 ? photoLayerRowRoot.thumbnailFailureDetail
+                                                                 : "Retry this layer thumbnail."
+                                                        onClicked: editorPreview.retryThumbnailRender()
+                                                    }
+
+                                                    RowLayout {
+                                                        objectName: "photoLayerChangedGroupBadgeRow"
+                                                        readonly property string groupSignature: photoLayerRowRoot.changedAdjustmentGroupSignature
+                                                        readonly property string groupLabel: String(layerData.changedAdjustmentGroupLabel || "")
+                                                        Layout.fillWidth: true
+                                                        visible: photoLayerRowRoot.changedAdjustmentGroups.length > 0
+                                                        spacing: 4
+
+                                                        Repeater {
+                                                            model: photoLayerRowRoot.changedAdjustmentGroups
+
+                                                            delegate: Rectangle {
+                                                                objectName: "photoLayerChangedGroupBadge"
+                                                                required property var modelData
+                                                                readonly property string groupKey: String(modelData.key || "")
+                                                                readonly property string groupLabel: String(modelData.label || "")
+                                                                Layout.preferredWidth: Math.max(34, photoLayerChangedGroupBadgeLabel.implicitWidth + 12)
+                                                                Layout.preferredHeight: 18
+                                                                radius: 3
+                                                                color: theme.alpha(root.mint, 0.16)
+                                                                border.width: theme.chromeBorderWidth
+                                                                border.color: theme.alpha(root.mint, 0.52)
+
+                                                                Label {
+                                                                    id: photoLayerChangedGroupBadgeLabel
+                                                                    anchors.centerIn: parent
+                                                                    text: parent.groupLabel
+                                                                    color: root.mint
+                                                                    font.family: theme.fontMono
+                                                                    font.pixelSize: 8
+                                                                    font.weight: Font.DemiBold
+                                                                }
+
+                                                                MouseArea {
+                                                                    objectName: "photoLayerChangedGroupBadgeTargetArea"
+                                                                    anchors.fill: parent
+                                                                    cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: root.activateLayerAdjustmentGroup(photoLayerRowRoot.layerIndex, parent.groupKey)
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Item {
+                                                            Layout.fillWidth: true
+                                                        }
+                                                    }
+
+                                                    Label {
+                                                        objectName: "photoLayerAdjustmentSummaryLabel"
+                                                        readonly property string summaryContract: photoLayerRowRoot.changedAdjustmentGroupSignature
+                                                        Layout.fillWidth: true
+                                                        visible: String(layerData.kind || "").trim().toLowerCase() === "adjustment"
+                                                        text: photoLayerRowRoot.localAdjustmentSummary
+                                                        color: photoLayerRowRoot.changedAdjustmentGroups.length > 0 ? theme.textMain : root.dimText
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 8
+                                                        font.weight: photoLayerRowRoot.changedAdjustmentGroups.length > 0 ? Font.DemiBold : Font.Normal
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Rectangle {
+                                                        objectName: "photoLayerJobStatusChip"
+                                                        readonly property string jobStatusSignature: photoLayerRowRoot.rowJobChipSignature
+                                                        Layout.preferredWidth: photoLayerJobStatusRow.implicitWidth + 12
+                                                        Layout.preferredHeight: 22
+                                                        radius: 3
+                                                        visible: photoLayerRowRoot.rowJobChipVisible
+                                                        color: theme.alpha(theme.ink950, 0.70)
+                                                        border.width: theme.chromeBorderWidth
+                                                        border.color: theme.alpha("#d98962", 0.54)
+
+                                                        RowLayout {
+                                                            id: photoLayerJobStatusRow
+                                                            anchors.fill: parent
+                                                            anchors.leftMargin: 6
+                                                            anchors.rightMargin: 6
+                                                            spacing: 5
+
+                                                            Rectangle {
+                                                                Layout.preferredWidth: 5
+                                                                Layout.preferredHeight: 5
+                                                                radius: 2.5
+                                                                color: "#d98962"
+                                                                opacity: 0.95
+                                                            }
+
+                                                            Label {
+                                                                text: root.maskActivityChipText()
+                                                                color: theme.textStrong
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 8
+                                                                font.weight: Font.DemiBold
+                                                                elide: Text.ElideRight
+                                                            }
+                                                        }
                                                     }
 
                                                     RowLayout {
@@ -5187,50 +14300,56 @@ Rectangle {
                                                         }
                                                     }
 
-                                                    Flow {
+                                                    RowLayout {
+                                                        id: layerActions
                                                         Layout.fillWidth: true
-                                                        spacing: 4
+                                                        spacing: 5
 
                                                         MiniButton {
-                                                            objectName: "photoLayerOpacityDownButton"
-                                                            width: 30
-                                                            implicitWidth: 30
-                                                            text: "-"
-                                                            role: "segmented"
-                                                            enabled: !layerLocked && layerOpacity > 0.0
-                                                            tooltip: "Lower layer opacity."
-                                                            onClicked: root.adjustPhotoLayerOpacity(layerIndex, layerData.opacity, -0.1)
+                                                            objectName: "photoLayerSelectionButton"
+                                                            square: true
+                                                            iconName: "check"
+                                                            role: "icon"
+                                                            active: layerSelected
+                                                            tooltip: layerSelected ? "Remove this layer from sync selection." : "Select this layer for layer commands."
+                                                            onClicked: root.setActivePhotoLayerSelection(layerIndex, true)
                                                         }
 
-                                                        MiniButton {
-                                                            objectName: "photoLayerOpacityUpButton"
-                                                            width: 30
-                                                            implicitWidth: 30
-                                                            text: "+"
-                                                            role: "segmented"
-                                                            enabled: !layerLocked && layerOpacity < 1.0
-                                                            tooltip: "Raise layer opacity."
-                                                            onClicked: root.adjustPhotoLayerOpacity(layerIndex, layerData.opacity, 0.1)
-                                                        }
-
-                                                        MiniButton {
-                                                            objectName: "photoLayerBlendModeButton"
-                                                            width: 86
-                                                            implicitWidth: 86
-                                                            text: root.photoLayerBlendLabel(layerData.blendMode)
-                                                            role: "segmented"
-                                                            active: String(layerData.blendMode || "normal") !== "normal"
+                                                        Slider {
+                                                            objectName: "photoLayerOpacitySlider"
+                                                            Layout.preferredWidth: 78
+                                                            Layout.preferredHeight: 24
+                                                            from: 0
+                                                            to: 100
+                                                            stepSize: 1
+                                                            value: layerOpacityPercent
                                                             enabled: !layerLocked
-                                                            tooltip: "Cycle layer blend mode."
-                                                            onClicked: root.cyclePhotoLayerBlendMode(layerIndex, layerData.blendMode)
+                                                            onPressedChanged: {
+                                                                if (pressed)
+                                                                    editorPreview.beginCoalescedEdit()
+                                                                else
+                                                                    editorPreview.endCoalescedEdit()
+                                                            }
+                                                            onMoved: editorPreview.setPhotoLayerOpacity(layerIndex, value / 100.0)
+                                                        }
+
+                                                        ToneComboBox {
+                                                            objectName: "photoLayerBlendModeComboBox"
+                                                            Layout.preferredWidth: 96
+                                                            Layout.preferredHeight: 26
+                                                            enabled: !layerLocked
+                                                            model: root.photoLayerBlendLabels()
+                                                            currentIndex: root.photoLayerBlendModeIndex(layerData.blendMode)
+                                                            onActivated: function(index) {
+                                                                editorPreview.setPhotoLayerBlendMode(layerIndex, root.photoLayerBlendModeAt(index))
+                                                            }
                                                         }
 
                                                         MiniButton {
                                                             objectName: "photoLayerClippingMaskButton"
-                                                            width: 46
-                                                            implicitWidth: 46
-                                                            text: "Clip"
-                                                            role: "segmented"
+                                                            square: true
+                                                            iconName: "link"
+                                                            role: "icon"
                                                             active: layerData.clippingMask === true
                                                             enabled: !layerLocked && layerData.kind !== "group" && layerIndex < editorPreview.photoLayerCount - 1
                                                             tooltip: layerData.clippingMask === true ? "Release clipping mask." : "Clip this layer to the layer below."
@@ -5239,10 +14358,9 @@ Rectangle {
 
                                                         MiniButton {
                                                             objectName: "photoLayerMaskButton"
-                                                            width: 52
-                                                            implicitWidth: 52
-                                                            text: layerData.hasLayerMask === true ? "Mask" : "+Mask"
-                                                            role: "segmented"
+                                                            square: true
+                                                            iconName: "masks"
+                                                            role: "icon"
                                                             active: layerData.hasLayerMask === true
                                                             enabled: !layerLocked
                                                             tooltip: layerData.hasLayerMask === true ? "Remove this layer mask." : "Add a layer mask."
@@ -5251,10 +14369,9 @@ Rectangle {
 
                                                         MiniButton {
                                                             objectName: "photoLayerTransformButton"
-                                                            width: 58
-                                                            implicitWidth: 58
-                                                            text: "Xform"
-                                                            role: "segmented"
+                                                            square: true
+                                                            iconName: "geometry"
+                                                            role: "icon"
                                                             active: layerIndex === root.normalizedActivePhotoLayerIndex()
                                                             enabled: root.photoLayerHasDirectTransform(layerData)
                                                             tooltip: active ? "This layer has direct canvas transform handles." : "Show transform handles for this layer."
@@ -5263,10 +14380,9 @@ Rectangle {
 
                                                         MiniButton {
                                                             objectName: "photoLayerVisibilityButton"
-                                                            width: 42
-                                                            implicitWidth: 42
-                                                            text: layerData.enabled === false ? "Off" : "On"
-                                                            role: "segmented"
+                                                            square: true
+                                                            iconName: layerData.enabled === false ? "delete" : "media"
+                                                            role: "icon"
                                                             active: layerData.enabled !== false
                                                             tooltip: "Toggle layer visibility."
                                                             onClicked: editorPreview.setPhotoLayerEnabled(layerIndex, !(layerData.enabled !== false))
@@ -5274,10 +14390,9 @@ Rectangle {
 
                                                         MiniButton {
                                                             objectName: "photoLayerRowSoloButton"
-                                                            width: 68
-                                                            implicitWidth: 68
-                                                            text: layerData.solo === true ? "Isolated" : "Isolate"
-                                                            role: "segmented"
+                                                            square: true
+                                                            iconName: "select"
+                                                            role: "icon"
                                                             active: layerData.solo === true
                                                             enabled: !layerLocked || layerData.solo === true
                                                             tooltip: layerData.solo === true ? "Clear layer isolation." : "Show only this layer."
@@ -5289,301 +14404,1352 @@ Rectangle {
                                                             }
                                                         }
                                                     }
+
+                                                    RowLayout {
+                                                        id: layerStructureActions
+                                                        objectName: "photoLayerStructureActions"
+                                                        Layout.fillWidth: true
+                                                        spacing: 5
+
+                                                        MiniButton {
+                                                            objectName: "photoLayerLockButton"
+                                                            square: true
+                                                            iconName: "lock"
+                                                            role: "icon"
+                                                            active: layerLocked
+                                                            tooltip: layerLocked ? "Unlock layer edits." : "Lock layer edits."
+                                                            onClicked: editorPreview.setPhotoLayerLocked(layerIndex, !layerLocked)
+                                                        }
+
+                                                        MiniButton {
+                                                            objectName: "photoLayerMoveUpButton"
+                                                            square: true
+                                                            iconName: "move-up"
+                                                            role: "icon"
+                                                            enabled: layerIndex > 0 && !layerLocked
+                                                            tooltip: "Move layer up."
+                                                            onClicked: editorPreview.movePhotoLayer(layerIndex, -1)
+                                                        }
+
+                                                        MiniButton {
+                                                            objectName: "photoLayerMoveDownButton"
+                                                            square: true
+                                                            iconName: "move-down"
+                                                            role: "icon"
+                                                            enabled: layerIndex < editorPreview.photoLayerCount - 1 && !layerLocked
+                                                            tooltip: "Move layer down."
+                                                            onClicked: editorPreview.movePhotoLayer(layerIndex, 1)
+                                                        }
+
+                                                        MiniButton {
+                                                            objectName: "photoLayerDuplicateButton"
+                                                            square: true
+                                                            iconName: "source"
+                                                            role: "icon"
+                                                            enabled: !layerLocked
+                                                            tooltip: "Duplicate layer."
+                                                            onClicked: editorPreview.duplicatePhotoLayer(layerIndex)
+                                                        }
+
+                                                        Item { Layout.fillWidth: true }
+
+                                                        MiniButton {
+                                                            objectName: "photoLayerDeleteButton"
+                                                            square: true
+                                                            iconName: "delete"
+                                                            role: "destructive"
+                                                            enabled: !layerLocked
+                                                            tooltip: "Delete layer."
+                                                            onClicked: editorPreview.deletePhotoLayer(layerIndex)
+                                                        }
+                                                    }
+
+                                                    ColumnLayout {
+                                                        id: photoLayerNestedMaskList
+                                                        objectName: "photoLayerNestedMaskList"
+                                                        readonly property var linkedMaskSets: root.maskSetsForAdjustmentLayer(layerIndex)
+                                                        readonly property var linkedMaskSetIdentities: root.maskSetIdentityList(linkedMaskSets)
+                                                        readonly property bool maskSectionCollapsed: root.photoLayerMaskSectionCollapsed(layerIndex, layerData)
+                                                        readonly property string maskSectionKey: root.photoLayerMaskSectionKey(layerIndex, layerData)
+                                                        readonly property string nestedMaskListContract: "nested-mask-list:linked-only|layer:" +
+                                                                                                      layerIndex.toString() +
+                                                                                                      "|count:" + linkedMaskSets.length +
+                                                                                                      "|ids:" + linkedMaskSetIdentities.join(",")
+                                                        readonly property string maskSectionContract: "mask-section:v1|scope:layer|key:" +
+                                                                                                      maskSectionKey +
+                                                                                                      "|layer:" + layerIndex.toString() +
+                                                                                                      "|count:" + linkedMaskSets.length +
+                                                                                                      "|collapsed:" + String(maskSectionCollapsed)
+                                                        Layout.fillWidth: true
+                                                        visible: linkedMaskSets.length > 0
+                                                        spacing: 4
+
+                                                        Rectangle {
+                                                            objectName: "photoLayerNestedMaskSectionHeader"
+                                                            Layout.fillWidth: true
+                                                            Layout.leftMargin: 18
+                                                            Layout.preferredHeight: 28
+                                                            radius: 3
+                                                            color: theme.alpha(root.panelLift, 0.42)
+                                                            border.width: theme.chromeBorderWidth
+                                                            border.color: photoLayerNestedMaskList.maskSectionCollapsed ? theme.alpha(root.hairline, 0.88)
+                                                                                                                        : theme.alpha(root.mint, 0.34)
+
+                                                            MouseArea {
+                                                                anchors.fill: parent
+                                                                hoverEnabled: true
+                                                                cursorShape: Qt.PointingHandCursor
+                                                                onClicked: root.setPhotoLayerMaskSectionCollapsed(
+                                                                               layerIndex,
+                                                                               layerData,
+                                                                               !photoLayerNestedMaskList.maskSectionCollapsed)
+                                                            }
+
+                                                            RowLayout {
+                                                                anchors.fill: parent
+                                                                anchors.leftMargin: 7
+                                                                anchors.rightMargin: 5
+                                                                spacing: 6
+
+                                                                AppIcon {
+                                                                    objectName: "photoLayerNestedMaskSectionChevron"
+                                                                    Layout.preferredWidth: 12
+                                                                    Layout.preferredHeight: 12
+                                                                    name: "chevron-right"
+                                                                    rotation: photoLayerNestedMaskList.maskSectionCollapsed ? 0 : 90
+                                                                    color: photoLayerNestedMaskList.maskSectionCollapsed ? root.dimText : root.mint
+                                                                }
+
+                                                                Label {
+                                                                    objectName: "photoLayerNestedMaskSectionLabel"
+                                                                    Layout.fillWidth: true
+                                                                    text: photoLayerNestedMaskList.linkedMaskSets.length + " MASK" +
+                                                                          (photoLayerNestedMaskList.linkedMaskSets.length === 1 ? "" : "S")
+                                                                    color: root.dimText
+                                                                    font.family: theme.fontMono
+                                                                    font.pixelSize: 8
+                                                                    font.weight: Font.DemiBold
+                                                                    elide: Text.ElideRight
+                                                                }
+
+                                                                MiniButton {
+                                                                    objectName: "photoLayerNestedMaskSectionToggle"
+                                                                    square: true
+                                                                    iconName: photoLayerNestedMaskList.maskSectionCollapsed ? "chevron-right" : "move-up"
+                                                                    role: "icon"
+                                                                    active: !photoLayerNestedMaskList.maskSectionCollapsed
+                                                                    tooltip: photoLayerNestedMaskList.maskSectionCollapsed ? "Expand layer masks." : "Collapse layer masks."
+                                                                    onClicked: root.setPhotoLayerMaskSectionCollapsed(
+                                                                                   layerIndex,
+                                                                                   layerData,
+                                                                                   !photoLayerNestedMaskList.maskSectionCollapsed)
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Repeater {
+                                                            model: photoLayerNestedMaskList.maskSectionCollapsed ? [] : photoLayerNestedMaskList.linkedMaskSets
+
+                                                            delegate: Rectangle {
+                                                                id: photoLayerNestedMaskRowRoot
+                                                                objectName: "photoLayerNestedMaskRow"
+                                                                required property var modelData
+                                                                readonly property bool maskChildAttachment: true
+                                                                readonly property int parentLayerIndex: layerIndex
+                                                                readonly property bool activeMaskSet: root.maskSetActive(modelData)
+                                                                readonly property bool rowJobChipVisible: root.layerMaskJobChipVisible(activeMaskSet)
+                                                                readonly property string rowJobChipSignature: root.layerMaskJobChipSignature("nested-mask", activeMaskSet)
+                                                                readonly property int sourceCount: Number(modelData.sourceCount || 0)
+                                                                readonly property string maskFailureStage: root.maskSetPreviewFailureStage(modelData)
+                                                                readonly property string maskFailureLabel: root.previewFailureRowLabel(maskFailureStage)
+                                                                readonly property string maskFailureSignature: root.maskSetPreviewFailureSignature(modelData)
+                                                                readonly property bool thumbnailStale: modelData.thumbnailStale === true
+                                                                readonly property bool thumbnailProgressive: modelData.thumbnailProgressive === true
+                                                                readonly property string thumbnailProgressiveReason: String(modelData.thumbnailProgressiveReason || "")
+                                                                readonly property string thumbnailProgressiveSignature: String(modelData.thumbnailProgressiveSignature || "")
+                                                                readonly property bool thumbnailRefreshQueued: thumbnailProgressive && thumbnailStale && thumbnailProgressiveReason === "thumbnail_refresh_deferred"
+                                                                readonly property string thumbnailQueueSignature: "thumbnail-queue|deferred:" + String(thumbnailRefreshQueued) + "|reason:" + thumbnailProgressiveReason
+                                                                readonly property bool thumbnailFailureContained: modelData.thumbnailFailureContained === true
+                                                                readonly property string thumbnailFailureStage: String(modelData.thumbnailFailureStage || "")
+                                                                readonly property string thumbnailFailureDetail: String(modelData.thumbnailFailureDetail || "")
+                                                                readonly property string thumbnailFailureSignature: String(modelData.thumbnailFailureSignature || "")
+                                                                readonly property string thumbnailRetryActionSignature: root.thumbnailRetryActionSignature(modelData, "photo-layer-nested-mask")
+                                                                readonly property string maskAlphaProviderContract: String(modelData.mask_alpha_provider_contract || "")
+                                                                readonly property string maskAlphaProvider: String(modelData.mask_alpha_provider || "")
+                                                                readonly property bool maskAlphaFullResolutionAvailable: modelData.mask_alpha_full_resolution_available === true
+                                                                readonly property bool maskAlphaDeterministic: modelData.mask_alpha_deterministic === true
+                                                                 readonly property int maskAlphaTargetWidth: Math.max(0, Number(modelData.mask_alpha_target_width || 0))
+                                                                 readonly property int maskAlphaTargetHeight: Math.max(0, Number(modelData.mask_alpha_target_height || 0))
+                                                                 readonly property string maskAlphaProviderSignature: String(modelData.mask_alpha_provider_signature || "")
+                                                                 readonly property string maskAlphaProviderSummary: root.maskAlphaProviderSummary(modelData)
+                                                                 readonly property string maskSourceBrushContract: String(modelData.brushAlphaSourceContract || "")
+                                                                 readonly property string maskSourceBrushSourceOfTruth: String(modelData.brushAlphaSourceOfTruth || "")
+                                                                 readonly property int maskSourceBrushStrokeCount: Math.max(0, Number(modelData.brushAlphaStrokeCount || 0))
+                                                                 readonly property int maskSourceBrushPointCount: Math.max(0, Number(modelData.brushAlphaPointCount || 0))
+                                                                 readonly property string maskSourceBrushSignature: String(modelData.brushAlphaSourceSignature || "")
+                                                                 readonly property string maskSourceShapeContract: String(modelData.shapeAlphaSourceContract || "")
+                                                                 readonly property string maskSourceShapeSourceOfTruth: String(modelData.shapeAlphaSourceOfTruth || "")
+                                                                 readonly property int maskSourceShapePointCount: Math.max(0, Number(modelData.shapeAlphaPointCount || 0))
+                                                                 readonly property int maskSourceShapeRawPointCount: Math.max(0, Number(modelData.shapeAlphaRawPointCount || 0))
+                                                                 readonly property bool maskSourceShapeClosed: modelData.shapeAlphaClosed === true
+                                                                 readonly property bool maskSourceShapeEditable: modelData.shapeAlphaEditable === true
+                                                                 readonly property string maskSourceShapeSignature: String(modelData.shapeAlphaSourceSignature || "")
+                                                                 readonly property string maskSourceGeneratedContract: String(modelData.generatedAlphaSourceContract || "")
+                                                                 readonly property string maskSourceGeneratedModelName: String(modelData.generatedAlphaModelName || "")
+                                                                 readonly property string maskSourceGeneratedTargetType: String(modelData.generatedAlphaTargetType || "")
+                                                                 readonly property int maskSourceGeneratedWidth: Math.max(0, Number(modelData.generatedAlphaWidth || 0))
+                                                                 readonly property int maskSourceGeneratedHeight: Math.max(0, Number(modelData.generatedAlphaHeight || 0))
+                                                                 readonly property bool maskSourceGeneratedConfidenceAvailable: modelData.generatedAlphaConfidenceAvailable === true
+                                                                 readonly property string maskSourceGeneratedSignature: String(modelData.generatedAlphaSourceSignature || "")
+                                                                 readonly property string maskSourceGeneratedRefinementSignature: String(modelData.generatedAlphaRefinementStateSignature || "")
+                                                                 readonly property string maskSourceProvenanceSummary: root.maskSourceProvenanceSummary(modelData)
+                                                                   readonly property int maskChildIndent: 18
+                                                                   readonly property int combineOrderIndex: index
+                                                                   readonly property int combineOrderCount: photoLayerNestedMaskList.linkedMaskSets.length
+                                                                   readonly property string combineOrderLabel: (combineOrderIndex + 1).toString() + " / " + combineOrderCount.toString()
+                                                                   readonly property bool combineMoveUpEnabled: combineOrderIndex > 0
+                                                                   readonly property bool combineMoveDownEnabled: combineOrderIndex < combineOrderCount - 1
+                                                                   readonly property string primarySourceKind: String(modelData.primarySourceKind || modelData.sourceKind || "")
+                                                                   readonly property string sourceKindLabel: String(modelData.sourceKindLabel || "Mask")
+                                                                   readonly property string combineModeSummary: String(modelData.combineModeSummary || "Add")
+                                                                   readonly property string combineModeContract: String(modelData.combineModeContract || "")
+                                                                   readonly property string maskTypeIconName: root.maskSourceIconName(primarySourceKind)
+                                                                   readonly property string maskChildRowContract: "nested-mask-child:v1|indent:" +
+                                                                                                                 maskChildIndent.toString() +
+                                                                                                                 "|kind:" + primarySourceKind +
+                                                                                                                 "|order:" + combineOrderLabel +
+                                                                                                                 "|combine:" + combineModeSummary +
+                                                                                                                 "|active:" + String(activeMaskSet) +
+                                                                                                                 "|thumbnail:true"
+                                                                  readonly property string thumbnailStateSignature: root.thumbnailStateSignature(modelData)
+                                                                Layout.fillWidth: true
+                                                                Layout.leftMargin: maskChildIndent
+                                                                Layout.preferredHeight: Math.max(38, nestedMaskContent.implicitHeight + 10)
+                                                                radius: 3
+                                                                color: activeMaskSet ? theme.alpha(root.mint, 0.12)
+                                                                                     : theme.alpha(root.panelLift, 0.44)
+                                                                border.width: theme.chromeBorderWidth
+                                                                border.color: activeMaskSet ? theme.alpha(root.mint, 0.72)
+                                                                                            : theme.alpha(root.hairline, 0.94)
+
+                                                                MouseArea {
+                                                                    anchors.fill: parent
+                                                                    onClicked: root.selectMaskSetAndLayer(parent.modelData, false)
+                                                                }
+
+                                                                RowLayout {
+                                                                    anchors.fill: parent
+                                                                    anchors.margins: 5
+                                                                    spacing: 6
+
+                                                                    AppIcon {
+                                                                        objectName: "photoLayerNestedMaskTypeIcon"
+                                                                        readonly property string sourceKind: photoLayerNestedMaskRowRoot.primarySourceKind
+                                                                        readonly property string sourceKindLabel: photoLayerNestedMaskRowRoot.sourceKindLabel
+                                                                        readonly property string iconContract: "mask-type-icon:v1|kind:" +
+                                                                                                              sourceKind +
+                                                                                                              "|label:" + sourceKindLabel
+                                                                        Layout.preferredWidth: 14
+                                                                        Layout.preferredHeight: 14
+                                                                        name: photoLayerNestedMaskRowRoot.maskTypeIconName
+                                                                        color: photoLayerNestedMaskRowRoot.activeMaskSet ? root.mint : root.dimText
+                                                                    }
+
+                                                                    Label {
+                                                                        objectName: "photoLayerNestedMaskOrderLabel"
+                                                                        readonly property int combineOrderIndex: photoLayerNestedMaskRowRoot.combineOrderIndex
+                                                                        readonly property int combineOrderCount: photoLayerNestedMaskRowRoot.combineOrderCount
+                                                                        readonly property string combineOrderLabel: photoLayerNestedMaskRowRoot.combineOrderLabel
+                                                                        Layout.preferredWidth: 32
+                                                                        text: combineOrderLabel
+                                                                        color: photoLayerNestedMaskRowRoot.activeMaskSet ? root.mint : root.dimText
+                                                                        font.family: theme.fontMono
+                                                                        font.pixelSize: 8
+                                                                        horizontalAlignment: Text.AlignHCenter
+                                                                        elide: Text.ElideRight
+                                                                    }
+
+                                                                    Rectangle {
+                                                                        objectName: "photoLayerNestedMaskThumbnail"
+                                                                        readonly property bool thumbnailStale: photoLayerNestedMaskRowRoot.thumbnailStale
+                                                                        readonly property bool thumbnailFailureContained: photoLayerNestedMaskRowRoot.thumbnailFailureContained
+                                                                        readonly property string thumbnailStateSignature: photoLayerNestedMaskRowRoot.thumbnailStateSignature
+                                                                        readonly property int thumbnailBackingWidth: Math.max(0, Number(modelData.thumbnailBackingWidth || 0))
+                                                                        readonly property int thumbnailBackingHeight: Math.max(0, Number(modelData.thumbnailBackingHeight || 0))
+                                                                        readonly property real thumbnailDevicePixelRatio: Math.max(0, Number(modelData.thumbnailDevicePixelRatio || 0))
+                                                                        readonly property string thumbnailPixelRatioSignature: String(modelData.thumbnailPixelRatioSignature || "")
+                                                                        readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(26, thumbnailBackingWidth)
+                                                                        readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(26, thumbnailBackingHeight)
+                                                                        readonly property bool thumbnailProgressive: photoLayerNestedMaskRowRoot.thumbnailProgressive
+                                                                        readonly property string thumbnailProgressiveReason: photoLayerNestedMaskRowRoot.thumbnailProgressiveReason
+                                                                        readonly property string thumbnailProgressiveSignature: photoLayerNestedMaskRowRoot.thumbnailProgressiveSignature
+                                                                        readonly property bool thumbnailRefreshQueued: photoLayerNestedMaskRowRoot.thumbnailRefreshQueued
+                                                                        readonly property string thumbnailQueueSignature: photoLayerNestedMaskRowRoot.thumbnailQueueSignature
+                                                                        readonly property string thumbnailFailureStage: photoLayerNestedMaskRowRoot.thumbnailFailureStage
+                                                                        readonly property string thumbnailFailureDetail: photoLayerNestedMaskRowRoot.thumbnailFailureDetail
+                                                                        readonly property string thumbnailFailureSignature: photoLayerNestedMaskRowRoot.thumbnailFailureSignature
+                                                                        readonly property string maskAlphaProviderContract: photoLayerNestedMaskRowRoot.maskAlphaProviderContract
+                                                                        readonly property string maskAlphaProvider: photoLayerNestedMaskRowRoot.maskAlphaProvider
+                                                                        readonly property bool maskAlphaFullResolutionAvailable: photoLayerNestedMaskRowRoot.maskAlphaFullResolutionAvailable
+                                                                         readonly property bool maskAlphaDeterministic: photoLayerNestedMaskRowRoot.maskAlphaDeterministic
+                                                                         readonly property string maskAlphaProviderSignature: photoLayerNestedMaskRowRoot.maskAlphaProviderSignature
+                                                                         readonly property string maskAlphaProviderSummary: photoLayerNestedMaskRowRoot.maskAlphaProviderSummary
+                                                                         readonly property string maskSourceBrushContract: photoLayerNestedMaskRowRoot.maskSourceBrushContract
+                                                                         readonly property string maskSourceShapeContract: photoLayerNestedMaskRowRoot.maskSourceShapeContract
+                                                                         readonly property string maskSourceGeneratedContract: photoLayerNestedMaskRowRoot.maskSourceGeneratedContract
+                                                                         readonly property string maskSourceProvenanceSummary: photoLayerNestedMaskRowRoot.maskSourceProvenanceSummary
+                                                                         readonly property string thumbnailInvalidationKey: String(modelData.thumbnailInvalidationKey || "")
+                                                                        readonly property string thumbnailInvalidationSignature: String(modelData.thumbnailInvalidationSignature || "")
+                                                                        readonly property string thumbnailInvalidationMaskAlphaHash: String(modelData.thumbnailInvalidationMaskAlphaHash || "")
+                                                                        readonly property string finalAlphaSourceKind: String(modelData.mask_source_kind || "")
+                                                                        readonly property string finalAlphaTraceSignature: String(modelData.mask_alpha_trace_signature || "")
+                                                                        readonly property bool finalAlphaComposite: finalAlphaSourceKind === "composite" &&
+                                                                                                                 finalAlphaTraceSignature.indexOf("mask-thumbnail-composite") >= 0
+                                                                        Layout.preferredWidth: 26
+                                                                        Layout.preferredHeight: 26
+                                                                        radius: 3
+                                                                        color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.10)
+                                                                                                         : theme.alpha(root.mint, 0.10)
+                                                                        border.width: 1
+                                                                        border.color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.72)
+                                                                                                                : theme.alpha(root.mint, 0.36)
+                                                                        clip: true
+
+                                                                        Image {
+                                                                            objectName: "photoLayerNestedMaskThumbnailImage"
+                                                                            anchors.fill: parent
+                                                                            anchors.margins: 1
+                                                                            source: String(modelData.thumbnailSource || "")
+                                                                            sourceSize.width: parent.screenAwareThumbnailBackingWidth
+                                                                            sourceSize.height: parent.screenAwareThumbnailBackingHeight
+                                                                            visible: source.toString().length > 0
+                                                                            opacity: parent.thumbnailStale ? 0.44 : 1.0
+                                                                            fillMode: Image.PreserveAspectCrop
+                                                                            smooth: true
+                                                                            cache: false
+                                                                        }
+
+                                                                        AppIcon {
+                                                                            anchors.centerIn: parent
+                                                                            visible: String(modelData.thumbnailSource || "").length === 0
+                                                                            name: "masks"
+                                                                            width: 12
+                                                                            height: 12
+                                                                            color: parent.thumbnailFailureContained ? theme.warning : root.mint
+                                                                        }
+
+                                                                        MouseArea {
+                                                                            objectName: "photoLayerNestedMaskThumbnailTargetArea"
+                                                                            anchors.fill: parent
+                                                                            cursorShape: Qt.PointingHandCursor
+                                                                            onClicked: root.selectMaskSetAndLayer(photoLayerNestedMaskRowRoot.modelData, false)
+                                                                        }
+                                                                    }
+
+                                                                    ColumnLayout {
+                                                                        id: nestedMaskContent
+                                                                        Layout.fillWidth: true
+                                                                        spacing: 1
+
+                                                                        Label {
+                                                                            objectName: "photoLayerNestedMaskNameLabel"
+                                                                            Layout.fillWidth: true
+                                                                            text: String(modelData.name || "Mask")
+                                                                            color: activeMaskSet ? root.mint : theme.textMain
+                                                                            font.family: theme.fontUi
+                                                                            font.pixelSize: 10
+                                                                            font.weight: Font.DemiBold
+                                                                            elide: Text.ElideRight
+                                                                        }
+
+                                                                        Label {
+                                                                            objectName: "photoLayerNestedMaskStatusLabel"
+                                                                            Layout.fillWidth: true
+                                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
+                                                                                   : root.thumbnailStatusLabel(
+                                                                                         modelData,
+                                                                                          photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
+                                                                                          photoLayerNestedMaskRowRoot.maskSourceProvenanceSummary +
+                                                                                          " / mask attachment")
+                                                                            color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning : root.dimText
+                                                                            font.family: theme.fontMono
+                                                                            font.pixelSize: 8
+                                                                            elide: Text.ElideRight
+                                                                        }
+
+                                                                        Rectangle {
+                                                                            objectName: "photoLayerNestedMaskJobStatusChip"
+                                                                            readonly property string jobStatusSignature: photoLayerNestedMaskRowRoot.rowJobChipSignature
+                                                                            Layout.preferredWidth: nestedMaskJobStatusRow.implicitWidth + 12
+                                                                            Layout.preferredHeight: 20
+                                                                            radius: 3
+                                                                            visible: photoLayerNestedMaskRowRoot.rowJobChipVisible
+                                                                            color: theme.alpha(theme.ink950, 0.70)
+                                                                            border.width: theme.chromeBorderWidth
+                                                                            border.color: theme.alpha("#d98962", 0.54)
+
+                                                                            RowLayout {
+                                                                                id: nestedMaskJobStatusRow
+                                                                                anchors.fill: parent
+                                                                                anchors.leftMargin: 6
+                                                                                anchors.rightMargin: 6
+                                                                                spacing: 5
+
+                                                                                Rectangle {
+                                                                                    Layout.preferredWidth: 5
+                                                                                    Layout.preferredHeight: 5
+                                                                                    radius: 2.5
+                                                                                    color: "#d98962"
+                                                                                    opacity: 0.95
+                                                                                }
+
+                                                                                Label {
+                                                                                    text: root.maskActivityChipText()
+                                                                                    color: theme.textStrong
+                                                                                    font.family: theme.fontMono
+                                                                                    font.pixelSize: 8
+                                                                                    font.weight: Font.DemiBold
+                                                                                    elide: Text.ElideRight
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskThumbnailRetryButton"
+                                                                        readonly property string retryActionSignature: photoLayerNestedMaskRowRoot.thumbnailRetryActionSignature
+                                                                        visible: photoLayerNestedMaskRowRoot.thumbnailFailureContained
+                                                                        square: true
+                                                                        iconName: "reset"
+                                                                        role: "icon"
+                                                                        accent: theme.warning
+                                                                        tooltip: photoLayerNestedMaskRowRoot.thumbnailFailureDetail.length > 0
+                                                                                 ? photoLayerNestedMaskRowRoot.thumbnailFailureDetail
+                                                                                 : "Retry this mask thumbnail."
+                                                                        onClicked: editorPreview.retryThumbnailRender()
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskPreviewButton"
+                                                                        square: true
+                                                                        iconName: "compare"
+                                                                        role: "icon"
+                                                                        active: modelData.maskSetPreviewBypassed === true
+                                                                        enabled: String(modelData.id || "").length > 0 &&
+                                                                                 Number(modelData.sourceCount || 0) > 0
+                                                                        tooltip: active ? "Show this mask attachment in preview."
+                                                                                        : "Preview before this mask attachment."
+                                                                        onClicked: editorPreview.setMaskSetPreviewBypassed(
+                                                                                        String(modelData.id || ""),
+                                                                                        modelData.maskSetPreviewBypassed !== true)
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskMoveUpButton"
+                                                                        square: true
+                                                                        iconName: "move-up"
+                                                                        role: "icon"
+                                                                        enabled: photoLayerNestedMaskRowRoot.combineMoveUpEnabled
+                                                                        tooltip: "Move this mask earlier in the layer combine order."
+                                                                        onClicked: root.moveLayerMaskSet(
+                                                                                       photoLayerNestedMaskRowRoot.parentLayerIndex,
+                                                                                       photoLayerNestedMaskRowRoot.modelData,
+                                                                                       photoLayerNestedMaskRowRoot.combineOrderIndex - 1)
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskMoveDownButton"
+                                                                        square: true
+                                                                        iconName: "move-down"
+                                                                        role: "icon"
+                                                                        enabled: photoLayerNestedMaskRowRoot.combineMoveDownEnabled
+                                                                        tooltip: "Move this mask later in the layer combine order."
+                                                                        onClicked: root.moveLayerMaskSet(
+                                                                                       photoLayerNestedMaskRowRoot.parentLayerIndex,
+                                                                                       photoLayerNestedMaskRowRoot.modelData,
+                                                                                       photoLayerNestedMaskRowRoot.combineOrderIndex + 1)
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskEditLayerButton"
+                                                                        text: "Edit Layer"
+                                                                        iconName: "adjust"
+                                                                        role: "segmented"
+                                                                        tooltip: "Edit this mask-backed adjustment layer."
+                                                                        onClicked: root.selectMaskSetAndLayer(modelData, true)
+                                                                    }
+
+                                                                    MiniButton {
+                                                                        objectName: "photoLayerNestedMaskSelectButton"
+                                                                        text: "Edit Mask"
+                                                                        iconName: "select"
+                                                                        role: "segmented"
+                                                                        active: activeMaskSet
+                                                                        tooltip: "Edit this mask attachment."
+                                                                        onClicked: root.selectMaskSetAndLayer(modelData, false)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    ColumnLayout {
+                                                        id: photoLayerTextEditor
+                                                        objectName: "photoLayerTextEditor"
+                                                        Layout.fillWidth: true
+                                                        visible: layerData.kind === "text"
+                                                        spacing: 5
+                                                        property string liveTextFontFamily: String(layerData.fontFamily || "Helvetica")
+                                                        property string liveTextColor: String(layerData.textColor || "#ffffff")
+                                                        property bool liveTextBold: String(layerData.fontWeight || "regular") === "bold"
+                                                        property string liveTextAlignment: String(layerData.textAlignment || "left")
+                                                        function applyTextStyle(overrides) {
+                                                            const next = overrides || ({})
+                                                            const family = next.fontFamily !== undefined
+                                                                    ? String(next.fontFamily || "")
+                                                                    : String(liveTextFontFamily || layerData.fontFamily || "Helvetica")
+                                                            const size = next.fontSize !== undefined
+                                                                    ? Number(next.fontSize)
+                                                                    : Number(layerData.fontSize || 48)
+                                                            const color = next.textColor !== undefined
+                                                                    ? String(next.textColor || "")
+                                                                    : String(liveTextColor || layerData.textColor || "#ffffff")
+                                                            const weight = next.fontWeight !== undefined
+                                                                    ? String(next.fontWeight || "regular")
+                                                                    : (liveTextBold ? "bold" : "regular")
+                                                            const alignment = next.textAlignment !== undefined
+                                                                    ? String(next.textAlignment || "left")
+                                                                    : String(liveTextAlignment || "left")
+                                                            return editorPreview.setPhotoLayerTextStyle(
+                                                                        layerIndex,
+                                                                        family,
+                                                                        Math.round(size),
+                                                                        color,
+                                                                        weight,
+                                                                        alignment)
+                                                        }
+
+                                                        TinyInput {
+                                                            objectName: "photoLayerTextContentField"
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: 28
+                                                            text: String(layerData.text || "Text")
+                                                            enabled: !layerLocked
+                                                            placeholder: "Text"
+                                                            onTextChanged: {
+                                                                if (!userEditing)
+                                                                    return
+                                                                if (layerData.kind === "text" && text !== String(layerData.text || ""))
+                                                                    editorPreview.setPhotoLayerText(layerIndex, text)
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 5
+
+                                                            TinyInput {
+                                                                objectName: "photoLayerTextFontField"
+                                                                Layout.fillWidth: true
+                                                                Layout.preferredHeight: 28
+                                                                text: photoLayerTextEditor.liveTextFontFamily
+                                                                enabled: !layerLocked
+                                                                placeholder: "Font"
+                                                                onTextChanged: {
+                                                                    if (!userEditing)
+                                                                        return
+                                                                    photoLayerTextEditor.liveTextFontFamily = text
+                                                                    if (layerData.kind === "text")
+                                                                        photoLayerTextEditor.applyTextStyle({ fontFamily: text })
+                                                                }
+                                                            }
+
+                                                            TinyInput {
+                                                                objectName: "photoLayerTextColorField"
+                                                                Layout.preferredWidth: 86
+                                                                Layout.preferredHeight: 28
+                                                                text: photoLayerTextEditor.liveTextColor
+                                                                enabled: !layerLocked
+                                                                placeholder: "#ffffff"
+                                                                onTextChanged: {
+                                                                    if (!userEditing)
+                                                                        return
+                                                                    photoLayerTextEditor.liveTextColor = text
+                                                                    if (layerData.kind === "text")
+                                                                        photoLayerTextEditor.applyTextStyle({ textColor: text })
+                                                                }
+                                                            }
+                                                        }
+
+                                                        AdjustSlider {
+                                                            objectName: "photoLayerTextSizeSlider"
+                                                            controlHeight: 34
+                                                            label: "Text Size"
+                                                            from: 8
+                                                            to: 144
+                                                            stepSize: 1
+                                                            defaultValue: 48
+                                                            value: Number(layerData.fontSize || 48)
+                                                            valueText: Math.round(Number(layerData.fontSize || 48)).toString()
+                                                            enabled: !layerLocked
+                                                            onValueDragged: function(value) {
+                                                                photoLayerTextEditor.applyTextStyle({ fontSize: Math.round(value) })
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 5
+
+                                                            MiniButton {
+                                                                objectName: "photoLayerTextBoldButton"
+                                                                text: "B"
+                                                                role: "segmented"
+                                                                active: photoLayerTextEditor.liveTextBold
+                                                                enabled: !layerLocked
+                                                                tooltip: "Toggle bold text."
+                                                                onClicked: {
+                                                                    photoLayerTextEditor.liveTextBold = !photoLayerTextEditor.liveTextBold
+                                                                    photoLayerTextEditor.applyTextStyle({
+                                                                        fontWeight: photoLayerTextEditor.liveTextBold ? "bold" : "regular"
+                                                                    })
+                                                                }
+                                                            }
+
+                                                            Repeater {
+                                                                model: [
+                                                                    { label: "Left", value: "left" },
+                                                                    { label: "Center", value: "center" },
+                                                                    { label: "Right", value: "right" }
+                                                                ]
+                                                                MiniButton {
+                                                                    required property var modelData
+                                                                    objectName: "photoLayerTextAlign" + modelData.label + "Button"
+                                                                    Layout.fillWidth: true
+                                                                    text: modelData.label
+                                                                    role: "segmented"
+                                                                    active: photoLayerTextEditor.liveTextAlignment === modelData.value
+                                                                    enabled: !layerLocked
+                                                                    tooltip: "Set text alignment."
+                                                                    onClicked: {
+                                                                        photoLayerTextEditor.liveTextAlignment = modelData.value
+                                                                        photoLayerTextEditor.applyTextStyle({ textAlignment: modelData.value })
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        RowLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 5
+
+                                                            AdjustSlider {
+                                                                objectName: "photoLayerTextBoxWidthSlider"
+                                                                Layout.fillWidth: true
+                                                                controlHeight: 34
+                                                                label: "Box W"
+                                                                from: 64
+                                                                to: 2048
+                                                                stepSize: 8
+                                                                defaultValue: 512
+                                                                value: Number(layerData.pixelWidth || 512)
+                                                                valueText: Math.round(Number(layerData.pixelWidth || 512)).toString()
+                                                                enabled: !layerLocked
+                                                                onValueDragged: function(value) {
+                                                                    editorPreview.setPhotoLayerTextBox(layerIndex, Math.round(value), Number(layerData.pixelHeight || 128))
+                                                                }
+                                                            }
+
+                                                            AdjustSlider {
+                                                                objectName: "photoLayerTextBoxHeightSlider"
+                                                                Layout.fillWidth: true
+                                                                controlHeight: 34
+                                                                label: "Box H"
+                                                                from: 32
+                                                                to: 1024
+                                                                stepSize: 8
+                                                                defaultValue: 128
+                                                                value: Number(layerData.pixelHeight || 128)
+                                                                valueText: Math.round(Number(layerData.pixelHeight || 128)).toString()
+                                                                enabled: !layerLocked
+                                                                onValueDragged: function(value) {
+                                                                    editorPreview.setPhotoLayerTextBox(layerIndex, Number(layerData.pixelWidth || 512), Math.round(value))
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
 
-                                    Label {
+                                    Rectangle {
+                                        id: baseImageLayerRow
+                                        objectName: "baseImageLayerRow"
+                                        readonly property bool baseLayerLocked: true
+                                        readonly property string baseLayerStackPosition: "bottom"
+                                        readonly property bool baseLayerSelected: root.selectedEditTargetScope() === "base-image"
+                                        readonly property string baseLayerTargetKind: "global-edits"
+                                        readonly property string baseLayerThumbnailSource: String(editorPreview.baseImageThumbnailSource || "")
+                                        readonly property bool baseLayerThumbnailUsesOriginalSource: baseLayerThumbnailSource.length > 0 &&
+                                                                                                   baseLayerThumbnailSource !== String(editorPreview.displayPreviewSource || "")
+                                        readonly property var changedAdjustmentGroups: root.globalChangedAdjustmentGroups()
+                                        readonly property string changedAdjustmentGroupSignature: root.globalChangedAdjustmentGroupSignature()
+                                        readonly property string baseLayerSummary: root.globalAdjustmentSummary()
+                                        readonly property string baseLayerMetadataSummary: root.baseImageMetadataSummary()
+                                        readonly property string baseLayerContract: "base-image-layer:v1|locked:true|stack:bottom|target:" +
+                                                                                   baseLayerTargetKind + "|thumbnail:original|selected:" +
+                                                                                   String(baseLayerSelected)
                                         Layout.fillWidth: true
-                                        visible: editorPreview.photoLayerCount === 0
-                                        text: "No photo layers"
-                                        color: root.dimText
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
+                                        Layout.preferredHeight: 78
+                                        radius: 4
+                                        color: baseLayerSelected ? theme.alpha(root.mint, 0.095)
+                                                                 : theme.alpha(root.panelColor, 0.50)
+                                        border.width: theme.chromeBorderWidth
+                                        border.color: baseLayerSelected ? theme.alpha(root.mint, 0.78)
+                                                                        : theme.alpha(root.dimText, 0.46)
+
+                                        MouseArea {
+                                            objectName: "baseImageLayerRowTargetArea"
+                                            readonly property string clickRouteContract: "base-image-row-click:activate-base-target:v1"
+                                            anchors.fill: parent
+                                            z: 20
+                                            cursorShape: Qt.PointingHandCursor
+                                            function triggerBaseImageLayerRowClickForTest() {
+                                                root.activateBaseImageLayerTarget()
+                                                return true
+                                            }
+                                            onClicked: root.activateBaseImageLayerTarget()
+                                        }
+
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 7
+
+                                            Rectangle {
+                                                objectName: "baseImageLayerThumbnail"
+                                                readonly property string thumbnailSource: baseImageLayerRow.baseLayerThumbnailSource
+                                                readonly property bool thumbnailReady: thumbnailSource.length > 0
+                                                Layout.preferredWidth: 32
+                                                Layout.preferredHeight: 32
+                                                radius: 3
+                                                color: theme.alpha(theme.accentCool400, 0.14)
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.textMain, 0.24)
+                                                clip: true
+
+                                                Image {
+                                                    objectName: "baseImageLayerThumbnailImage"
+                                                    anchors.fill: parent
+                                                    anchors.margins: 1
+                                                    source: parent.thumbnailSource
+                                                    sourceSize.width: 96
+                                                    sourceSize.height: 96
+                                                    visible: parent.thumbnailReady
+                                                    fillMode: Image.PreserveAspectCrop
+                                                    smooth: true
+                                                    cache: false
+                                                }
+
+                                                AppIcon {
+                                                    objectName: "baseImageLayerTypeIcon"
+                                                    anchors.centerIn: parent
+                                                    visible: !parent.thumbnailReady
+                                                    name: "media"
+                                                    color: theme.textMain
+                                                    width: 14
+                                                    height: 14
+                                                }
+
+                                                Rectangle {
+                                                    objectName: "baseImageLayerLockBadge"
+                                                    anchors.left: parent.left
+                                                    anchors.right: parent.right
+                                                    anchors.bottom: parent.bottom
+                                                    height: 13
+                                                    radius: 2
+                                                    color: theme.alpha(root.dimText, 0.82)
+
+                                                    Label {
+                                                        anchors.centerIn: parent
+                                                        text: "LOCK"
+                                                        color: "#06100E"
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 7
+                                                        font.weight: Font.DemiBold
+                                                    }
+                                                }
+                                            }
+
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 4
+
+                                                Label {
+                                                    objectName: "baseImageLayerNameLabel"
+                                                    Layout.fillWidth: true
+                                                    text: "Base Image"
+                                                    color: baseImageLayerRow.baseLayerSelected ? root.mint : theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                RowLayout {
+                                                    objectName: "baseImageGlobalAdjustmentBadgeRow"
+                                                    readonly property string groupSignature: baseImageLayerRow.changedAdjustmentGroupSignature
+                                                    Layout.fillWidth: true
+                                                    spacing: 4
+
+                                                    Rectangle {
+                                                        objectName: "baseImageGlobalAdjustmentBadge"
+                                                        readonly property bool hasGlobalAdjustments: baseImageLayerRow.changedAdjustmentGroups.length > 0
+                                                        Layout.preferredWidth: baseImageGlobalAdjustmentBadgeLabel.implicitWidth + 12
+                                                        Layout.preferredHeight: 18
+                                                        radius: 3
+                                                        color: hasGlobalAdjustments ? theme.alpha(root.mint, 0.16)
+                                                                                    : theme.alpha(root.panelLift, 0.44)
+                                                        border.width: theme.chromeBorderWidth
+                                                        border.color: hasGlobalAdjustments ? theme.alpha(root.mint, 0.52)
+                                                                                           : root.hairline
+
+                                                        Label {
+                                                            id: baseImageGlobalAdjustmentBadgeLabel
+                                                            anchors.centerIn: parent
+                                                            text: parent.hasGlobalAdjustments
+                                                                  ? "Global " + baseImageLayerRow.changedAdjustmentGroups.length
+                                                                  : "Global"
+                                                            color: parent.hasGlobalAdjustments ? root.mint : root.dimText
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: 8
+                                                            font.weight: Font.DemiBold
+                                                        }
+                                                    }
+
+                                                    Item {
+                                                        Layout.fillWidth: true
+                                                    }
+                                                }
+
+                                                Label {
+                                                    objectName: "baseImageLayerStatusLabel"
+                                                    Layout.fillWidth: true
+                                                    text: baseImageLayerRow.baseLayerSummary +
+                                                          " / Global edits target / Locked bottom layer"
+                                                    color: baseImageLayerRow.baseLayerSelected ||
+                                                           baseImageLayerRow.changedAdjustmentGroups.length > 0 ? root.mint : root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    objectName: "baseImageLayerMetadataLabel"
+                                                    Layout.fillWidth: true
+                                                    text: baseImageLayerRow.baseLayerMetadataSummary
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 8
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            MiniButton {
+                                                objectName: "baseImageLayerLockButton"
+                                                square: true
+                                                iconName: "lock"
+                                                role: "icon"
+                                                active: true
+                                                enabled: false
+                                                tooltip: "Base image is locked and stays at the bottom of the stack."
+                                            }
+
+                                            MiniButton {
+                                                objectName: "baseImageLayerVisibilityButton"
+                                                square: true
+                                                iconName: "media"
+                                                role: "icon"
+                                                active: true
+                                                enabled: false
+                                                tooltip: "Base image is always visible."
+                                            }
+                                        }
+                                    }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "presetLibraryInspectorGroup"
+                                    visible: root.editInspectorTab === "presets"
+                                    title: "Presets"
+                                    compareGroup: "color"
+                                    beforeAfterObjectName: "presetLibraryBeforeAfterButton"
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            ToneComboBox {
+                                                objectName: "studioPresetQuickSelect"
+                                                Layout.fillWidth: true
+                                                model: editorPreview.presetNames
+                                                currentIndex: root.studioCurrentPresetName().length > 0
+                                                              ? editorPreview.presetNames.indexOf(root.studioCurrentPresetName())
+                                                              : -1
+                                                onActivated: root.selectStudioPreset(currentText)
+                                            }
+                                            MiniButton {
+                                                objectName: "studioApplyPresetButton"
+                                                text: "Apply"
+                                                role: "primary"
+                                                enabled: root.studioCurrentPresetName().length > 0 && editorPreview.hasAsset
+                                                onClicked: root.applyStudioPreset()
+                                            }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: root.studioPresetMetaText()
+                                                color: root.dimText
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 10
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+                                        ToneTextField {
+                                            objectName: "studioPresetSearchField"
+                                            Layout.fillWidth: true
+                                            placeholderText: "Search Virel and custom presets"
+                                            text: root.studioPresetSearchText
+                                            onTextEdited: root.studioPresetSearchText = text
+                                        }
+                                        Flow {
+                                            objectName: "studioPresetCategoryFilterRow"
+                                            Layout.fillWidth: true
+                                            spacing: 5
+                                            Repeater {
+                                                model: root.studioPresetCategoryFilters()
+                                                FilterChip {
+                                                    required property string modelData
+                                                    text: root.studioPresetFilterLabel(modelData)
+                                                    active: root.studioPresetCategoryFilter === modelData
+                                                    onClicked: root.studioPresetCategoryFilter = modelData
+                                                }
+                                            }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            ToneComboBox {
+                                                objectName: "studioPresetPackFilterCombo"
+                                                Layout.fillWidth: true
+                                                model: root.studioPresetPackFilters()
+                                                currentIndex: Math.max(0, root.studioPresetPackFilters().indexOf(root.studioPresetPackFilter))
+                                                onActivated: root.studioPresetPackFilter = currentText
+                                            }
+                                            MiniButton {
+                                                objectName: "studioPresetFavoritesFilterButton"
+                                                text: "Favorites"
+                                                role: "segmented"
+                                                active: root.studioPresetFavoritesOnly
+                                                onClicked: root.studioPresetFavoritesOnly = !root.studioPresetFavoritesOnly
+                                            }
+                                        }
+                                        ListView {
+                                            objectName: "studioPresetLibraryList"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 292
+                                            clip: true
+                                            spacing: 8
+                                            model: root.studioPresetLibraryRows()
+                                            delegate: Rectangle {
+                                                id: presetCard
+                                                required property var modelData
+                                                readonly property bool packHeader: modelData.kind === "pack"
+                                                readonly property string presetName: packHeader ? "" : String(modelData.name || "")
+                                                objectName: packHeader ? "studioPresetPackHeader" : "studioPresetLibraryCard"
+                                                width: ListView.view ? ListView.view.width : 0
+                                                height: packHeader ? 30 : 104
+                                                radius: 4
+                                                color: packHeader
+                                                       ? theme.alpha(theme.ink950, 0.08)
+                                                       : root.studioCurrentPresetName() === presetName
+                                                        ? theme.alpha(root.mint, 0.10)
+                                                        : theme.alpha(theme.ink950, hoverHandler.hovered ? 0.44 : 0.28)
+                                                border.color: packHeader ? "transparent" : root.studioCurrentPresetName() === presetName ? root.mint : root.hairline
+                                                border.width: packHeader ? 0 : 1
+
+                                                HoverHandler {
+                                                    id: hoverHandler
+                                                    enabled: !presetCard.packHeader
+                                                    onHoveredChanged: hovered
+                                                                      ? root.previewStudioPreset(presetCard.presetName)
+                                                                      : root.clearStudioPresetPreview()
+                                                }
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    enabled: !presetCard.packHeader
+                                                    acceptedButtons: Qt.LeftButton
+                                                    onClicked: root.selectStudioPreset(presetCard.presetName)
+                                                    onPressed: root.previewStudioPreset(presetCard.presetName)
+                                                    onReleased: root.clearStudioPresetPreview()
+                                                }
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.leftMargin: 2
+                                                    anchors.rightMargin: 2
+                                                    visible: presetCard.packHeader
+                                                    spacing: 6
+
+                                                    Label {
+                                                        Layout.fillWidth: true
+                                                        text: String(presetCard.modelData.label || "")
+                                                        color: theme.textMain
+                                                        font.family: theme.fontUi
+                                                        font.pixelSize: 12
+                                                        font.weight: Font.DemiBold
+                                                        elide: Text.ElideRight
+                                                    }
+                                                    Label {
+                                                        text: String(presetCard.modelData.count || 0)
+                                                        color: root.dimText
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 10
+                                                    }
+                                                }
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 9
+                                                    visible: !presetCard.packHeader
+                                                    spacing: 10
+
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 78
+                                                        Layout.fillHeight: true
+                                                        radius: 3
+                                                        color: theme.alpha(theme.ink950, 0.55)
+                                                        clip: true
+                                                        border.color: theme.alpha(theme.polar, 0.12)
+                                                        border.width: 1
+                                                        Image {
+                                                            anchors.fill: parent
+                                                            source: editorPreview.presetThumbnailSource(presetCard.presetName)
+                                                            fillMode: Image.PreserveAspectCrop
+                                                            smooth: true
+                                                        }
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        Layout.fillHeight: true
+                                                        spacing: 2
+
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: presetCard.presetName
+                                                            color: theme.textMain
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: 13
+                                                            font.weight: Font.DemiBold
+                                                            elide: Text.ElideRight
+                                                        }
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: root.studioPresetTypeText(presetCard.presetName) + " · " + editorPreview.presetCategoryName(presetCard.presetName)
+                                                            color: root.dimText
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: 9
+                                                            elide: Text.ElideRight
+                                                        }
+                                                        Flow {
+                                                            Layout.fillWidth: true
+                                                            spacing: 3
+                                                            Repeater {
+                                                                model: editorPreview.presetAdjustmentGroups(presetCard.presetName).slice(0, 3)
+                                                                FilterChip {
+                                                                    required property string modelData
+                                                                    text: modelData
+                                                                    active: true
+                                                                    enabled: false
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+
+                                                    MiniButton {
+                                                        objectName: "studioPresetFavoriteButton"
+                                                        square: true
+                                                        iconName: editorPreview.isPresetFavorite(presetCard.presetName) ? "rating" : "star"
+                                                        role: "icon"
+                                                        active: editorPreview.isPresetFavorite(presetCard.presetName)
+                                                        tooltip: "Favorite preset."
+                                                        onClicked: root.toggleStudioPresetFavorite(presetCard.presetName)
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioPresetApplyFromCardButton"
+                                                        text: "Apply"
+                                                        role: "secondary"
+                                                        enabled: editorPreview.hasAsset
+                                                        tooltip: "Apply preset."
+                                                        onClicked: {
+                                                            root.selectStudioPreset(presetCard.presetName)
+                                                            root.applyStudioPreset()
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        AdjustSlider {
+                                            label: "Intensity"
+                                            from: 0
+                                            to: 1
+                                            stepSize: 0.01
+                                            defaultValue: 1
+                                            value: editorPreview.presetIntensity
+                                            valueText: Math.round(editorPreview.presetIntensity * 100).toString() + "%"
+                                            onValueDragged: function(value) { editorPreview.presetIntensity = value }
+                                        }
+                                        Flow {
+                                            Layout.fillWidth: true
+                                            spacing: 4
+                                            visible: root.studioCurrentPresetName().length > 0
+                                            Repeater {
+                                                model: editorPreview.presetChangedControls(root.studioCurrentPresetName(), []).slice(0, 8)
+                                                FilterChip {
+                                                    required property string modelData
+                                                    text: modelData
+                                                    active: true
+                                                    enabled: false
+                                                }
+                                            }
+                                        }
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                objectName: "studioPresetNameField"
+                                                placeholderText: "Preset name"
+                                                text: root.studioPresetDraftName
+                                                onTextEdited: root.studioPresetDraftName = text
+                                                onAccepted: root.saveStudioPreset()
+                                            }
+                                            ToneTextField {
+                                                Layout.preferredWidth: 116
+                                                objectName: "studioPresetPackField"
+                                                placeholderText: "Pack"
+                                                text: root.studioPresetDraftPack
+                                                onTextEdited: root.studioPresetDraftPack = text
+                                                onAccepted: root.saveStudioPreset()
+                                            }
+                                            MiniButton {
+                                                objectName: "studioSavePresetButton"
+                                                text: "Save"
+                                                role: "secondary"
+                                                enabled: editorPreview.hasAsset && root.studioPresetDraftName.trim().length > 0
+                                                onClicked: root.saveStudioPreset()
+                                            }
+                                            MiniButton {
+                                                objectName: "studioPresetManageMenuButton"
+                                                text: "Manage"
+                                                role: "secondary"
+                                                onClicked: studioPresetManagementMenu.open()
+                                            }
+                                        }
+                                        Popup {
+                                            id: studioPresetManagementMenu
+                                            objectName: "studioPresetManagementMenu"
+                                            width: parent ? parent.width : 300
+                                            modal: false
+                                            focus: true
+                                            closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                                            background: Rectangle {
+                                                color: root.panelColor
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: root.hairline
+                                                radius: 4
+                                            }
+                                            contentItem: ColumnLayout {
+                                                spacing: 8
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+                                                    MiniButton {
+                                                        objectName: "studioRenamePresetButton"
+                                                        Layout.fillWidth: true
+                                                        text: "Rename"
+                                                        role: "secondary"
+                                                        enabled: editorPreview.isUserPreset(root.studioCurrentPresetName()) && root.studioPresetDraftName.trim().length > 0
+                                                        onClicked: {
+                                                            root.renameStudioPreset()
+                                                            studioPresetManagementMenu.close()
+                                                        }
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioMovePresetButton"
+                                                        Layout.fillWidth: true
+                                                        text: "Move Pack"
+                                                        role: "secondary"
+                                                        enabled: editorPreview.isUserPreset(root.studioCurrentPresetName()) && root.studioPresetDraftPack.trim().length > 0
+                                                        onClicked: {
+                                                            root.moveStudioPresetToPack()
+                                                            studioPresetManagementMenu.close()
+                                                        }
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioDeletePresetButton"
+                                                        Layout.fillWidth: true
+                                                        text: "Delete"
+                                                        role: "destructive"
+                                                        enabled: editorPreview.isUserPreset(root.studioCurrentPresetName())
+                                                        onClicked: {
+                                                            root.deleteStudioPreset()
+                                                            studioPresetManagementMenu.close()
+                                                        }
+                                                    }
+                                                }
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+                                                    ToneTextField {
+                                                        objectName: "studioPresetExportFolderField"
+                                                        Layout.fillWidth: true
+                                                        placeholderText: "Export folder"
+                                                        text: root.studioPresetExportFolder
+                                                        onTextEdited: root.studioPresetExportFolder = text
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioExportPresetBundleButton"
+                                                        text: "Export"
+                                                        role: "secondary"
+                                                        enabled: root.studioPresetExportFolder.trim().length > 0
+                                                        onClicked: root.exportStudioPresetBundle()
+                                                    }
+                                                }
+                                                RowLayout {
+                                                    Layout.fillWidth: true
+                                                    spacing: 6
+                                                    ToneTextField {
+                                                        objectName: "studioPresetImportFolderField"
+                                                        Layout.fillWidth: true
+                                                        placeholderText: "Import folder"
+                                                        text: root.studioPresetImportFolder
+                                                        onTextEdited: root.studioPresetImportFolder = text
+                                                    }
+                                                    MiniButton {
+                                                        objectName: "studioImportPresetBundleButton"
+                                                        text: "Import"
+                                                        role: "secondary"
+                                                        enabled: root.studioPresetImportFolder.trim().length > 0
+                                                        onClicked: root.importStudioPresetBundle()
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
                                 InspectorGroup {
                                     objectName: "whiteBalanceInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("white-balance")
                                     title: "White Balance"
                                     resetGroup: "whiteBalance"
                                     resetObjectName: "whiteBalancePanelResetButton"
-                                    AdjustSlider { objectName: "temperatureSlider"; label: "Temp"; valueInputMode: "kelvin"; value: editorPreview.temperature; valueText: root.whiteBalanceKelvin(editorPreview.temperature) + "K"; trackColors: ["#4FB5FF", "#F2C35B"]; onValueDragged: function(value) { editorPreview.temperature = value } }
-                                    AdjustSlider { objectName: "tintSlider"; label: "Tint"; value: editorPreview.tint; valueText: root.signedPercent(editorPreview.tint); trackColors: ["#49B86B", "#C85AC1"]; onValueDragged: function(value) { editorPreview.tint = value } }
+                                    compareGroup: "tone"
+                                    beforeAfterObjectName: "whiteBalancePanelBeforeAfterButton"
+                                    AdjustSlider { objectName: "temperatureSlider"; label: "Temp"; valueInputMode: "kelvin"; value: root.primaryAdjustmentValue("temperature", editorPreview.temperature); valueText: root.whiteBalanceKelvin(root.primaryAdjustmentValue("temperature", editorPreview.temperature)) + "K"; trackColors: ["#4FB5FF", "#F2C35B"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("temperature", value) } }
+                                    AdjustSlider { objectName: "tintSlider"; label: "Tint"; value: root.primaryAdjustmentValue("tint", editorPreview.tint); valueText: root.signedPercent(root.primaryAdjustmentValue("tint", editorPreview.tint)); trackColors: ["#49B86B", "#C85AC1"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("tint", value) } }
                                     MiniButton { Layout.fillWidth: true; text: "Sample White Balance"; iconName: "brush-tool"; role: "secondary"; onClicked: editorPreview.setWhiteBalanceSampling(true) }
                                 }
 
                                 InspectorGroup {
                                     objectName: "lightInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("light")
                                     title: "Light"
                                     resetGroup: "light"
                                     resetObjectName: "lightPanelResetButton"
+                                    compareGroup: "tone"
+                                    beforeAfterObjectName: "lightPanelBeforeAfterButton"
                                     CollapsibleGroup {
                                         objectName: "lightBasicToneGroup"
                                         title: "Basic Tone"
                                         expanded: true
                                         onToggled: expanded = !expanded
-                                        AdjustSlider { objectName: "exposureSlider"; label: "Exposure"; from: -2; to: 2; stepSize: 0.01; value: editorPreview.exposure; valueText: root.exposureText(editorPreview.exposure); onValueDragged: function(value) { editorPreview.exposure = value } }
-                                        AdjustSlider { objectName: "brightnessSlider"; label: "Brightness"; value: editorPreview.brightness; valueText: root.signedPercent(editorPreview.brightness); onValueDragged: function(value) { editorPreview.brightness = value } }
-                                        AdjustSlider { label: "Contrast"; value: editorPreview.contrast; valueText: root.signedPercent(editorPreview.contrast); onValueDragged: function(value) { editorPreview.contrast = value } }
-                                        AdjustSlider { label: "Highlights"; value: editorPreview.highlights; valueText: root.signedPercent(editorPreview.highlights); onValueDragged: function(value) { editorPreview.highlights = value } }
-                                        AdjustSlider { label: "Shadows"; value: editorPreview.shadows; valueText: root.signedPercent(editorPreview.shadows); onValueDragged: function(value) { editorPreview.shadows = value } }
-                                        AdjustSlider { label: "Whites"; value: editorPreview.whites; valueText: root.signedPercent(editorPreview.whites); onValueDragged: function(value) { editorPreview.whites = value } }
-                                        AdjustSlider { label: "Blacks"; value: editorPreview.blacks; valueText: root.signedPercent(editorPreview.blacks); onValueDragged: function(value) { editorPreview.blacks = value } }
+                                        AdjustSlider { objectName: "exposureSlider"; label: "Exposure"; from: -2; to: 2; stepSize: 0.01; value: root.primaryAdjustmentValue("exposure", editorPreview.exposure); valueText: root.exposureText(root.primaryAdjustmentValue("exposure", editorPreview.exposure)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("exposure", value) } }
+                                        AdjustSlider { objectName: "brightnessSlider"; label: "Brightness"; value: root.primaryAdjustmentValue("brightness", editorPreview.brightness); valueText: root.signedPercent(root.primaryAdjustmentValue("brightness", editorPreview.brightness)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("brightness", value) } }
+                                        AdjustSlider { label: "Contrast"; value: root.primaryAdjustmentValue("contrast", editorPreview.contrast); valueText: root.signedPercent(root.primaryAdjustmentValue("contrast", editorPreview.contrast)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("contrast", value) } }
+                                        AdjustSlider { label: "Highlights"; value: root.primaryAdjustmentValue("highlights", editorPreview.highlights); valueText: root.signedPercent(root.primaryAdjustmentValue("highlights", editorPreview.highlights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("highlights", value) } }
+                                        AdjustSlider { label: "Shadows"; value: root.primaryAdjustmentValue("shadows", editorPreview.shadows); valueText: root.signedPercent(root.primaryAdjustmentValue("shadows", editorPreview.shadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("shadows", value) } }
+                                        AdjustSlider { label: "Whites"; value: root.primaryAdjustmentValue("whites", editorPreview.whites); valueText: root.signedPercent(root.primaryAdjustmentValue("whites", editorPreview.whites)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("whites", value) } }
+                                        AdjustSlider { label: "Blacks"; value: root.primaryAdjustmentValue("blacks", editorPreview.blacks); valueText: root.signedPercent(root.primaryAdjustmentValue("blacks", editorPreview.blacks)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blacks", value) } }
                                     }
                                     CollapsibleGroup {
                                         objectName: "lightAdvancedToneGroup"
-                                        title: "Advanced Tone"
+                                        title: "Roll-off & Detail"
                                         expanded: root.lightAdvancedToneExpanded
+                                        resetObjectName: "lightRollOffDetailResetButton"
+                                        resetVisible: true
                                         onToggled: root.lightAdvancedToneExpanded = !root.lightAdvancedToneExpanded
-                                        AdjustSlider { label: "HDR Local Tone"; from: 0; to: 100; value: editorPreview.hdrLocalToneMapping; valueText: Math.round(editorPreview.hdrLocalToneMapping).toString(); onValueDragged: function(value) { editorPreview.hdrLocalToneMapping = value } }
-                                        AdjustSlider { label: "Filmic Shoulder"; value: editorPreview.filmicShoulder; valueText: root.signedPercent(editorPreview.filmicShoulder); onValueDragged: function(value) { editorPreview.filmicShoulder = value } }
-                                        AdjustSlider { label: "Filmic Toe"; value: editorPreview.filmicToe; valueText: root.signedPercent(editorPreview.filmicToe); onValueDragged: function(value) { editorPreview.filmicToe = value } }
-                                        AdjustSlider { label: "Adaptive Contrast"; value: editorPreview.adaptiveContrast; valueText: root.signedPercent(editorPreview.adaptiveContrast); onValueDragged: function(value) { editorPreview.adaptiveContrast = value } }
-                                    }
-                                    CollapsibleGroup {
-                                        objectName: "lightLevelsGroup"
-                                        title: "Levels"
-                                        expanded: root.lightLevelsExpanded
-                                        onToggled: root.lightLevelsExpanded = !root.lightLevelsExpanded
-                                        AdjustSlider { label: "Black Point"; from: 0; to: 100; value: editorPreview.levelsBlackPoint; valueText: Math.round(editorPreview.levelsBlackPoint).toString(); onValueDragged: function(value) { editorPreview.levelsBlackPoint = value } }
-                                        AdjustSlider { label: "Gamma"; value: editorPreview.levelsGamma; valueText: root.signedPercent(editorPreview.levelsGamma); onValueDragged: function(value) { editorPreview.levelsGamma = value } }
-                                        AdjustSlider { label: "White Point"; from: 0; to: 100; defaultValue: 100; value: editorPreview.levelsWhitePoint; valueText: Math.round(editorPreview.levelsWhitePoint).toString(); onValueDragged: function(value) { editorPreview.levelsWhitePoint = value } }
+                                        onResetRequested: {
+                                            editorPreview.hdrLocalToneMapping = 0
+                                            root.setPrimaryAdjustmentValue("filmicShoulder", 0)
+                                            root.setPrimaryAdjustmentValue("filmicToe", 0)
+                                            root.setPrimaryAdjustmentValue("adaptiveContrast", 0)
+                                        }
+                                        AdjustSlider { label: "Highlight Detail"; from: 0; to: 100; value: editorPreview.hdrLocalToneMapping; valueText: Math.round(editorPreview.hdrLocalToneMapping).toString(); onValueDragged: function(value) { editorPreview.hdrLocalToneMapping = value } }
+                                        AdjustSlider { label: "Highlight Roll-off"; value: root.primaryAdjustmentValue("filmicShoulder", editorPreview.filmicShoulder); valueText: root.signedPercent(root.primaryAdjustmentValue("filmicShoulder", editorPreview.filmicShoulder)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("filmicShoulder", value) } }
+                                        AdjustSlider { label: "Shadow Fade"; value: root.primaryAdjustmentValue("filmicToe", editorPreview.filmicToe); valueText: root.signedPercent(root.primaryAdjustmentValue("filmicToe", editorPreview.filmicToe)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("filmicToe", value) } }
+                                        AdjustSlider { label: "Local Contrast"; value: root.primaryAdjustmentValue("adaptiveContrast", editorPreview.adaptiveContrast); valueText: root.signedPercent(root.primaryAdjustmentValue("adaptiveContrast", editorPreview.adaptiveContrast)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("adaptiveContrast", value) } }
                                     }
                                     CollapsibleGroup {
                                         objectName: "lightZoneMappingGroup"
-                                        title: "Zone Mapping"
+                                        title: "Zone Mixer"
                                         expanded: root.lightZonesExpanded
+                                        resetObjectName: "lightZoneMixerResetButton"
+                                        resetVisible: true
                                         onToggled: root.lightZonesExpanded = !root.lightZonesExpanded
-                                        AdjustSlider { label: "Deep Shadows"; value: editorPreview.zoneDeepShadows; valueText: root.signedPercent(editorPreview.zoneDeepShadows); onValueDragged: function(value) { editorPreview.zoneDeepShadows = value } }
-                                        AdjustSlider { label: "Shadows"; value: editorPreview.zoneShadows; valueText: root.signedPercent(editorPreview.zoneShadows); onValueDragged: function(value) { editorPreview.zoneShadows = value } }
-                                        AdjustSlider { label: "Midtones"; value: editorPreview.zoneMidtones; valueText: root.signedPercent(editorPreview.zoneMidtones); onValueDragged: function(value) { editorPreview.zoneMidtones = value } }
-                                        AdjustSlider { label: "Lights"; value: editorPreview.zoneLights; valueText: root.signedPercent(editorPreview.zoneLights); onValueDragged: function(value) { editorPreview.zoneLights = value } }
-                                        AdjustSlider { label: "Highlights"; value: editorPreview.zoneHighlights; valueText: root.signedPercent(editorPreview.zoneHighlights); onValueDragged: function(value) { editorPreview.zoneHighlights = value } }
+                                        onResetRequested: {
+                                            root.setPrimaryAdjustmentValue("zoneDeepShadows", 0)
+                                            root.setPrimaryAdjustmentValue("zoneShadows", 0)
+                                            root.setPrimaryAdjustmentValue("zoneMidtones", 0)
+                                            root.setPrimaryAdjustmentValue("zoneLights", 0)
+                                            root.setPrimaryAdjustmentValue("zoneHighlights", 0)
+                                        }
+                                        AdjustSlider { label: "Deep Shadows"; value: root.primaryAdjustmentValue("zoneDeepShadows", editorPreview.zoneDeepShadows); valueText: root.signedPercent(root.primaryAdjustmentValue("zoneDeepShadows", editorPreview.zoneDeepShadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("zoneDeepShadows", value) } }
+                                        AdjustSlider { label: "Shadows"; value: root.primaryAdjustmentValue("zoneShadows", editorPreview.zoneShadows); valueText: root.signedPercent(root.primaryAdjustmentValue("zoneShadows", editorPreview.zoneShadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("zoneShadows", value) } }
+                                        AdjustSlider { label: "Midtones"; value: root.primaryAdjustmentValue("zoneMidtones", editorPreview.zoneMidtones); valueText: root.signedPercent(root.primaryAdjustmentValue("zoneMidtones", editorPreview.zoneMidtones)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("zoneMidtones", value) } }
+                                        AdjustSlider { label: "Lights"; value: root.primaryAdjustmentValue("zoneLights", editorPreview.zoneLights); valueText: root.signedPercent(root.primaryAdjustmentValue("zoneLights", editorPreview.zoneLights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("zoneLights", value) } }
+                                        AdjustSlider { label: "Highlights"; value: root.primaryAdjustmentValue("zoneHighlights", editorPreview.zoneHighlights); valueText: root.signedPercent(root.primaryAdjustmentValue("zoneHighlights", editorPreview.zoneHighlights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("zoneHighlights", value) } }
                                     }
-                                }
-
-                                InspectorGroup {
-                                    objectName: "toneCurveInspectorGroup"
-                                    title: "Tone Curve"
-                                    ToneCurveEditor {
-                                        objectName: "studioToneCurveEditor"
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 214
-                                        compactMode: false
-                                        accent: root.mint
-                                        selectedChannel: editorPreview.curveChannel
-                                        curveMode: editorPreview.activeCurveMode
-                                        pointsModel: editorPreview.activeCurvePoints
-                                        presetNames: editorPreview.curvePresetNames
-                                        histogramRedData: editorPreview.histogramRed
-                                        histogramGreenData: editorPreview.histogramGreen
-                                        histogramBlueData: editorPreview.histogramBlue
-                                        histogramLuminanceData: editorPreview.histogramLuminance
-                                        histogramLogScale: root.scopeLogHistogram
-                                        presetPreviewProvider: function(preset) { return editorPreview.curvePresetPreviewPoints(preset) }
-                                        onChannelSelected: function(channel) { editorPreview.curveChannel = channel }
-                                        onPointsEdited: function(points) { editorPreview.activeCurvePoints = points }
-                                        onPresetSelected: function(preset) { editorPreview.applyCurvePreset(preset) }
-                                    }
-                                    AdjustSlider { label: "Shadows"; value: editorPreview.curveShadows; valueText: root.signedPercent(editorPreview.curveShadows); onValueDragged: function(value) { editorPreview.curveShadows = value } }
-                                    AdjustSlider { label: "Darks"; value: editorPreview.curveDarks; valueText: root.signedPercent(editorPreview.curveDarks); onValueDragged: function(value) { editorPreview.curveDarks = value } }
-                                    AdjustSlider { label: "Lights"; value: editorPreview.curveLights; valueText: root.signedPercent(editorPreview.curveLights); onValueDragged: function(value) { editorPreview.curveLights = value } }
-                                    AdjustSlider { label: "Highlights"; value: editorPreview.curveHighlights; valueText: root.signedPercent(editorPreview.curveHighlights); onValueDragged: function(value) { editorPreview.curveHighlights = value } }
                                 }
 
                                 InspectorGroup {
                                     objectName: "colorInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("color")
                                     title: "Color"
                                     resetGroup: "color"
                                     resetObjectName: "colorPanelResetButton"
-                                    AdjustSlider { label: "Vibrance"; value: editorPreview.vibrance; valueText: root.signedPercent(editorPreview.vibrance); onValueDragged: function(value) { editorPreview.vibrance = value } }
-                                    AdjustSlider { objectName: "saturationSlider"; label: "Saturation"; value: editorPreview.saturation; valueText: root.signedPercent(editorPreview.saturation); onValueDragged: function(value) { editorPreview.saturation = value } }
+                                    compareGroup: "color"
+                                    beforeAfterObjectName: "colorPanelBeforeAfterButton"
+                                    AdjustSlider { label: "Vibrance"; value: root.primaryAdjustmentValue("vibrance", editorPreview.vibrance); valueText: root.signedPercent(root.primaryAdjustmentValue("vibrance", editorPreview.vibrance)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("vibrance", value) } }
+                                    AdjustSlider { objectName: "saturationSlider"; label: "Saturation"; value: root.primaryAdjustmentValue("saturation", editorPreview.saturation); valueText: root.signedPercent(root.primaryAdjustmentValue("saturation", editorPreview.saturation)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("saturation", value) } }
                                 }
 
                                 InspectorGroup {
-                                    objectName: "presenceInspectorGroup"
-                                    title: "Presence"
-                                    resetGroup: "presence"
-                                    resetObjectName: "presencePanelResetButton"
-                                    AdjustSlider { label: "Texture"; value: editorPreview.texture; valueText: root.signedPercent(editorPreview.texture); onValueDragged: function(value) { editorPreview.texture = value } }
-                                    AdjustSlider { label: "Clarity"; value: editorPreview.clarity; valueText: root.signedPercent(editorPreview.clarity); onValueDragged: function(value) { editorPreview.clarity = value } }
-                                    AdjustSlider { label: "Dehaze"; value: editorPreview.dehaze; valueText: root.signedPercent(editorPreview.dehaze); onValueDragged: function(value) { editorPreview.dehaze = value } }
-                                }
-
-                                InspectorGroup {
-                                    objectName: "rawInspectorGroup"
-                                    title: "Raw"
-                                    resetGroup: "raw"
-                                    resetObjectName: "rawPanelResetButton"
-                                    visible: editorPreview.rawControlsAvailable
-                                    AdjustSlider { label: "Raw Exposure"; from: -2; to: 2; stepSize: 0.01; value: editorPreview.rawExposure; valueText: root.exposureText(editorPreview.rawExposure); onValueDragged: function(value) { editorPreview.rawExposure = value } }
-                                    AdjustSlider { label: "Raw Boost"; value: editorPreview.rawBoost; valueText: root.signedPercent(editorPreview.rawBoost); onValueDragged: function(value) { editorPreview.rawBoost = value } }
-                                    AdjustSlider { label: "Shadow Boost"; value: editorPreview.rawShadowBoost; valueText: root.signedPercent(editorPreview.rawShadowBoost); onValueDragged: function(value) { editorPreview.rawShadowBoost = value } }
-                                    AdjustSlider { label: "Raw Detail"; value: editorPreview.rawDetail; valueText: root.signedPercent(editorPreview.rawDetail); onValueDragged: function(value) { editorPreview.rawDetail = value } }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        MiniButton { Layout.fillWidth: true; text: "Highlight Recovery"; role: "segmented"; active: editorPreview.rawHighlightRecovery; onClicked: editorPreview.rawHighlightRecovery = !editorPreview.rawHighlightRecovery }
-                                        MiniButton { Layout.fillWidth: true; text: "Lens Correction"; role: "segmented"; active: editorPreview.rawLensCorrection; onClicked: editorPreview.rawLensCorrection = !editorPreview.rawLensCorrection }
-                                    }
-                                }
-
-                                InspectorGroup {
-                                    objectName: "advancedColorInspectorGroup"
-                                    title: "Advanced Color"
-                                    CollapsibleGroup {
-                                    objectName: "colorMixGroup"
-                                    title: "Color Mix"
-                                    expanded: root.colorMixExpanded
-                                    onToggled: root.colorMixExpanded = !root.colorMixExpanded
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Repeater {
-                                            model: ["HSL", "HSV", "LCH", "OKLab"]
-                                            MiniButton {
-                                                required property string modelData
-                                                Layout.fillWidth: true
-                                                text: modelData
-                                                role: "segmented"
-                                                active: editorPreview.colorMixerModel === modelData
-                                                onClicked: editorPreview.colorMixerModel = modelData
-                                            }
-                                        }
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Repeater {
-                                            model: ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"]
-                                            MiniButton {
-                                                required property string modelData
-                                                Layout.fillWidth: true
-                                                text: modelData.slice(0, 1)
-                                                role: "segmented"
-                                                active: editorPreview.hslChannel === modelData
-                                                onClicked: editorPreview.hslChannel = modelData
-                                            }
-                                        }
-                                    }
-                                    AdjustSlider { label: "Hue"; value: editorPreview.hueAdjustment; valueText: root.signedPercent(editorPreview.hueAdjustment); onValueDragged: function(value) { editorPreview.hueAdjustment = value } }
-                                    AdjustSlider { label: "Saturation"; value: editorPreview.saturationAdjustment; valueText: root.signedPercent(editorPreview.saturationAdjustment); onValueDragged: function(value) { editorPreview.saturationAdjustment = value } }
-                                    AdjustSlider { label: "Luminance"; value: editorPreview.luminanceAdjustment; valueText: root.signedPercent(editorPreview.luminanceAdjustment); onValueDragged: function(value) { editorPreview.luminanceAdjustment = value } }
-                                    AdjustSlider { label: "Cyan"; value: editorPreview.selectiveCyan; valueText: root.signedPercent(editorPreview.selectiveCyan); onValueDragged: function(value) { editorPreview.selectiveCyan = value } }
-                                    AdjustSlider { label: "Magenta"; value: editorPreview.selectiveMagenta; valueText: root.signedPercent(editorPreview.selectiveMagenta); onValueDragged: function(value) { editorPreview.selectiveMagenta = value } }
-                                    AdjustSlider { label: "Yellow"; value: editorPreview.selectiveYellow; valueText: root.signedPercent(editorPreview.selectiveYellow); onValueDragged: function(value) { editorPreview.selectiveYellow = value } }
-                                    AdjustSlider { label: "Black"; value: editorPreview.selectiveBlack; valueText: root.signedPercent(editorPreview.selectiveBlack); onValueDragged: function(value) { editorPreview.selectiveBlack = value } }
-                                }
-
-                                    CollapsibleGroup {
-                                    objectName: "channelMixerGroup"
-                                    title: "Channel Mixer"
-                                    expanded: root.channelMixerExpanded
-                                    onToggled: root.channelMixerExpanded = !root.channelMixerExpanded
-                                    AdjustSlider { objectName: "channelMixerRedFromRedSlider"; label: "Red / Red"; from: -200; to: 200; defaultValue: 100; value: editorPreview.channelMixerRedFromRed; valueText: Math.round(editorPreview.channelMixerRedFromRed).toString(); onValueDragged: function(value) { editorPreview.channelMixerRedFromRed = value } }
-                                    AdjustSlider { label: "Red / Green"; from: -200; to: 200; value: editorPreview.channelMixerRedFromGreen; valueText: Math.round(editorPreview.channelMixerRedFromGreen).toString(); onValueDragged: function(value) { editorPreview.channelMixerRedFromGreen = value } }
-                                    AdjustSlider { label: "Red / Blue"; from: -200; to: 200; value: editorPreview.channelMixerRedFromBlue; valueText: Math.round(editorPreview.channelMixerRedFromBlue).toString(); onValueDragged: function(value) { editorPreview.channelMixerRedFromBlue = value } }
-                                    AdjustSlider { label: "Green / Red"; from: -200; to: 200; value: editorPreview.channelMixerGreenFromRed; valueText: Math.round(editorPreview.channelMixerGreenFromRed).toString(); onValueDragged: function(value) { editorPreview.channelMixerGreenFromRed = value } }
-                                    AdjustSlider { label: "Green / Green"; from: -200; to: 200; defaultValue: 100; value: editorPreview.channelMixerGreenFromGreen; valueText: Math.round(editorPreview.channelMixerGreenFromGreen).toString(); onValueDragged: function(value) { editorPreview.channelMixerGreenFromGreen = value } }
-                                    AdjustSlider { label: "Green / Blue"; from: -200; to: 200; value: editorPreview.channelMixerGreenFromBlue; valueText: Math.round(editorPreview.channelMixerGreenFromBlue).toString(); onValueDragged: function(value) { editorPreview.channelMixerGreenFromBlue = value } }
-                                    AdjustSlider { label: "Blue / Red"; from: -200; to: 200; value: editorPreview.channelMixerBlueFromRed; valueText: Math.round(editorPreview.channelMixerBlueFromRed).toString(); onValueDragged: function(value) { editorPreview.channelMixerBlueFromRed = value } }
-                                    AdjustSlider { label: "Blue / Green"; from: -200; to: 200; value: editorPreview.channelMixerBlueFromGreen; valueText: Math.round(editorPreview.channelMixerBlueFromGreen).toString(); onValueDragged: function(value) { editorPreview.channelMixerBlueFromGreen = value } }
-                                    AdjustSlider { label: "Blue / Blue"; from: -200; to: 200; defaultValue: 100; value: editorPreview.channelMixerBlueFromBlue; valueText: Math.round(editorPreview.channelMixerBlueFromBlue).toString(); onValueDragged: function(value) { editorPreview.channelMixerBlueFromBlue = value } }
-                                }
-
-                                    CollapsibleGroup {
-                                    objectName: "blackWhiteGroup"
-                                    title: "Black & White"
-                                    expanded: root.blackWhiteExpanded
-                                    onToggled: root.blackWhiteExpanded = !root.blackWhiteExpanded
-                                    CheckBox {
-                                        text: "Enable"
-                                        checked: editorPreview.blackAndWhiteEnabled
-                                        onToggled: editorPreview.blackAndWhiteEnabled = checked
-                                    }
-                                    AdjustSlider { label: "Reds"; value: editorPreview.blackAndWhiteReds; valueText: root.signedPercent(editorPreview.blackAndWhiteReds); onValueDragged: function(value) { editorPreview.blackAndWhiteReds = value } }
-                                    AdjustSlider { label: "Oranges"; value: editorPreview.blackAndWhiteOranges; valueText: root.signedPercent(editorPreview.blackAndWhiteOranges); onValueDragged: function(value) { editorPreview.blackAndWhiteOranges = value } }
-                                    AdjustSlider { label: "Yellows"; value: editorPreview.blackAndWhiteYellows; valueText: root.signedPercent(editorPreview.blackAndWhiteYellows); onValueDragged: function(value) { editorPreview.blackAndWhiteYellows = value } }
-                                    AdjustSlider { label: "Greens"; value: editorPreview.blackAndWhiteGreens; valueText: root.signedPercent(editorPreview.blackAndWhiteGreens); onValueDragged: function(value) { editorPreview.blackAndWhiteGreens = value } }
-                                    AdjustSlider { label: "Aquas"; value: editorPreview.blackAndWhiteAquas; valueText: root.signedPercent(editorPreview.blackAndWhiteAquas); onValueDragged: function(value) { editorPreview.blackAndWhiteAquas = value } }
-                                    AdjustSlider { label: "Blues"; value: editorPreview.blackAndWhiteBlues; valueText: root.signedPercent(editorPreview.blackAndWhiteBlues); onValueDragged: function(value) { editorPreview.blackAndWhiteBlues = value } }
-                                    AdjustSlider { label: "Purples"; value: editorPreview.blackAndWhitePurples; valueText: root.signedPercent(editorPreview.blackAndWhitePurples); onValueDragged: function(value) { editorPreview.blackAndWhitePurples = value } }
-                                    AdjustSlider { label: "Magentas"; value: editorPreview.blackAndWhiteMagentas; valueText: root.signedPercent(editorPreview.blackAndWhiteMagentas); onValueDragged: function(value) { editorPreview.blackAndWhiteMagentas = value } }
-                                }
-
-                                    CollapsibleGroup {
-                                    objectName: "colorReplaceGroup"
-                                    title: "Color Replace"
-                                    expanded: root.colorReplaceExpanded
-                                    onToggled: root.colorReplaceExpanded = !root.colorReplaceExpanded
-                                    CheckBox {
-                                        text: "Enable"
-                                        checked: editorPreview.colorReplacementEnabled
-                                        onToggled: editorPreview.colorReplacementEnabled = checked
-                                    }
-                                    AdjustSlider { label: "Source Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: editorPreview.colorReplacementSourceHue; valueText: Math.round(editorPreview.colorReplacementSourceHue * 360) + "°"; onValueDragged: function(value) { editorPreview.colorReplacementSourceHue = value } }
-                                    AdjustSlider { objectName: "colorReplacementTargetHueSlider"; label: "Target Hue"; from: 0; to: 1; defaultValue: 0.33; valueInputMode: "degreesNormalized"; value: editorPreview.colorReplacementTargetHue; valueText: Math.round(editorPreview.colorReplacementTargetHue * 360) + "°"; onValueDragged: function(value) { editorPreview.colorReplacementTargetHue = value } }
-                                    AdjustSlider { objectName: "colorReplacementRangeSlider"; label: "Range"; from: 1; to: 100; defaultValue: 35; value: editorPreview.colorReplacementRange; valueText: Math.round(editorPreview.colorReplacementRange).toString(); onValueDragged: function(value) { editorPreview.colorReplacementRange = value } }
-                                    AdjustSlider { label: "Strength"; from: 0; to: 100; value: editorPreview.colorReplacementStrength; valueText: Math.round(editorPreview.colorReplacementStrength).toString(); onValueDragged: function(value) { editorPreview.colorReplacementStrength = value } }
-                                }
-
-                                    CollapsibleGroup {
-                                    objectName: "skinToneGroup"
-                                    title: "Skin Tone"
-                                    expanded: root.skinToneExpanded
-                                    onToggled: root.skinToneExpanded = !root.skinToneExpanded
-                                    CheckBox {
-                                        text: "Protect"
-                                        checked: editorPreview.skinToneProtectionEnabled
-                                        onToggled: editorPreview.skinToneProtectionEnabled = checked
-                                    }
-                                    Rectangle {
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 28
-                                        color: "transparent"
-                                        border.color: root.hairlineStrong
-                                        border.width: 1
-                                        Rectangle {
-                                            width: parent.width * 0.82
-                                            height: 2
-                                            radius: 1
-                                            color: root.mint
-                                            anchors.centerIn: parent
-                                            rotation: editorPreview.skinToneLineAngle - 20
-                                        }
-                                    }
-                                    AdjustSlider { objectName: "skinToneLineHueSlider"; label: "Line Hue"; from: 0; to: 1; defaultValue: 0.08; valueInputMode: "degreesNormalized"; value: editorPreview.skinToneLineHue; valueText: Math.round(editorPreview.skinToneLineAngle) + "°"; onValueDragged: function(value) { editorPreview.skinToneLineHue = value } }
-                                    AdjustSlider { label: "Range"; from: 1; to: 100; defaultValue: 30; value: editorPreview.skinToneProtectionRange; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value } }
-                                    AdjustSlider { label: "Strength"; from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value } }
-                                }
-
-                                    CollapsibleGroup {
-                                    objectName: "harmonyGroup"
-                                    title: "Harmony"
-                                    expanded: root.harmonyExpanded
-                                    onToggled: root.harmonyExpanded = !root.harmonyExpanded
-                                    CheckBox {
-                                        text: "Enable"
-                                        checked: editorPreview.colorHarmonyEnabled
-                                        onToggled: editorPreview.colorHarmonyEnabled = checked
-                                    }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Repeater {
-                                            model: ["Complementary", "Analogous", "Triadic", "Split Complementary", "Tetradic"]
-                                            MiniButton {
-                                                required property string modelData
-                                                Layout.fillWidth: true
-                                                text: modelData === "Split Complementary" ? "Split" : modelData.slice(0, 4)
-                                                role: "segmented"
-                                                active: editorPreview.colorHarmonyMode === modelData
-                                                onClicked: editorPreview.colorHarmonyMode = modelData
-                                            }
-                                        }
-                                    }
-                                    AdjustSlider { label: "Base Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: editorPreview.colorHarmonyBaseHue; valueText: Math.round(editorPreview.colorHarmonyBaseHue * 360) + "°"; onValueDragged: function(value) { editorPreview.colorHarmonyBaseHue = value } }
-                                    AdjustSlider { label: "Strength"; from: 0; to: 100; value: editorPreview.colorHarmonyStrength; valueText: Math.round(editorPreview.colorHarmonyStrength).toString(); onValueDragged: function(value) { editorPreview.colorHarmonyStrength = value } }
-                                }
-
+                                    objectName: "colorGradingInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("advanced-color")
+                                    title: "Color Grading"
+                                    compareGroup: "color"
+                                    beforeAfterObjectName: "colorGradingPanelBeforeAfterButton"
+                                    resetGroup: "color"
+                                    resetObjectName: "colorGradingPanelResetButton"
                                     CollapsibleGroup {
                                     objectName: "splitToningGroup"
                                     title: "Split Toning"
@@ -5597,40 +15763,41 @@ Rectangle {
                                             objectName: "splitToningShadowsWheel"
                                             Layout.fillWidth: true
                                             title: "Shadows"
-                                            wheelSize: 72
-                                            hue: editorPreview.gradingShadowsHue
-                                            saturation: editorPreview.gradingShadowsSaturation
-                                            luminance: editorPreview.gradingShadowsLuminance
+                                            wheelSize: 56
+                                            hue: root.primaryGradingValue("shadows", "hue", editorPreview.gradingShadowsHue)
+                                            saturation: root.primaryGradingValue("shadows", "saturation", editorPreview.gradingShadowsSaturation)
+                                            luminance: root.primaryGradingValue("shadows", "luminance", editorPreview.gradingShadowsLuminance)
                                             accent: root.mint
-                                            onHueEdited: function(value) { root.selectedToneWheel = 0; editorPreview.gradingShadowsHue = value }
-                                            onSaturationEdited: function(value) { root.selectedToneWheel = 0; editorPreview.gradingShadowsSaturation = value }
+                                            onHueEdited: function(value) { root.selectedToneWheel = 0; root.setPrimaryAdjustmentValue("gradingShadowsHue", value) }
+                                            onSaturationEdited: function(value) { root.selectedToneWheel = 0; root.setPrimaryAdjustmentValue("gradingShadowsSaturation", value) }
                                         }
                                         ColorWheelControl {
                                             objectName: "splitToningMidtonesWheel"
                                             Layout.fillWidth: true
                                             title: "Midtones"
-                                            wheelSize: 72
-                                            hue: editorPreview.gradingMidtonesHue
-                                            saturation: editorPreview.gradingMidtonesSaturation
-                                            luminance: editorPreview.gradingMidtonesLuminance
+                                            wheelSize: 56
+                                            hue: root.primaryGradingValue("midtones", "hue", editorPreview.gradingMidtonesHue)
+                                            saturation: root.primaryGradingValue("midtones", "saturation", editorPreview.gradingMidtonesSaturation)
+                                            luminance: root.primaryGradingValue("midtones", "luminance", editorPreview.gradingMidtonesLuminance)
                                             accent: root.mint
-                                            onHueEdited: function(value) { root.selectedToneWheel = 1; editorPreview.gradingMidtonesHue = value }
-                                            onSaturationEdited: function(value) { root.selectedToneWheel = 1; editorPreview.gradingMidtonesSaturation = value }
+                                            onHueEdited: function(value) { root.selectedToneWheel = 1; root.setPrimaryAdjustmentValue("gradingMidtonesHue", value) }
+                                            onSaturationEdited: function(value) { root.selectedToneWheel = 1; root.setPrimaryAdjustmentValue("gradingMidtonesSaturation", value) }
                                         }
                                         ColorWheelControl {
                                             objectName: "splitToningHighlightsWheel"
                                             Layout.fillWidth: true
                                             title: "Highlights"
-                                            wheelSize: 72
-                                            hue: editorPreview.gradingHighlightsHue
-                                            saturation: editorPreview.gradingHighlightsSaturation
-                                            luminance: editorPreview.gradingHighlightsLuminance
+                                            wheelSize: 56
+                                            hue: root.primaryGradingValue("highlights", "hue", editorPreview.gradingHighlightsHue)
+                                            saturation: root.primaryGradingValue("highlights", "saturation", editorPreview.gradingHighlightsSaturation)
+                                            luminance: root.primaryGradingValue("highlights", "luminance", editorPreview.gradingHighlightsLuminance)
                                             accent: root.mint
-                                            onHueEdited: function(value) { root.selectedToneWheel = 2; editorPreview.gradingHighlightsHue = value }
-                                            onSaturationEdited: function(value) { root.selectedToneWheel = 2; editorPreview.gradingHighlightsSaturation = value }
+                                            onHueEdited: function(value) { root.selectedToneWheel = 2; root.setPrimaryAdjustmentValue("gradingHighlightsHue", value) }
+                                            onSaturationEdited: function(value) { root.selectedToneWheel = 2; root.setPrimaryAdjustmentValue("gradingHighlightsSaturation", value) }
                                         }
                                     }
                                     RowLayout {
+                                        objectName: "splitToningRangeTabs"
                                         Layout.fillWidth: true
                                         Repeater {
                                             model: ["Shadows", "Midtones", "Highlights"]
@@ -5645,36 +15812,779 @@ Rectangle {
                                             }
                                         }
                                     }
-                                    AdjustSlider { objectName: "selectedToneWheelHueSlider"; label: root.selectedToneWheelName() + " Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: root.selectedToneWheelHue(); valueText: Math.round(root.selectedToneWheelHue() * 360) + "°"; onValueDragged: function(value) { root.setSelectedToneWheelHue(value) } }
-                                    AdjustSlider { label: root.selectedToneWheelName() + " Sat"; from: 0; to: 100; value: root.selectedToneWheelSaturation(); valueText: Math.round(root.selectedToneWheelSaturation()); onValueDragged: function(value) { root.setSelectedToneWheelSaturation(value) } }
-                                    AdjustSlider { label: root.selectedToneWheelName() + " Lum"; value: root.selectedToneWheelLuminance(); valueText: root.signedPercent(root.selectedToneWheelLuminance()); onValueDragged: function(value) { root.setSelectedToneWheelLuminance(value) } }
+                                    ColorWheelControl {
+                                        objectName: "splitToningFocusedWheel"
+                                        Layout.alignment: Qt.AlignHCenter
+                                        Layout.preferredWidth: 168
+                                        Layout.preferredHeight: implicitHeight
+                                        title: root.selectedToneWheelName()
+                                        wheelSize: 148
+                                        hue: root.selectedToneWheelHue()
+                                        saturation: root.selectedToneWheelSaturation()
+                                        luminance: root.selectedToneWheelLuminance()
+                                        accent: root.mint
+                                        onHueEdited: function(value) { root.setSelectedToneWheelHue(value) }
+                                        onSaturationEdited: function(value) { root.setSelectedToneWheelSaturation(value) }
+                                    }
+                                    AdjustSlider {
+                                        objectName: "colorGradingAmountSlider"
+                                        controlHeight: 40
+                                        label: "Amount"
+                                        from: 0
+                                        to: 100
+                                        defaultValue: 100
+                                        value: root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)
+                                        valueText: Math.round(root.primaryNestedAdjustmentValue("colorGrading", "", "amount", editorPreview.gradingAmount)).toString()
+                                        onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingAmount", value) }
+                                    }
+                                    AdjustSlider {
+                                        objectName: "colorGradingBalanceSlider"
+                                        controlHeight: 40
+                                        label: "Balance"
+                                        defaultValue: 0
+                                        value: root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance)
+                                        valueText: root.signedPercent(root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance))
+                                        onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingBalance", value) }
+                                    }
+                                    AdjustSlider { objectName: "selectedToneWheelHueSlider"; controlHeight: 40; label: root.selectedToneWheelName() + " Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: root.selectedToneWheelHue(); valueText: Math.round(root.selectedToneWheelHue() * 360) + "°"; trackColors: root.rainbowTrack(); onValueDragged: function(value) { root.setSelectedToneWheelHue(value) } }
+                                    AdjustSlider { objectName: "selectedToneWheelSaturationSlider"; controlHeight: 40; label: root.selectedToneWheelName() + " Sat"; from: 0; to: 100; value: root.selectedToneWheelSaturation(); valueText: Math.round(root.selectedToneWheelSaturation()).toString(); trackColors: ["#505963", root.gradingPreviewColor(root.selectedToneWheelHue(), 100, root.selectedToneWheelLuminance()), "#ffffff"]; onValueDragged: function(value) { root.setSelectedToneWheelSaturation(value) } }
+                                    AdjustSlider { objectName: "selectedToneWheelLuminanceSlider"; controlHeight: 40; label: root.selectedToneWheelName() + " Lum"; value: root.selectedToneWheelLuminance(); valueText: root.signedPercent(root.selectedToneWheelLuminance()); trackColors: ["#101419", root.gradingPreviewColor(root.selectedToneWheelHue(), root.selectedToneWheelSaturation(), 0), "#eff3f6"]; onValueDragged: function(value) { root.setSelectedToneWheelLuminance(value) } }
                                 }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "toneCurveInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("tone-curve")
+                                    title: "Tone Curve"
+                                    compareGroup: "tone"
+                                    beforeAfterObjectName: "toneCurvePanelBeforeAfterButton"
+                                    ToneCurveEditor {
+                                        objectName: "studioToneCurveEditor"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 430
+                                        compactMode: false
+                                        accent: root.mint
+                                        selectedChannel: editorPreview.curveChannel
+                                        curveMode: root.primaryCurveMode()
+                                        pointsModel: root.primaryCurvePoints()
+                                        presetNames: editorPreview.curvePresetNames
+                                        histogramRedData: editorPreview.histogramRed
+                                        histogramGreenData: editorPreview.histogramGreen
+                                        histogramBlueData: editorPreview.histogramBlue
+                                        histogramLuminanceData: editorPreview.histogramLuminance
+                                        histogramLogScale: root.scopeLogHistogram
+                                        presetPreviewProvider: function(preset) { return editorPreview.curvePresetPreviewPoints(preset) }
+                                        onEditStarted: editorPreview.beginCoalescedEdit()
+                                        onEditFinished: editorPreview.endCoalescedEdit()
+                                        onChannelSelected: function(channel) { editorPreview.curveChannel = channel }
+                                        onPointsEdited: function(points) { root.setPrimaryCurvePoints(points) }
+                                        onPresetSelected: function(preset) {
+                                            if (root.activeAdjustmentLayerIndex() >= 0)
+                                                root.setPrimaryCurvePoints(editorPreview.curvePresetPreviewPoints(preset))
+                                            else
+                                                editorPreview.applyCurvePreset(preset)
+                                        }
+                                    }
+                                    CollapsibleGroup {
+                                        objectName: "toneCurveInputLevelsGroup"
+                                        title: "Input Levels"
+                                        expanded: root.lightLevelsExpanded
+                                        resetObjectName: "toneCurveInputLevelsResetButton"
+                                        resetVisible: true
+                                        onToggled: root.lightLevelsExpanded = !root.lightLevelsExpanded
+                                        onResetRequested: {
+                                            root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
+                                            root.setPrimaryAdjustmentValue("levelsGamma", 0)
+                                            root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
+                                        }
+                                        Rectangle {
+                                            objectName: "toneCurveInputLevelsStrip"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 66
+                                            radius: 4
+                                            color: theme.alpha(theme.ink950, 0.26)
+                                            border.color: root.hairlineStrong
+                                            border.width: 1
+                                            clip: true
+                                            HistogramDisplay {
+                                                objectName: "toneCurveInputLevelsHistogram"
+                                                anchors.fill: parent
+                                                anchors.margins: 6
+                                                redData: []
+                                                greenData: []
+                                                blueData: []
+                                                luminanceData: editorPreview.histogramLuminance
+                                                showRgb: false
+                                                showLuminance: true
+                                                logScale: root.scopeLogHistogram
+                                                framed: false
+                                            }
+                                            Item {
+                                                objectName: "toneCurveInputLevelsHandles"
+                                                anchors.fill: parent
+                                                anchors.leftMargin: 8
+                                                anchors.rightMargin: 8
+                                                anchors.topMargin: 6
+                                                anchors.bottomMargin: 6
+                                                Repeater {
+                                                    model: [
+                                                        { name: "black", position: Math.max(0, Math.min(0.95, root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095)), color: "#4FB5FF" },
+                                                        { name: "gamma", position: Math.max(0.05, Math.min(0.95, 0.5 + root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 220)), color: root.mint },
+                                                        { name: "white", position: Math.max(0.05, Math.min(1, 1 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint) * 0.0095)), color: "#F2C35B" }
+                                                    ]
+                                                    Rectangle {
+                                                        required property var modelData
+                                                        objectName: "toneCurveInputLevelsHandle"
+                                                        x: modelData.position * (parent.width - width)
+                                                        y: 0
+                                                        width: 2
+                                                        height: parent.height
+                                                        radius: 1
+                                                        color: modelData.color
+                                                        opacity: 0.92
+                                                        Rectangle {
+                                                            anchors.horizontalCenter: parent.horizontalCenter
+                                                            anchors.bottom: parent.bottom
+                                                            width: 10
+                                                            height: 10
+                                                            radius: 2
+                                                            rotation: 45
+                                                            color: parent.color
+                                                            border.color: theme.alpha(theme.ink950, 0.74)
+                                                            border.width: 1
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        AdjustSlider { objectName: "toneCurveInputBlackSlider"; controlHeight: 38; label: "Black Input"; from: 0; to: 95; value: root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint); valueText: Math.round(root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsBlackPoint", value) } }
+                                        AdjustSlider { objectName: "toneCurveInputGammaSlider"; controlHeight: 38; label: "Gamma"; value: root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma); valueText: Number(Math.pow(2, -root.primaryAdjustmentValue("levelsGamma", editorPreview.levelsGamma) / 100 * 1.45)).toFixed(2); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsGamma", value) } }
+                                        AdjustSlider { objectName: "toneCurveInputWhiteSlider"; controlHeight: 38; label: "White Input"; from: 5; to: 100; defaultValue: 100; value: 100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint); valueText: Math.round(100 - root.primaryAdjustmentValue("levelsWhitePoint", editorPreview.levelsWhitePoint)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("levelsWhitePoint", 100 - value) } }
+                                    }
+                                    AdjustSlider { label: "Shadows"; value: root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows); valueText: root.signedPercent(root.primaryAdjustmentValue("curveShadows", editorPreview.curveShadows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveShadows", value) } }
+                                    AdjustSlider { label: "Darks"; value: root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks); valueText: root.signedPercent(root.primaryAdjustmentValue("curveDarks", editorPreview.curveDarks)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveDarks", value) } }
+                                    AdjustSlider { label: "Lights"; value: root.primaryAdjustmentValue("curveLights", editorPreview.curveLights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveLights", editorPreview.curveLights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveLights", value) } }
+                                    AdjustSlider { label: "Highlights"; value: root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights); valueText: root.signedPercent(root.primaryAdjustmentValue("curveHighlights", editorPreview.curveHighlights)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("curveHighlights", value) } }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "presenceInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("presence")
+                                    title: "Presence"
+                                    resetGroup: "presence"
+                                    resetObjectName: "presencePanelResetButton"
+                                    compareGroup: "detail"
+                                    beforeAfterObjectName: "presencePanelBeforeAfterButton"
+                                    AdjustSlider { objectName: "presenceTextureSlider"; label: "Texture"; value: root.primaryAdjustmentValue("texture", editorPreview.texture); valueText: root.signedPercent(root.primaryAdjustmentValue("texture", editorPreview.texture)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("texture", value) } }
+                                    AdjustSlider { objectName: "presenceClaritySlider"; label: "Clarity"; value: root.primaryAdjustmentValue("clarity", editorPreview.clarity); valueText: root.signedPercent(root.primaryAdjustmentValue("clarity", editorPreview.clarity)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("clarity", value) } }
+                                    AdjustSlider { objectName: "presenceDehazeSlider"; label: "Dehaze"; value: root.primaryAdjustmentValue("dehaze", editorPreview.dehaze); valueText: root.signedPercent(root.primaryAdjustmentValue("dehaze", editorPreview.dehaze)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("dehaze", value) } }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "rawInspectorGroup"
+                                    title: "Raw"
+                                    resetGroup: "raw"
+                                    resetObjectName: "rawPanelResetButton"
+                                    compareGroup: "raw"
+                                    beforeAfterObjectName: "rawPanelBeforeAfterButton"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && editorPreview.rawControlsAvailable && root.adjustmentGroupMatches("raw")
+                                    AdjustSlider { label: "Raw Exposure"; from: -4; to: 4; stepSize: 0.01; value: editorPreview.rawExposure; valueText: root.exposureText(editorPreview.rawExposure); onValueDragged: function(value) { editorPreview.rawExposure = value } }
+                                    AdjustSlider { label: "Raw Boost"; from: 0; to: 2; stepSize: 0.01; defaultValue: 0; value: editorPreview.rawBoost; valueText: Math.round(editorPreview.rawBoost * 100).toString() + "%"; onValueDragged: function(value) { editorPreview.rawBoost = value } }
+                                    AdjustSlider { label: "Shadow Boost"; from: 0; to: 2; stepSize: 0.01; defaultValue: 1; value: editorPreview.rawShadowBoost; valueText: Math.round(editorPreview.rawShadowBoost * 100).toString() + "%"; onValueDragged: function(value) { editorPreview.rawShadowBoost = value } }
+                                    AdjustSlider { label: "Raw Detail"; from: 0; to: 2; stepSize: 0.01; defaultValue: 0; value: editorPreview.rawDetail; valueText: Math.round(editorPreview.rawDetail * 100).toString() + "%"; onValueDragged: function(value) { editorPreview.rawDetail = value } }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton { Layout.fillWidth: true; text: "Highlight Recovery"; role: "segmented"; active: editorPreview.rawHighlightRecovery; onClicked: editorPreview.rawHighlightRecovery = !editorPreview.rawHighlightRecovery }
+                                        MiniButton { Layout.fillWidth: true; text: "Lens Correction"; role: "segmented"; active: editorPreview.rawLensCorrection; onClicked: editorPreview.rawLensCorrection = !editorPreview.rawLensCorrection }
+                                    }
+                                }
+
+                                InspectorGroup {
+                                    objectName: "advancedColorInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("advanced-color")
+                                    title: "Advanced Color"
+                                    compareGroup: "color"
+                                    beforeAfterObjectName: "advancedColorPanelBeforeAfterButton"
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton {
+                                            Layout.fillWidth: true
+                                            text: "Lab"
+                                            role: "segmented"
+                                            active: root.labColorToolsVisible
+                                            onClicked: root.labColorToolsVisible = !root.labColorToolsVisible
+                                        }
+                                    }
+                                    CollapsibleGroup {
+                                    objectName: "colorMixGroup"
+                                    title: "Color Mix"
+                                    expanded: root.colorMixExpanded
+                                    onToggled: root.colorMixExpanded = !root.colorMixExpanded
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: root.labColorToolsVisible
+                                        Repeater {
+                                            model: ["HSL", "HSV", "LCH", "OKLab"]
+                                            MiniButton {
+                                                required property string modelData
+                                                Layout.fillWidth: true
+                                                text: modelData
+                                                role: "segmented"
+                                                active: root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel) === modelData
+                                                onClicked: root.setPrimaryStringAdjustmentValue("colorMixerModel", modelData)
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        objectName: "hslChannelButtonRow"
+                                        Layout.fillWidth: true
+                                        Repeater {
+                                            model: ["Reds", "Oranges", "Yellows", "Greens", "Aquas", "Blues", "Purples", "Magentas"]
+                                            MiniButton {
+                                                required property string modelData
+                                                objectName: "hslChannel" + modelData + "Button"
+                                                Layout.fillWidth: true
+                                                text: root.hslChannelShortLabel(modelData)
+                                                iconName: "swatch"
+                                                iconColor: root.hslChannelColor(modelData)
+                                                labelVisible: parent !== null && parent.width >= 520
+                                                role: "segmented"
+                                                active: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) === modelData
+                                                tooltip: root.hslChannelTooltip(modelData)
+                                                onClicked: root.setPrimaryStringAdjustmentValue("hslChannel", modelData)
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        objectName: "colorMixActiveChannelPreview"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 42
+                                        radius: 4
+                                        color: theme.alpha(theme.ink950, 0.32)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 8
+                                            Rectangle {
+                                                objectName: "colorMixActiveChannelSwatch"
+                                                Layout.preferredWidth: 30
+                                                Layout.fillHeight: true
+                                                radius: 3
+                                                color: root.hslChannelColor(root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel))
+                                                border.color: theme.alpha(theme.polar, 0.18)
+                                                border.width: 1
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 2
+                                                Label {
+                                                    objectName: "colorMixActiveChannelLabel"
+                                                    Layout.fillWidth: true
+                                                    text: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) + " / " + root.primaryStringAdjustmentValue("colorMixerModel", editorPreview.colorMixerModel)
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+                                                Label {
+                                                    objectName: "colorMixActiveChannelValues"
+                                                    Layout.fillWidth: true
+                                                    text: "H " + root.signedPercent(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)) + "   S " + root.signedPercent(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)) + "   L " + root.signedPercent(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment))
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                            MiniButton {
+                                                objectName: "colorMixResetChannelButton"
+                                                square: true
+                                                iconName: "reset"
+                                                role: "icon"
+                                                enabled: Math.abs(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)) > 0.01 || Math.abs(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)) > 0.01 || Math.abs(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment)) > 0.01
+                                                tooltip: "Reset selected color mix channel."
+                                                onClicked: root.resetColorMixActiveChannel()
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        objectName: "colorMixAffectedRangeStrip"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 18
+                                        radius: 3
+                                        color: theme.alpha(theme.ink950, 0.24)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        clip: true
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 3
+                                            spacing: 2
+                                            Repeater {
+                                                model: root.hslChannelRangeColors(root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel))
+                                                Rectangle {
+                                                    objectName: "colorMixAffectedRangeSwatch"
+                                                    required property int index
+                                                    required property string modelData
+                                                    Layout.fillWidth: true
+                                                    Layout.fillHeight: true
+                                                    radius: 2
+                                                    color: modelData
+                                                    opacity: index === 1 ? 0.95 : 0.42
+                                                }
+                                            }
+                                        }
+                                    }
+                                    AdjustSlider { label: "Hue"; value: root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("hueAdjustment", value) } }
+                                    AdjustSlider { label: "Saturation"; value: root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("saturationAdjustment", value) } }
+                                    AdjustSlider { label: "Luminance"; value: root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("luminanceAdjustment", value) } }
+                                    AdjustSlider { visible: root.labColorToolsVisible; label: "Cyan"; value: root.primaryColorMixerChannelValue("selectiveCyan", editorPreview.selectiveCyan); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveCyan", editorPreview.selectiveCyan)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveCyan", value) } }
+                                    AdjustSlider { visible: root.labColorToolsVisible; label: "Magenta"; value: root.primaryColorMixerChannelValue("selectiveMagenta", editorPreview.selectiveMagenta); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveMagenta", editorPreview.selectiveMagenta)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveMagenta", value) } }
+                                    AdjustSlider { visible: root.labColorToolsVisible; label: "Yellow"; value: root.primaryColorMixerChannelValue("selectiveYellow", editorPreview.selectiveYellow); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveYellow", editorPreview.selectiveYellow)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveYellow", value) } }
+                                    AdjustSlider { visible: root.labColorToolsVisible; label: "Black"; value: root.primaryColorMixerChannelValue("selectiveBlack", editorPreview.selectiveBlack); valueText: root.signedPercent(root.primaryColorMixerChannelValue("selectiveBlack", editorPreview.selectiveBlack)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("selectiveBlack", value) } }
+                                }
+
+                                    CollapsibleGroup {
+                                    objectName: "channelMixerGroup"
+                                    visible: root.labColorToolsVisible
+                                    title: "Channel Mixer"
+                                    expanded: root.channelMixerExpanded
+                                    onToggled: root.channelMixerExpanded = !root.channelMixerExpanded
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton { objectName: "channelMixerIdentityPresetButton"; Layout.fillWidth: true; text: "Identity"; iconName: "reset"; tooltip: "Restore normal RGB output."; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
+                                        MiniButton { objectName: "channelMixerMonochromePresetButton"; Layout.fillWidth: true; text: "Mono"; iconName: "swatch"; tooltip: "Mix all outputs from luminance."; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
+                                        MiniButton { objectName: "channelMixerSwapRedBluePresetButton"; Layout.fillWidth: true; text: "Swap RB"; iconName: "swap"; tooltip: "Swap red and blue output channels."; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { Layout.fillWidth: true; text: "Output Red"; color: theme.textStrong; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                        Label {
+                                            objectName: "channelMixerRedRowSumLabel"
+                                            text: "Sum " + Math.round(root.primaryChannelMixerValue("redFromRed", editorPreview.channelMixerRedFromRed) + root.primaryChannelMixerValue("redFromGreen", editorPreview.channelMixerRedFromGreen) + root.primaryChannelMixerValue("redFromBlue", editorPreview.channelMixerRedFromBlue)).toString()
+                                            color: Math.abs(root.primaryChannelMixerValue("redFromRed", editorPreview.channelMixerRedFromRed) + root.primaryChannelMixerValue("redFromGreen", editorPreview.channelMixerRedFromGreen) + root.primaryChannelMixerValue("redFromBlue", editorPreview.channelMixerRedFromBlue) - 100) > 25 ? "#F2C35B" : root.dimText
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                        }
+                                        MiniButton { objectName: "channelMixerResetRedRowButton"; text: "Reset"; iconName: "reset"; square: true; role: "icon"; tooltip: "Reset the red output row."; onClicked: editorPreview.resetChannelMixerRow("red") }
+                                    }
+                                    AdjustSlider { objectName: "channelMixerRedFromRedSlider"; label: "From Red"; from: -200; to: 200; defaultValue: 100; value: root.primaryChannelMixerValue("redFromRed", editorPreview.channelMixerRedFromRed); valueText: Math.round(root.primaryChannelMixerValue("redFromRed", editorPreview.channelMixerRedFromRed)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerRedFromRed", value) } }
+                                    AdjustSlider { label: "From Green"; from: -200; to: 200; value: root.primaryChannelMixerValue("redFromGreen", editorPreview.channelMixerRedFromGreen); valueText: Math.round(root.primaryChannelMixerValue("redFromGreen", editorPreview.channelMixerRedFromGreen)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerRedFromGreen", value) } }
+                                    AdjustSlider { label: "From Blue"; from: -200; to: 200; value: root.primaryChannelMixerValue("redFromBlue", editorPreview.channelMixerRedFromBlue); valueText: Math.round(root.primaryChannelMixerValue("redFromBlue", editorPreview.channelMixerRedFromBlue)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerRedFromBlue", value) } }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { Layout.fillWidth: true; text: "Output Green"; color: theme.textStrong; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                        Label {
+                                            objectName: "channelMixerGreenRowSumLabel"
+                                            text: "Sum " + Math.round(root.primaryChannelMixerValue("greenFromRed", editorPreview.channelMixerGreenFromRed) + root.primaryChannelMixerValue("greenFromGreen", editorPreview.channelMixerGreenFromGreen) + root.primaryChannelMixerValue("greenFromBlue", editorPreview.channelMixerGreenFromBlue)).toString()
+                                            color: Math.abs(root.primaryChannelMixerValue("greenFromRed", editorPreview.channelMixerGreenFromRed) + root.primaryChannelMixerValue("greenFromGreen", editorPreview.channelMixerGreenFromGreen) + root.primaryChannelMixerValue("greenFromBlue", editorPreview.channelMixerGreenFromBlue) - 100) > 25 ? "#F2C35B" : root.dimText
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                        }
+                                        MiniButton { objectName: "channelMixerResetGreenRowButton"; text: "Reset"; iconName: "reset"; square: true; role: "icon"; tooltip: "Reset the green output row."; onClicked: editorPreview.resetChannelMixerRow("green") }
+                                    }
+                                    AdjustSlider { label: "From Red"; from: -200; to: 200; value: root.primaryChannelMixerValue("greenFromRed", editorPreview.channelMixerGreenFromRed); valueText: Math.round(root.primaryChannelMixerValue("greenFromRed", editorPreview.channelMixerGreenFromRed)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerGreenFromRed", value) } }
+                                    AdjustSlider { label: "From Green"; from: -200; to: 200; defaultValue: 100; value: root.primaryChannelMixerValue("greenFromGreen", editorPreview.channelMixerGreenFromGreen); valueText: Math.round(root.primaryChannelMixerValue("greenFromGreen", editorPreview.channelMixerGreenFromGreen)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerGreenFromGreen", value) } }
+                                    AdjustSlider { label: "From Blue"; from: -200; to: 200; value: root.primaryChannelMixerValue("greenFromBlue", editorPreview.channelMixerGreenFromBlue); valueText: Math.round(root.primaryChannelMixerValue("greenFromBlue", editorPreview.channelMixerGreenFromBlue)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerGreenFromBlue", value) } }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label { Layout.fillWidth: true; text: "Output Blue"; color: theme.textStrong; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                        Label {
+                                            objectName: "channelMixerBlueRowSumLabel"
+                                            text: "Sum " + Math.round(root.primaryChannelMixerValue("blueFromRed", editorPreview.channelMixerBlueFromRed) + root.primaryChannelMixerValue("blueFromGreen", editorPreview.channelMixerBlueFromGreen) + root.primaryChannelMixerValue("blueFromBlue", editorPreview.channelMixerBlueFromBlue)).toString()
+                                            color: Math.abs(root.primaryChannelMixerValue("blueFromRed", editorPreview.channelMixerBlueFromRed) + root.primaryChannelMixerValue("blueFromGreen", editorPreview.channelMixerBlueFromGreen) + root.primaryChannelMixerValue("blueFromBlue", editorPreview.channelMixerBlueFromBlue) - 100) > 25 ? "#F2C35B" : root.dimText
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                        }
+                                        MiniButton { objectName: "channelMixerResetBlueRowButton"; text: "Reset"; iconName: "reset"; square: true; role: "icon"; tooltip: "Reset the blue output row."; onClicked: editorPreview.resetChannelMixerRow("blue") }
+                                    }
+                                    AdjustSlider { label: "From Red"; from: -200; to: 200; value: root.primaryChannelMixerValue("blueFromRed", editorPreview.channelMixerBlueFromRed); valueText: Math.round(root.primaryChannelMixerValue("blueFromRed", editorPreview.channelMixerBlueFromRed)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerBlueFromRed", value) } }
+                                    AdjustSlider { label: "From Green"; from: -200; to: 200; value: root.primaryChannelMixerValue("blueFromGreen", editorPreview.channelMixerBlueFromGreen); valueText: Math.round(root.primaryChannelMixerValue("blueFromGreen", editorPreview.channelMixerBlueFromGreen)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerBlueFromGreen", value) } }
+                                    AdjustSlider { label: "From Blue"; from: -200; to: 200; defaultValue: 100; value: root.primaryChannelMixerValue("blueFromBlue", editorPreview.channelMixerBlueFromBlue); valueText: Math.round(root.primaryChannelMixerValue("blueFromBlue", editorPreview.channelMixerBlueFromBlue)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("channelMixerBlueFromBlue", value) } }
+                                }
+
+                                    CollapsibleGroup {
+                                    objectName: "blackWhiteGroup"
+                                    title: "Black & White"
+                                    expanded: root.blackWhiteExpanded
+                                    onToggled: root.blackWhiteExpanded = !root.blackWhiteExpanded
+                                    CheckBox {
+                                        text: "Enable"
+                                        checked: root.primaryBoolAdjustmentValue("blackAndWhiteEnabled", editorPreview.blackAndWhiteEnabled)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("blackAndWhiteEnabled", checked)
+                                    }
+                                    AdjustSlider { label: "Reds"; value: root.primaryBlackAndWhiteValue("Reds", editorPreview.blackAndWhiteReds); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Reds", editorPreview.blackAndWhiteReds)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteReds", value) } }
+                                    AdjustSlider { label: "Oranges"; value: root.primaryBlackAndWhiteValue("Oranges", editorPreview.blackAndWhiteOranges); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Oranges", editorPreview.blackAndWhiteOranges)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteOranges", value) } }
+                                    AdjustSlider { label: "Yellows"; value: root.primaryBlackAndWhiteValue("Yellows", editorPreview.blackAndWhiteYellows); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Yellows", editorPreview.blackAndWhiteYellows)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteYellows", value) } }
+                                    AdjustSlider { label: "Greens"; value: root.primaryBlackAndWhiteValue("Greens", editorPreview.blackAndWhiteGreens); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Greens", editorPreview.blackAndWhiteGreens)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteGreens", value) } }
+                                    AdjustSlider { label: "Aquas"; value: root.primaryBlackAndWhiteValue("Aquas", editorPreview.blackAndWhiteAquas); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Aquas", editorPreview.blackAndWhiteAquas)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteAquas", value) } }
+                                    AdjustSlider { label: "Blues"; value: root.primaryBlackAndWhiteValue("Blues", editorPreview.blackAndWhiteBlues); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Blues", editorPreview.blackAndWhiteBlues)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteBlues", value) } }
+                                    AdjustSlider { label: "Purples"; value: root.primaryBlackAndWhiteValue("Purples", editorPreview.blackAndWhitePurples); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Purples", editorPreview.blackAndWhitePurples)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhitePurples", value) } }
+                                    AdjustSlider { label: "Magentas"; value: root.primaryBlackAndWhiteValue("Magentas", editorPreview.blackAndWhiteMagentas); valueText: root.signedPercent(root.primaryBlackAndWhiteValue("Magentas", editorPreview.blackAndWhiteMagentas)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("blackAndWhiteMagentas", value) } }
+                                }
+
+                                    CollapsibleGroup {
+                                    objectName: "colorReplaceGroup"
+                                    title: "Color Replace"
+                                    expanded: root.colorReplaceExpanded
+                                    onToggled: root.colorReplaceExpanded = !root.colorReplaceExpanded
+                                    CheckBox {
+                                        text: "Enable"
+                                        checked: root.primaryBoolAdjustmentValue("colorReplacementEnabled", editorPreview.colorReplacementEnabled)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("colorReplacementEnabled", checked)
+                                    }
+                                    Rectangle {
+                                        objectName: "colorReplaceSwatchPreview"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 48
+                                        radius: 4
+                                        color: theme.alpha(theme.ink950, 0.32)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 8
+                                            Rectangle {
+                                                objectName: "colorReplaceSourceSwatch"
+                                                Layout.preferredWidth: 44
+                                                Layout.fillHeight: true
+                                                radius: 3
+                                                color: root.hueSwatchColor(root.primaryColorReplacementValue("sourceHue", editorPreview.colorReplacementSourceHue))
+                                                border.color: theme.alpha(theme.polar, 0.18)
+                                                border.width: 1
+                                            }
+                                            ColumnLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 2
+                                                Label {
+                                                    objectName: "colorReplaceSummaryLabel"
+                                                    Layout.fillWidth: true
+                                                    text: Math.round(root.primaryColorReplacementValue("sourceHue", editorPreview.colorReplacementSourceHue) * 360) + "° -> " + Math.round(root.primaryColorReplacementValue("targetHue", editorPreview.colorReplacementTargetHue) * 360) + "°"
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                    elide: Text.ElideRight
+                                                }
+                                                Label {
+                                                    objectName: "colorReplaceSelectionLabel"
+                                                    Layout.fillWidth: true
+                                                    text: "Range " + Math.round(root.primaryColorReplacementValue("range", editorPreview.colorReplacementRange)) + "   Soft " + Math.round(root.primaryColorReplacementValue("softness", editorPreview.colorReplacementSoftness)) + "   Strength " + Math.round(root.primaryColorReplacementValue("strength", editorPreview.colorReplacementStrength))
+                                                          + "   Keep " + (root.primaryBoolAdjustmentValue("colorReplacementPreserveLuminance", editorPreview.colorReplacementPreserveLuminance) ? "L" : "-") + (root.primaryBoolAdjustmentValue("colorReplacementPreserveSaturation", editorPreview.colorReplacementPreserveSaturation) ? "S" : "-")
+                                                    color: root.dimText
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+                                            Rectangle {
+                                                objectName: "colorReplaceTargetSwatch"
+                                                Layout.preferredWidth: 44
+                                                Layout.fillHeight: true
+                                                radius: 3
+                                                color: root.hueSwatchColor(root.primaryColorReplacementValue("targetHue", editorPreview.colorReplacementTargetHue))
+                                                border.color: theme.alpha(theme.polar, 0.18)
+                                                border.width: 1
+                                            }
+                                            MiniButton {
+                                                objectName: "colorReplaceSwapHueButton"
+                                                square: true
+                                                iconName: "swap"
+                                                role: "icon"
+                                                tooltip: "Swap source and target hues."
+                                                onClicked: root.swapColorReplacementHues()
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        MiniButton {
+                                            objectName: "colorReplaceSampleSourceButton"
+                                            Layout.fillWidth: true
+                                            text: "Source"
+                                            iconName: "eyedropper"
+                                            role: "segmented"
+                                            active: editorPreview.colorToolSamplingTarget === "color-replace-source"
+                                            tooltip: "Sample the source hue from the image."
+                                            onClicked: root.setColorToolSampler("color-replace-source")
+                                        }
+                                        MiniButton {
+                                            objectName: "colorReplaceSampleTargetButton"
+                                            Layout.fillWidth: true
+                                            text: "Target"
+                                            iconName: "eyedropper"
+                                            role: "segmented"
+                                            active: editorPreview.colorToolSamplingTarget === "color-replace-target"
+                                            tooltip: "Sample the target hue from the image."
+                                            onClicked: root.setColorToolSampler("color-replace-target")
+                                        }
+                                        MiniButton {
+                                            objectName: "colorReplaceSampleSkinButton"
+                                            Layout.fillWidth: true
+                                            text: "Skin"
+                                            iconName: "eyedropper"
+                                            role: "segmented"
+                                            active: editorPreview.colorToolSamplingTarget === "skin-protection"
+                                            tooltip: "Sample protected skin hue from the image."
+                                            onClicked: root.setColorToolSampler("skin-protection")
+                                        }
+                                        MiniButton {
+                                            objectName: "colorReplaceMaskPreviewButton"
+                                            Layout.fillWidth: true
+                                            text: "Mask"
+                                            iconName: "scope"
+                                            role: "segmented"
+                                            active: editorPreview.colorToolMaskPreviewEnabled
+                                            tooltip: "Preview affected color replacement and skin-protection pixels."
+                                            onClicked: editorPreview.colorToolMaskPreviewEnabled = !editorPreview.colorToolMaskPreviewEnabled
+                                        }
+                                    }
+                                    AdjustSlider { label: "Source Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: root.primaryColorReplacementValue("sourceHue", editorPreview.colorReplacementSourceHue); valueText: Math.round(root.primaryColorReplacementValue("sourceHue", editorPreview.colorReplacementSourceHue) * 360) + "°"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorReplacementSourceHue", value) } }
+                                    AdjustSlider { objectName: "colorReplacementTargetHueSlider"; label: "Target Hue"; from: 0; to: 1; defaultValue: 0.33; valueInputMode: "degreesNormalized"; value: root.primaryColorReplacementValue("targetHue", editorPreview.colorReplacementTargetHue); valueText: Math.round(root.primaryColorReplacementValue("targetHue", editorPreview.colorReplacementTargetHue) * 360) + "°"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorReplacementTargetHue", value) } }
+                                    AdjustSlider { objectName: "colorReplacementRangeSlider"; label: "Range"; from: 1; to: 100; defaultValue: 35; value: root.primaryColorReplacementValue("range", editorPreview.colorReplacementRange); valueText: Math.round(root.primaryColorReplacementValue("range", editorPreview.colorReplacementRange)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorReplacementRange", value) } }
+                                    AdjustSlider { objectName: "colorReplacementSoftnessSlider"; label: "Softness"; from: 0; to: 100; defaultValue: 100; value: root.primaryColorReplacementValue("softness", editorPreview.colorReplacementSoftness); valueText: Math.round(root.primaryColorReplacementValue("softness", editorPreview.colorReplacementSoftness)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorReplacementSoftness", value) } }
+                                    AdjustSlider { label: "Strength"; from: 0; to: 100; value: root.primaryColorReplacementValue("strength", editorPreview.colorReplacementStrength); valueText: Math.round(root.primaryColorReplacementValue("strength", editorPreview.colorReplacementStrength)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorReplacementStrength", value) } }
+                                    CompactCheckBox {
+                                        objectName: "colorReplacementPreserveLuminanceCheckBox"
+                                        text: "Preserve Luminance"
+                                        checked: root.primaryBoolAdjustmentValue("colorReplacementPreserveLuminance", editorPreview.colorReplacementPreserveLuminance)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("colorReplacementPreserveLuminance", checked)
+                                    }
+                                    CompactCheckBox {
+                                        objectName: "colorReplacementPreserveSaturationCheckBox"
+                                        text: "Preserve Saturation"
+                                        checked: root.primaryBoolAdjustmentValue("colorReplacementPreserveSaturation", editorPreview.colorReplacementPreserveSaturation)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("colorReplacementPreserveSaturation", checked)
+                                    }
+                                    CompactCheckBox {
+                                        objectName: "colorReplaceProtectSkinCheckBox"
+                                        text: "Protect Skin"
+                                        checked: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("skinToneProtectionEnabled", checked)
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        MiniButton {
+                                            objectName: "colorReplaceAutoSkinButton"
+                                            Layout.fillWidth: true
+                                            text: "Auto Skin (Heuristic)"
+                                            iconName: "scope"
+                                            role: "secondary"
+                                            tooltip: "Estimate protected skin hue and range with a color heuristic."
+                                            onClicked: editorPreview.autoDetectSkinProtection()
+                                        }
+                                        MiniButton {
+                                            objectName: "colorReplaceResetSkinProtectionButton"
+                                            Layout.fillWidth: true
+                                            text: "Reset Skin"
+                                            iconName: "reset"
+                                            role: "secondary"
+                                            tooltip: "Reset protected skin hue, range, and strength."
+                                            onClicked: {
+                                                root.setPrimaryBoolAdjustmentValue("skinToneProtectionEnabled", false)
+                                                root.setPrimaryAdjustmentValue("skinToneLineHue", 0.08)
+                                                root.setPrimaryAdjustmentValue("skinToneProtectionRange", 30)
+                                                root.setPrimaryAdjustmentValue("skinToneProtectionStrength", 0)
+                                            }
+                                        }
+                                    }
+                                    AdjustSlider { objectName: "colorReplaceSkinHueSlider"; visible: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled); label: "Protected Hue"; from: 0; to: 1; defaultValue: 0.08; valueInputMode: "degreesNormalized"; value: root.primarySkinToneValue("lineHue", editorPreview.skinToneLineHue); valueText: Math.round(root.primarySkinToneValue("lineHue", editorPreview.skinToneLineHue) * 360) + "°"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneLineHue", value) } }
+                                    AdjustSlider { objectName: "colorReplaceSkinRangeSlider"; visible: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled); label: "Hue Range"; from: 1; to: 100; defaultValue: 30; value: root.primarySkinToneValue("range", editorPreview.skinToneProtectionRange); valueText: Math.round(root.primarySkinToneValue("range", editorPreview.skinToneProtectionRange)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneProtectionRange", value) } }
+                                    AdjustSlider { objectName: "colorReplaceSkinProtectionSlider"; visible: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled); label: "Protection"; from: 0; to: 100; defaultValue: 0; value: root.primarySkinToneValue("strength", editorPreview.skinToneProtectionStrength); valueText: Math.round(root.primarySkinToneValue("strength", editorPreview.skinToneProtectionStrength)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneProtectionStrength", value) } }
+                                }
+
+                                    CollapsibleGroup {
+                                    objectName: "skinToneGroup"
+                                    visible: root.labColorToolsVisible
+                                    title: "Skin Protection Lab"
+                                    expanded: root.skinToneExpanded
+                                    onToggled: root.skinToneExpanded = !root.skinToneExpanded
+                                    CompactCheckBox {
+                                        text: "Protect"
+                                        checked: root.primaryBoolAdjustmentValue("skinToneProtectionEnabled", editorPreview.skinToneProtectionEnabled)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("skinToneProtectionEnabled", checked)
+                                    }
+                                    Rectangle {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 44
+                                        radius: 3
+                                        clip: true
+                                        color: theme.alpha(theme.ink950, 0.28)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            color: "transparent"
+                                            border.width: 1
+                                            border.color: theme.alpha(theme.polar, 0.055)
+                                        }
+                                        Rectangle {
+                                            width: parent.width * 0.72
+                                            height: 2
+                                            radius: 1
+                                            color: root.mint
+                                            anchors.centerIn: parent
+                                            rotation: root.primarySkinToneValue("lineHue", editorPreview.skinToneLineHue) * 360 - 20
+                                        }
+                                    }
+                                    AdjustSlider { objectName: "skinToneLineHueSlider"; label: "Protected Hue"; from: 0; to: 1; defaultValue: 0.08; valueInputMode: "degreesNormalized"; value: root.primarySkinToneValue("lineHue", editorPreview.skinToneLineHue); valueText: Math.round(root.primarySkinToneValue("lineHue", editorPreview.skinToneLineHue) * 360) + "°"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneLineHue", value) } }
+                                    AdjustSlider { label: "Hue Range"; from: 1; to: 100; defaultValue: 30; value: root.primarySkinToneValue("range", editorPreview.skinToneProtectionRange); valueText: Math.round(root.primarySkinToneValue("range", editorPreview.skinToneProtectionRange)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneProtectionRange", value) } }
+                                    AdjustSlider { label: "Protection"; from: 0; to: 100; value: root.primarySkinToneValue("strength", editorPreview.skinToneProtectionStrength); valueText: Math.round(root.primarySkinToneValue("strength", editorPreview.skinToneProtectionStrength)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("skinToneProtectionStrength", value) } }
+                                }
+
+                                    CollapsibleGroup {
+                                    objectName: "harmonyGroup"
+                                    visible: root.labColorToolsVisible
+                                    title: "Harmony Lab"
+                                    expanded: root.harmonyExpanded
+                                    onToggled: root.harmonyExpanded = !root.harmonyExpanded
+                                    CheckBox {
+                                        text: "Enable"
+                                        checked: root.primaryBoolAdjustmentValue("colorHarmonyEnabled", editorPreview.colorHarmonyEnabled)
+                                        onToggled: root.setPrimaryBoolAdjustmentValue("colorHarmonyEnabled", checked)
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        MiniButton { objectName: "harmonyWarmPresetButton"; Layout.fillWidth: true; text: "Warm"; role: "segmented"; tooltip: "Warm analogous palette."; onClicked: root.applyHarmonyPreset("Warm Analogous") }
+                                        MiniButton { objectName: "harmonyComplementPresetButton"; Layout.fillWidth: true; text: "Comp"; role: "segmented"; tooltip: "Soft complementary palette."; onClicked: root.applyHarmonyPreset("Soft Complement") }
+                                        MiniButton { objectName: "harmonyTriadPresetButton"; Layout.fillWidth: true; text: "Triad"; role: "segmented"; tooltip: "Cool triadic palette."; onClicked: root.applyHarmonyPreset("Cool Triad") }
+                                    }
+                                    Rectangle {
+                                        objectName: "harmonyPalettePreview"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 44
+                                        radius: 4
+                                        color: theme.alpha(theme.ink950, 0.32)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 6
+                                            Repeater {
+                                                model: root.harmonyAnchorHues(root.primaryStringAdjustmentValue("colorHarmonyMode", editorPreview.colorHarmonyMode), root.primaryHarmonyValue("baseHue", editorPreview.colorHarmonyBaseHue))
+                                                Rectangle {
+                                                    objectName: "harmonyAnchorSwatch"
+                                                    required property real modelData
+                                                    Layout.fillWidth: true
+                                                    Layout.fillHeight: true
+                                                    radius: 3
+                                                    color: root.hueSwatchColor(modelData)
+                                                    border.color: theme.alpha(theme.polar, 0.16)
+                                                    border.width: 1
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Rectangle {
+                                        objectName: "harmonyAffectedRangeStrip"
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 18
+                                        radius: 3
+                                        color: theme.alpha(theme.ink950, 0.24)
+                                        border.color: root.hairlineStrong
+                                        border.width: 1
+                                        clip: true
+                                        RowLayout {
+                                            anchors.fill: parent
+                                            anchors.margins: 3
+                                            spacing: 2
+                                            Repeater {
+                                                model: root.harmonyRangeHues(root.primaryStringAdjustmentValue("colorHarmonyMode", editorPreview.colorHarmonyMode), root.primaryHarmonyValue("baseHue", editorPreview.colorHarmonyBaseHue))
+                                                Rectangle {
+                                                    objectName: "harmonyAffectedRangeSwatch"
+                                                    required property int index
+                                                    required property real modelData
+                                                    Layout.fillWidth: true
+                                                    Layout.fillHeight: true
+                                                    radius: 2
+                                                    color: root.hueSwatchColor(modelData)
+                                                    opacity: index % 3 === 1 ? 0.95 : 0.38
+                                                }
+                                            }
+                                        }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Repeater {
+                                            model: ["Complementary", "Analogous", "Triadic", "Split Complementary", "Tetradic"]
+                                            MiniButton {
+                                                required property string modelData
+                                                Layout.fillWidth: true
+                                                text: modelData === "Split Complementary" ? "Split" : modelData.slice(0, 4)
+                                                role: "segmented"
+                                                active: root.primaryStringAdjustmentValue("colorHarmonyMode", editorPreview.colorHarmonyMode) === modelData
+                                                onClicked: root.setPrimaryStringAdjustmentValue("colorHarmonyMode", modelData)
+                                            }
+                                        }
+                                    }
+                                    AdjustSlider { objectName: "harmonyBaseHueSlider"; label: "Base Hue"; from: 0; to: 1; valueInputMode: "degreesNormalized"; value: root.primaryHarmonyValue("baseHue", editorPreview.colorHarmonyBaseHue); valueText: Math.round(root.primaryHarmonyValue("baseHue", editorPreview.colorHarmonyBaseHue) * 360) + "°"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorHarmonyBaseHue", value) } }
+                                    AdjustSlider { objectName: "harmonyAmountSlider"; label: "Amount"; from: 0; to: 100; value: root.primaryHarmonyValue("strength", editorPreview.colorHarmonyStrength); valueText: Math.round(root.primaryHarmonyValue("strength", editorPreview.colorHarmonyStrength)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorHarmonyStrength", value) } }
+                                }
+
                                 }
 
                             }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                visible: root.editInspectorTab === "detail"
+                                visible: root.editInspectorTab === "adjust" || root.editInspectorTab === "crop"
                                 spacing: 12
                                 InspectorGroup {
+                                    objectName: "detailInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("detail")
                                     title: "Detail"
                                     resetGroup: "detail"
                                     resetObjectName: "detailPanelResetButton"
-                                    AdjustSlider { label: "Sharpening"; value: editorPreview.sharpening; valueText: root.signedPercent(editorPreview.sharpening); onValueDragged: function(value) { editorPreview.sharpening = value } }
-                                    AdjustSlider { label: "Masking"; value: editorPreview.sharpenMasking; valueText: root.signedPercent(editorPreview.sharpenMasking); onValueDragged: function(value) { editorPreview.sharpenMasking = value } }
-                                    AdjustSlider { label: "Luminance NR"; value: editorPreview.luminanceNr; valueText: root.signedPercent(editorPreview.luminanceNr); onValueDragged: function(value) { editorPreview.luminanceNr = value } }
-                                    AdjustSlider { label: "Color NR"; value: editorPreview.colorNr; valueText: root.signedPercent(editorPreview.colorNr); onValueDragged: function(value) { editorPreview.colorNr = value } }
+                                    compareGroup: "detail"
+                                    beforeAfterObjectName: "detailPanelBeforeAfterButton"
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        MiniButton { objectName: "detailInspectOneToOneButton"; Layout.fillWidth: true; text: "Inspect 1:1"; iconName: "zoom"; role: "segmented"; active: editViewport.zoom > 1.01 && root.loupeEnabled; onClicked: editViewport.inspectDetailAtOneToOne() }
+                                        MiniButton { objectName: "detailLoupeButton"; Layout.fillWidth: true; text: "Loupe"; iconName: "plus"; role: "segmented"; active: root.loupeEnabled; onClicked: root.loupeEnabled = !root.loupeEnabled }
+                                        MiniButton { objectName: "detailMaskPreviewButton"; Layout.fillWidth: true; text: "Mask"; iconName: "snap"; role: "segmented"; active: root.focusPeakingOverlayEnabled; onClicked: root.setAnalysisOverlay("focus-peaking") }
+                                    }
+                                    CollapsibleGroup {
+                                        objectName: "detailSharpeningGroup"
+                                        title: "Sharpening"
+                                        expanded: true
+                                        onToggled: expanded = !expanded
+                                        AdjustSlider { objectName: "detailSharpenAmountSlider"; label: "Amount"; from: 0; to: 150; defaultValue: 0; value: root.primaryAdjustmentValue("sharpening", editorPreview.sharpening); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpening", editorPreview.sharpening)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpening", value) } }
+                                        AdjustSlider { objectName: "detailSharpenRadiusSlider"; label: "Radius"; from: 0.5; to: 3.0; stepSize: 0.1; defaultValue: 1.0; value: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius); valueText: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius).toFixed(1) + " px"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenRadius", value) } }
+                                        AdjustSlider { objectName: "detailSharpenDetailSlider"; label: "Detail"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail); valueText: Math.round(root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenDetail", value) } }
+                                        AdjustSlider { objectName: "detailSharpenMaskingSlider"; label: "Masking"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenMasking", value) } }
+                                    }
+                                    CollapsibleGroup {
+                                        objectName: "detailNoiseReductionGroup"
+                                        title: "Noise Reduction"
+                                        expanded: true
+                                        onToggled: expanded = !expanded
+                                        AdjustSlider { objectName: "detailLuminanceNrSlider"; label: "Luminance"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("luminanceNr", editorPreview.luminanceNr); valueText: root.signedPercent(root.primaryAdjustmentValue("luminanceNr", editorPreview.luminanceNr)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("luminanceNr", value) } }
+                                        AdjustSlider { objectName: "detailColorNrSlider"; label: "Color"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("colorNr", editorPreview.colorNr); valueText: root.signedPercent(root.primaryAdjustmentValue("colorNr", editorPreview.colorNr)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("colorNr", value) } }
+                                    }
                                 }
                                 InspectorGroup {
+                                    objectName: "lensInspectorGroup"
+                                    visible: root.editInspectorTab === "adjust" && !root.maskTargetInspectorActive() && root.adjustmentGroupMatches("detail")
                                     title: "Lens"
                                     resetGroup: "lens"
                                     resetObjectName: "lensPanelResetButton"
-                                    AdjustSlider { label: "Distortion"; value: editorPreview.lensDistortion; valueText: root.signedPercent(editorPreview.lensDistortion); onValueDragged: function(value) { editorPreview.lensDistortion = value } }
-                                    AdjustSlider { label: "Vignette"; value: editorPreview.lensVignette; valueText: root.signedPercent(editorPreview.lensVignette); onValueDragged: function(value) { editorPreview.lensVignette = value } }
-                                    AdjustSlider { label: "Chromatic"; from: 0; to: 100; value: editorPreview.chromaticAberration; valueText: Math.round(editorPreview.chromaticAberration); onValueDragged: function(value) { editorPreview.chromaticAberration = value } }
+                                    AdjustSlider { objectName: "lensDistortionSlider"; label: "Distortion"; value: root.primaryAdjustmentValue("lensDistortion", editorPreview.lensDistortion); valueText: root.signedPercent(root.primaryAdjustmentValue("lensDistortion", editorPreview.lensDistortion)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("lensDistortion", value) } }
+                                    AdjustSlider { objectName: "lensVignetteSlider"; label: "Vignette"; value: root.primaryAdjustmentValue("lensVignette", editorPreview.lensVignette); valueText: root.signedPercent(root.primaryAdjustmentValue("lensVignette", editorPreview.lensVignette)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("lensVignette", value) } }
+                                    AdjustSlider { objectName: "lensChromaticAberrationSlider"; label: "Chromatic"; from: 0; to: 100; value: root.primaryAdjustmentValue("chromaticAberration", editorPreview.chromaticAberration); valueText: Math.round(root.primaryAdjustmentValue("chromaticAberration", editorPreview.chromaticAberration)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("chromaticAberration", value) } }
                                 }
                                 InspectorGroup {
+                                    objectName: "cropInspectorGroup"
+                                    visible: root.editTool === "crop" && root.editInspectorTab === "crop"
                                     title: "Crop"
                                     CollapsibleGroup {
                                         objectName: "cropBoxGroup"
@@ -5697,17 +16607,13 @@ Rectangle {
                                         title: "Guides & Aspect"
                                         expanded: true
                                         onToggled: expanded = !expanded
-                                        RowLayout {
+                                        Label { text: "Guide"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
+                                        ToneComboBox {
+                                            objectName: "cropGuideModeComboBox"
                                             Layout.fillWidth: true
-                                            MiniButton { objectName: "cropGuideOffButton"; Layout.fillWidth: true; text: "Off"; role: "segmented"; active: root.cropGuideMode === "Off"; onClicked: root.cropGuideMode = "Off" }
-                                            MiniButton { objectName: "cropGuideThirdsButton"; Layout.fillWidth: true; text: "Thirds"; role: "segmented"; active: root.cropGuideMode === "Thirds"; onClicked: root.cropGuideMode = "Thirds" }
-                                            MiniButton { objectName: "cropGuideGoldenButton"; Layout.fillWidth: true; text: "Golden"; role: "segmented"; active: root.cropGuideMode === "Golden Ratio"; onClicked: root.cropGuideMode = "Golden Ratio" }
-                                        }
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            MiniButton { objectName: "cropGuideCenterButton"; Layout.fillWidth: true; text: "Center"; role: "segmented"; active: root.cropGuideMode === "Center"; onClicked: root.cropGuideMode = "Center" }
-                                            MiniButton { objectName: "cropGuideDiagonalButton"; Layout.fillWidth: true; text: "Diag"; role: "segmented"; active: root.cropGuideMode === "Diagonal"; onClicked: root.cropGuideMode = "Diagonal" }
-                                            MiniButton { objectName: "cropGuideSpiralButton"; Layout.fillWidth: true; text: "Spiral"; role: "segmented"; active: root.cropGuideMode === "Golden Spiral"; onClicked: root.cropGuideMode = "Golden Spiral" }
+                                            model: root.cropGuideModes()
+                                            currentIndex: root.cropGuideModeIndex()
+                                            onActivated: root.setCropGuideMode(currentText)
                                         }
                                         Label { text: "Aspect"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
                                         ToneComboBox {
@@ -5764,23 +16670,24 @@ Rectangle {
                                         AdjustSlider { label: "H Guide"; from: -45; to: 45; value: editorPreview.uprightHorizontalGuideAngle; valueText: Math.round(editorPreview.uprightHorizontalGuideAngle) + " deg"; onValueDragged: function(value) { editorPreview.uprightHorizontalGuideAngle = value } }
                                         MiniButton { Layout.fillWidth: true; text: "Straighten Horizon"; role: "secondary"; enabled: editorPreview.hasAsset && Math.abs(editorPreview.uprightHorizontalGuideAngle) > 0.05; onClicked: editorPreview.straightenFromHorizonAngle(editorPreview.uprightHorizontalGuideAngle) }
                                         MiniButton { Layout.fillWidth: true; text: "Apply Upright"; role: "secondary"; onClicked: editorPreview.applyGuidedUpright() }
-                                        MiniButton { Layout.fillWidth: true; text: "Crop Fill"; role: "segmented"; active: editorPreview.contentAwareCropFill; onClicked: editorPreview.contentAwareCropFill = !editorPreview.contentAwareCropFill }
-                                        AdjustSlider { label: "Rotate"; from: -45; to: 45; stepSize: 0.1; value: editorPreview.transformRotation; valueText: editorPreview.transformRotation.toFixed(1) + " deg"; onValueDragged: function(value) { editorPreview.transformRotation = value } }
-                                        AdjustSlider { objectName: "transformScaleSlider"; label: "Scale"; from: 0.25; to: 4; stepSize: 0.01; defaultValue: 1; value: editorPreview.transformScale; valueText: editorPreview.transformScale.toFixed(2) + "x"; onValueDragged: function(value) { editorPreview.transformScale = value } }
-                                        AdjustSlider { label: "Vertical"; from: -100; to: 100; value: editorPreview.perspectiveVertical; valueText: root.signedPercent(editorPreview.perspectiveVertical); onValueDragged: function(value) { editorPreview.perspectiveVertical = value } }
-                                        AdjustSlider { label: "Horizontal"; from: -100; to: 100; value: editorPreview.perspectiveHorizontal; valueText: root.signedPercent(editorPreview.perspectiveHorizontal); onValueDragged: function(value) { editorPreview.perspectiveHorizontal = value } }
-                                        AdjustSlider { label: "Skew X"; from: -100; to: 100; value: editorPreview.transformSkewX; valueText: root.signedPercent(editorPreview.transformSkewX); onValueDragged: function(value) { editorPreview.transformSkewX = value } }
-                                        AdjustSlider { label: "Skew Y"; from: -100; to: 100; value: editorPreview.transformSkewY; valueText: root.signedPercent(editorPreview.transformSkewY); onValueDragged: function(value) { editorPreview.transformSkewY = value } }
+                                        MiniButton { objectName: "contentAwareCropFillButton"; Layout.fillWidth: true; text: "Crop Fill"; role: "segmented"; active: root.primaryBoolAdjustmentValue("contentAwareCropFill", editorPreview.contentAwareCropFill); onClicked: root.setPrimaryBoolAdjustmentValue("contentAwareCropFill", !root.primaryBoolAdjustmentValue("contentAwareCropFill", editorPreview.contentAwareCropFill)) }
+                                        AdjustSlider { objectName: "transformRotationSlider"; label: "Rotate"; from: -45; to: 45; stepSize: 0.1; value: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation); valueText: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation).toFixed(1) + " deg"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformRotation", value) } }
+                                        AdjustSlider { objectName: "transformScaleSlider"; label: "Scale"; from: 0.25; to: 4; stepSize: 0.01; defaultValue: 1; value: root.primaryAdjustmentValue("transformScale", editorPreview.transformScale); valueText: root.primaryAdjustmentValue("transformScale", editorPreview.transformScale).toFixed(2) + "x"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformScale", value) } }
+                                        AdjustSlider { objectName: "perspectiveVerticalSlider"; label: "Vertical"; from: -100; to: 100; value: root.primaryAdjustmentValue("perspectiveVertical", editorPreview.perspectiveVertical); valueText: root.signedPercent(root.primaryAdjustmentValue("perspectiveVertical", editorPreview.perspectiveVertical)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("perspectiveVertical", value) } }
+                                        AdjustSlider { objectName: "perspectiveHorizontalSlider"; label: "Horizontal"; from: -100; to: 100; value: root.primaryAdjustmentValue("perspectiveHorizontal", editorPreview.perspectiveHorizontal); valueText: root.signedPercent(root.primaryAdjustmentValue("perspectiveHorizontal", editorPreview.perspectiveHorizontal)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("perspectiveHorizontal", value) } }
+                                        AdjustSlider { objectName: "transformSkewXSlider"; label: "Skew X"; from: -100; to: 100; value: root.primaryAdjustmentValue("transformSkewX", editorPreview.transformSkewX); valueText: root.signedPercent(root.primaryAdjustmentValue("transformSkewX", editorPreview.transformSkewX)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformSkewX", value) } }
+                                        AdjustSlider { objectName: "transformSkewYSlider"; label: "Skew Y"; from: -100; to: 100; value: root.primaryAdjustmentValue("transformSkewY", editorPreview.transformSkewY); valueText: root.signedPercent(root.primaryAdjustmentValue("transformSkewY", editorPreview.transformSkewY)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformSkewY", value) } }
                                     }
                                     CollapsibleGroup {
                                         objectName: "cropLiquifyGroup"
+                                        visible: root.cropLiquifyToolAvailable
                                         title: "Liquify"
                                         expanded: root.cropLiquifyExpanded
                                         onToggled: root.cropLiquifyExpanded = !root.cropLiquifyExpanded
-                                        AdjustSlider { label: "Strength"; from: -100; to: 100; value: editorPreview.liquifyStrength; valueText: root.signedPercent(editorPreview.liquifyStrength); onValueDragged: function(value) { editorPreview.liquifyStrength = value } }
-                                        AdjustSlider { objectName: "liquifyRadiusSlider"; label: "Radius"; from: 0.02; to: 1; stepSize: 0.01; defaultValue: 0.25; valueInputMode: "percentNormalized"; value: editorPreview.liquifyRadius; valueText: Math.round(editorPreview.liquifyRadius * 100) + "%"; onValueDragged: function(value) { editorPreview.liquifyRadius = value } }
-                                        AdjustSlider { label: "Center X"; from: 0; to: 1; stepSize: 0.01; defaultValue: 0.5; valueInputMode: "percentNormalized"; value: editorPreview.liquifyCenterX; valueText: Math.round(editorPreview.liquifyCenterX * 100) + "%"; onValueDragged: function(value) { editorPreview.liquifyCenterX = value } }
-                                        AdjustSlider { label: "Center Y"; from: 0; to: 1; stepSize: 0.01; defaultValue: 0.5; valueInputMode: "percentNormalized"; value: editorPreview.liquifyCenterY; valueText: Math.round(editorPreview.liquifyCenterY * 100) + "%"; onValueDragged: function(value) { editorPreview.liquifyCenterY = value } }
+                                        AdjustSlider { objectName: "liquifyStrengthSlider"; label: "Strength"; from: -100; to: 100; value: root.primaryAdjustmentValue("liquifyStrength", editorPreview.liquifyStrength); valueText: root.signedPercent(root.primaryAdjustmentValue("liquifyStrength", editorPreview.liquifyStrength)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("liquifyStrength", value) } }
+                                        AdjustSlider { objectName: "liquifyRadiusSlider"; label: "Radius"; from: 0.02; to: 1; stepSize: 0.01; defaultValue: 0.25; valueInputMode: "percentNormalized"; value: root.primaryAdjustmentValue("liquifyRadius", editorPreview.liquifyRadius); valueText: Math.round(root.primaryAdjustmentValue("liquifyRadius", editorPreview.liquifyRadius) * 100) + "%"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("liquifyRadius", value) } }
+                                        AdjustSlider { objectName: "liquifyCenterXSlider"; label: "Center X"; from: 0; to: 1; stepSize: 0.01; defaultValue: 0.5; valueInputMode: "percentNormalized"; value: root.primaryAdjustmentValue("liquifyCenterX", editorPreview.liquifyCenterX); valueText: Math.round(root.primaryAdjustmentValue("liquifyCenterX", editorPreview.liquifyCenterX) * 100) + "%"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("liquifyCenterX", value) } }
+                                        AdjustSlider { objectName: "liquifyCenterYSlider"; label: "Center Y"; from: 0; to: 1; stepSize: 0.01; defaultValue: 0.5; valueInputMode: "percentNormalized"; value: root.primaryAdjustmentValue("liquifyCenterY", editorPreview.liquifyCenterY); valueText: Math.round(root.primaryAdjustmentValue("liquifyCenterY", editorPreview.liquifyCenterY) * 100) + "%"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("liquifyCenterY", value) } }
                                     }
                                 }
                             }
@@ -5803,25 +16710,47 @@ Rectangle {
                                         font.pixelSize: 10
                                         elide: Text.ElideRight
                                     }
-                                    RowLayout {
+                                    Label {
+                                        objectName: "scopeProofingStatusLabel"
                                         Layout.fillWidth: true
-                                        MiniButton { Layout.fillWidth: true; text: "RGB"; role: "segmented"; active: root.scopeShowRgb; onClicked: root.scopeShowRgb = !root.scopeShowRgb }
-                                        MiniButton { Layout.fillWidth: true; text: "Luma"; role: "segmented"; active: root.scopeShowLuma; onClicked: root.scopeShowLuma = !root.scopeShowLuma }
-                                        MiniButton { Layout.fillWidth: true; text: root.scopeLogHistogram ? "Log" : "Linear"; role: "segmented"; active: root.scopeLogHistogram; onClicked: root.scopeLogHistogram = !root.scopeLogHistogram }
+                                        text: root.proofingStatusText()
+                                        color: editorPreview.softProofEnabled ? theme.accentCool400 : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                        elide: Text.ElideRight
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        MiniButton { Layout.fillWidth: true; text: "Density"; role: "segmented"; active: root.scopeShowDensity; onClicked: root.scopeShowDensity = !root.scopeShowDensity }
-                                        MiniButton { Layout.fillWidth: true; text: "Trace"; role: "segmented"; active: root.scopeShowTrace; onClicked: root.scopeShowTrace = !root.scopeShowTrace }
-                                        MiniButton { Layout.fillWidth: true; text: "Grid"; role: "segmented"; active: root.scopeShowGrid; onClicked: root.scopeShowGrid = !root.scopeShowGrid }
+                                        MiniButton { objectName: "scopeRgbToggle"; Layout.fillWidth: true; text: "RGB"; role: "segmented"; active: root.scopeShowRgb; onClicked: root.scopeShowRgb = !root.scopeShowRgb }
+                                        MiniButton { objectName: "scopeLumaToggle"; Layout.fillWidth: true; text: "Luma"; role: "segmented"; active: root.scopeShowLuma; onClicked: root.scopeShowLuma = !root.scopeShowLuma }
+                                        MiniButton { objectName: "scopeLogToggle"; Layout.fillWidth: true; text: root.scopeLogHistogram ? "Log" : "Linear"; role: "segmented"; active: root.scopeLogHistogram; onClicked: root.scopeLogHistogram = !root.scopeLogHistogram }
                                     }
-                                    MiniButton {
+                                    RowLayout {
                                         Layout.fillWidth: true
-                                        text: root.largeScopesMode ? "Show Image" : "Large Scopes"
-                                        iconName: "scope"
-                                        role: "secondary"
-                                        active: root.largeScopesMode
-                                        onClicked: root.largeScopesMode = !root.largeScopesMode
+                                        MiniButton { objectName: "scopeDensityToggle"; Layout.fillWidth: true; text: "Density"; role: "segmented"; active: root.scopeShowDensity; onClicked: root.scopeShowDensity = !root.scopeShowDensity }
+                                        MiniButton { objectName: "scopeTraceToggle"; Layout.fillWidth: true; text: "Trace"; role: "segmented"; active: root.scopeShowTrace; onClicked: root.scopeShowTrace = !root.scopeShowTrace }
+                                        MiniButton { objectName: "scopeGridToggle"; Layout.fillWidth: true; text: "Grid"; role: "segmented"; active: root.scopeShowGrid; onClicked: root.scopeShowGrid = !root.scopeShowGrid }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        MiniButton {
+                                            objectName: "scopesImageViewModeButton"
+                                            Layout.fillWidth: true
+                                            text: "Image"
+                                            iconName: "media"
+                                            role: "segmented"
+                                            active: root.scopesViewMode() === "image"
+                                            onClicked: root.setScopesViewMode("image")
+                                        }
+                                        MiniButton {
+                                            objectName: "scopesLargeViewModeButton"
+                                            Layout.fillWidth: true
+                                            text: "Large"
+                                            iconName: "scope"
+                                            role: "segmented"
+                                            active: root.scopesViewMode() === "large"
+                                            onClicked: root.setScopesViewMode("large")
+                                        }
                                     }
                                 }
 
@@ -5843,7 +16772,16 @@ Rectangle {
                                             ["Camera", editorPreview.cameraLabel.length > 0 ? editorPreview.cameraLabel : "DJI \"ZH20T\""],
                                             ["Lens", editorPreview.lensModel.length > 0 ? editorPreview.lensModel : "6.8-119.9 mm f/4.0"],
                                             ["Captured", editorPreview.captureDate.length > 0 ? editorPreview.captureDate : "Oct 1, 2025 9:57 PM"],
-                                            ["Color Space", editorPreview.outputColorSpace]
+                                            ["Resolution", Number(editorPreview.sourceImageWidth || 0) > 0 && Number(editorPreview.sourceImageHeight || 0) > 0
+                                             ? Math.round(editorPreview.sourceImageWidth) + " x " + Math.round(editorPreview.sourceImageHeight) + " (" + root.aspectRatioText(editorPreview.sourceImageWidth, editorPreview.sourceImageHeight) + ")"
+                                             : "Pending"],
+                                            ["Color Space", editorPreview.outputColorSpace],
+                                            ["Proofing", root.proofingStatusText()],
+                                            ["Catalog", root.formatInt(catalogAssets.assetCount) + " visible / " + root.formatInt(catalogAssets.totalAssetCount) + " total"],
+                                            ["Review", catalogAssets.reviewFilter === "all" && catalogAssets.minimumRatingFilter === 0
+                                             ? root.formatInt(catalogAssets.visiblePickedCount) + " picked, " + root.formatInt(catalogAssets.visibleRatedCount) + " rated"
+                                             : "Filter " + catalogAssets.reviewFilter + (catalogAssets.minimumRatingFilter > 0 ? ", " + catalogAssets.minimumRatingFilter + "+ stars" : "")],
+                                            ["Project", catalogAssets.projectFilter === "all" ? "All Projects" : catalogAssets.projectFilter]
                                         ]
                                         RowLayout {
                                             required property var modelData
@@ -5858,10 +16796,22 @@ Rectangle {
                     }
 
                     RowLayout {
+                        objectName: "editInspectorFooter"
                         Layout.fillWidth: true
-                        MiniButton { Layout.preferredWidth: 74; text: "Reset"; role: "secondary"; onClicked: editorPreview.resetAdjustments() }
-                        MiniButton { Layout.fillWidth: true; text: "Save Preset"; role: "secondary"; onClicked: editorPreview.savePreset("Quick Preset", true) }
-                        MiniButton { Layout.fillWidth: true; text: "Export"; role: "primary"; active: true; onClicked: root.assetActivated("export") }
+                        MiniButton {
+                            objectName: "editInspectorResetButton"
+                            Layout.preferredWidth: 34
+                            square: true
+                            text: "Reset"
+                            iconName: "reset"
+                            role: "icon"
+                            tooltip: "Reset all edit settings and the preview view."
+                            onClicked: {
+                                editorPreview.resetAdjustments()
+                                editViewport.resetView()
+                            }
+                        }
+                        MiniButton { objectName: "editInspectorSavePresetButton"; Layout.fillWidth: true; text: "Save Preset"; role: "secondary"; onClicked: root.saveStudioPreset() }
                     }
                 }
             }

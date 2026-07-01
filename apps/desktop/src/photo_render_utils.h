@@ -1,5 +1,6 @@
 #pragma once
 
+#include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
 
 #include <QColorSpace>
@@ -26,8 +27,13 @@ struct RenderBackendTelemetry final {
   QString fallback_reason;
 };
 
+struct RenderMaskOptions final {
+  bool rebuild_editable_masks_at_output_resolution = false;
+};
+
 [[nodiscard]] bool preview_supported(const QString& file_path);
 [[nodiscard]] bool render_backend_available(RenderBackendPreference backend_preference);
+[[nodiscard]] QString render_backend_unavailable_reason(RenderBackendPreference backend_preference);
 [[nodiscard]] bool decode_source_image(
     const QString& file_path,
     QImage* image,
@@ -46,7 +52,10 @@ struct RenderBackendTelemetry final {
     const QColorSpace& target_color_space,
     QImage::Format output_format = QImage::Format_ARGB32,
     const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
-    RenderBackendTelemetry* telemetry = nullptr);
+    RenderBackendTelemetry* telemetry = nullptr,
+    RenderMaskOptions mask_options = {},
+    photo_editor::pipeline::RemovalQuality removal_quality =
+        photo_editor::pipeline::RemovalQuality::Final);
 [[nodiscard]] QImage render_output_image_with_backend(
     const QImage& image,
     const RenderEditState& state,
@@ -54,7 +63,10 @@ struct RenderBackendTelemetry final {
     QImage::Format output_format,
     RenderBackendPreference backend_preference,
     const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
-    RenderBackendTelemetry* telemetry = nullptr);
+    RenderBackendTelemetry* telemetry = nullptr,
+    RenderMaskOptions mask_options = {},
+    photo_editor::pipeline::RemovalQuality removal_quality =
+        photo_editor::pipeline::RemovalQuality::Final);
 void apply_color_adjustments(QImage* image, const RenderEditState& state);
 
 }  // namespace photo_editor::desktop

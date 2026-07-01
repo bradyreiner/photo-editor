@@ -45,14 +45,17 @@ Rectangle {
     readonly property bool polygonDrawArmed: transientMaskTool === "polygon"
     readonly property bool lassoDrawArmed: transientMaskTool === "lasso"
     readonly property bool cloneSourcePickArmed: transientMaskTool === "clone-source" ||
-                                                 (optionModifierActive &&
-                                                  !controlModifierActive &&
-                                                  editorPreview.activeMaskKind === "brush" &&
-                                                  editorPreview.activeMaskRetouchMode === "clone" &&
-                                                  !objectPickArmed &&
-                                                  !polygonDrawArmed &&
-                                                  !lassoDrawArmed)
+                                                  (optionModifierActive &&
+                                                   !controlModifierActive &&
+                                                   editorPreview.activeMaskKind === "brush" &&
+                                                   editorPreview.activeMaskRetouchMode === "clone" &&
+                                                   !objectPickArmed &&
+                                                   !polygonDrawArmed &&
+                                                   !lassoDrawArmed)
     property real selectionOutlinePhase: 0
+    readonly property int selectionOutlineAnimationPointBudget: 1800
+    readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
+    readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
     property string cropGuideMode: "Thirds"
     property string compareViewMode: "side-by-side"
     property real compareWipePosition: 0.5
@@ -111,6 +114,27 @@ Rectangle {
     property string inspectorMode: "adjust"
     property string inspectorTab: "adjust"
     property bool batchToolsExpanded: false
+    property bool agentStyleBuilderExpanded: false
+    property string agentRunMode: "draft"
+    property string agentStyleDraftName: ""
+    property string agentStyleDraftGoal: ""
+    property bool agentStyleAllowRaw: true
+    property bool agentStyleAllowGlobalColor: true
+    property bool agentStyleAllowCurves: true
+    property bool agentStyleAllowHsl: true
+    property bool agentStyleAllowColorGrading: true
+    property bool agentStyleAllowDetail: true
+    property bool agentStyleAllowCrop: true
+    property bool agentStyleAllowMasks: false
+    property bool agentStyleAllowRetouch: false
+    property bool agentStyleAllowLayersLuts: false
+    property bool agentStyleAllowExport: false
+    property string agentStyleMaxExposureShift: "1.2"
+    property string agentStyleMaxTemperatureShift: "1800"
+    property string agentStyleMaxSaturationShift: "18"
+    property string agentStyleHighlightClipLimit: "0.5"
+    property string agentStyleShadowClipLimit: "1.0"
+    property string agentStyleSaveMessage: ""
 
     FileDialog {
         id: referenceImageDialog
@@ -140,6 +164,625 @@ Rectangle {
         return Math.max(minimum, Math.min(maximum, value))
     }
 
+    function boundedAgentNumber(text, fallback, minimum, maximum) {
+        const parsed = Number(String(text || "").trim())
+        if (!isFinite(parsed))
+            return fallback
+        return clamp(parsed, minimum, maximum)
+    }
+
+    function agentSelectedModelIndex() {
+        for (let index = 0; index < agentEdit.availableModels.length; ++index) {
+            const modelInfo = agentEdit.availableModels[index]
+            if (modelInfo.id === agentEdit.selectedModelId)
+                return index
+        }
+        return agentEdit.availableModels.length > 0 ? 0 : -1
+    }
+
+    function activeAgentModel() {
+        const selectedIndex = agentSelectedModelIndex()
+        if (selectedIndex >= 0 && selectedIndex < agentEdit.availableModels.length)
+            return agentEdit.availableModels[selectedIndex]
+        return null
+    }
+
+    function agentModelStatusText() {
+        const modelInfo = activeAgentModel()
+        if (!modelInfo)
+            return "No local model"
+        const name = modelInfo.name || modelInfo.id || "Local model"
+        const status = modelInfo.status || (modelInfo.available ? "available" : "unavailable")
+        const backend = modelInfo.backend || "local"
+        return name + " · " + status + " · " + backend
+    }
+
+    function agentModelStatusColor(modelInfo) {
+        if (!modelInfo)
+            return theme.error
+        const status = String(modelInfo.status || (modelInfo.available ? "available" : "unavailable")).toLowerCase()
+        if (status === "available")
+            return theme.success
+        if (status === "loading" || status === "busy")
+            return theme.accentCool500
+        if (status === "failed" || status === "unavailable")
+            return theme.error
+        return theme.textMuted
+    }
+
+    function agentModelStatusLabel(modelInfo) {
+        if (!modelInfo)
+            return "unavailable"
+        return String(modelInfo.status || (modelInfo.available ? "available" : "unavailable")).toLowerCase()
+    }
+
+    function agentModelDetailText(modelInfo) {
+        if (!modelInfo)
+            return ""
+        const backend = modelInfo.backend || "local"
+        const configured = modelInfo.configured ? "configured" : "built-in"
+        const reason = String(modelInfo.statusReason || "").trim()
+        return reason.length > 0 ? (backend + " · " + configured + " · " + reason) : (backend + " · " + configured)
+    }
+
+    function agentRunArtifactPath(key) {
+        const report = agentEdit.lastRunReport || ({})
+        if (report[key] !== undefined && String(report[key]).length > 0)
+            return String(report[key])
+        const artifacts = report.artifacts || ({})
+        if (artifacts[key] !== undefined && String(artifacts[key]).length > 0)
+            return String(artifacts[key])
+        return ""
+    }
+
+    function localImageUrl(path) {
+        const value = String(path || "")
+        if (value.length === 0)
+            return ""
+        if (value.indexOf("file:") === 0 || value.indexOf("qrc:") === 0 || value.indexOf("image:") === 0)
+            return value
+        return "file://" + value
+    }
+
+    function agentProofPath(role) {
+        if (role === "before")
+            return agentRunArtifactPath("beforeProofPath")
+        if (role === "after")
+            return agentRunArtifactPath("afterProofPath")
+        const current = agentRunArtifactPath("currentProofPath")
+        if (current.length > 0)
+            return current
+        const after = agentRunArtifactPath("afterProofPath")
+        if (after.length > 0)
+            return after
+        return agentRunArtifactPath("beforeProofPath")
+    }
+
+    function agentProofSource(role) {
+        return localImageUrl(agentProofPath(role))
+    }
+
+    function agentHasProofSurface() {
+        return agentProofPath("current").length > 0 ||
+               agentProofPath("before").length > 0 ||
+               agentProofPath("after").length > 0
+    }
+
+    function agentRecipeDiff() {
+        const report = agentEdit.lastRunReport || ({})
+        if (report.recipeDiff !== undefined && report.recipeDiff !== null)
+            return report.recipeDiff
+        const validation = report.validationReport || ({})
+        if (validation.recipeDiff !== undefined && validation.recipeDiff !== null)
+            return validation.recipeDiff
+        return ({})
+    }
+
+    function agentDiffGroupLabel(groupKey) {
+        const labels = ({
+            "globalTone": "Tone",
+            "raw": "RAW",
+            "whiteBalance": "White balance",
+            "curves": "Curves",
+            "color": "Color",
+            "hsl": "HSL / mixer",
+            "blackWhite": "Black and white",
+            "detail": "Detail",
+            "crop": "Crop / transform",
+            "masks": "Masks",
+            "maskStack": "Masks",
+            "retouch": "Retouch",
+            "layers": "Layers / LUTs",
+            "export": "Export"
+        })
+        return labels[groupKey] || String(groupKey)
+    }
+
+    function agentFormatDiffValue(value) {
+        if (value === undefined || value === null)
+            return "none"
+        if (typeof value === "number")
+            return Math.abs(value) >= 10 ? value.toFixed(1) : value.toFixed(2)
+        if (typeof value === "boolean")
+            return value ? "on" : "off"
+        if (Array.isArray(value))
+            return value.length + (value.length === 1 ? " item" : " items")
+        if (typeof value === "object")
+            return "changed"
+        const text = String(value)
+        return text.length > 0 ? text : "none"
+    }
+
+    function agentDiffEntrySummary(entry) {
+        if (!entry || typeof entry !== "object")
+            return "changed"
+        if (entry.before !== undefined || entry.after !== undefined)
+            return agentFormatDiffValue(entry.before) + " -> " + agentFormatDiffValue(entry.after)
+        if (entry.count !== undefined)
+            return agentFormatDiffValue(entry.count)
+        return "changed"
+    }
+
+    function agentRecipeDiffGroups() {
+        const diff = agentRecipeDiff()
+        const groups = []
+        const keys = Object.keys(diff)
+        for (let index = 0; index < keys.length; ++index) {
+            const key = keys[index]
+            const group = diff[key]
+            const fields = group && typeof group === "object" ? Object.keys(group) : []
+            if (fields.length === 0)
+                continue
+            const summaries = []
+            const limit = Math.min(fields.length, 3)
+            for (let fieldIndex = 0; fieldIndex < limit; ++fieldIndex) {
+                const field = fields[fieldIndex]
+                summaries.push(field + ": " + agentDiffEntrySummary(group[field]))
+            }
+            if (fields.length > limit)
+                summaries.push("+" + (fields.length - limit) + " more")
+            groups.push({
+                "key": key,
+                "label": agentDiffGroupLabel(key),
+                "count": fields.length,
+                "summary": summaries.join(" · ")
+            })
+        }
+        return groups
+    }
+
+    function agentHasRecipeDiff() {
+        return agentRecipeDiffGroups().length > 0
+    }
+
+    function agentAssetReports() {
+        const report = agentEdit.lastRunReport || ({})
+        if (report.assetReports !== undefined && report.assetReports !== null)
+            return report.assetReports
+        if (String(report.mode || "") === "commit" &&
+                report.assetIds !== undefined &&
+                report.assetIds !== null) {
+            const committedReports = []
+            for (let index = 0; index < report.assetIds.length; ++index)
+                committedReports.push({ "assetId": report.assetIds[index], "status": "committed" })
+            return committedReports
+        }
+        return []
+    }
+
+    function agentBatchReportWarningCount(report) {
+        if (!report || report.warnings === undefined || report.warnings === null)
+            return 0
+        return report.warnings.length
+    }
+
+    function agentBatchReportErrorCount(report) {
+        if (!report || report.errors === undefined || report.errors === null)
+            return 0
+        return report.errors.length
+    }
+
+    function agentBatchReportStatus(report) {
+        const rawStatus = String((report && report.status) || "").toLowerCase()
+        if (agentBatchReportErrorCount(report) > 0 || rawStatus === "failed" || (report && report.ok === false))
+            return "failed"
+        if (agentBatchReportWarningCount(report) > 0 && rawStatus !== "failed")
+            return "warning"
+        if (rawStatus.length > 0)
+            return rawStatus
+        return "pending"
+    }
+
+    function agentBatchStatusColor(status) {
+        const value = String(status || "").toLowerCase()
+        if (value === "drafted" || value === "validated" || value === "committed")
+            return theme.success
+        if (value === "warning")
+            return theme.warning
+        if (value === "failed")
+            return theme.error
+        return theme.textMuted
+    }
+
+    function agentBatchStatusSummaryText() {
+        const report = agentEdit.lastRunReport || ({})
+        const summary = report.batchSummary || ({})
+        if (summary.statusCounts !== undefined && summary.statusCounts !== null) {
+            const summaryParts = []
+            const summaryOrder = ["pending", "drafted", "validated", "warning", "failed", "committed"]
+            for (let index = 0; index < summaryOrder.length; ++index) {
+                const status = summaryOrder[index]
+                const count = Number(summary.statusCounts[status] || 0)
+                if (count > 0)
+                    summaryParts.push(count + " " + status)
+            }
+            if (summaryParts.length > 0)
+                return summaryParts.join(" · ")
+            if (summary.assetCount !== undefined && summary.assetCount > 0)
+                return summary.assetCount + (summary.assetCount === 1 ? " asset" : " assets")
+        }
+        const reports = agentAssetReports()
+        const counts = ({ "pending": 0, "drafted": 0, "validated": 0, "warning": 0, "failed": 0, "committed": 0 })
+        for (let index = 0; index < reports.length; ++index) {
+            const status = agentBatchReportStatus(reports[index])
+            if (counts[status] === undefined)
+                counts[status] = 0
+            counts[status] += 1
+        }
+        const labels = ({
+            "pending": "pending",
+            "drafted": "drafted",
+            "validated": "validated",
+            "warning": "warning",
+            "failed": "failed",
+            "committed": "committed"
+        })
+        const order = ["pending", "drafted", "validated", "warning", "failed", "committed"]
+        const parts = []
+        for (let index = 0; index < order.length; ++index) {
+            const status = order[index]
+            if (counts[status] > 0)
+                parts.push(counts[status] + " " + labels[status])
+        }
+        if (parts.length > 0)
+            return parts.join(" · ")
+        if (agentEdit.running && catalogAssets.selectedAssetCount > 1)
+            return catalogAssets.selectedAssetCount + " pending"
+        return ""
+    }
+
+    function agentHasBatchStatus() {
+        return agentAssetReports().length > 0 ||
+               (agentEdit.running && catalogAssets.selectedAssetCount > 1)
+    }
+
+    function agentBatchReportAssetLabel(report, index) {
+        const assetId = String((report && report.assetId) || "")
+        return assetId.length > 0 ? assetId : "Asset " + (index + 1)
+    }
+
+    function agentBatchReportDetail(report) {
+        const parts = []
+        const warningCount = agentBatchReportWarningCount(report)
+        const errorCount = agentBatchReportErrorCount(report)
+        if (errorCount > 0)
+            parts.push(errorCount + (errorCount === 1 ? " error" : " errors"))
+        if (warningCount > 0)
+            parts.push(warningCount + (warningCount === 1 ? " warning" : " warnings"))
+        if (report && report.revisionCount !== undefined && report.revisionCount > 0)
+            parts.push(report.revisionCount + (report.revisionCount === 1 ? " revision" : " revisions"))
+        if (parts.length > 0)
+            return parts.join(" · ")
+        return agentBatchReportStatus(report) === "pending" ? "waiting for agent" : "ready"
+    }
+
+    function agentRunStages() {
+        return [
+            { "key": "analyze", "label": "Analyze" },
+            { "key": "plan", "label": "Plan" },
+            { "key": "draft-recipe", "label": "Draft recipe" },
+            { "key": "render-proof", "label": "Render proof" },
+            { "key": "validate", "label": "Validate" },
+            { "key": "revise", "label": "Revise" },
+            { "key": "batch-sync", "label": "Batch sync" },
+            { "key": "outlier-correction", "label": "Outlier correction" },
+            { "key": "export-preflight", "label": "Export preflight" },
+            { "key": "ready-review", "label": "Ready for review" }
+        ]
+    }
+
+    function agentToolCalls() {
+        const report = agentEdit.lastRunReport || ({})
+        return report.toolCalls !== undefined && report.toolCalls !== null ? report.toolCalls : []
+    }
+
+    function agentReportMode() {
+        const report = agentEdit.lastRunReport || ({})
+        return String(report.mode || agentRunMode || "")
+    }
+
+    function agentToolCallMatchesStage(toolName, stageKey) {
+        const name = String(toolName || "")
+        const mode = agentReportMode()
+        if (stageKey === "analyze")
+            return name === "render_current_proof" && mode === "analyze"
+        if (stageKey === "plan")
+            return name === "validate_recipe_patch"
+        if (stageKey === "draft-recipe")
+            return name === "validate_recipe_patch"
+        if (stageKey === "render-proof")
+            return name === "render_current_proof" || name === "render_proof_and_validate"
+        if (stageKey === "validate")
+            return name === "validate_recipe_patch" ||
+                   name === "render_proof_and_validate" ||
+                   name === "validate_batch_asset" ||
+                   name === "export_preflight" ||
+                   name === "render_current_proof"
+        if (stageKey === "revise")
+            return name === "revise_recipe_patch_from_validation"
+        if (stageKey === "batch-sync")
+            return name === "apply_recipe_patch_to_selected" || name === "validate_batch_asset"
+        if (stageKey === "export-preflight")
+            return name === "export_preflight" || name === "queue_batch_export"
+        return false
+    }
+
+    function agentStageActiveKey() {
+        const status = String(agentEdit.status || "").toLowerCase()
+        if (status.indexOf("analyz") >= 0)
+            return "analyze"
+        if (status.indexOf("planning") >= 0)
+            return "plan"
+        if (status.indexOf("applying draft") >= 0)
+            return "draft-recipe"
+        if (status.indexOf("validating batch") >= 0)
+            return "validate"
+        if (status.indexOf("export preflight") >= 0 ||
+                status.indexOf("preparing export") >= 0 ||
+                status.indexOf("queueing export") >= 0)
+            return "export-preflight"
+        return ""
+    }
+
+    function agentStageHasToolCall(stageKey) {
+        const calls = agentToolCalls()
+        for (let index = 0; index < calls.length; ++index) {
+            if (agentToolCallMatchesStage(calls[index].name, stageKey))
+                return true
+        }
+        return false
+    }
+
+    function agentStageHasFailedToolCall(stageKey) {
+        const calls = agentToolCalls()
+        for (let index = 0; index < calls.length; ++index) {
+            const call = calls[index]
+            if (agentToolCallMatchesStage(call.name, stageKey) &&
+                    String(call.status || "").toLowerCase() === "failed")
+                return true
+        }
+        return false
+    }
+
+    function agentStageWarningCount(stageKey) {
+        const calls = agentToolCalls()
+        let warningCount = 0
+        for (let index = 0; index < calls.length; ++index) {
+            const call = calls[index]
+            if (!agentToolCallMatchesStage(call.name, stageKey))
+                continue
+            const outcome = call.outcome || ({})
+            warningCount += Number(outcome.warningCount || 0)
+        }
+        return warningCount
+    }
+
+    function agentStageCompletedFromReport(stageKey) {
+        const report = agentEdit.lastRunReport || ({})
+        const mode = agentReportMode()
+        if (agentStageHasToolCall(stageKey))
+            return true
+        if (stageKey === "analyze")
+            return mode === "analyze" && String(report.analysisSummary || "").length > 0
+        if (stageKey === "render-proof")
+            return agentHasProofSurface()
+        if (stageKey === "validate")
+            return report.validationReport !== undefined ||
+                   Number(report.checkedCount || 0) > 0 ||
+                   Number(report.errorCount || 0) > 0 ||
+                   Number(report.warningCount || 0) > 0
+        if (stageKey === "batch-sync")
+            return agentAssetReports().length > 0 ||
+                   Number(report.draftedCount || 0) > 0 ||
+                   Number(report.checkedCount || 0) > 0
+        if (stageKey === "export-preflight")
+            return mode === "export-preflight" || mode === "queue-export"
+        if (stageKey === "ready-review")
+            return report.ok === true && !agentEdit.running
+        return false
+    }
+
+    function agentStageStatus(stageKey) {
+        if (agentEdit.running && agentStageActiveKey() === stageKey)
+            return "active"
+        if (agentStageHasFailedToolCall(stageKey))
+            return "failed"
+        if (agentStageWarningCount(stageKey) > 0)
+            return "warning"
+        if (agentStageCompletedFromReport(stageKey))
+            return "complete"
+        return "pending"
+    }
+
+    function agentStageStatusColor(status) {
+        const value = String(status || "")
+        if (value === "active")
+            return theme.accentCool500
+        if (value === "complete")
+            return theme.success
+        if (value === "warning")
+            return theme.warning
+        if (value === "failed")
+            return theme.error
+        return theme.textMuted
+    }
+
+    function agentStageStatusLabel(status) {
+        if (status === "complete")
+            return "done"
+        return status
+    }
+
+    function agentHasStageProgress() {
+        const report = agentEdit.lastRunReport || ({})
+        return agentEdit.running ||
+               String(report.mode || "").length > 0 ||
+               agentToolCalls().length > 0
+    }
+
+    function agentScopeText() {
+        const count = catalogAssets.selectedAssetCount
+        if (count > 1)
+            return "Selected assets · " + count
+        if (count === 1)
+            return "Current photo · " + catalogAssets.selectedAssetId
+        return "No selected photos"
+    }
+
+    function agentRunHistory() {
+        return agentEdit.runHistory || []
+    }
+
+    function agentRunHistoryStatusColor(entry) {
+        if (!entry || entry.ok !== true)
+            return theme.error
+        const warningCount = Number(entry.warningCount || 0)
+        if (warningCount > 0)
+            return theme.warning
+        return theme.success
+    }
+
+    function agentRunHistoryTitle(entry) {
+        const mode = agentRunModeLabel(String(entry.mode || ""))
+        const scope = String(entry.scope || "")
+        return scope.length > 0 ? mode + " · " + scope : mode
+    }
+
+    function agentRunHistoryDetail(entry) {
+        const assetCount = Number(entry.assetCount || 0)
+        const durationMs = Number(entry.durationMs || 0)
+        const queueWaitMs = Number(entry.queueWaitMs || 0)
+        const warnings = Number(entry.warningCount || 0)
+        const parts = []
+        if (assetCount > 0)
+            parts.push(assetCount + " assets")
+        if (durationMs >= 0)
+            parts.push(durationMs + " ms")
+        if (queueWaitMs > 0)
+            parts.push("queued " + queueWaitMs + " ms")
+        if (warnings > 0)
+            parts.push(warnings + " warnings")
+        return parts.join(" · ")
+    }
+
+    function agentRunModeLabel(mode) {
+        if (mode === "analyze")
+            return "Analyze"
+        if (mode === "validate-batch")
+            return "Batch Check"
+        if (mode === "export-preflight")
+            return "Export Check"
+        return "Draft"
+    }
+
+    function agentRunModeIcon(mode) {
+        if (mode === "analyze")
+            return "filter"
+        if (mode === "validate-batch")
+            return "check"
+        if (mode === "export-preflight")
+            return "export"
+        return "adjust"
+    }
+
+    function agentRecipeBaseModeLabel(mode) {
+        if (mode === "neutral")
+            return "Neutral"
+        return "Current"
+    }
+
+    function agentRecipeBaseModeIcon(mode) {
+        if (mode === "neutral")
+            return "reset"
+        return "layers"
+    }
+
+    function agentCanRunMode(mode) {
+        if (!editorPreview.hasAsset || agentEdit.running)
+            return false
+        if (mode === "analyze")
+            return catalogAssets.selectedAssetCount === 1
+        return catalogAssets.selectedAssetCount >= 1
+    }
+
+    function runSelectedAgentMode() {
+        if (!agentCanRunMode(agentRunMode))
+            return
+        if (agentRunMode === "analyze") {
+            agentEdit.analyzeSelected()
+        } else if (agentRunMode === "validate-batch") {
+            agentEdit.validateBatchForSelected()
+        } else if (agentRunMode === "export-preflight") {
+            agentEdit.exportPreflightForSelected()
+        } else {
+            agentEdit.runDraftOnSelected(agentEdit.userInstructions)
+        }
+    }
+
+    function createAgentStyleFromDraft() {
+        const result = agentEdit.createStyle(
+                    agentStyleDraftName,
+                    agentStyleDraftGoal,
+                    {
+                        "raw": agentStyleAllowRaw,
+                        "global_color": agentStyleAllowGlobalColor,
+                        "curves": agentStyleAllowCurves,
+                        "hsl": agentStyleAllowHsl,
+                        "color_grading": agentStyleAllowColorGrading,
+                        "detail": agentStyleAllowDetail,
+                        "crop": agentStyleAllowCrop ? "conservative" : false,
+                        "masks": agentStyleAllowMasks,
+                        "retouch": agentStyleAllowRetouch ? "minor_cleanup_only" : false,
+                        "layers_luts": agentStyleAllowLayersLuts,
+                        "export": agentStyleAllowExport
+                    },
+                    {
+                        "avoid_clipped_highlights": true,
+                        "avoid_crushed_blacks": true,
+                        "max_exposure_shift": boundedAgentNumber(agentStyleMaxExposureShift, 1.2, 0, 5),
+                        "max_temperature_shift": boundedAgentNumber(agentStyleMaxTemperatureShift, 1800, 0, 10000),
+                        "max_saturation_shift": boundedAgentNumber(agentStyleMaxSaturationShift, 18, 0, 100)
+                    },
+                    {
+                        "highlight_clip_limit_percent": boundedAgentNumber(agentStyleHighlightClipLimit, 0.5, 0, 10),
+                        "shadow_clip_limit_percent": boundedAgentNumber(agentStyleShadowClipLimit, 1.0, 0, 10),
+                        "require_before_after_proof": true
+                    },
+                    {
+                        "cluster_by_lighting": true,
+                        "maintain_sequence_consistency": true,
+                        "correct_outliers_individually": true
+                    })
+        if (result.ok) {
+            agentStyleSaveMessage = "Saved " + agentStyleDraftName.trim()
+            agentStyleDraftName = ""
+            agentStyleDraftGoal = ""
+            agentStyleBuilderExpanded = false
+        } else {
+            agentStyleSaveMessage = result.errors !== undefined ? result.errors.join("\n") : "Unable to save style"
+        }
+    }
+
     function clearTransientTools() {
         transientMaskTool = ""
         editorPreview.clearSmartSelectPreview()
@@ -162,6 +805,43 @@ Rectangle {
 
     function manualSelectionSubtractActive() {
         return optionModifierActive && !controlModifierActive
+    }
+
+    function activePolygonShortcutReady() {
+        return inspectorMode === "masks" &&
+               editorPreview.hasActiveMask &&
+               editorPreview.activeMaskKind === "polygon"
+    }
+
+    function completeActivePolygonSelection() {
+        if (!activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount < 3 ||
+                editorPreview.activeMaskPolygonSelfIntersecting)
+            return false
+        clearTransientTools()
+        inspectorTab = "masks"
+        inspectorMode = "masks"
+        return true
+    }
+
+    function activePolygonSnapClose(normalizedX, normalizedY, canvasWidth, canvasHeight) {
+        if (!activePolygonShortcutReady() ||
+                editorPreview.activeMaskPolygonPointCount < 3 ||
+                editorPreview.activeMaskPolygonSelfIntersecting)
+            return false
+        const points = editorPreview.activeMaskPolygonPoints || []
+        if (points.length < 3)
+            return false
+        const first = points[0]
+        const dx = (Number(normalizedX) - Number(first.x || 0)) * Math.max(1, Number(canvasWidth || 1))
+        const dy = (Number(normalizedY) - Number(first.y || 0)) * Math.max(1, Number(canvasHeight || 1))
+        return Math.sqrt(dx * dx + dy * dy) <= 18
+    }
+
+    function completeActivePolygonIfSnappingToFirst(normalizedX, normalizedY, canvasWidth, canvasHeight) {
+        if (!activePolygonSnapClose(normalizedX, normalizedY, canvasWidth, canvasHeight))
+            return false
+        return completeActivePolygonSelection()
     }
 
     function syncTemporaryBrushModifierState() {
@@ -270,7 +950,7 @@ Rectangle {
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "red-eye")
             return "Red-Eye Removal"
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "skin-cleanup")
-            return "Skin Cleanup"
+            return "Skin Cleanup (Heuristic)"
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskRetouchMode === "frequency-smoothing")
             return "Frequency Smoothing"
         if (editorPreview.activeMaskToolRole === "retouch" && editorPreview.activeMaskKind === "object" &&
@@ -424,6 +1104,15 @@ Rectangle {
         return theme.accentCool400
     }
 
+    function selectionOperationOverlayColor(operationName) {
+        const operation = String(operationName || "add").trim().toLowerCase()
+        if (operation === "subtract")
+            return "#ff8a4c"
+        if (operation === "intersect")
+            return "#8fa8ff"
+        return "#24dcc2"
+    }
+
     function previewStatusText() {
         if (inspectorMode !== "masks" || !editorPreview.hasAsset)
             return editorPreview.processing ? "" : editorPreview.status
@@ -479,17 +1168,17 @@ Rectangle {
 
     function aiMaskLabel(kind) {
         if (kind === "sky")
-            return "Sky"
+            return "Sky (Heuristic)"
         if (kind === "background")
-            return "Background"
+            return "Background (Subject Invert)"
         if (kind === "people")
-            return "People"
+            return "People (Unsupported)"
         if (kind === "face")
-            return "Face"
+            return "Face (Unsupported)"
         if (kind === "hair")
-            return "Hair"
+            return "Hair (Unsupported)"
         if (kind === "clothing")
-            return "Clothing"
+            return "Clothing (Unsupported)"
         if (kind === "object")
             return "Object"
         return "Subject"
@@ -498,10 +1187,10 @@ Rectangle {
     function maskAccent(mask) {
         if (!mask)
             return "#8ab8d8"
-        if (mask.operation === "subtract")
-            return "#d36a5e"
-        if (mask.operation === "intersect")
-            return "#6fa96d"
+        if (mask.toolRole !== "retouch" &&
+                (mask.operation === "add" || mask.operation === "subtract" ||
+                 mask.operation === "intersect"))
+            return selectionOperationOverlayColor(mask.operation)
         if (mask.toolRole === "retouch" && mask.retouchMode === "clone")
             return theme.accentWarm500
         if (mask.toolRole === "retouch" && mask.retouchMode === "heal")
@@ -604,7 +1293,8 @@ Rectangle {
         const viewportWidth = Math.max(1, previewSurface.width - 4);
         const viewportHeight = Math.max(1, previewSurface.height - 4);
         const compareWidth = sideBySideCompareEnabled() ? Math.max(1, (viewportWidth - 8) / 2) : viewportWidth;
-        const zoomMultiplier = fitToView ? 1.0 : Math.min(2.0, Math.max(1.0, manualZoom));
+        const previewSupersample = 1.5;
+        const zoomMultiplier = fitToView ? previewSupersample : Math.min(3.0, Math.max(previewSupersample, manualZoom));
         editorPreview.previewTargetEdge = Math.round(Math.max(compareWidth, viewportHeight) * Screen.devicePixelRatio * zoomMultiplier);
     }
 
@@ -685,6 +1375,58 @@ Rectangle {
         return Math.min(availableWidth / imageWidth, availableHeight / imageHeight);
     }
 
+    function outlinePointCount(outlines) {
+        if (!outlines || outlines.length === undefined)
+            return 0
+        let total = 0
+        for (let i = 0; i < outlines.length; ++i) {
+            const entry = outlines[i]
+            if (!entry)
+                continue
+            if (entry.x !== undefined && entry.y !== undefined) {
+                total += 1
+            } else if (entry.length !== undefined) {
+                total += entry.length
+            }
+        }
+        return total
+    }
+
+    function activeSelectionOutlinePointCount() {
+        const pathPointCount = root.outlinePointCount(editorPreview.activeMaskOutlinePaths)
+        if (pathPointCount > 0)
+            return pathPointCount
+        return root.outlinePointCount(editorPreview.activeMaskOutlinePoints)
+    }
+
+    function smartSelectionPreviewOutlinePointCount() {
+        return root.outlinePointCount(editorPreview.smartSelectPreviewOutlinePoints)
+    }
+
+    function selectionOutlineAnimationPointCount() {
+        const activePointCount = root.activeSelectionOutlinePointCount()
+        if (activePointCount >= 2)
+            return activePointCount
+        if (objectPickArmed && editorPreview.smartSelectPreviewActive)
+            return root.smartSelectionPreviewOutlinePointCount()
+        return activePointCount
+    }
+
+    function selectionOutlineAnimationShouldRun() {
+        if (editorPreview.maskPreviewMode !== "marching-ants")
+            return false
+        if (!root.visible || (!editorPreview.hasActiveMask && !(objectPickArmed && editorPreview.smartSelectPreviewActive)))
+            return false
+        if (editorPreview.maskPreviewTemporarilyHidden === true || editorPreview.compareMode ||
+                editorPreview.cropEditing || inspectorMode !== "masks")
+            return false
+        if (editorPreview.brushStrokeActive || editorPreview.smartSelectStrokeActive ||
+                root.tabletBrushStrokeActive)
+            return false
+        const pointCount = root.selectionOutlineAnimationPointCount()
+        return pointCount >= 2 && pointCount <= root.selectionOutlineAnimationPointBudget
+    }
+
     function currentZoomLevel() {
         return fitToView ? fitZoomLevel() : manualZoom;
     }
@@ -694,7 +1436,7 @@ Rectangle {
         to: 24
         duration: 900
         loops: Animation.Infinite
-        running: false
+        running: root.selectionOutlineAnimationEnabled
     }
 
     onManualZoomChanged: {
@@ -791,21 +1533,35 @@ Rectangle {
     }
 
     function gradingPreviewColor(hueValue, saturationValue, luminanceValue) {
-        const hue = ((hueValue / 100.0) % 1.0 + 1.0) % 1.0;
+        const hue = ((hueValue % 1.0) + 1.0) % 1.0;
         const saturation = Math.max(0.18, Math.min(1.0, Math.abs(saturationValue) / 100.0));
         const lightness = Math.max(0.38, Math.min(0.76, 0.56 + luminanceValue / 280.0));
         return Qt.hsla(hue, saturation, lightness, 1.0);
     }
 
     function activeAdjustmentGroups() {
-        return selectedAdjustmentGroups.slice(0);
+        return selectedAdjustmentGroups.filter(function(groupKey) {
+            return adjustmentGroupAvailable(groupKey);
+        });
+    }
+
+    function adjustmentGroupAvailable(groupKey) {
+        return String(groupKey || "") !== "raw" || editorPreview.rawControlsAvailable;
+    }
+
+    function availableAdjustmentGroups() {
+        return adjustmentGroups.filter(function(group) {
+            return adjustmentGroupAvailable(group.key);
+        });
     }
 
     function hasAdjustmentGroup(groupKey) {
-        return selectedAdjustmentGroups.indexOf(groupKey) >= 0;
+        return adjustmentGroupAvailable(groupKey) && selectedAdjustmentGroups.indexOf(groupKey) >= 0;
     }
 
     function toggleAdjustmentGroup(groupKey) {
+        if (!adjustmentGroupAvailable(groupKey))
+            return;
         let nextGroups = selectedAdjustmentGroups.slice(0);
         const existingIndex = nextGroups.indexOf(groupKey);
         if (existingIndex >= 0) {
@@ -1060,19 +1816,14 @@ Rectangle {
         sequence: "V"
         context: Qt.WindowShortcut
         enabled: inspectorMode === "masks" && editorPreview.hasActiveMask
+        readonly property string maskPreviewDisplayCycleContract: "legacy-editview-mask-preview-cycle|overlay|outline|marching-ants|hidden:v1"
         onActivated: {
-            if (editorPreview.maskPreviewMode === "overlay")
-                editorPreview.maskPreviewMode = "grayscale"
-            else if (editorPreview.maskPreviewMode === "grayscale")
-                editorPreview.maskPreviewMode = "black-on-white"
-            else if (editorPreview.maskPreviewMode === "black-on-white")
-                editorPreview.maskPreviewMode = "white-on-black"
-            else if (editorPreview.maskPreviewMode === "white-on-black")
+            if (editorPreview.maskPreviewDisplayMode === "overlay")
+                editorPreview.maskPreviewMode = "outline"
+            else if (editorPreview.maskPreviewDisplayMode === "outline")
                 editorPreview.maskPreviewMode = "marching-ants"
-            else if (editorPreview.maskPreviewMode === "marching-ants")
-                editorPreview.maskPreviewMode = "edge"
-            else if (editorPreview.maskPreviewMode === "edge")
-                editorPreview.maskPreviewMode = "affected"
+            else if (editorPreview.maskPreviewDisplayMode === "marching-ants")
+                editorPreview.maskPreviewMode = "hidden"
             else
                 editorPreview.maskPreviewMode = "overlay"
         }
@@ -1986,9 +2737,9 @@ Rectangle {
 
                                     ActionButton {
                                         compact: true
-                                        text: "Skin"
+                                        text: "Skin (Heuristic)"
                                         iconName: "brush-tool"
-                                        tooltipText: "Skin Cleanup"
+                                        tooltipText: "Skin Cleanup (Heuristic)"
                                         accent: "#d7a08c"
                                         tone: active ? "primary" : "secondary"
                                         active: editorPreview.activeMaskToolRole === "retouch" &&
@@ -2001,9 +2752,9 @@ Rectangle {
 
                                     ActionButton {
                                         compact: true
-                                        text: "Smooth"
+                                        text: "Smooth (Experimental)"
                                         iconName: "brush-tool"
-                                        tooltipText: "Frequency Smoothing"
+                                        tooltipText: "Frequency Smoothing (Experimental)"
                                         accent: "#c994d8"
                                         tone: active ? "primary" : "secondary"
                                         active: editorPreview.activeMaskToolRole === "retouch" &&
@@ -2136,9 +2887,7 @@ Rectangle {
                         anchors.bottom: parent.bottom
                         anchors.right: sideBySideCompareEnabled() ? compareFitDivider.left : parent.right
                         anchors.rightMargin: sideBySideCompareEnabled() ? 8 : 0
-                        source: editorPreview.displayPreviewNativeAvailable && !wipeCompareEnabled()
-                                ? ""
-                                : editedDisplaySource
+                        source: editedDisplaySource
                         fillMode: Image.PreserveAspectFit
                         asynchronous: true
                         cache: false
@@ -2302,6 +3051,11 @@ Rectangle {
                         imageY: editorPreview.displayPreviewNativeAvailable ? editedPreviewFitNative.y : editedPreviewFit.y + (editedPreviewFit.height - editedPreviewFit.paintedHeight) / 2
                         imageWidth: editorPreview.displayPreviewNativeAvailable ? Math.max(0, editedPreviewFitNative.width) : Math.max(0, editedPreviewFit.paintedWidth)
                         imageHeight: editorPreview.displayPreviewNativeAvailable ? Math.max(0, editedPreviewFitNative.height) : Math.max(0, editedPreviewFit.paintedHeight)
+                        cropX: editorPreview.cropRectX
+                        cropY: editorPreview.cropRectY
+                        cropWidth: editorPreview.cropRectWidth
+                        cropHeight: editorPreview.cropRectHeight
+                        transformRotation: editorPreview.transformRotation
                     }
                 }
 
@@ -2364,9 +3118,7 @@ Rectangle {
                             y: Math.max(0, (zoomPreviewContent.height - editedPreviewZoom.height) / 2)
                             width: editedPreviewPixelWidth(editedPreviewZoom) * manualZoom
                             height: editedPreviewPixelHeight(editedPreviewZoom) * manualZoom
-                            source: editorPreview.displayPreviewNativeAvailable && !wipeCompareEnabled()
-                                    ? ""
-                                    : editedDisplaySource
+                            source: editedDisplaySource
                             fillMode: Image.Stretch
                             asynchronous: true
                             cache: false
@@ -2535,6 +3287,11 @@ Rectangle {
                             imageY: editedPreviewZoom.y
                             imageWidth: editedPreviewZoom.width
                             imageHeight: editedPreviewZoom.height
+                            cropX: editorPreview.cropRectX
+                            cropY: editorPreview.cropRectY
+                            cropWidth: editorPreview.cropRectWidth
+                            cropHeight: editorPreview.cropRectHeight
+                            transformRotation: editorPreview.transformRotation
                         }
                     }
                 }
@@ -3216,6 +3973,7 @@ Rectangle {
                             Repeater {
                                 model: [
                                     { "key": "adjust", "label": "ADJUST" },
+                                    { "key": "agent", "label": "AGENT" },
                                     { "key": "masks", "label": "MASKS" },
                                     { "key": "scopes", "label": "SCOPES" },
                                     { "key": "info", "label": "INFO" }
@@ -3498,7 +4256,7 @@ Rectangle {
                                         spacing: 4
 
                                         Repeater {
-                                            model: adjustmentGroups
+                                            model: availableAdjustmentGroups()
 
                                             delegate: ActionButton {
                                                 required property var modelData
@@ -3635,6 +4393,1027 @@ Rectangle {
                     Column {
                         width: inspectorScroll.availableWidth
                         spacing: 10
+
+                        Rectangle {
+                            width: parent.width
+                            visible: inspectorMode === "adjust" && inspectorTab === "agent"
+                            radius: 0
+                            color: theme.alpha(theme.ink950, 0.34)
+                            border.width: 1
+                            border.color: theme.alpha(theme.lineSoft, 0.28)
+                            implicitHeight: agentPanelLayout.implicitHeight + 20
+
+                            ColumnLayout {
+                                id: agentPanelLayout
+                                anchors.fill: parent
+                                anchors.margins: 10
+                                spacing: 9
+
+                                InspectorSection {
+                                    Layout.fillWidth: true
+                                    title: "Agent Run"
+                                    subtitle: agentEdit.status
+
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+
+                                        Repeater {
+                                            model: agentEdit.availableStyles
+
+                                            delegate: ActionButton {
+                                                required property var modelData
+
+                                                text: modelData.name || modelData.id
+                                                compact: true
+                                                active: agentEdit.selectedStyleId === modelData.id
+                                                onClicked: agentEdit.selectedStyleId = modelData.id
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: {
+                                            for (let index = 0; index < agentEdit.availableStyles.length; ++index) {
+                                                const style = agentEdit.availableStyles[index]
+                                                if (style.id === agentEdit.selectedStyleId)
+                                                    return style.goal || ""
+                                            }
+                                            return ""
+                                        }
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: agentStyleBuilderExpanded ? "Hide Style Builder" : "Create Style"
+                                        iconName: "plus"
+                                        compact: true
+                                        enabled: !agentEdit.running
+                                        onClicked: agentStyleBuilderExpanded = !agentStyleBuilderExpanded
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 7
+                                        visible: agentStyleBuilderExpanded
+
+                                        ToneTextField {
+                                            Layout.fillWidth: true
+                                            text: agentStyleDraftName
+                                            placeholderText: "Style name"
+                                            enabled: !agentEdit.running
+                                            onTextEdited: agentStyleDraftName = text
+                                        }
+
+                                        TextArea {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 74
+                                            text: agentStyleDraftGoal
+                                            placeholderText: "Editing outcome, taste rules, and constraints"
+                                            wrapMode: TextEdit.WordWrap
+                                            enabled: !agentEdit.running
+                                            color: theme.textStrong
+                                            selectedTextColor: theme.ink950
+                                            selectionColor: theme.focusRing
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            onTextChanged: {
+                                                if (activeFocus)
+                                                    agentStyleDraftGoal = text
+                                            }
+                                            background: Rectangle {
+                                                radius: theme.radiusControl
+                                                color: theme.alpha(theme.glassBase, 0.38)
+                                                border.width: 1
+                                                border.color: theme.alpha(theme.glassEdge, 0.24)
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Allowed tools"
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+
+                                        Flow {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+
+                                            CheckBox { text: "RAW"; checked: agentStyleAllowRaw; enabled: !agentEdit.running; onToggled: agentStyleAllowRaw = checked }
+                                            CheckBox { text: "Tone/Color"; checked: agentStyleAllowGlobalColor; enabled: !agentEdit.running; onToggled: agentStyleAllowGlobalColor = checked }
+                                            CheckBox { text: "Curves"; checked: agentStyleAllowCurves; enabled: !agentEdit.running; onToggled: agentStyleAllowCurves = checked }
+                                            CheckBox { text: "HSL"; checked: agentStyleAllowHsl; enabled: !agentEdit.running; onToggled: agentStyleAllowHsl = checked }
+                                            CheckBox { text: "Grading"; checked: agentStyleAllowColorGrading; enabled: !agentEdit.running; onToggled: agentStyleAllowColorGrading = checked }
+                                            CheckBox { text: "Detail"; checked: agentStyleAllowDetail; enabled: !agentEdit.running; onToggled: agentStyleAllowDetail = checked }
+                                            CheckBox { text: "Crop"; checked: agentStyleAllowCrop; enabled: !agentEdit.running; onToggled: agentStyleAllowCrop = checked }
+                                            CheckBox { text: "Masks"; checked: agentStyleAllowMasks; enabled: !agentEdit.running; onToggled: agentStyleAllowMasks = checked }
+                                            CheckBox { text: "Retouch"; checked: agentStyleAllowRetouch; enabled: !agentEdit.running; onToggled: agentStyleAllowRetouch = checked }
+                                            CheckBox { text: "Layers/LUTs"; checked: agentStyleAllowLayersLuts; enabled: !agentEdit.running; onToggled: agentStyleAllowLayersLuts = checked }
+                                            CheckBox { text: "Export"; checked: agentStyleAllowExport; enabled: !agentEdit.running; onToggled: agentStyleAllowExport = checked }
+                                        }
+
+                                        GridLayout {
+                                            Layout.fillWidth: true
+                                            columns: 2
+                                            columnSpacing: 6
+                                            rowSpacing: 6
+
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                text: agentStyleMaxExposureShift
+                                                placeholderText: "Max exposure shift"
+                                                enabled: !agentEdit.running
+                                                onTextEdited: agentStyleMaxExposureShift = text
+                                            }
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                text: agentStyleMaxSaturationShift
+                                                placeholderText: "Max saturation shift"
+                                                enabled: !agentEdit.running
+                                                onTextEdited: agentStyleMaxSaturationShift = text
+                                            }
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                text: agentStyleMaxTemperatureShift
+                                                placeholderText: "Max temperature shift"
+                                                enabled: !agentEdit.running
+                                                onTextEdited: agentStyleMaxTemperatureShift = text
+                                            }
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                text: agentStyleHighlightClipLimit
+                                                placeholderText: "Highlight clip %"
+                                                enabled: !agentEdit.running
+                                                onTextEdited: agentStyleHighlightClipLimit = text
+                                            }
+                                            ToneTextField {
+                                                Layout.fillWidth: true
+                                                text: agentStyleShadowClipLimit
+                                                placeholderText: "Shadow clip %"
+                                                enabled: !agentEdit.running
+                                                onTextEdited: agentStyleShadowClipLimit = text
+                                            }
+                                            ActionButton {
+                                                Layout.fillWidth: true
+                                                text: "Save Style"
+                                                iconName: "save"
+                                                tone: "primary"
+                                                enabled: !agentEdit.running &&
+                                                         agentStyleDraftName.trim().length > 0 &&
+                                                         agentStyleDraftGoal.trim().length > 0
+                                                onClicked: createAgentStyleFromDraft()
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: agentStyleSaveMessage.length > 0
+                                            text: agentStyleSaveMessage
+                                            color: agentStyleSaveMessage.indexOf("Saved ") === 0 ? theme.textMuted : theme.error
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                        }
+                                    }
+
+                                    ToneComboBox {
+                                        Layout.fillWidth: true
+                                        model: agentEdit.availableModelNames
+                                        enabled: agentEdit.availableModelNames.length > 0 && !agentEdit.running
+                                        currentIndex: agentSelectedModelIndex()
+                                        onActivated: function(index) {
+                                            const modelInfo = agentEdit.availableModels[index]
+                                            if (modelInfo && modelInfo.id !== undefined)
+                                                agentEdit.selectedModelId = modelInfo.id
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        visible: agentEdit.availableModels.length > 0
+
+                                        Repeater {
+                                            model: agentEdit.availableModels
+
+                                            delegate: Rectangle {
+                                                required property int index
+                                                required property var modelData
+
+                                                Layout.fillWidth: true
+                                                implicitHeight: modelRowLayout.implicitHeight + 8
+                                                radius: theme.radiusControl
+                                                color: agentEdit.selectedModelId === String(modelData.id || "")
+                                                       ? theme.alpha(theme.focusRing, 0.12)
+                                                       : theme.alpha(theme.ink800, 0.20)
+                                                border.width: 1
+                                                border.color: agentEdit.selectedModelId === String(modelData.id || "")
+                                                              ? theme.alpha(theme.focusRing, 0.36)
+                                                              : theme.alpha(theme.lineSoft, 0.20)
+
+                                                RowLayout {
+                                                    id: modelRowLayout
+                                                    anchors.fill: parent
+                                                    anchors.margins: 4
+                                                    spacing: 6
+
+                                                    Rectangle {
+                                                        Layout.preferredWidth: 7
+                                                        Layout.preferredHeight: 7
+                                                        radius: 4
+                                                        color: agentModelStatusColor(modelData)
+                                                    }
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 1
+
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: String(modelData.name || modelData.id || "Local model")
+                                                            color: theme.textStrong
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: 11
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        Label {
+                                                            Layout.fillWidth: true
+                                                            text: agentModelDetailText(modelData)
+                                                            color: theme.textMuted
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: 9
+                                                            elide: Text.ElideRight
+                                                        }
+                                                    }
+
+                                                    Label {
+                                                        Layout.preferredWidth: 82
+                                                        text: agentModelStatusLabel(modelData)
+                                                        color: agentModelStatusColor(modelData)
+                                                        font.family: theme.fontMono
+                                                        font.pixelSize: 9
+                                                        horizontalAlignment: Text.AlignRight
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+
+                                                MouseArea {
+                                                    anchors.fill: parent
+                                                    enabled: !agentEdit.running && String(modelData.id || "").length > 0
+                                                    onClicked: agentEdit.selectedModelId = String(modelData.id || "")
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: agentScopeText()
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            elide: Text.ElideMiddle
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: agentModelStatusText()
+                                            color: {
+                                                const modelInfo = activeAgentModel()
+                                                if (!modelInfo)
+                                                    return theme.error
+                                                const status = String(modelInfo.status || "").toLowerCase()
+                                                return status === "failed" || status === "unavailable"
+                                                       ? theme.error
+                                                       : theme.textMuted
+                                            }
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignRight
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+
+                                    TextArea {
+                                        Layout.fillWidth: true
+                                        Layout.preferredHeight: 86
+                                        text: agentEdit.userInstructions
+                                        placeholderText: "Style notes"
+                                        wrapMode: TextEdit.WordWrap
+                                        enabled: !agentEdit.running
+                                        color: theme.textStrong
+                                        selectedTextColor: theme.ink950
+                                        selectionColor: theme.focusRing
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 11
+                                        onTextChanged: {
+                                            if (activeFocus)
+                                                agentEdit.userInstructions = text
+                                        }
+                                        background: Rectangle {
+                                            radius: theme.radiusControl
+                                            color: theme.alpha(theme.glassBase, 0.38)
+                                            border.width: 1
+                                            border.color: theme.alpha(theme.glassEdge, 0.24)
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Base"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+
+                                        Repeater {
+                                            model: ["current", "neutral"]
+
+                                            delegate: ActionButton {
+                                                required property string modelData
+
+                                                text: agentRecipeBaseModeLabel(modelData)
+                                                iconName: agentRecipeBaseModeIcon(modelData)
+                                                compact: true
+                                                active: agentEdit.recipeBaseMode === modelData
+                                                enabled: !agentEdit.running
+                                                onClicked: agentEdit.recipeBaseMode = modelData
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Run mode"
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+
+                                    Flow {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+
+                                        Repeater {
+                                            model: ["analyze", "draft", "validate-batch", "export-preflight"]
+
+                                            delegate: ActionButton {
+                                                required property string modelData
+
+                                                text: agentRunModeLabel(modelData)
+                                                iconName: agentRunModeIcon(modelData)
+                                                compact: true
+                                                active: agentRunMode === modelData
+                                                enabled: !agentEdit.running
+                                                onClicked: agentRunMode = modelData
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Run " + agentRunModeLabel(agentRunMode)
+                                            iconName: agentRunModeIcon(agentRunMode)
+                                            tone: "primary"
+                                            enabled: agentCanRunMode(agentRunMode)
+                                            onClicked: runSelectedAgentMode()
+                                        }
+
+                                        ActionButton {
+                                            text: "Cancel"
+                                            iconName: "close"
+                                            compact: true
+                                            enabled: agentEdit.running
+                                            onClicked: agentEdit.cancelRun("user_cancelled")
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        objectName: "agentRunStagePanel"
+                                        Layout.fillWidth: true
+                                        visible: agentHasStageProgress()
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.24)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.22)
+                                        implicitHeight: agentRunStageColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: agentRunStageColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Run stages"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    text: agentEdit.running ? agentEdit.status : "Last run"
+                                                    color: agentEdit.running ? theme.accentCool500 : theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            GridLayout {
+                                                id: agentRunStageGrid
+                                                Layout.fillWidth: true
+                                                columns: 2
+                                                columnSpacing: 6
+                                                rowSpacing: 5
+
+                                                Repeater {
+                                                    model: agentRunStages()
+
+                                                    delegate: Rectangle {
+                                                        objectName: "agentRunStageRow"
+                                                        required property var modelData
+                                                        readonly property string stageStatus: agentStageStatus(modelData.key)
+
+                                                        Layout.preferredWidth: Math.max(0, (agentRunStageGrid.width - agentRunStageGrid.columnSpacing) / 2)
+                                                        Layout.preferredHeight: 30
+                                                        radius: theme.radiusControl
+                                                        color: theme.alpha(theme.ink900, 0.24)
+                                                        border.width: 1
+                                                        border.color: theme.alpha(agentStageStatusColor(stageStatus), stageStatus === "pending" ? 0.16 : 0.36)
+
+                                                        RowLayout {
+                                                            anchors.fill: parent
+                                                            anchors.margins: 5
+                                                            spacing: 5
+
+                                                            Rectangle {
+                                                                Layout.preferredWidth: 7
+                                                                Layout.preferredHeight: 7
+                                                                radius: 4
+                                                                color: agentStageStatusColor(stageStatus)
+                                                            }
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: modelData.label
+                                                                color: theme.textMain
+                                                                font.family: theme.fontUi
+                                                                font.pixelSize: 9
+                                                                elide: Text.ElideRight
+                                                            }
+
+                                                            Label {
+                                                                text: agentStageStatusLabel(stageStatus)
+                                                                color: agentStageStatusColor(stageStatus)
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 8
+                                                                elide: Text.ElideRight
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Commit"
+                                            iconName: "check"
+                                            compact: true
+                                            enabled: agentEdit.draftActive && !agentEdit.running
+                                            onClicked: agentEdit.commitDraft(true)
+                                        }
+
+                                        ActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Revise"
+                                            iconName: "adjust"
+                                            compact: true
+                                            enabled: agentEdit.draftActive && !agentEdit.running
+                                            onClicked: agentEdit.runDraftOnSelected(agentEdit.userInstructions)
+                                        }
+
+                                        ConfirmActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Queue Export"
+                                            confirmText: "Confirm Export"
+                                            iconName: "export"
+                                            compact: true
+                                            enabled: editorPreview.hasAsset && catalogAssets.selectedAssetCount >= 1 && !agentEdit.running
+                                            helperText: "Queue selected assets after agent review"
+                                            onConfirmed: agentEdit.queueExportForSelected("", "", true)
+                                        }
+
+                                        ConfirmActionButton {
+                                            Layout.fillWidth: true
+                                            text: "Rollback"
+                                            compact: true
+                                            enabled: agentEdit.draftActive && !agentEdit.running
+                                            helperText: "Restore the pre-agent recipe"
+                                            onConfirmed: agentEdit.rollbackDraft()
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: agentEdit.lastRunReport.analysisSummary !== undefined &&
+                                                 agentEdit.lastRunReport.analysisSummary.length > 0
+                                        text: agentEdit.lastRunReport.analysisSummary || ""
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: agentEdit.lastRunReport.planSummary !== undefined &&
+                                                 agentEdit.lastRunReport.planSummary.length > 0
+                                        text: agentEdit.lastRunReport.planSummary || ""
+                                        color: theme.textMain
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    ColumnLayout {
+                                        objectName: "agentProofSurface"
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        visible: agentHasProofSurface()
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: agentProofPath("before").length > 0 &&
+                                                  agentProofPath("after").length > 0
+                                                  ? "Before / After proof"
+                                                  : "Rendered proof"
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+                                            visible: agentProofPath("before").length > 0 &&
+                                                     agentProofPath("after").length > 0
+
+                                            Repeater {
+                                                model: [
+                                                    { "role": "before", "label": "Before" },
+                                                    { "role": "after", "label": "After" }
+                                                ]
+
+                                                delegate: Rectangle {
+                                                    required property var modelData
+
+                                                    Layout.fillWidth: true
+                                                    Layout.preferredHeight: 104
+                                                    radius: theme.radiusControl
+                                                    color: theme.alpha(theme.ink950, 0.46)
+                                                    border.width: 1
+                                                    border.color: theme.alpha(theme.lineSoft, 0.24)
+                                                    clip: true
+
+                                                    Image {
+                                                        objectName: "agent" + modelData.label + "ProofImage"
+                                                        anchors.fill: parent
+                                                        anchors.margins: 2
+                                                        source: agentProofSource(modelData.role)
+                                                        fillMode: Image.PreserveAspectFit
+                                                        asynchronous: true
+                                                        cache: false
+                                                    }
+
+                                                    Rectangle {
+                                                        anchors.left: parent.left
+                                                        anchors.top: parent.top
+                                                        anchors.margins: 5
+                                                        radius: theme.radiusControl
+                                                        color: theme.alpha(theme.ink950, 0.76)
+                                                        implicitWidth: proofRoleLabel.implicitWidth + 10
+                                                        implicitHeight: 20
+
+                                                        Label {
+                                                            id: proofRoleLabel
+                                                            anchors.centerIn: parent
+                                                            text: modelData.label
+                                                            color: theme.textStrong
+                                                            font.family: theme.fontMono
+                                                            font.pixelSize: 9
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 118
+                                            radius: theme.radiusControl
+                                            color: theme.alpha(theme.ink950, 0.46)
+                                            border.width: 1
+                                            border.color: theme.alpha(theme.lineSoft, 0.24)
+                                            clip: true
+                                            visible: agentProofPath("before").length === 0 ||
+                                                     agentProofPath("after").length === 0
+
+                                            Image {
+                                                objectName: "agentCurrentProofImage"
+                                                anchors.fill: parent
+                                                anchors.margins: 2
+                                                source: agentProofSource("current")
+                                                fillMode: Image.PreserveAspectFit
+                                                asynchronous: true
+                                                cache: false
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        objectName: "agentRecipeDiffPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentHasRecipeDiff()
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.26)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.22)
+                                        implicitHeight: agentRecipeDiffColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: agentRecipeDiffColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Recipe diff"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    text: agentRecipeDiffGroups().length + " groups"
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            Repeater {
+                                                model: agentRecipeDiffGroups()
+
+                                                delegate: Rectangle {
+                                                    objectName: "agentRecipeDiffRow"
+                                                    required property var modelData
+
+                                                    Layout.fillWidth: true
+                                                    implicitHeight: Math.max(38, agentRecipeDiffRowContent.implicitHeight + 10)
+                                                    radius: theme.radiusControl
+                                                    color: theme.alpha(theme.ink900, 0.28)
+                                                    border.width: 1
+                                                    border.color: theme.alpha(theme.lineSoft, 0.18)
+
+                                                    RowLayout {
+                                                        id: agentRecipeDiffRowContent
+                                                        anchors.fill: parent
+                                                        anchors.margins: 5
+                                                        spacing: 8
+
+                                                        ColumnLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 2
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: modelData.label
+                                                                color: theme.textMain
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 10
+                                                                elide: Text.ElideRight
+                                                            }
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: modelData.summary
+                                                                color: theme.textMuted
+                                                                font.family: theme.fontUi
+                                                                font.pixelSize: 9
+                                                                wrapMode: Text.WordWrap
+                                                            }
+                                                        }
+
+                                                        Rectangle {
+                                                            radius: theme.radiusControl
+                                                            color: theme.alpha(theme.accentCool500, 0.12)
+                                                            border.width: 1
+                                                            border.color: theme.alpha(theme.accentCool500, 0.34)
+                                                            implicitWidth: Math.max(54, agentRecipeDiffCountLabel.implicitWidth + 14)
+                                                            implicitHeight: 24
+
+                                                            Label {
+                                                                id: agentRecipeDiffCountLabel
+                                                                anchors.centerIn: parent
+                                                                text: modelData.count
+                                                                color: theme.accentCool500
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 9
+                                                                horizontalAlignment: Text.AlignHCenter
+                                                            }
+                                                        }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                    Rectangle {
+                                        objectName: "agentBatchStatusPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentHasBatchStatus()
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.30)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.24)
+                                        implicitHeight: agentBatchStatusColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: agentBatchStatusColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Batch status"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    text: agentBatchStatusSummaryText()
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            Repeater {
+                                                model: agentAssetReports()
+
+                                                delegate: Rectangle {
+                                                    objectName: "agentBatchStatusRow"
+                                                    required property int index
+                                                    required property var modelData
+                                                    readonly property string batchStatus: agentBatchReportStatus(modelData)
+
+                                                    Layout.fillWidth: true
+                                                    implicitHeight: Math.max(38, agentBatchStatusRowContent.implicitHeight + 10)
+                                                    radius: theme.radiusControl
+                                                    color: theme.alpha(theme.ink900, 0.32)
+                                                    border.width: 1
+                                                    border.color: theme.alpha(agentBatchStatusColor(batchStatus), 0.38)
+
+                                                    RowLayout {
+                                                        id: agentBatchStatusRowContent
+                                                        anchors.fill: parent
+                                                        anchors.margins: 5
+                                                        spacing: 8
+
+                                                        ColumnLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 2
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: agentBatchReportAssetLabel(modelData, index)
+                                                                color: theme.textMain
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 10
+                                                                elide: Text.ElideMiddle
+                                                            }
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: agentBatchReportDetail(modelData)
+                                                                color: theme.textMuted
+                                                                font.family: theme.fontUi
+                                                                font.pixelSize: 9
+                                                                elide: Text.ElideRight
+                                                            }
+                                                        }
+
+                                                        Rectangle {
+                                                            radius: theme.radiusControl
+                                                            color: theme.alpha(agentBatchStatusColor(batchStatus), 0.14)
+                                                            border.width: 1
+                                                            border.color: theme.alpha(agentBatchStatusColor(batchStatus), 0.44)
+                                                            implicitWidth: Math.max(64, agentBatchStatusLabel.implicitWidth + 14)
+                                                            implicitHeight: 24
+
+                                                            Label {
+                                                                id: agentBatchStatusLabel
+                                                                anchors.centerIn: parent
+                                                                text: batchStatus
+                                                                color: agentBatchStatusColor(batchStatus)
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 9
+                                                                horizontalAlignment: Text.AlignHCenter
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                visible: agentAssetReports().length === 0 && agentEdit.running
+                                                text: "Waiting for per-asset run reports"
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 9
+                                                wrapMode: Text.WordWrap
+                                            }
+                                        }
+	                                    }
+
+                                    Rectangle {
+                                        objectName: "agentRunHistoryPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentRunHistory().length > 0
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.26)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.22)
+                                        implicitHeight: agentRunHistoryColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: agentRunHistoryColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Run history"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                    elide: Text.ElideRight
+                                                }
+
+                                                Label {
+                                                    text: agentRunHistory().length + " recent"
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    elide: Text.ElideRight
+                                                }
+                                            }
+
+                                            Repeater {
+                                                model: agentRunHistory().slice(0, 5)
+
+                                                delegate: Rectangle {
+                                                    objectName: "agentRunHistoryRow"
+                                                    required property var modelData
+
+                                                    Layout.fillWidth: true
+                                                    implicitHeight: Math.max(36, agentRunHistoryRowContent.implicitHeight + 10)
+                                                    radius: theme.radiusControl
+                                                    color: theme.alpha(theme.ink900, 0.28)
+                                                    border.width: 1
+                                                    border.color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.34)
+
+                                                    RowLayout {
+                                                        id: agentRunHistoryRowContent
+                                                        anchors.fill: parent
+                                                        anchors.margins: 5
+                                                        spacing: 8
+
+                                                        ColumnLayout {
+                                                            Layout.fillWidth: true
+                                                            spacing: 2
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: agentRunHistoryTitle(modelData)
+                                                                color: theme.textMain
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 10
+                                                                elide: Text.ElideRight
+                                                            }
+
+                                                            Label {
+                                                                Layout.fillWidth: true
+                                                                text: agentRunHistoryDetail(modelData)
+                                                                color: theme.textMuted
+                                                                font.family: theme.fontUi
+                                                                font.pixelSize: 9
+                                                                elide: Text.ElideRight
+                                                            }
+                                                        }
+
+                                                        Rectangle {
+                                                            radius: theme.radiusControl
+                                                            color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.14)
+                                                            border.width: 1
+                                                            border.color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.44)
+                                                            implicitWidth: Math.max(54, agentRunHistoryStatusLabel.implicitWidth + 14)
+                                                            implicitHeight: 24
+
+                                                            Label {
+                                                                id: agentRunHistoryStatusLabel
+                                                                anchors.centerIn: parent
+                                                                text: modelData.ok === true ? "ok" : "failed"
+                                                                color: agentRunHistoryStatusColor(modelData)
+                                                                font.family: theme.fontMono
+                                                                font.pixelSize: 9
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: agentEdit.lastRunReport.warnings !== undefined &&
+                                                 agentEdit.lastRunReport.warnings.length > 0
+                                        text: agentEdit.lastRunReport.warnings !== undefined
+                                              ? agentEdit.lastRunReport.warnings.join("\n")
+                                              : ""
+                                        color: theme.warning
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        visible: agentEdit.errorMessage.length > 0
+                                        text: agentEdit.errorMessage
+                                        color: theme.error
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WordWrap
+                                    }
+                                }
+                            }
+                        }
 
                         Rectangle {
                             width: parent.width
@@ -3842,96 +5621,96 @@ Rectangle {
                                                 showRgb: false
                                                 showLuminance: true
                                                 logScale: histogramLogScale
-                                                framed: false
-                                                shadowClipRatio: editorPreview.histogramSampleCount > 0
-                                                                 ? editorPreview.histogramShadowClipCount / editorPreview.histogramSampleCount
-                                                                 : 0
-                                                highlightClipRatio: editorPreview.histogramSampleCount > 0
-                                                                    ? editorPreview.histogramHighlightClipCount / editorPreview.histogramSampleCount
-                                                                    : 0
-                                            }
+                                            framed: false
+                                            shadowClipRatio: editorPreview.histogramSampleCount > 0
+                                                             ? editorPreview.histogramShadowClipCount / editorPreview.histogramSampleCount
+                                                             : 0
+                                            highlightClipRatio: editorPreview.histogramSampleCount > 0
+                                                                ? editorPreview.histogramHighlightClipCount / editorPreview.histogramSampleCount
+                                                                : 0
+                                        }
 
-                                            Canvas {
-                                                id: scopeCanvas
-                                                anchors.fill: parent
-                                                anchors.margins: 8
-                                                anchors.topMargin: 22
-                                                visible: scopeTile.modelData !== "Histogram"
+                                        Canvas {
+                                            id: scopeCanvas
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            anchors.topMargin: 22
+                                            visible: scopeTile.modelData !== "Histogram"
 
-                                                onWidthChanged: requestPaint()
-                                                onHeightChanged: requestPaint()
+                                            onWidthChanged: requestPaint()
+                                            onHeightChanged: requestPaint()
 
-                                                onPaint: {
-                                                    const ctx = getContext("2d")
-                                                    ctx.reset()
-                                                    const w = width
-                                                    const h = height
-                                                    const red = editorPreview.scopeWaveformRed || []
-                                                    const green = editorPreview.scopeWaveformGreen || []
-                                                    const blue = editorPreview.scopeWaveformBlue || []
-                                                    const luma = editorPreview.scopeWaveformLuminance || []
-                                                    const densityRed = editorPreview.scopeDensityRed || []
-                                                    const densityGreen = editorPreview.scopeDensityGreen || []
-                                                    const densityBlue = editorPreview.scopeDensityBlue || []
-                                                    const densityLuma = editorPreview.scopeDensityLuminance || []
-                                                    const vectors = editorPreview.scopeVectorscopePoints || []
-                                                    const densityLevels = 64
+                                            onPaint: {
+                                                const ctx = getContext("2d")
+                                                ctx.reset()
+                                                const w = width
+                                                const h = height
+                                                const red = editorPreview.scopeWaveformRed || []
+                                                const green = editorPreview.scopeWaveformGreen || []
+                                                const blue = editorPreview.scopeWaveformBlue || []
+                                                const luma = editorPreview.scopeWaveformLuminance || []
+                                                const densityRed = editorPreview.scopeDensityRed || []
+                                                const densityGreen = editorPreview.scopeDensityGreen || []
+                                                const densityBlue = editorPreview.scopeDensityBlue || []
+                                                const densityLuma = editorPreview.scopeDensityLuminance || []
+                                                const vectors = editorPreview.scopeVectorscopePoints || []
+                                                const densityLevels = 64
 
-                                                    function drawGrid(x, y, plotWidth, plotHeight, withLabels) {
-                                                        ctx.save()
-                                                        ctx.lineWidth = 1
-                                                        ctx.strokeStyle = theme.alpha(theme.polar, 0.075)
-                                                        for (let i = 1; i < 4; ++i) {
-                                                            const gx = Math.round(x + (plotWidth / 4) * i) + 0.5
-                                                            ctx.beginPath()
-                                                            ctx.moveTo(gx, y)
-                                                            ctx.lineTo(gx, y + plotHeight)
-                                                            ctx.stroke()
-                                                        }
-                                                        for (let i = 0; i <= 4; ++i) {
-                                                            const gy = Math.round(y + (plotHeight / 4) * i) + 0.5
-                                                            ctx.beginPath()
-                                                            ctx.moveTo(x, gy)
-                                                            ctx.lineTo(x + plotWidth, gy)
-                                                            ctx.stroke()
-                                                        }
-                                                        ctx.strokeStyle = theme.alpha(theme.lineSoft, 0.18)
-                                                        ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5,
-                                                                       Math.max(0, plotWidth - 1), Math.max(0, plotHeight - 1))
-                                                        if (withLabels) {
-                                                            ctx.fillStyle = theme.alpha(theme.textFaint, 0.44)
-                                                            ctx.font = "7px \"" + theme.fontMono + "\""
-                                                            ctx.textAlign = "left"
-                                                            ctx.textBaseline = "middle"
-                                                            const labels = [["100", 0], ["75", 0.25], ["50", 0.5], ["25", 0.75], ["0", 1]]
-                                                            for (let j = 0; j < labels.length; ++j) {
-                                                                const ly = Math.max(y + 4, Math.min(y + plotHeight - 4, y + labels[j][1] * plotHeight))
-                                                                ctx.fillText(labels[j][0], 0, ly)
-                                                            }
-                                                        }
-                                                        ctx.restore()
-                                                    }
-
-                                                    function channelValue(data, index, key) {
-                                                        if (!data || data.length === 0)
-                                                            return 0
-                                                        const raw = data[Math.max(0, Math.min(data.length - 1, index))] || 0
-                                                        const value = typeof raw === "object" ? Number(raw[key] || 0) : Number(raw || 0)
-                                                        return Math.max(0, Math.min(1, value))
-                                                    }
-
-                                                    function drawAverage(data, color, x, y, plotWidth, plotHeight, alpha, lineWidth) {
-                                                        const count = data ? data.length : 0
-                                                        if (count < 2)
-                                                            return
-                                                        const step = plotWidth / Math.max(1, count - 1)
-                                                        ctx.save()
-                                                        ctx.strokeStyle = theme.alpha(color, alpha)
-                                                        ctx.lineWidth = lineWidth
+                                                function drawGrid(x, y, plotWidth, plotHeight, withLabels) {
+                                                    ctx.save()
+                                                    ctx.lineWidth = 1
+                                                    ctx.strokeStyle = theme.alpha(theme.polar, 0.075)
+                                                    for (let i = 1; i < 4; ++i) {
+                                                        const gx = Math.round(x + (plotWidth / 4) * i) + 0.5
                                                         ctx.beginPath()
-                                                        for (let i = 0; i < count; ++i) {
-                                                            const px = x + step * i
-                                                            const py = y + plotHeight - channelValue(data, i, "avg") * plotHeight
+                                                        ctx.moveTo(gx, y)
+                                                        ctx.lineTo(gx, y + plotHeight)
+                                                        ctx.stroke()
+                                                    }
+                                                    for (let i = 0; i <= 4; ++i) {
+                                                        const gy = Math.round(y + (plotHeight / 4) * i) + 0.5
+                                                        ctx.beginPath()
+                                                        ctx.moveTo(x, gy)
+                                                        ctx.lineTo(x + plotWidth, gy)
+                                                        ctx.stroke()
+                                                    }
+                                                    ctx.strokeStyle = theme.alpha(theme.lineSoft, 0.18)
+                                                    ctx.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5,
+                                                                   Math.max(0, plotWidth - 1), Math.max(0, plotHeight - 1))
+                                                    if (withLabels) {
+                                                        ctx.fillStyle = theme.alpha(theme.textFaint, 0.44)
+                                                        ctx.font = "7px \"" + theme.fontMono + "\""
+                                                        ctx.textAlign = "left"
+                                                        ctx.textBaseline = "middle"
+                                                        const labels = [["100", 0], ["75", 0.25], ["50", 0.5], ["25", 0.75], ["0", 1]]
+                                                        for (let j = 0; j < labels.length; ++j) {
+                                                            const ly = Math.max(y + 4, Math.min(y + plotHeight - 4, y + labels[j][1] * plotHeight))
+                                                            ctx.fillText(labels[j][0], 0, ly)
+                                                        }
+                                                    }
+                                                    ctx.restore()
+                                                }
+
+                                                function channelValue(data, index, key) {
+                                                    if (!data || data.length === 0)
+                                                        return 0
+                                                    const raw = data[Math.max(0, Math.min(data.length - 1, index))] || 0
+                                                    const value = typeof raw === "object" ? Number(raw[key] || 0) : Number(raw || 0)
+                                                    return Math.max(0, Math.min(1, value))
+                                                }
+
+                                                function drawAverage(data, color, x, y, plotWidth, plotHeight, alpha, lineWidth) {
+                                                    const count = data ? data.length : 0
+                                                    if (count < 2)
+                                                        return
+                                                    const step = plotWidth / Math.max(1, count - 1)
+                                                    ctx.save()
+                                                    ctx.strokeStyle = theme.alpha(color, alpha)
+                                                    ctx.lineWidth = lineWidth
+                                                    ctx.beginPath()
+                                                    for (let i = 0; i < count; ++i) {
+                                                        const px = x + step * i
+                                                        const py = y + plotHeight - channelValue(data, i, "avg") * plotHeight
                                                             if (i === 0)
                                                                 ctx.moveTo(px, py)
                                                             else
@@ -4168,7 +5947,7 @@ Rectangle {
 
                                 InspectorSection {
                                     Layout.fillWidth: true
-                                    visible: true
+                                    visible: false
                                     title: "Layers"
                                     showAccentMarker: false
                                     uppercaseTitle: true
@@ -4933,9 +6712,29 @@ Rectangle {
                                     expandable: true
                                     expanded: false
 
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        Button { text: "Identity"; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
+                                        Button { text: "Mono"; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
+                                        Button { text: "Swap RB"; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Output Red"
+                                            color: theme.textStrong
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("red") }
+                                    }
+
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "RED FROM RED"
+                                        label: "FROM RED"
                                         valueText: Math.round(editorPreview.channelMixerRedFromRed).toString()
                                         from: -200
                                         to: 200
@@ -4946,7 +6745,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "RED FROM GREEN"
+                                        label: "FROM GREEN"
                                         valueText: Math.round(editorPreview.channelMixerRedFromGreen).toString()
                                         from: -200
                                         to: 200
@@ -4957,7 +6756,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "RED FROM BLUE"
+                                        label: "FROM BLUE"
                                         valueText: Math.round(editorPreview.channelMixerRedFromBlue).toString()
                                         from: -200
                                         to: 200
@@ -4966,9 +6765,21 @@ Rectangle {
                                         onResetRequested: editorPreview.channelMixerRedFromBlue = 0
                                     }
 
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Output Green"
+                                            color: theme.textStrong
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("green") }
+                                    }
+
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "GREEN FROM RED"
+                                        label: "FROM RED"
                                         valueText: Math.round(editorPreview.channelMixerGreenFromRed).toString()
                                         from: -200
                                         to: 200
@@ -4979,7 +6790,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "GREEN FROM GREEN"
+                                        label: "FROM GREEN"
                                         valueText: Math.round(editorPreview.channelMixerGreenFromGreen).toString()
                                         from: -200
                                         to: 200
@@ -4990,7 +6801,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "GREEN FROM BLUE"
+                                        label: "FROM BLUE"
                                         valueText: Math.round(editorPreview.channelMixerGreenFromBlue).toString()
                                         from: -200
                                         to: 200
@@ -4999,9 +6810,21 @@ Rectangle {
                                         onResetRequested: editorPreview.channelMixerGreenFromBlue = 0
                                     }
 
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Output Blue"
+                                            color: theme.textStrong
+                                            font.pixelSize: 11
+                                            font.weight: Font.DemiBold
+                                        }
+                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("blue") }
+                                    }
+
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "BLUE FROM RED"
+                                        label: "FROM RED"
                                         valueText: Math.round(editorPreview.channelMixerBlueFromRed).toString()
                                         from: -200
                                         to: 200
@@ -5012,7 +6835,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "BLUE FROM GREEN"
+                                        label: "FROM GREEN"
                                         valueText: Math.round(editorPreview.channelMixerBlueFromGreen).toString()
                                         from: -200
                                         to: 200
@@ -5023,7 +6846,7 @@ Rectangle {
 
                                     InspectorSlider {
                                         Layout.fillWidth: true
-                                        label: "BLUE FROM BLUE"
+                                        label: "FROM BLUE"
                                         valueText: Math.round(editorPreview.channelMixerBlueFromBlue).toString()
                                         from: -200
                                         to: 200
@@ -5075,12 +6898,19 @@ Rectangle {
                                     InspectorSlider { Layout.fillWidth: true; label: "SOURCE HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementSourceHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementSourceHue; onValueDragged: function(value) { editorPreview.colorReplacementSourceHue = value }; onResetRequested: editorPreview.colorReplacementSourceHue = 0 }
                                     InspectorSlider { Layout.fillWidth: true; label: "TARGET HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementTargetHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementTargetHue; onValueDragged: function(value) { editorPreview.colorReplacementTargetHue = value }; onResetRequested: editorPreview.colorReplacementTargetHue = 0.33 }
                                     InspectorSlider { Layout.fillWidth: true; label: "RANGE"; valueText: Math.round(editorPreview.colorReplacementRange).toString(); from: 1; to: 100; value: editorPreview.colorReplacementRange; onValueDragged: function(value) { editorPreview.colorReplacementRange = value }; onResetRequested: editorPreview.colorReplacementRange = 35 }
+                                    InspectorSlider { Layout.fillWidth: true; label: "SOFTNESS"; valueText: Math.round(editorPreview.colorReplacementSoftness).toString(); from: 0; to: 100; value: editorPreview.colorReplacementSoftness; onValueDragged: function(value) { editorPreview.colorReplacementSoftness = value }; onResetRequested: editorPreview.colorReplacementSoftness = 100 }
                                     InspectorSlider { Layout.fillWidth: true; label: "STRENGTH"; valueText: Math.round(editorPreview.colorReplacementStrength).toString(); from: 0; to: 100; value: editorPreview.colorReplacementStrength; onValueDragged: function(value) { editorPreview.colorReplacementStrength = value }; onResetRequested: editorPreview.colorReplacementStrength = 0 }
+                                    CheckBox { text: "Preserve Luminance"; checked: editorPreview.colorReplacementPreserveLuminance; onToggled: editorPreview.colorReplacementPreserveLuminance = checked }
+                                    CheckBox { text: "Preserve Saturation"; checked: editorPreview.colorReplacementPreserveSaturation; onToggled: editorPreview.colorReplacementPreserveSaturation = checked }
+                                    CheckBox { objectName: "colorReplaceProtectSkinCheckBox"; text: "Protect Skin"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                                    InspectorSlider { objectName: "colorReplaceSkinHueSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "PROTECTED HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
+                                    InspectorSlider { objectName: "colorReplaceSkinRangeSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "HUE RANGE"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
+                                    InspectorSlider { objectName: "colorReplaceSkinProtectionSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "PROTECTION"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
                                 }
 
                                 InspectorSection {
                                     Layout.fillWidth: true
-                                    title: "Skin Tone"
+                                    title: "Skin Protection Lab"
                                     showAccentMarker: false
                                     uppercaseTitle: true
                                     titleFontFamily: theme.fontMono
@@ -5104,14 +6934,14 @@ Rectangle {
                                             rotation: editorPreview.skinToneLineAngle - 20
                                         }
                                     }
-                                    InspectorSlider { Layout.fillWidth: true; label: "LINE HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
-                                    InspectorSlider { Layout.fillWidth: true; label: "RANGE"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
-                                    InspectorSlider { Layout.fillWidth: true; label: "STRENGTH"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
+                                    InspectorSlider { Layout.fillWidth: true; label: "PROTECTED HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
+                                    InspectorSlider { Layout.fillWidth: true; label: "HUE RANGE"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
+                                    InspectorSlider { Layout.fillWidth: true; label: "PROTECTION"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
                                 }
 
                                 InspectorSection {
                                     Layout.fillWidth: true
-                                    title: "Harmony"
+                                    title: "Harmony Lab"
                                     showAccentMarker: false
                                     uppercaseTitle: true
                                     titleFontFamily: theme.fontMono
@@ -5136,7 +6966,7 @@ Rectangle {
                                         }
                                     }
                                     InspectorSlider { Layout.fillWidth: true; label: "BASE HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorHarmonyBaseHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorHarmonyBaseHue; onValueDragged: function(value) { editorPreview.colorHarmonyBaseHue = value }; onResetRequested: editorPreview.colorHarmonyBaseHue = 0 }
-                                    InspectorSlider { Layout.fillWidth: true; label: "STRENGTH"; valueText: Math.round(editorPreview.colorHarmonyStrength).toString(); from: 0; to: 100; value: editorPreview.colorHarmonyStrength; onValueDragged: function(value) { editorPreview.colorHarmonyStrength = value }; onResetRequested: editorPreview.colorHarmonyStrength = 0 }
+                                    InspectorSlider { Layout.fillWidth: true; label: "HUE PULL"; valueText: Math.round(editorPreview.colorHarmonyStrength).toString(); from: 0; to: 100; value: editorPreview.colorHarmonyStrength; onValueDragged: function(value) { editorPreview.colorHarmonyStrength = value }; onResetRequested: editorPreview.colorHarmonyStrength = 0 }
                                 }
 
                                 InspectorSection {
@@ -5750,15 +7580,55 @@ Rectangle {
                             expandable: true
                             expanded: true
 
-                            InspectorSlider { Layout.fillWidth: true; label: "Red / Red"; valueText: Math.round(editorPreview.channelMixerRedFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromRed; onValueDragged: function(value) { editorPreview.channelMixerRedFromRed = value }; onResetRequested: editorPreview.channelMixerRedFromRed = 100 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Red / Green"; valueText: Math.round(editorPreview.channelMixerRedFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromGreen; onValueDragged: function(value) { editorPreview.channelMixerRedFromGreen = value }; onResetRequested: editorPreview.channelMixerRedFromGreen = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Red / Blue"; valueText: Math.round(editorPreview.channelMixerRedFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromBlue; onValueDragged: function(value) { editorPreview.channelMixerRedFromBlue = value }; onResetRequested: editorPreview.channelMixerRedFromBlue = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Green / Red"; valueText: Math.round(editorPreview.channelMixerGreenFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromRed; onValueDragged: function(value) { editorPreview.channelMixerGreenFromRed = value }; onResetRequested: editorPreview.channelMixerGreenFromRed = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Green / Green"; valueText: Math.round(editorPreview.channelMixerGreenFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromGreen; onValueDragged: function(value) { editorPreview.channelMixerGreenFromGreen = value }; onResetRequested: editorPreview.channelMixerGreenFromGreen = 100 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Green / Blue"; valueText: Math.round(editorPreview.channelMixerGreenFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromBlue; onValueDragged: function(value) { editorPreview.channelMixerGreenFromBlue = value }; onResetRequested: editorPreview.channelMixerGreenFromBlue = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Blue / Red"; valueText: Math.round(editorPreview.channelMixerBlueFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromRed; onValueDragged: function(value) { editorPreview.channelMixerBlueFromRed = value }; onResetRequested: editorPreview.channelMixerBlueFromRed = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Blue / Green"; valueText: Math.round(editorPreview.channelMixerBlueFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromGreen; onValueDragged: function(value) { editorPreview.channelMixerBlueFromGreen = value }; onResetRequested: editorPreview.channelMixerBlueFromGreen = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Blue / Blue"; valueText: Math.round(editorPreview.channelMixerBlueFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromBlue; onValueDragged: function(value) { editorPreview.channelMixerBlueFromBlue = value }; onResetRequested: editorPreview.channelMixerBlueFromBlue = 100 }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Button { text: "Identity"; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
+                                Button { text: "Mono"; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
+                                Button { text: "Swap RB"; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                            }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Output Red"
+                                    color: theme.textStrong
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("red") }
+                            }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerRedFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromRed; onValueDragged: function(value) { editorPreview.channelMixerRedFromRed = value }; onResetRequested: editorPreview.channelMixerRedFromRed = 100 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerRedFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromGreen; onValueDragged: function(value) { editorPreview.channelMixerRedFromGreen = value }; onResetRequested: editorPreview.channelMixerRedFromGreen = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Blue"; valueText: Math.round(editorPreview.channelMixerRedFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromBlue; onValueDragged: function(value) { editorPreview.channelMixerRedFromBlue = value }; onResetRequested: editorPreview.channelMixerRedFromBlue = 0 }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Output Green"
+                                    color: theme.textStrong
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("green") }
+                            }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerGreenFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromRed; onValueDragged: function(value) { editorPreview.channelMixerGreenFromRed = value }; onResetRequested: editorPreview.channelMixerGreenFromRed = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerGreenFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromGreen; onValueDragged: function(value) { editorPreview.channelMixerGreenFromGreen = value }; onResetRequested: editorPreview.channelMixerGreenFromGreen = 100 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Blue"; valueText: Math.round(editorPreview.channelMixerGreenFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromBlue; onValueDragged: function(value) { editorPreview.channelMixerGreenFromBlue = value }; onResetRequested: editorPreview.channelMixerGreenFromBlue = 0 }
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: "Output Blue"
+                                    color: theme.textStrong
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("blue") }
+                            }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerBlueFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromRed; onValueDragged: function(value) { editorPreview.channelMixerBlueFromRed = value }; onResetRequested: editorPreview.channelMixerBlueFromRed = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerBlueFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromGreen; onValueDragged: function(value) { editorPreview.channelMixerBlueFromGreen = value }; onResetRequested: editorPreview.channelMixerBlueFromGreen = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "From Blue"; valueText: Math.round(editorPreview.channelMixerBlueFromBlue).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromBlue; onValueDragged: function(value) { editorPreview.channelMixerBlueFromBlue = value }; onResetRequested: editorPreview.channelMixerBlueFromBlue = 100 }
                         }
 
                         InspectorSection {
@@ -5802,13 +7672,20 @@ Rectangle {
                             InspectorSlider { Layout.fillWidth: true; label: "Source Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementSourceHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementSourceHue; onValueDragged: function(value) { editorPreview.colorReplacementSourceHue = value }; onResetRequested: editorPreview.colorReplacementSourceHue = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "Target Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementTargetHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementTargetHue; onValueDragged: function(value) { editorPreview.colorReplacementTargetHue = value }; onResetRequested: editorPreview.colorReplacementTargetHue = 0.33 }
                             InspectorSlider { Layout.fillWidth: true; label: "Range"; valueText: Math.round(editorPreview.colorReplacementRange).toString(); from: 1; to: 100; value: editorPreview.colorReplacementRange; onValueDragged: function(value) { editorPreview.colorReplacementRange = value }; onResetRequested: editorPreview.colorReplacementRange = 35 }
+                            InspectorSlider { Layout.fillWidth: true; label: "Softness"; valueText: Math.round(editorPreview.colorReplacementSoftness).toString(); from: 0; to: 100; value: editorPreview.colorReplacementSoftness; onValueDragged: function(value) { editorPreview.colorReplacementSoftness = value }; onResetRequested: editorPreview.colorReplacementSoftness = 100 }
                             InspectorSlider { Layout.fillWidth: true; label: "Strength"; valueText: Math.round(editorPreview.colorReplacementStrength).toString(); from: 0; to: 100; value: editorPreview.colorReplacementStrength; onValueDragged: function(value) { editorPreview.colorReplacementStrength = value }; onResetRequested: editorPreview.colorReplacementStrength = 0 }
+                            CheckBox { objectName: "colorReplacementPreserveLuminanceCheckBox"; text: "Preserve Luminance"; checked: editorPreview.colorReplacementPreserveLuminance; onToggled: editorPreview.colorReplacementPreserveLuminance = checked }
+                            CheckBox { objectName: "colorReplacementPreserveSaturationCheckBox"; text: "Preserve Saturation"; checked: editorPreview.colorReplacementPreserveSaturation; onToggled: editorPreview.colorReplacementPreserveSaturation = checked }
+                            CheckBox { objectName: "colorReplaceProtectSkinCheckBox"; text: "Protect Skin"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                            InspectorSlider { objectName: "colorReplaceSkinHueSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Protected Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
+                            InspectorSlider { objectName: "colorReplaceSkinRangeSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Hue Range"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
+                            InspectorSlider { objectName: "colorReplaceSkinProtectionSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Protection"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
                         }
 
                         InspectorSection {
                             width: parent.width
                             visible: false && inspectorMode === "adjust"
-                            title: "Skin Tone"
+                            title: "Skin Protection Lab"
                             showAccentMarker: false
                             uppercaseTitle: true
                             titleFontFamily: theme.fontMono
@@ -5827,15 +7704,15 @@ Rectangle {
                                 border.width: 1
                                 Rectangle { anchors.centerIn: parent; width: parent.width * 0.82; height: 2; color: theme.accentWarm400; rotation: editorPreview.skinToneLineAngle - 20 }
                             }
-                            InspectorSlider { Layout.fillWidth: true; label: "Line Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Range"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Strength"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "Protected Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
+                            InspectorSlider { Layout.fillWidth: true; label: "Hue Range"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
+                            InspectorSlider { Layout.fillWidth: true; label: "Protection"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
                         }
 
                         InspectorSection {
                             width: parent.width
                             visible: false && inspectorMode === "adjust"
-                            title: "Harmony"
+                            title: "Harmony Lab"
                             showAccentMarker: false
                             uppercaseTitle: true
                             titleFontFamily: theme.fontMono
@@ -5861,7 +7738,7 @@ Rectangle {
                                 }
                             }
                             InspectorSlider { Layout.fillWidth: true; label: "Base Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorHarmonyBaseHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorHarmonyBaseHue; onValueDragged: function(value) { editorPreview.colorHarmonyBaseHue = value }; onResetRequested: editorPreview.colorHarmonyBaseHue = 0 }
-                            InspectorSlider { Layout.fillWidth: true; label: "Strength"; valueText: Math.round(editorPreview.colorHarmonyStrength).toString(); from: 0; to: 100; value: editorPreview.colorHarmonyStrength; onValueDragged: function(value) { editorPreview.colorHarmonyStrength = value }; onResetRequested: editorPreview.colorHarmonyStrength = 0 }
+                            InspectorSlider { Layout.fillWidth: true; label: "Hue Pull"; valueText: Math.round(editorPreview.colorHarmonyStrength).toString(); from: 0; to: 100; value: editorPreview.colorHarmonyStrength; onValueDragged: function(value) { editorPreview.colorHarmonyStrength = value }; onResetRequested: editorPreview.colorHarmonyStrength = 0 }
                         }
 
                         InspectorSection {
@@ -6530,10 +8407,11 @@ Rectangle {
                             InspectorSlider {
                                 Layout.fillWidth: true
                                 label: "Hue"
-                                valueText: Math.round(editorPreview.gradingShadowsHue).toString()
+                                valueInputMode: "degreesNormalized"
+                                valueText: Math.round(editorPreview.gradingShadowsHue * 360) + "\u00B0"
                                 trackColors: rainbowTrack()
-                                from: -100
-                                to: 100
+                                from: 0
+                                to: 1
                                 value: editorPreview.gradingShadowsHue
                                 onValueDragged: function(value) { editorPreview.gradingShadowsHue = value }
                                 onResetRequested: editorPreview.gradingShadowsHue = 0
@@ -6574,10 +8452,11 @@ Rectangle {
                             InspectorSlider {
                                 Layout.fillWidth: true
                                 label: "Hue"
-                                valueText: Math.round(editorPreview.gradingMidtonesHue).toString()
+                                valueInputMode: "degreesNormalized"
+                                valueText: Math.round(editorPreview.gradingMidtonesHue * 360) + "\u00B0"
                                 trackColors: rainbowTrack()
-                                from: -100
-                                to: 100
+                                from: 0
+                                to: 1
                                 value: editorPreview.gradingMidtonesHue
                                 onValueDragged: function(value) { editorPreview.gradingMidtonesHue = value }
                                 onResetRequested: editorPreview.gradingMidtonesHue = 0
@@ -6618,10 +8497,11 @@ Rectangle {
                             InspectorSlider {
                                 Layout.fillWidth: true
                                 label: "Hue"
-                                valueText: Math.round(editorPreview.gradingHighlightsHue).toString()
+                                valueInputMode: "degreesNormalized"
+                                valueText: Math.round(editorPreview.gradingHighlightsHue * 360) + "\u00B0"
                                 trackColors: rainbowTrack()
-                                from: -100
-                                to: 100
+                                from: 0
+                                to: 1
                                 value: editorPreview.gradingHighlightsHue
                                 onValueDragged: function(value) { editorPreview.gradingHighlightsHue = value }
                                 onResetRequested: editorPreview.gradingHighlightsHue = 0
@@ -6757,7 +8637,7 @@ Rectangle {
                             }
 
                             CheckBox {
-                                text: "Content-Aware Fill"
+                                text: "Local Crop Edge Fill"
                                 checked: editorPreview.contentAwareCropFill
                                 onToggled: editorPreview.contentAwareCropFill = checked
                             }

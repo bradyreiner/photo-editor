@@ -36,6 +36,15 @@ bool contains_text(const std::string& text, const std::string& expected) {
   return text.find(expected) != std::string::npos;
 }
 
+bool rect_equals(
+    const photo_editor::pipeline::RenderPixelRect& rect,
+    int x,
+    int y,
+    int width,
+    int height) {
+  return rect.x == x && rect.y == y && rect.width == width && rect.height == height;
+}
+
 }  // namespace
 
 int main() {
@@ -401,6 +410,95 @@ int main() {
        !contains_text(serialized_export_state, "\"reason\":\"mask_edit\"") ||
        !contains_text(serialized_export_state, "\"first_affected_stage\":\"mask_resolve\"")) {
     std::cerr << "expected serialized graph state to include variant, stages, dependencies, cache, and invalidation rules\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto normalized_pixel_rect = photo_editor::pipeline::pixel_rect_for_dirty_region(
+      photo_editor::pipeline::RenderDirtyRegion{
+          .x = 0.125,
+          .y = 0.25,
+          .width = 0.25,
+          .height = 0.125,
+          .full_frame = false,
+      },
+      800,
+      600);
+  if (!rect_equals(normalized_pixel_rect, 100, 150, 200, 75)) {
+    std::cerr << "expected normalized dirty regions to map to conservative pixel rects\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto expanded_rect = photo_editor::pipeline::expand_pixel_rect(
+      normalized_pixel_rect,
+      32,
+      800,
+      600);
+  if (!rect_equals(expanded_rect, 68, 118, 264, 139)) {
+    std::cerr << "expected tile padding to expand and clamp pixel rects\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto full_tiles = photo_editor::pipeline::plan_render_tiles(
+      photo_editor::pipeline::RenderTileRequest{
+          .image_width = 1000,
+          .image_height = 800,
+          .tile_size = 256,
+          .padding_px = 16,
+      });
+  if (full_tiles.size() != 16 ||
+      !rect_equals(full_tiles.front().output_rect, 0, 0, 256, 256) ||
+      !rect_equals(full_tiles.front().padded_rect, 0, 0, 272, 272) ||
+      !rect_equals(full_tiles.back().output_rect, 768, 768, 232, 32) ||
+      !rect_equals(full_tiles.back().padded_rect, 752, 752, 248, 48)) {
+    std::cerr << "expected full-frame tile plan to cover edge tiles with clamped padding\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto dirty_tiles = photo_editor::pipeline::plan_render_tiles(
+      photo_editor::pipeline::RenderTileRequest{
+          .image_width = 1000,
+          .image_height = 800,
+          .tile_size = 256,
+          .padding_px = 8,
+          .dirty_region = photo_editor::pipeline::RenderDirtyRegion{
+              .x = 0.30,
+              .y = 0.30,
+              .width = 0.02,
+              .height = 0.02,
+              .full_frame = false,
+          },
+      });
+  if (dirty_tiles.size() != 1 ||
+      dirty_tiles.front().tile_x != 1 ||
+      dirty_tiles.front().tile_y != 0 ||
+      !rect_equals(dirty_tiles.front().output_rect, 256, 0, 256, 256) ||
+      !rect_equals(dirty_tiles.front().padded_rect, 248, 0, 272, 264)) {
+    std::cerr << "expected localized dirty regions to schedule only intersecting tiles plus padding\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto prioritized_tiles = photo_editor::pipeline::plan_render_tiles(
+      photo_editor::pipeline::RenderTileRequest{
+          .image_width = 1024,
+          .image_height = 1024,
+          .tile_size = 256,
+          .padding_px = 0,
+          .visible_region = photo_editor::pipeline::RenderDirtyRegion{
+              .x = 0.375,
+              .y = 0.375,
+              .width = 0.125,
+              .height = 0.125,
+              .full_frame = false,
+          },
+          .prioritize_visible_region = true,
+      });
+  if (prioritized_tiles.size() != 16 ||
+      prioritized_tiles.front().priority != photo_editor::pipeline::RenderTilePriority::Visible ||
+      prioritized_tiles.front().tile_x != 1 ||
+      prioritized_tiles.front().tile_y != 1 ||
+      prioritized_tiles.at(1).priority != photo_editor::pipeline::RenderTilePriority::Adjacent ||
+      prioritized_tiles.back().priority != photo_editor::pipeline::RenderTilePriority::Background) {
+    std::cerr << "expected tile planner to prioritize visible tiles before adjacent and background work\n";
     return EXIT_FAILURE;
   }
 

@@ -14,10 +14,14 @@ class NullEditorPreviewTexture final : public EditorPreviewTexture {
   [[nodiscard]] bool available() const override { return false; }
   [[nodiscard]] const char* backendName() const override { return "cpu"; }
   bool upload(const QImage&) override { return false; }
+  bool uploadRegion(const QImage&, const QRect&) override { return false; }
+  bool uploadPatch(const QImage&, const QRect&) override { return false; }
   void clear() override {}
   [[nodiscard]] bool hasNativeTexture() const override { return false; }
   [[nodiscard]] quint64 nativeTextureHandle() const override { return 0; }
   [[nodiscard]] QSize nativeTextureSize() const override { return {}; }
+  [[nodiscard]] const char* nativeTextureFormatName() const override { return "none"; }
+  [[nodiscard]] int nativeTextureBytesPerPixel() const override { return 0; }
 };
 
 }  // namespace
