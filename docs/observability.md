@@ -23,6 +23,16 @@ The current implementation is intentionally minimal and vendor-neutral:
 
 - `PHOTO_EDITOR_LOG_LEVEL`
   - Supported values: `info` (default), `debug`, `trace`, `warning`, `error`
+- `PHOTO_EDITOR_OBSERVABILITY_CONSOLE`
+  - Supported values: `compact` (default), `json`, `quiet`, `over_budget`
+  - `compact` keeps the terminal readable by printing a small performance summary for structured events.
+  - `json` preserves the previous terminal behavior and prints the full structured message.
+  - `quiet` prints warnings/errors only.
+  - `over_budget` prints warnings/errors plus structured events that failed, cancelled, or exceeded
+    their latency budget.
+- `PHOTO_EDITOR_LOG_COLOR`
+  - Supported values: `auto` (default), `always`, `never`
+  - `auto` colorizes local terminal output, but respects `NO_COLOR` and `TERM=dumb`.
 - `PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY`
   - Set to `1` by the desktop app in supported dev builds so helper binaries participate in the same run.
 - `PHOTO_EDITOR_SESSION_ID`
@@ -63,6 +73,22 @@ filters:
 - catalog bootstrap failures by `event=catalog.bootstrap.failed`
 - import discovery timing by `event=catalog_import.discovery.completed`
 - job outcomes by `event=job.completed` or `event=job.failed`
+
+## Console Output
+
+The console is a live status surface; `desktop.jsonl` remains the full source of truth. In the
+default `compact` mode, structured events are projected into short lines such as:
+
+```text
+2026-07-02T10:19:33.456Z [info] photo_editor.perf: preview.render.completed stage=interactive mode=live_preview reason=slider_drag elapsed=142ms queue=9ms budget=OVER/100ms backend=metal dirty=layers_composite cache=2/6 gen=33
+```
+
+High-cardinality details such as file paths, state signatures, async job ids, full dirty-stage
+arrays, and byte counters stay in JSONL. Use `PHOTO_EDITOR_OBSERVABILITY_CONSOLE=json` when you
+need the previous full-message terminal stream. Use `over_budget` when you only want terminal
+attention for slow renders, failures, cancellations, and warnings. Repeated Qt warnings are still
+written to JSONL every time, but the terminal prints only milestone repeats so image-format noise
+does not bury performance events.
 
 ## Summarize Performance Runs
 

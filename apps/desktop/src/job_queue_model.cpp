@@ -109,9 +109,8 @@ QString cancellation_policy_signature_for_job(const QString& job_kind, const QSt
 }  // namespace
 
 JobQueueModel::JobQueueModel(QObject* parent) : QAbstractListModel(parent) {
-  (void)recoverInterruptedJobRecords(nullptr);
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &JobQueueModel::refresh);
-  reloadJobs();
+  setStatus(QStringLiteral("Jobs load after the catalog is ready."));
 }
 
 int JobQueueModel::rowCount(const QModelIndex& parent) const {
@@ -192,6 +191,11 @@ bool JobQueueModel::hasFailures() const { return failedJobCountValue() > 0; }
 QString JobQueueModel::status() const { return status_; }
 
 void JobQueueModel::refresh() {
+  reloadJobs();
+}
+
+void JobQueueModel::initializeFromStore() {
+  (void)recoverInterruptedJobRecords(nullptr);
   reloadJobs();
 }
 

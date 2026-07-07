@@ -4137,6 +4137,9 @@ QSize CarouselDocumentController::effectiveMediaSourceSize(const MediaItem& medi
   if (media.type == MediaType::Video) {
     return probeVideoSize(media.file_path);
   }
+  if (media.type != MediaType::Image || media.file_path.trimmed().isEmpty()) {
+    return {};
+  }
 
   QImageReader reader(media.file_path);
   QSize source_size = reader.size();
@@ -4458,6 +4461,9 @@ bool CarouselDocumentController::decodeEditedImage(
     bool preview,
     int max_edge) const {
   if (media.type != MediaType::Image) {
+    return false;
+  }
+  if (media.file_path.trimmed().isEmpty()) {
     return false;
   }
 

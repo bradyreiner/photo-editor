@@ -59,6 +59,7 @@ jobs:
           python3 -B scripts/perf/test-preview-release-proof-runner.py
           python3 -B scripts/perf/test-preview-release-proof-report.py
           python3 -B scripts/perf/test-desktop-preview-proof-gate.py
+          python3 -B scripts/perf/test-app-performance-suite.py
 
       - name: Validate GitHub workflows
         uses: raven-actions/actionlint@v2

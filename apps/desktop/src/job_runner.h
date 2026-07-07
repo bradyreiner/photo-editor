@@ -14,7 +14,8 @@ class JobRunner final : public QObject {
  public:
   explicit JobRunner(QObject* parent = nullptr);
 
- Q_INVOKABLE void wake();
+  Q_INVOKABLE void initializeFromStore();
+  Q_INVOKABLE void wake();
 
  private:
   void handleAsyncJobFinished();

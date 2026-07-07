@@ -3,9 +3,11 @@ use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use getrandom::getrandom;
 use serde::{Deserialize, Serialize};
+use sqlx::postgres::PgPoolOptions;
 use sqlx::{query, query_scalar};
 use time::OffsetDateTime;
 
@@ -22,6 +24,7 @@ const LOCAL_POSTGRES_LOG_DIR: &str = "logs";
 const LOCAL_POSTGRES_LOG_FILE: &str = "postgres.log";
 const LOCAL_POSTGRES_STATE_FILE: &str = "state.json";
 const LOCAL_POSTGRES_STATE_VERSION: u32 = 1;
+const LOCAL_DATABASE_HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(750);
 
 type LocalDatabaseResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -359,13 +362,28 @@ pub async fn ensure_external_database_ready(database_url: &str) -> LocalDatabase
 }
 
 async fn database_healthcheck(database_url: &str) -> bool {
-    let config = PostgresCatalogConfig {
-        database_url: database_url.to_string(),
-        max_connections: 1,
+    let pool = match PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(LOCAL_DATABASE_HEALTHCHECK_TIMEOUT)
+        .connect(database_url)
+        .await
+    {
+        Ok(pool) => pool,
+        Err(_) => return false,
     };
 
-    match CatalogService::connect(&config).await {
-        Ok(catalog) => catalog.healthcheck().await.is_ok(),
+    query("SELECT 1").execute(&pool).await.is_ok()
+}
+
+#[cfg(test)]
+async fn database_healthcheck_with_timeout(database_url: &str, timeout: Duration) -> bool {
+    match PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(timeout)
+        .connect(database_url)
+        .await
+    {
+        Ok(pool) => query("SELECT 1").execute(&pool).await.is_ok(),
         Err(_) => false,
     }
 }
@@ -539,6 +557,22 @@ mod tests {
         assert_eq!(
             redact_connection_url("postgresql://user:secret@localhost:5432/db"),
             "postgresql://user:<redacted>@localhost:5432/db"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_healthcheck_fails_fast_for_unavailable_database() {
+        let started_at = std::time::Instant::now();
+        let healthy = database_healthcheck_with_timeout(
+            &format!("postgresql://photo_editor:secret@{LOCAL_DATABASE_HOST}:1/photo_editor"),
+            Duration::from_millis(75),
+        )
+        .await;
+
+        assert!(!healthy);
+        assert!(
+            started_at.elapsed() < Duration::from_secs(2),
+            "healthcheck should not wait for SQLx's default connection timeout"
         );
     }
 }

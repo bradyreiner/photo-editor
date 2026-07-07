@@ -7,12 +7,19 @@ import "../components"
 
 Rectangle {
     id: root
+    objectName: "libraryWorkspace"
     color: "transparent"
     focus: true
 
     Theme {
         id: theme
     }
+
+    readonly property string libraryVisibilityContract: "library-visibility:v1|always:header-view-actions-filter-summary-grid-inspector|contextual:selection-toolbar-import-browser-empty-state-offline-actions|one-expansion:review-filter-selection-actions-import-actions-project-assignment-export|hover-focus:gallery-selection-keyboard-review|diagnostic:import-progress-offline-state|preserve:functionality"
+    readonly property string librarySurfaceContract: "library-surfaces:v1|browse:grid-compare-survey|filters:search-date-media-project-review-clear|inspector:preview-metadata-review-source-actions|import-browser:folder-preview-handoff|selection:batch-project-export-delete|no-elide:true|no-overlap:true"
+    readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v1|first-glance:grid-dominant-header-filters-inspector|close-inspection:search-filter-selection-review-inspector-import|clutter:one-primary-selection-action-clear-filters-disabled|interaction:search-filter-select-rate-pick-reject-edit-compare-export|text:no-elide-no-overlap|functionality:preserved"
+    readonly property string libraryPageCompletionContract: "page-completion:v1|library|sidebar:sources-projects-storage|content:grid-compare-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:view-select-refresh-filters|actions:edit-compare-export-project-delete|states:default-selected-multi-filtered-import-empty-offline"
+    readonly property string librarySearchBehaviorContract: "library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved"
 
     component InspectorRule: Rectangle {
         Theme { id: ruleTheme }
@@ -40,7 +47,9 @@ Rectangle {
             font.family: rowTheme.fontMono
             font.pixelSize: 10
             font.letterSpacing: 0.4
-            elide: Text.ElideRight
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 8
+            elide: Text.ElideNone
         }
 
         Label {
@@ -50,7 +59,9 @@ Rectangle {
             font.family: rowTheme.fontUi
             font.pixelSize: 12
             font.weight: Font.Medium
-            elide: Text.ElideRight
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
+            elide: Text.ElideNone
         }
     }
 
@@ -65,6 +76,7 @@ Rectangle {
     property string localSelectedFilePath: ""
     property string exportDestinationPath: ""
     property string catalogViewMode: "grid"
+    property string searchDraftText: catalogAssets.searchFilter
     property bool selectionModeActive: false
     property bool focusCheckEnabled: false
     readonly property var activeImportJob: {
@@ -118,6 +130,9 @@ Rectangle {
                                          || catalogAssets.reviewFilter !== "all"
                                          || catalogAssets.availabilityFilter !== "all"
                                          || catalogAssets.minimumRatingFilter > 0
+    readonly property bool librarySearchHasText: root.searchDraftText.trim().length > 0
+    readonly property bool librarySearchActive: catalogAssets.searchFilter.trim().length > 0
+    readonly property bool librarySearchPending: root.searchDraftText !== catalogAssets.searchFilter
 
     readonly property var importFilterValues: ["all", "today", "7d", "30d", "year"]
     readonly property var importFilterLabels: ["All Imports", "Today", "Last 7 Days", "Recent", "This Year"]
@@ -189,6 +204,31 @@ Rectangle {
         if (catalogAssets.minimumRatingFilter > 0)
             parts.push(minimumRatingLabels[indexForValue(minimumRatingValues, catalogAssets.minimumRatingFilter)]);
         return parts.length > 0 ? parts.join("  •  ") : "Showing all imported assets";
+    }
+
+    function librarySearchBehaviorSignature() {
+        return "library-search:v1" +
+               "|draft:" + String(root.librarySearchHasText) +
+               "|active:" + String(root.librarySearchActive) +
+               "|pending:" + String(root.librarySearchPending) +
+               "|clear-visible:" + String(root.librarySearchHasText) +
+               "|debounce:180" +
+               "|text:no-elide" +
+               "|preserve:catalogAssets.searchFilter"
+    }
+
+    function libraryWorkflowPolishSignature() {
+        return "library-workflow-polish:v1" +
+               "|search:" + (catalogAssets.searchFilter !== "" ? "active" : "idle") +
+               "|filters:" + (root.filtersActive ? "active" : "clear") +
+               "|selection-mode:" + String(root.selectionModeActive) +
+               "|selected:" + String(catalogAssets.selectedAssetCount || 0) +
+               "|view:" + root.catalogViewMode +
+               "|inspector:" + (root.hasSelection ? (catalogAssets.hasMultiSelection ? "batch" : "single") : "empty") +
+               "|import:" + String(root.importBrowserOpen) +
+               "|activity:" + String(root.libraryActivityVisible) +
+               "|clear-filters-enabled:" + String(root.filtersActive) +
+               "|preserve:search-filter-select-rate-pick-reject-edit-compare-export-import"
     }
 
     function selectionSummaryText() {
@@ -303,6 +343,56 @@ Rectangle {
                 : catalogAssets.status
     }
 
+    function importActionMenuItems() {
+        return [
+            {
+                key: "choose-folder",
+                label: "Choose Folder",
+                icon: "folder",
+                enabled: true,
+                tooltip: "Choose a folder from Finder."
+            },
+            {
+                key: "import-folder",
+                label: "Import This Folder",
+                icon: "folder",
+                enabled: root.localFolderPath.length > 0 && !catalogAssets.busy,
+                disabledReason: root.localFolderPath.length > 0
+                                ? "Import is already working."
+                                : "Choose a folder first.",
+                tooltip: "Import the currently previewed folder into the Library."
+            },
+            {
+                key: "up-one-folder",
+                label: "Up One Folder",
+                icon: "chevron-left",
+                enabled: root.localFolderUrl.length > 0,
+                disabledReason: "Choose a folder before navigating.",
+                tooltip: "Open the parent folder."
+            },
+            {
+                key: "jobs",
+                label: "Show Import Jobs",
+                icon: "clock",
+                enabled: jobQueue && jobQueue.totalJobCountForKind("catalog_import") > 0,
+                disabledReason: "No import jobs are queued.",
+                tooltip: "Open the background job view."
+            }
+        ]
+    }
+
+    function handleImportMenuAction(key) {
+        if (key === "choose-folder") {
+            chooseImportFolder()
+        } else if (key === "import-folder") {
+            importCurrentFolder()
+        } else if (key === "up-one-folder") {
+            openLocalFolder(catalogAssets.parentFolderUrl(localFolderUrl))
+        } else if (key === "jobs") {
+            openJobsWorkspace()
+        }
+    }
+
     function libraryActivityTitle() {
         if (catalogAssets.deleting) {
             const count = Math.max(1, Number(catalogAssets.deleteTargetCount || 0))
@@ -348,6 +438,8 @@ Rectangle {
     }
 
     function clearFilters() {
+        librarySearchDebounceTimer.stop();
+        root.searchDraftText = "";
         catalogAssets.searchFilter = "";
         catalogAssets.importDateFilter = "all";
         catalogAssets.captureYearFilter = "all";
@@ -356,6 +448,95 @@ Rectangle {
         catalogAssets.reviewFilter = "all";
         catalogAssets.availabilityFilter = "all";
         catalogAssets.minimumRatingFilter = 0;
+    }
+
+    function updateLibrarySearchDraft(text) {
+        root.searchDraftText = String(text || "")
+        librarySearchDebounceTimer.restart()
+    }
+
+    function applyLibrarySearchNow() {
+        librarySearchDebounceTimer.stop()
+        if (catalogAssets.searchFilter !== root.searchDraftText)
+            catalogAssets.searchFilter = root.searchDraftText
+    }
+
+    function clearLibrarySearch() {
+        librarySearchDebounceTimer.stop()
+        root.searchDraftText = ""
+        catalogAssets.searchFilter = ""
+        searchField.forceActiveFocus()
+    }
+
+    Timer {
+        id: librarySearchDebounceTimer
+        interval: 180
+        repeat: false
+        onTriggered: root.applyLibrarySearchNow()
+    }
+
+    Connections {
+        target: catalogAssets
+        function onFiltersChanged() {
+            if (!librarySearchDebounceTimer.running && root.searchDraftText !== catalogAssets.searchFilter)
+                root.searchDraftText = catalogAssets.searchFilter
+        }
+    }
+
+    function reviewFilterLabel() {
+        if (catalogAssets.reviewFilter === "picked")
+            return "Picked " + catalogAssets.visiblePickedCount
+        if (catalogAssets.reviewFilter === "rejected")
+            return "Rejected " + catalogAssets.visibleRejectedCount
+        if (catalogAssets.reviewFilter === "unmarked")
+            return "Unmarked " + catalogAssets.visibleUnmarkedCount
+        if (catalogAssets.reviewFilter === "rated")
+            return "Rated"
+        return "Review"
+    }
+
+    function reviewFilterMenuItems() {
+        return [
+            {
+                key: "all",
+                label: "All " + catalogAssets.assetCount,
+                icon: "grid",
+                checked: catalogAssets.reviewFilter === "all",
+                tooltip: "Show every visible asset."
+            },
+            {
+                key: "picked",
+                label: "Picked " + catalogAssets.visiblePickedCount,
+                icon: "check",
+                checked: catalogAssets.reviewFilter === "picked",
+                tooltip: "Show picked assets."
+            },
+            {
+                key: "rejected",
+                label: "Rejected " + catalogAssets.visibleRejectedCount,
+                icon: "close",
+                checked: catalogAssets.reviewFilter === "rejected",
+                tooltip: "Show rejected assets."
+            },
+            {
+                key: "unmarked",
+                label: "Unmarked " + catalogAssets.visibleUnmarkedCount,
+                icon: "media",
+                checked: catalogAssets.reviewFilter === "unmarked",
+                tooltip: "Show assets without pick or reject state."
+            },
+            {
+                key: "rated",
+                label: "Rated",
+                icon: "star",
+                checked: catalogAssets.reviewFilter === "rated",
+                tooltip: "Show rated assets."
+            }
+        ]
+    }
+
+    function handleReviewFilterMenu(key) {
+        catalogAssets.reviewFilter = key
     }
 
     function cullStatusLabel(status) {
@@ -495,6 +676,61 @@ Rectangle {
             root.exportDestinationPath = exportJobs.defaultDestinationDirectory()
         exportDestinationField.text = root.exportDestinationPath
         exportSelectionDialog.open()
+    }
+
+    function selectionActionMenuItems() {
+        return [
+            {
+                key: "select-all",
+                label: "Select All Visible",
+                icon: "select",
+                enabled: root.canSelectAll(),
+                tooltip: "Select every visible Library asset."
+            },
+            {
+                key: "clear-selection",
+                label: "Clear Selection",
+                icon: "close",
+                enabled: catalogAssets.selectedAssetCount > 0,
+                disabledReason: "No assets are selected.",
+                tooltip: "Clear the current batch selection."
+            },
+            {
+                key: "done",
+                label: "Done Selecting",
+                icon: "check",
+                enabled: root.selectionModeActive,
+                disabledReason: "Selection mode is not active.",
+                tooltip: "Leave selection mode."
+            },
+            {
+                key: "delete",
+                label: catalogAssets.selectedAssetCount === 1 ? "Delete Image" : "Delete Selected",
+                icon: "delete",
+                destructive: true,
+                separatorBefore: true,
+                enabled: catalogAssets.selectedAssetCount > 0,
+                disabledReason: "Select one or more Library assets before deleting.",
+                tooltip: "Delete selected assets from the Library."
+            }
+        ]
+    }
+
+    function handleSelectionActionMenu(key) {
+        if (key === "select-all") {
+            root.selectAll()
+            return
+        }
+        if (key === "clear-selection") {
+            catalogAssets.clearSelection()
+            return
+        }
+        if (key === "done") {
+            root.setSelectionModeActive(false)
+            return
+        }
+        if (key === "delete" && catalogAssets.selectedAssetCount > 0)
+            deleteAssetsDialog.open()
     }
 
     function reviewShortcutsEnabled() {
@@ -815,55 +1051,14 @@ Rectangle {
                     Repeater {
                         model: catalogAssets.projectNames
 
-                        delegate: Rectangle {
+                        delegate: ProjectMembershipRow {
                             required property string modelData
-                            readonly property int membershipCount: root.selectedProjectMembershipCount(modelData)
-                            readonly property bool fullyApplied: membershipCount === catalogAssets.selectedAssetCount && catalogAssets.selectedAssetCount > 0
 
-                            Layout.fillWidth: true
-                            radius: theme.radius12
-                            color: theme.alpha(theme.ink950, fullyApplied ? 0.64 : 0.42)
-                            border.width: 1
-                            border.color: fullyApplied
-                                          ? theme.alpha(theme.accentCool400, 0.42)
-                                          : theme.alpha(theme.lineSoft, 0.24)
-                            implicitHeight: projectRow.implicitHeight + theme.space14
-
-                            RowLayout {
-                                id: projectRow
-                                anchors.fill: parent
-                                anchors.margins: theme.space10
-                                spacing: theme.space10
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 2
-
-                                    Label {
-                                        text: modelData
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 13
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
-                                    }
-
-                                    Label {
-                                        text: root.projectMembershipSummary(modelData)
-                                        color: theme.textMuted
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        elide: Text.ElideRight
-                                    }
-                                }
-
-                                ActionButton {
-                                    text: fullyApplied ? "Remove" : (membershipCount > 0 ? "Add Missing" : "Add")
-                                    compact: true
-                                    active: fullyApplied
-                                    onClicked: root.toggleSelectedProjectMembership(modelData)
-                                }
-                            }
+                            projectName: modelData
+                            summary: root.projectMembershipSummary(modelData)
+                            membershipCount: root.selectedProjectMembershipCount(modelData)
+                            selectedCount: catalogAssets.selectedAssetCount
+                            onToggleRequested: function(projectName) { root.toggleSelectedProjectMembership(projectName) }
                         }
                     }
                 }
@@ -1015,7 +1210,7 @@ Rectangle {
                 }
 
                 ActionButton {
-                    text: "Queue Export"
+                    text: "Start Export"
                     iconName: "export"
                     tone: "primary"
                     enabled: root.exportDestinationPath.trim().length > 0
@@ -1303,6 +1498,8 @@ Rectangle {
         spacing: theme.space12
 
         Rectangle {
+            objectName: "libraryMainSurface"
+            readonly property string surfaceContract: "library-main-surface:v1|browse-dominant:true|filters-visible:true|view-switch-visible:true|selection-contextual:true|import-handoff-contextual:true|no-elide:true|no-overlap:true"
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: theme.radiusSurface
@@ -1322,6 +1519,8 @@ Rectangle {
                 spacing: theme.space12
 
                 Rectangle {
+                    objectName: "libraryHeaderBar"
+                    readonly property string visibilityRole: "always-visible|title-counts-view-mode-selection-refresh"
                     Layout.fillWidth: true
                     implicitHeight: galleryHeaderColumn.implicitHeight + (theme.space12 * 2)
                     radius: theme.radiusSurface
@@ -1362,7 +1561,9 @@ Rectangle {
                                 font.family: theme.fontUi
                                 font.pixelSize: 11
                                 verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 8
+                                elide: Text.ElideNone
                             }
 
                             Rectangle {
@@ -1376,6 +1577,8 @@ Rectangle {
 
                                 RowLayout {
                                     id: utilityRow
+                                    objectName: "libraryUtilityToolbar"
+                                    readonly property string visibilityRole: "always-visible|view-mode-select-refresh"
                                     anchors.fill: parent
                                     anchors.margins: theme.space8
                                     spacing: theme.space8
@@ -1440,7 +1643,7 @@ Rectangle {
                                     }
 
                                     ActionButton {
-                                        text: catalogAssets.loading ? "Refreshing..." : "Reload"
+                                        text: catalogAssets.loading ? "Refreshing" : "Reload"
                                         iconName: "refresh"
                                         compact: true
                                         tooltipText: catalogAssets.loading ? "Refreshing gallery" : "Reload gallery"
@@ -1455,6 +1658,8 @@ Rectangle {
                 }
 
                 Rectangle {
+                    objectName: "libraryFilterBar"
+                    readonly property string visibilityRole: "always-visible|search-date-media-project-review-clear-summary"
                     Layout.fillWidth: true
                     implicitHeight: libraryFilterColumn.implicitHeight + (theme.space10 * 2)
                     radius: theme.radius12
@@ -1472,12 +1677,73 @@ Rectangle {
                             Layout.fillWidth: true
                             spacing: theme.space6
 
-                            ToneTextField {
-                                id: searchField
+                            Rectangle {
+                                id: librarySearchControl
+                                objectName: "librarySearchControl"
+                                readonly property string searchControlContract: "library-search-control:v1|active-frame:true|clear-visible-only-when-text:true|debounced:true|enter-applies:true|no-elide:true"
                                 Layout.fillWidth: true
-                                placeholderText: "Search by filename, camera, lens, location..."
-                                text: catalogAssets.searchFilter
-                                onTextChanged: catalogAssets.searchFilter = text
+                                Layout.minimumWidth: 260
+                                implicitHeight: theme.controlHeightTall
+                                radius: theme.radiusControl
+                                color: root.librarySearchActive || root.librarySearchPending
+                                       ? theme.alpha(theme.accentWarm400, 0.08)
+                                       : theme.alpha(theme.glassBase, 0.28)
+                                border.width: searchField.activeFocus ? 2 : 1
+                                border.color: searchField.activeFocus
+                                              ? theme.alpha(theme.focusRing, 0.9)
+                                              : root.librarySearchPending
+                                                ? theme.alpha(theme.accentWarm400, 0.7)
+                                                : root.librarySearchActive
+                                                  ? theme.alpha(theme.accentWarm400, 0.48)
+                                                  : theme.alpha(theme.glassEdge, 0.2)
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: theme.space4
+                                    anchors.rightMargin: theme.space4
+                                    spacing: theme.space4
+
+                                    AppIcon {
+                                        Layout.preferredWidth: 13
+                                        Layout.preferredHeight: 13
+                                        name: "search"
+                                        color: root.librarySearchActive || root.librarySearchPending
+                                               ? theme.accentWarm400
+                                               : theme.textMuted
+                                    }
+
+                                    ToneTextField {
+                                        id: searchField
+                                        objectName: "librarySearchField"
+                                        Layout.fillWidth: true
+                                        placeholderText: "Search by filename, camera, lens, location"
+                                        text: root.searchDraftText
+                                        background: Item {}
+                                        leftPadding: 0
+                                        rightPadding: 0
+                                        Accessible.name: "Library search"
+                                        Accessible.description: "Search by filename, camera, lens, or location."
+                                        onTextChanged: {
+                                            if (text !== root.searchDraftText)
+                                                root.updateLibrarySearchDraft(text)
+                                        }
+                                        onAccepted: root.applyLibrarySearchNow()
+                                    }
+
+                                    ActionButton {
+                                        id: librarySearchClearButton
+                                        objectName: "librarySearchClearButton"
+                                        visible: root.librarySearchHasText
+                                        enabled: root.librarySearchHasText
+                                        text: "Clear Search"
+                                        iconName: "close"
+                                        showText: false
+                                        compact: true
+                                        embedded: true
+                                        tooltipText: "Clear library search"
+                                        onClicked: root.clearLibrarySearch()
+                                    }
+                                }
                             }
 
                             ToneComboBox {
@@ -1501,32 +1767,19 @@ Rectangle {
                                 onActivated: root.applyProjectSelection(root.projectFilterValues[currentIndex])
                             }
 
-                            FilterChip {
-                                text: "All " + catalogAssets.assetCount
+                            MenuButton {
+                                text: root.reviewFilterLabel()
+                                iconName: "star"
+                                compact: true
                                 accent: theme.accentWarm400
-                                active: catalogAssets.reviewFilter === "all"
+                                tone: catalogAssets.reviewFilter === "all" ? "secondary" : "primary"
+                                tooltipText: catalogAssets.reviewFilter === "all"
+                                             ? "Open the menu to filter by review state."
+                                             : "Show all review states. Open the menu for specific review filters."
+                                menuItems: root.reviewFilterMenuItems()
+                                menuWidth: 178
                                 onClicked: catalogAssets.reviewFilter = "all"
-                            }
-
-                            FilterChip {
-                                text: "Picks " + catalogAssets.visiblePickedCount
-                                accent: theme.success
-                                active: catalogAssets.reviewFilter === "picked"
-                                onClicked: catalogAssets.reviewFilter = "picked"
-                            }
-
-                            FilterChip {
-                                text: "Rejects " + catalogAssets.visibleRejectedCount
-                                accent: theme.error
-                                active: catalogAssets.reviewFilter === "rejected"
-                                onClicked: catalogAssets.reviewFilter = "rejected"
-                            }
-
-                            FilterChip {
-                                text: "Unmarked " + catalogAssets.visibleUnmarkedCount
-                                accent: theme.accentCool400
-                                active: catalogAssets.reviewFilter === "unmarked"
-                                onClicked: catalogAssets.reviewFilter = "unmarked"
+                                onMenuItemTriggered: function(key) { root.handleReviewFilterMenu(key) }
                             }
 
                             ActionButton {
@@ -1539,10 +1792,38 @@ Rectangle {
                                 onClicked: root.clearFilters()
                             }
                         }
+
+                        Label {
+                            objectName: "libraryActiveFilterSummary"
+                            Layout.fillWidth: true
+                            text: root.activeFilterSummary()
+                            color: root.filtersActive ? theme.textMain : theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 11
+                            wrapMode: Text.WordWrap
+                        }
+
+                        StatusChip {
+                            objectName: "libraryActiveSearchChip"
+                            Layout.fillWidth: true
+                            visible: root.librarySearchActive || root.librarySearchPending
+                            text: root.librarySearchPending
+                                  ? "Search pending: " + root.searchDraftText
+                                  : "Search active: " + catalogAssets.searchFilter
+                            iconName: "search"
+                            tone: root.librarySearchPending ? "warning" : "accent"
+                            detailText: root.librarySearchPending
+                                        ? "Typing pauses briefly before the Library applies this search."
+                                        : "The Library grid is filtered by this search."
+                            actionText: "Clear"
+                            onActionTriggered: root.clearLibrarySearch()
+                        }
                     }
                 }
 
                 Rectangle {
+                    objectName: "librarySelectionActionBar"
+                    readonly property string visibilityRole: "contextual|batch-summary-project-export-more-clear"
                     Layout.fillWidth: true
                     visible: root.selectionModeActive
                     implicitHeight: selectionActionRow.implicitHeight + (theme.space8 * 2)
@@ -1563,7 +1844,9 @@ Rectangle {
                             color: theme.textStrong
                             font.family: theme.fontUi
                             font.pixelSize: 12
-                            elide: Text.ElideRight
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 8
+                            elide: Text.ElideNone
                         }
 
                         ActionButton {
@@ -1581,26 +1864,21 @@ Rectangle {
                             onClicked: root.openExportDialog()
                         }
 
-                        ActionButton {
-                            text: "Delete"
-                            iconName: "delete"
+                        MenuButton {
+                            text: "More"
+                            iconName: "menu"
                             compact: true
-                            tone: "danger"
-                            enabled: catalogAssets.selectedAssetCount > 0
-                            onClicked: deleteAssetsDialog.open()
-                        }
-
-                        ActionButton {
-                            text: "Clear"
-                            compact: true
-                            enabled: catalogAssets.selectedAssetCount > 0
-                            onClicked: catalogAssets.clearSelection()
-                        }
-
-                        ActionButton {
-                            text: "Done"
-                            compact: true
-                            onClicked: root.setSelectionModeActive(false)
+                            tooltipText: "Selection actions."
+                            enabled: root.selectionModeActive || catalogAssets.selectedAssetCount > 0
+                            menuItems: root.selectionActionMenuItems()
+                            menuWidth: 190
+                            onClicked: {
+                                if (catalogAssets.selectedAssetCount > 0)
+                                    catalogAssets.clearSelection()
+                                else
+                                    root.setSelectionModeActive(false)
+                            }
+                            onMenuItemTriggered: function(key) { root.handleSelectionActionMenu(key) }
                         }
                     }
                 }
@@ -1611,6 +1889,8 @@ Rectangle {
 
                     Flickable {
                         id: galleryFlick
+                        objectName: "libraryGalleryGrid"
+                        readonly property string visibilityRole: "always-visible|asset-grid-keyboard-selection-review-open"
                         anchors.fill: parent
                         visible: root.catalogViewMode === "grid" && !root.importBrowserOpen
                         clip: true
@@ -1862,6 +2142,8 @@ Rectangle {
                     }
 
                     Loader {
+                        objectName: "libraryReviewLoader"
+                        readonly property string visibilityRole: "contextual|compare-survey-review-cull"
                         anchors.fill: parent
                         visible: !root.importBrowserOpen && root.catalogViewMode !== "grid"
                         active: visible
@@ -1869,6 +2151,8 @@ Rectangle {
                     }
 
                     Rectangle {
+                        objectName: "libraryEmptyState"
+                        readonly property string visibilityRole: "contextual|empty-filter-reset-import-handoff"
                         anchors.fill: parent
                         visible: catalogAssets.assetCount === 0 && !root.importBrowserOpen
                         radius: theme.radiusSurface
@@ -1920,6 +2204,8 @@ Rectangle {
                     }
 
                     Rectangle {
+                        objectName: "libraryImportBrowser"
+                        readonly property string visibilityRole: "contextual|folder-pick-preview-import-jobs-close"
                         anchors.fill: parent
                         visible: root.importBrowserOpen
                         radius: theme.radiusSurface
@@ -1955,7 +2241,9 @@ Rectangle {
                                         color: theme.textMuted
                                         font.family: theme.fontUi
                                         font.pixelSize: 12
-                                        elide: Text.ElideMiddle
+                                        wrapMode: Text.WrapAnywhere
+                                        maximumLineCount: 2
+                                        elide: Text.ElideNone
                                         Layout.fillWidth: true
                                     }
                                 }
@@ -1982,11 +2270,18 @@ Rectangle {
                                     onClicked: root.openLocalFolder(catalogAssets.parentFolderUrl(root.localFolderUrl))
                                 }
 
-                                ActionButton {
-                                    text: root.hasActiveImportJobs() ? "Importing..." : "Import This Folder"
+                                SplitButton {
+                                    text: root.hasActiveImportJobs() ? "Importing" : "Import This Folder"
                                     tone: "primary"
-                                    enabled: root.localFolderPath.length > 0 && !catalogAssets.busy
+                                    iconName: "folder"
+                                    primaryEnabled: root.localFolderPath.length > 0 && !catalogAssets.busy
+                                    disabledReason: root.localFolderPath.length > 0
+                                                    ? "Import is already working."
+                                                    : "Choose a folder first."
+                                    menuItems: root.importActionMenuItems()
+                                    menuTooltipText: "Import options"
                                     onClicked: root.importCurrentFolder()
+                                    onMenuItemTriggered: function(key) { root.handleImportMenuAction(key) }
                                 }
 
                                 ActionButton {
@@ -2016,32 +2311,8 @@ Rectangle {
                                 spacing: theme.space8
                                 model: localFolderModel
 
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property string fileName
-                                    required property string fileUrl
-
-                                    width: Math.max(108, folderLabel.implicitWidth + theme.space20)
-                                    height: 34
-                                    radius: theme.radius8
-                                    color: theme.alpha(theme.ink900, 0.92)
-                                    border.width: 1
-                                    border.color: theme.alpha(theme.lineSoft, 0.48)
-
-                                    Label {
-                                        id: folderLabel
-                                        anchors.centerIn: parent
-                                        text: fileName
-                                        color: theme.textMain
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 10
-                                        font.weight: Font.Medium
-                                    }
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: root.openLocalFolder(fileUrl)
-                                    }
+                                delegate: ImportFolderChip {
+                                    onActivated: function(folderUrl) { root.openLocalFolder(folderUrl) }
                                 }
                             }
 
@@ -2054,54 +2325,9 @@ Rectangle {
                                 boundsBehavior: Flickable.StopAtBounds
                                 model: localImageModel
 
-                                delegate: Rectangle {
-                                    required property int index
-                                    required property string filePath
-                                    required property string fileName
-                                    required property string fileUrl
-
-                                    width: 204
-                                    height: 206
-                                    radius: theme.radius12
-                                    color: theme.alpha(theme.ink900, 0.94)
-                                    border.width: root.localSelectedFilePath === filePath ? 1 : 0
-                                    border.color: theme.accentWarm400
-
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        anchors.margins: theme.space8
-                                        spacing: theme.space6
-
-                                        Rectangle {
-                                            Layout.fillWidth: true
-                                            Layout.preferredHeight: 156
-                                            radius: theme.radius10
-                                            color: theme.ink950
-                                            clip: true
-
-                                            Image {
-                                                anchors.fill: parent
-                                                source: fileUrl
-                                                fillMode: Image.PreserveAspectCrop
-                                                asynchronous: true
-                                                cache: true
-                                            }
-                                        }
-
-                                        Label {
-                                            text: fileName
-                                            color: theme.textStrong
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 11
-                                            elide: Text.ElideRight
-                                            Layout.fillWidth: true
-                                        }
-                                    }
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        onClicked: root.selectLocalFile(filePath)
-                                    }
+                                delegate: ImportImageTile {
+                                    selected: root.localSelectedFilePath === filePath
+                                    onActivated: function(filePath) { root.selectLocalFile(filePath) }
                                 }
                             }
                         }
@@ -2111,6 +2337,8 @@ Rectangle {
         }
 
         Rectangle {
+            objectName: "libraryInspectorPanel"
+            readonly property string surfaceContract: "library-inspector:v1|preview:always|metadata:selection|review:single-selection|source-actions:selection|batch-summary:multi-selection|no-elide:true|no-overlap:true"
             Layout.preferredWidth: 332
             Layout.fillHeight: true
             radius: 0
@@ -2152,7 +2380,7 @@ Rectangle {
                         font.weight: Font.Medium
                         wrapMode: Text.WordWrap
                         maximumLineCount: 2
-                        elide: Text.ElideRight
+                        elide: Text.ElideNone
                     }
 
                     Rectangle {
@@ -2258,233 +2486,251 @@ Rectangle {
                         }
                     }
 
-                    ColumnLayout {
+                    Loader {
+                        objectName: "librarySelectedInspectorDetailsLoader"
                         Layout.fillWidth: true
-                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
-                        spacing: theme.space8
+                        active: root.hasSelection && !catalogAssets.hasMultiSelection
 
-                        InspectorRule {}
+                        sourceComponent: Component {
+                            ColumnLayout {
+                                spacing: theme.space8
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: "Details"
-                            color: theme.textStrong
-                            font.family: theme.fontUi
-                            font.pixelSize: 13
-                            font.weight: Font.Bold
-                        }
+                                InspectorRule {}
 
-                        InspectorDetailRow {
-                            label: "Camera"
-                            value: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "Unknown camera"
-                        }
-
-                        InspectorDetailRow {
-                            label: "Captured"
-                            value: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Unknown"
-                        }
-
-                        InspectorDetailRow {
-                            label: "Lens"
-                            value: catalogAssets.selectedLensModel
-                        }
-
-                        InspectorDetailRow {
-                            label: "Imported"
-                            value: catalogAssets.selectedImportedAt
-                        }
-
-                        InspectorDetailRow {
-                            label: "Projects"
-                            value: catalogAssets.selectedProjectSummary
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            InfoPill {
-                                Layout.fillWidth: true
-                                visible: catalogAssets.selectedIso.length > 0
-                                label: "ISO"
-                                value: catalogAssets.selectedIso
-                            }
-
-                            InfoPill {
-                                Layout.fillWidth: true
-                                visible: catalogAssets.selectedShutterSpeed.length > 0
-                                label: "SHUTTER"
-                                value: catalogAssets.selectedShutterSpeed
-                            }
-
-                            InfoPill {
-                                Layout.fillWidth: true
-                                visible: catalogAssets.selectedAperture.length > 0
-                                label: "APERTURE"
-                                value: catalogAssets.selectedAperture
-                            }
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
-                            color: theme.textFaint
-                            font.family: theme.fontMono
-                            font.pixelSize: 10
-                            maximumLineCount: 2
-                            elide: Text.ElideMiddle
-                            wrapMode: Text.WrapAnywhere
-                        }
-                    }
-
-                    ColumnLayout {
-                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
-                        Layout.fillWidth: true
-                        spacing: theme.space8
-
-                        InspectorRule {}
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Review"
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 13
-                                font.weight: Font.Bold
-                            }
-
-                            Label {
-                                text: (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
-                                color: theme.textFaint
-                                font.family: theme.fontMono
-                                font.pixelSize: 10
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            InfoPill {
-                                Layout.fillWidth: true
-                                label: "RATING"
-                                value: root.ratingLabel(catalogAssets.selectedRating)
-                            }
-
-                            InfoPill {
-                                Layout.fillWidth: true
-                                label: "STATUS"
-                                value: root.cullStatusLabel(catalogAssets.selectedCullStatus)
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Pick"
-                                compact: true
-                                accent: theme.success
-                                active: catalogAssets.selectedPicked
-                                enabled: catalogAssets.selectedIndex >= 0
-                                shape: "clipped"
-                                onClicked: root.applyPickReview(false)
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Reject"
-                                compact: true
-                                accent: theme.error
-                                active: catalogAssets.selectedRejected
-                                enabled: catalogAssets.selectedIndex >= 0
-                                onClicked: root.applyRejectReview(false)
-                            }
-
-                            ActionButton {
-                                Layout.fillWidth: true
-                                text: "Clear"
-                                compact: true
-                                enabled: catalogAssets.selectedIndex >= 0
-                                onClicked: catalogAssets.clearSelectedCullState()
-                            }
-                        }
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space6
-
-                            Repeater {
-                                model: 5
-
-                                delegate: ActionButton {
-                                    required property int index
-
+                                Label {
                                     Layout.fillWidth: true
-                                    compact: true
-                                    text: String(index + 1)
-                                    accent: theme.warning
-                                    active: catalogAssets.selectedRating >= index + 1
-                                    enabled: catalogAssets.selectedIndex >= 0
-                                    tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
-                                    onClicked: root.applyRatingReview(index + 1, false)
+                                    text: "Details"
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 13
+                                    font.weight: Font.Bold
+                                }
+
+                                InspectorDetailRow {
+                                    label: "Camera"
+                                    value: catalogAssets.selectedCameraLabel.length > 0 ? catalogAssets.selectedCameraLabel : "Unknown camera"
+                                }
+
+                                InspectorDetailRow {
+                                    label: "Captured"
+                                    value: catalogAssets.selectedCaptureDate.length > 0 ? catalogAssets.selectedCaptureDate : "Unknown"
+                                }
+
+                                InspectorDetailRow {
+                                    label: "Lens"
+                                    value: catalogAssets.selectedLensModel
+                                }
+
+                                InspectorDetailRow {
+                                    label: "Imported"
+                                    value: catalogAssets.selectedImportedAt
+                                }
+
+                                InspectorDetailRow {
+                                    label: "Projects"
+                                    value: catalogAssets.selectedProjectSummary
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space8
+
+                                    InfoPill {
+                                        Layout.fillWidth: true
+                                        visible: catalogAssets.selectedIso.length > 0
+                                        label: "ISO"
+                                        value: catalogAssets.selectedIso
+                                    }
+
+                                    InfoPill {
+                                        Layout.fillWidth: true
+                                        visible: catalogAssets.selectedShutterSpeed.length > 0
+                                        label: "SHUTTER"
+                                        value: catalogAssets.selectedShutterSpeed
+                                    }
+
+                                    InfoPill {
+                                        Layout.fillWidth: true
+                                        visible: catalogAssets.selectedAperture.length > 0
+                                        label: "APERTURE"
+                                        value: catalogAssets.selectedAperture
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedFilePath.length > 0 ? catalogAssets.selectedFilePath : ""
+                                    color: theme.textFaint
+                                    font.family: theme.fontMono
+                                    font.pixelSize: 10
+                                    maximumLineCount: 2
+                                    elide: Text.ElideNone
+                                    wrapMode: Text.WrapAnywhere
                                 }
                             }
                         }
+                    }
 
-                        ActionButton {
-                            Layout.fillWidth: true
-                            compact: true
-                            text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
-                            active: appShell.cullingAutoAdvance
-                            shape: appShell.cullingAutoAdvance ? "clipped" : "standard"
-                            onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
+                    Loader {
+                        objectName: "librarySelectedInspectorReviewLoader"
+                        Layout.fillWidth: true
+                        active: root.hasSelection && !catalogAssets.hasMultiSelection
+
+                        sourceComponent: Component {
+                            ColumnLayout {
+                                spacing: theme.space8
+
+                                InspectorRule {}
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space8
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Review"
+                                        color: theme.textStrong
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 13
+                                        font.weight: Font.Bold
+                                    }
+
+                                    Label {
+                                        text: (catalogAssets.selectedIndex + 1) + " / " + catalogAssets.assetCount
+                                        color: theme.textFaint
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 10
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space8
+
+                                    InfoPill {
+                                        Layout.fillWidth: true
+                                        label: "RATING"
+                                        value: root.ratingLabel(catalogAssets.selectedRating)
+                                    }
+
+                                    InfoPill {
+                                        Layout.fillWidth: true
+                                        label: "STATUS"
+                                        value: root.cullStatusLabel(catalogAssets.selectedCullStatus)
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space8
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "Pick"
+                                        compact: true
+                                        accent: theme.success
+                                        active: catalogAssets.selectedPicked
+                                        enabled: catalogAssets.selectedIndex >= 0
+                                        shape: "clipped"
+                                        onClicked: root.applyPickReview(false)
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "Reject"
+                                        compact: true
+                                        accent: theme.error
+                                        active: catalogAssets.selectedRejected
+                                        enabled: catalogAssets.selectedIndex >= 0
+                                        onClicked: root.applyRejectReview(false)
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        text: "Clear"
+                                        compact: true
+                                        enabled: catalogAssets.selectedIndex >= 0
+                                        onClicked: catalogAssets.clearSelectedCullState()
+                                    }
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space6
+
+                                    Repeater {
+                                        model: 5
+
+                                        delegate: ActionButton {
+                                            required property int index
+
+                                            Layout.fillWidth: true
+                                            compact: true
+                                            text: String(index + 1)
+                                            accent: theme.warning
+                                            active: catalogAssets.selectedRating >= index + 1
+                                            enabled: catalogAssets.selectedIndex >= 0
+                                            tooltipText: (index + 1) + ((index + 1) === 1 ? " star" : " stars")
+                                            onClicked: root.applyRatingReview(index + 1, false)
+                                        }
+                                    }
+                                }
+
+                                ActionButton {
+                                    Layout.fillWidth: true
+                                    compact: true
+                                    text: appShell.cullingAutoAdvance ? "Auto-Advance On" : "Auto-Advance Off"
+                                    active: appShell.cullingAutoAdvance
+                                    shape: appShell.cullingAutoAdvance ? "clipped" : "standard"
+                                    onClicked: appShell.cullingAutoAdvance = !appShell.cullingAutoAdvance
+                                }
+                            }
                         }
                     }
 
-                    ColumnLayout {
-                        visible: root.hasSelection && !catalogAssets.hasMultiSelection
+                    Loader {
+                        objectName: "librarySelectedInspectorSourceLoader"
                         Layout.fillWidth: true
-                        spacing: theme.space8
+                        active: root.hasSelection && !catalogAssets.hasMultiSelection
 
-                        InspectorRule {}
+                        sourceComponent: Component {
+                            ColumnLayout {
+                                spacing: theme.space8
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: catalogAssets.selectedOnline
-                                  ? "Source available on disk."
-                                  : "Source offline. Recheck mounted drives or relink it."
-                            color: catalogAssets.selectedOnline ? theme.textMuted : theme.warning
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
-                            wrapMode: Text.WordWrap
-                        }
+                                InspectorRule {}
 
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: theme.space8
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: catalogAssets.selectedOnline
+                                          ? "Source available on disk."
+                                          : "Source offline. Recheck mounted drives or relink it."
+                                    color: catalogAssets.selectedOnline ? theme.textMuted : theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    font.weight: Font.Medium
+                                    wrapMode: Text.WordWrap
+                                }
 
-                            ActionButton {
-                                Layout.fillWidth: true
-                                compact: true
-                                text: "Recheck"
-                                onClicked: catalogAssets.refreshOnlineState()
-                            }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space8
 
-                            ActionButton {
-                                Layout.fillWidth: true
-                                compact: true
-                                text: "Relink"
-                                enabled: !catalogAssets.selectedOnline
-                                shape: !catalogAssets.selectedOnline ? "clipped" : "standard"
-                                onClicked: root.chooseRelinkFolder(true)
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: "Recheck"
+                                        onClicked: catalogAssets.refreshOnlineState()
+                                    }
+
+                                    ActionButton {
+                                        Layout.fillWidth: true
+                                        compact: true
+                                        text: "Relink"
+                                        enabled: !catalogAssets.selectedOnline
+                                        shape: !catalogAssets.selectedOnline ? "clipped" : "standard"
+                                        onClicked: root.chooseRelinkFolder(true)
+                                    }
+                                }
                             }
                         }
                     }

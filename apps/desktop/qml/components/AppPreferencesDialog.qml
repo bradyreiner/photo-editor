@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
+    objectName: "appPreferencesDialog"
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -15,6 +16,9 @@ Dialog {
 
     property int currentPage: 0
     readonly property var pageTitles: ["General", "Timeline", "Storage"]
+    readonly property string dialogVisibilityContract: "dialog-visibility:v1|preferences|always:nav-current-page-close-by-escape|contextual:page-settings-storage-paths-backend-status|one-expansion:workspace-picker-backend-picker-folder-open|hover-focus:preference-navigation-controls|diagnostic:backend-availability-storage-paths|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v1|preferences|nav:fixed-left|page:dominant|sections:scrollable|toggles:stable|paths:copyable-wrap|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v1|dark-mode:general-toggle|startup-workspace:general-combo|reopen-workspace:general-toggle|preview-backend:general-combo|timeline-defaults:timeline-page|storage-folders:storage-open-actions"
 
     Theme { id: theme }
 
@@ -309,72 +313,17 @@ Dialog {
                 Repeater {
                     model: root.pageTitles
 
-                    delegate: Button {
-                        id: pageButton
-
+                    delegate: PreferenceNavRow {
                         required property int index
                         required property string modelData
 
-                        Layout.fillWidth: true
-                        implicitHeight: 74
-                        hoverEnabled: true
-                        onClicked: root.currentPage = index
-
-                        background: Rectangle {
-                            radius: theme.radiusPanel
-                            border.width: 1
-                            border.color: root.currentPage === pageButton.index
-                                          ? theme.alpha(root.pageAccent(pageButton.index), 0.58)
-                                          : theme.alpha(theme.glassEdge, pageButton.hovered ? 0.42 : 0.22)
-                            color: root.currentPage === pageButton.index
-                                   ? theme.alpha(root.pageAccent(pageButton.index), 0.14)
-                                   : (pageButton.hovered ? theme.alpha(theme.glassLift, 0.64) : theme.alpha(theme.glassBase, 0.38))
-
-                            Behavior on color {
-                                ColorAnimation { duration: theme.durationFast }
-                            }
-
-                            Behavior on border.color {
-                                ColorAnimation { duration: theme.durationFast }
-                            }
-                        }
-
-                        contentItem: RowLayout {
-                            spacing: theme.space12
-
-                            Rectangle {
-                                Layout.alignment: Qt.AlignTop
-                                implicitWidth: 6
-                                implicitHeight: 6
-                                radius: 1
-                                color: root.pageAccent(pageButton.index)
-                                opacity: root.currentPage === pageButton.index ? 1.0 : 0.34
-                            }
-
-                            ColumnLayout {
-                                Layout.fillWidth: true
-                                spacing: theme.space4
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: pageButton.modelData
-                                    color: root.currentPage === pageButton.index ? theme.textStrong : theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 13
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: root.pageSubtitle(pageButton.index)
-                                    color: theme.textFaint
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                    maximumLineCount: 2
-                                    elide: Text.ElideRight
-                                }
-                            }
+                        pageIndex: index
+                        title: modelData
+                        subtitle: root.pageSubtitle(index)
+                        accent: root.pageAccent(index)
+                        selected: root.currentPage === index
+                        onActivated: function(pageIndex) {
+                            root.currentPage = pageIndex
                         }
                     }
                 }

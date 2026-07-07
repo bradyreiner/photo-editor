@@ -77,99 +77,46 @@ Rectangle {
         RowLayout {
             spacing: 4
 
-            Rectangle {
-                implicitWidth: 20
-                implicitHeight: 18
-                radius: 5
-                color: trackData.trackKind === "video"
-                       ? (trackData.visible ? theme.alpha(theme.accentCool500, 0.24) : theme.alpha(theme.ink700, 0.84))
-                       : (trackData.muted ? theme.alpha(theme.error, 0.24) : theme.alpha(theme.ink700, 0.84))
-                border.width: 1
-                border.color: theme.alpha(theme.lineStrong, 0.42)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: trackData.trackKind === "video" ? "V" : "M"
-                    color: theme.textStrong
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: canTogglePrimary
-                    onClicked: root.togglePrimaryTrackState()
-                }
+            TimelineTrackToggleButton {
+                label: trackData.trackKind === "video"
+                       ? (trackData.visible ? "Hide Video Track" : "Show Video Track")
+                       : (trackData.muted ? "Unmute Audio Track" : "Mute Audio Track")
+                shortLabel: trackData.trackKind === "video" ? "V" : "M"
+                iconName: trackData.trackKind === "video" ? (trackData.visible ? "visible" : "hidden") : "audio"
+                checked: trackData.trackKind === "video" ? trackData.visible : trackData.muted
+                checkedColor: trackData.trackKind === "video" ? theme.accentCool500 : theme.error
+                enabled: canTogglePrimary
+                onToggled: root.togglePrimaryTrackState()
             }
 
-            Rectangle {
-                implicitWidth: 20
-                implicitHeight: 18
-                radius: 5
-                color: trackData.solo ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
-                border.width: 1
-                border.color: theme.alpha(theme.lineStrong, 0.42)
+            TimelineTrackToggleButton {
                 visible: trackData.trackKind === "audio"
-
-                Label {
-                    anchors.centerIn: parent
-                    text: "S"
-                    color: theme.textStrong
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: canToggleSolo
-                    onClicked: root.toggleSoloTrackState()
-                }
+                label: trackData.solo ? "Clear Solo" : "Solo Track"
+                shortLabel: "S"
+                checked: trackData.solo
+                checkedColor: theme.accentWarm500
+                enabled: canToggleSolo
+                onToggled: root.toggleSoloTrackState()
             }
 
-            Rectangle {
-                implicitWidth: 20
-                implicitHeight: 18
-                radius: 5
-                color: trackData.targeted ? theme.alpha(theme.accentWarm500, 0.24) : theme.alpha(theme.ink700, 0.84)
-                border.width: 1
-                border.color: theme.alpha(theme.lineStrong, 0.42)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: "T"
-                    color: theme.textStrong
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: canToggleTargeted
-                    onClicked: root.toggleTargetedTrackState()
-                }
+            TimelineTrackToggleButton {
+                label: trackData.targeted ? "Untarget Track" : "Target Track"
+                shortLabel: "T"
+                iconName: "check"
+                checked: trackData.targeted
+                checkedColor: theme.accentWarm500
+                enabled: canToggleTargeted
+                onToggled: root.toggleTargetedTrackState()
             }
 
-            Rectangle {
-                implicitWidth: 20
-                implicitHeight: 18
-                radius: 5
-                color: trackData.locked ? theme.alpha(theme.warning, 0.24) : theme.alpha(theme.ink700, 0.84)
-                border.width: 1
-                border.color: theme.alpha(theme.lineStrong, 0.42)
-
-                Label {
-                    anchors.centerIn: parent
-                    text: "L"
-                    color: theme.textStrong
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
-
-                MouseArea {
-                    anchors.fill: parent
-                    enabled: canToggleLocked
-                    onClicked: root.toggleLockedTrackState()
-                }
+            TimelineTrackToggleButton {
+                label: trackData.locked ? "Unlock Track" : "Lock Track"
+                shortLabel: "L"
+                iconName: "lock"
+                checked: trackData.locked
+                checkedColor: theme.warning
+                enabled: canToggleLocked
+                onToggled: root.toggleLockedTrackState()
             }
         }
     }
@@ -213,38 +160,49 @@ Rectangle {
         }
     }
 
-    Menu {
+    AppMenu {
         id: trackMenu
+        accent: trackData.trackKind === "video" ? theme.accentCool500 : theme.accentWarm500
 
-        MenuItem {
+        AppMenuItem {
             text: trackData.locked ? "Unlock Track" : "Lock Track"
+            iconName: "lock"
+            accent: trackMenu.accent
             enabled: canToggleLocked
             onTriggered: root.toggleLockedTrackState()
         }
 
-        MenuItem {
+        AppMenuItem {
             text: trackData.targeted ? "Untarget Track" : "Target Track"
+            iconName: "check"
+            accent: trackMenu.accent
             enabled: canToggleTargeted
             onTriggered: root.toggleTargetedTrackState()
         }
 
-        MenuItem {
+        AppMenuItem {
             visible: trackData.trackKind === "video"
             text: trackData.visible ? "Hide Video Track" : "Show Video Track"
+            iconName: trackData.visible ? "hidden" : "visible"
+            accent: trackMenu.accent
             enabled: canToggleVisibility
             onTriggered: root.togglePrimaryTrackState()
         }
 
-        MenuItem {
+        AppMenuItem {
             visible: trackData.trackKind === "audio"
             text: trackData.muted ? "Unmute Audio Track" : "Mute Audio Track"
+            iconName: "audio"
+            accent: trackMenu.accent
             enabled: canToggleMuted
             onTriggered: root.togglePrimaryTrackState()
         }
 
-        MenuItem {
+        AppMenuItem {
             visible: trackData.trackKind === "audio"
             text: trackData.solo ? "Clear Solo" : "Solo Track"
+            iconName: "star"
+            accent: trackMenu.accent
             enabled: canToggleSolo
             onTriggered: root.toggleSoloTrackState()
         }

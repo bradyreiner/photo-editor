@@ -44,6 +44,53 @@ struct EditorPreviewControllerTestAccess {
     return controller.thumbnail_entry_cache_store_count_;
   }
 
+  static bool thumbnail_refresh_deferred(const EditorPreviewController& controller) {
+    return controller.thumbnailRefreshDeferred();
+  }
+
+  static bool thumbnail_refresh_queue_pending(const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_pending_;
+  }
+
+  static int thumbnail_refresh_queue_pending_generation(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_pending_generation_;
+  }
+
+  static int thumbnail_refresh_queue_dispatched_count(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_dispatched_count_;
+  }
+
+  static bool thumbnail_refresh_queue_worker_running(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_watcher_.isRunning();
+  }
+
+  static int thumbnail_refresh_queue_worker_started_count(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_worker_started_count_;
+  }
+
+  static int thumbnail_refresh_queue_worker_completed_count(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_worker_completed_count_;
+  }
+
+  static int thumbnail_refresh_queue_stale_result_count(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_stale_result_count_;
+  }
+
+  static QString thumbnail_refresh_queue_active_job_id(
+      const EditorPreviewController& controller) {
+    return controller.thumbnail_refresh_queue_active_job_id_;
+  }
+
+  static int pending_brush_commit_count(const EditorPreviewController& controller) {
+    return static_cast<int>(controller.pending_brush_commits_.size());
+  }
+
   static void forceThumbnailEntryCacheLookup(EditorPreviewController& controller) {
     controller.mask_thumbnail_cache_dirty_ = true;
     controller.photo_layer_thumbnail_cache_dirty_ = true;
@@ -169,6 +216,71 @@ bool wait_for_preview_idle(
              photo_layer_adjustment_render_timer_active(controller);
 }
 
+bool wait_for_brush_commit(
+    photo_editor::desktop::EditorPreviewController& controller,
+    int timeout_ms = 2000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    if (photo_editor::desktop::EditorPreviewControllerTestAccess::pending_brush_commit_count(
+            controller) == 0) {
+      return true;
+    }
+    QThread::msleep(25);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  return photo_editor::desktop::EditorPreviewControllerTestAccess::pending_brush_commit_count(
+             controller) == 0;
+}
+
+bool finish_brush_stroke(photo_editor::desktop::EditorPreviewController& controller) {
+  controller.endActiveBrushStroke();
+  return wait_for_brush_commit(controller);
+}
+
+bool wait_for_thumbnail_queue_dispatch(
+    photo_editor::desktop::EditorPreviewController& controller,
+    int minimum_dispatch_count,
+    int minimum_completed_count = -1,
+    int timeout_ms = 3000) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+                thumbnail_refresh_queue_dispatched_count(controller) >=
+            minimum_dispatch_count &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_pending(controller) &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_deferred(controller) &&
+        !photo_editor::desktop::EditorPreviewControllerTestAccess::
+            thumbnail_refresh_queue_worker_running(controller) &&
+        (minimum_completed_count < 0 ||
+         photo_editor::desktop::EditorPreviewControllerTestAccess::
+                 thumbnail_refresh_queue_worker_completed_count(controller) >=
+             minimum_completed_count)) {
+      return true;
+    }
+    QThread::msleep(25);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  return photo_editor::desktop::EditorPreviewControllerTestAccess::
+             thumbnail_refresh_queue_dispatched_count(controller) >=
+             minimum_dispatch_count &&
+         !photo_editor::desktop::EditorPreviewControllerTestAccess::
+             thumbnail_refresh_queue_pending(controller) &&
+         !photo_editor::desktop::EditorPreviewControllerTestAccess::
+             thumbnail_refresh_deferred(controller) &&
+         !photo_editor::desktop::EditorPreviewControllerTestAccess::
+             thumbnail_refresh_queue_worker_running(controller) &&
+         (minimum_completed_count < 0 ||
+          photo_editor::desktop::EditorPreviewControllerTestAccess::
+                  thumbnail_refresh_queue_worker_completed_count(controller) >=
+              minimum_completed_count);
+}
+
 QImage scaled_square_reference_image(QImage image, int edge) {
   if (image.isNull() || edge <= 0) {
     return {};
@@ -215,11 +327,15 @@ bool has_evaluated_alpha_thumbnail_metadata(const QVariantMap& value) {
   const auto bytes = value.value(QStringLiteral("thumbnailAlphaBytes")).toInt();
   const auto hash = value.value(QStringLiteral("thumbnailAlphaHash")).toString();
   const auto signature = value.value(QStringLiteral("thumbnailFreshnessSignature")).toString();
+  const auto provider_cache_key =
+      value.value(QStringLiteral("maskAlphaProviderCacheKey")).toString();
   return value.value(QStringLiteral("thumbnailAlphaSource")).toString() ==
              QStringLiteral("evaluated-mask-alpha") &&
          width > 0 && height > 0 && bytes == width * height &&
           hash.startsWith(QStringLiteral("sha256:")) &&
           hash.size() == QStringLiteral("sha256:").size() + 64 &&
+          provider_cache_key.startsWith(QStringLiteral("sha1:")) &&
+          value.contains(QStringLiteral("maskAlphaProviderCacheHit")) &&
            signature.contains(QStringLiteral("alpha:")) && signature.contains(hash);
 }
 
@@ -304,6 +420,54 @@ bool thumbnail_is_clean_grayscale_alpha_matte(const QVariantMap& value) {
     }
   }
   return true;
+}
+
+bool thumbnail_has_clean_solid_color_overlay(const QVariantMap& value) {
+  if (value.value(QStringLiteral("thumbnailOverlayVisualMode")).toString() !=
+          QStringLiteral("solid-color-alpha") ||
+      value.value(QStringLiteral("thumbnailOverlayRgbPolicy")).toString() !=
+          QStringLiteral("solid-color-preserves-alpha") ||
+      value.value(QStringLiteral("thumbnailOverlayContract")).toString() !=
+          QStringLiteral("mask-thumbnail-overlay:v1|source:final-alpha|color:solid|debug-rgb:false") ||
+      !value.value(QStringLiteral("thumbnailOverlayDebugColorFree")).toBool()) {
+    return false;
+  }
+
+  const auto expected_color =
+      QColor(value.value(QStringLiteral("thumbnailOverlayColor")).toString());
+  if (!expected_color.isValid() || expected_color != QColor(0, 230, 195)) {
+    return false;
+  }
+
+  const auto matte =
+      decoded_thumbnail_source(value.value(QStringLiteral("thumbnailSource")).toString())
+          .convertToFormat(QImage::Format_ARGB32);
+  const auto overlay =
+      decoded_thumbnail_source(value.value(QStringLiteral("thumbnailOverlaySource")).toString())
+          .convertToFormat(QImage::Format_ARGB32);
+  if (matte.isNull() || overlay.isNull() || matte.size() != overlay.size()) {
+    return false;
+  }
+
+  auto saw_visible_alpha = false;
+  for (int y = 0; y < overlay.height(); ++y) {
+    for (int x = 0; x < overlay.width(); ++x) {
+      const auto matte_pixel = matte.pixelColor(x, y);
+      const auto overlay_pixel = overlay.pixelColor(x, y);
+      if (overlay_pixel.alpha() != matte_pixel.alpha()) {
+        return false;
+      }
+      if (overlay_pixel.alpha() > 0) {
+        saw_visible_alpha = true;
+        if (overlay_pixel.red() != expected_color.red() ||
+            overlay_pixel.green() != expected_color.green() ||
+            overlay_pixel.blue() != expected_color.blue()) {
+          return false;
+        }
+      }
+    }
+  }
+  return saw_visible_alpha;
 }
 
 int thumbnail_max_rgba_delta(const QImage& left, const QImage& right) {
@@ -612,6 +776,9 @@ int main(int argc, char** argv) {
     if (!thumbnail_is_clean_grayscale_alpha_matte(set)) {
       return fail("every mask set thumbnail should be a clean grayscale-alpha matte without debug RGB color");
     }
+    if (!thumbnail_has_clean_solid_color_overlay(set)) {
+      return fail("every mask set thumbnail should expose a clean optional solid-color overlay using the same alpha");
+    }
     if (!has_thumbnail_pixel_metrics(set, 34, 96)) {
       return fail("every mask set thumbnail should expose Retina backing-pixel metrics");
     }
@@ -680,6 +847,9 @@ int main(int argc, char** argv) {
       }
       if (!thumbnail_is_clean_grayscale_alpha_matte(source)) {
         return fail("every mask source thumbnail should be a clean grayscale-alpha matte without debug RGB color");
+      }
+      if (!thumbnail_has_clean_solid_color_overlay(source)) {
+        return fail("every mask source thumbnail should expose a clean optional solid-color overlay using the same alpha");
       }
       if (!has_thumbnail_pixel_metrics(source, 34, 96)) {
         return fail("every mask source thumbnail should expose Retina backing-pixel metrics");
@@ -924,6 +1094,318 @@ int main(int argc, char** argv) {
       entry_cached_photo_layer.value(QStringLiteral("thumbnailSource")).toString() !=
           initial_layer_thumbnail_source) {
     return fail("thumbnail entry cache should reuse mask source, mask set, and adjustment layer thumbnails by stable identity key");
+  }
+  photo_editor::desktop::EditorPreviewController mask_queue_controller;
+  mask_queue_controller.loadAsset(
+      QStringLiteral("mask-thumbnail-queue-worker-proof"),
+      thumbnail_fixture_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(mask_queue_controller)) {
+    return fail("mask thumbnail queue proof should start from an idle preview controller");
+  }
+  mask_queue_controller.startSelectionBrush(false);
+  const auto mask_queue_sets_before = mask_queue_controller.maskSets();
+  if (mask_queue_sets_before.isEmpty() ||
+      mask_queue_sets_before.constFirst()
+          .toMap()
+          .value(QStringLiteral("thumbnailSource"))
+          .toString()
+          .isEmpty()) {
+    return fail("mask thumbnail queue proof should warm an initial mask thumbnail before the live stroke");
+  }
+  const auto mask_queue_store_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_entry_cache_store_count(mask_queue_controller);
+  const auto mask_queue_hit_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_entry_cache_hit_count(mask_queue_controller);
+  const auto mask_queue_dispatch_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_dispatched_count(mask_queue_controller);
+  const auto mask_queue_worker_started_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_started_count(mask_queue_controller);
+  const auto mask_queue_worker_completed_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_completed_count(mask_queue_controller);
+  const auto mask_queue_stale_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_stale_result_count(mask_queue_controller);
+  mask_queue_controller.beginActiveBrushStroke();
+  mask_queue_controller.addBrushPoint(0.24, 0.34);
+  mask_queue_controller.addBrushPoint(0.72, 0.58);
+  mask_queue_controller.setActiveMaskDensity(0.73);
+  const auto mask_queue_sets_deferred = mask_queue_controller.maskSets();
+  const auto mask_queue_generation =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_pending_generation(mask_queue_controller);
+  const auto mask_queue_set_deferred =
+      mask_queue_sets_deferred.isEmpty() ? QVariantMap{} : mask_queue_sets_deferred.constFirst().toMap();
+  if (mask_queue_sets_deferred.isEmpty() ||
+      mask_queue_generation <= 0 ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_deferred(mask_queue_controller) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_pending(mask_queue_controller) ||
+      !mask_queue_set_deferred.value(QStringLiteral("thumbnailQueuePending")).toBool() ||
+      mask_queue_set_deferred.value(QStringLiteral("thumbnailQueueJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(mask_queue_generation) ||
+      mask_queue_set_deferred.value(QStringLiteral("thumbnailQueueReason")).toString() !=
+          QStringLiteral("mask_thumbnail_refresh_deferred") ||
+      mask_queue_set_deferred.value(QStringLiteral("thumbnailProgressive")).toBool() != true ||
+      mask_queue_set_deferred.value(QStringLiteral("thumbnailStale")).toBool() != true) {
+    return fail("mask thumbnail queue proof should defer changed mask thumbnails and expose the queued worker job on stale rows");
+  }
+  if (!finish_brush_stroke(mask_queue_controller)) {
+    return fail("mask thumbnail queue proof should commit the brush stroke");
+  }
+  if (!wait_for_thumbnail_queue_dispatch(
+          mask_queue_controller,
+          mask_queue_dispatch_count_before + 1,
+          mask_queue_worker_completed_before + 1,
+          6000)) {
+    return fail("mask thumbnail queue proof should dispatch queued thumbnail work after the live stroke settles");
+  }
+  if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_refresh_queue_worker_started_count(mask_queue_controller) !=
+          mask_queue_worker_started_before + 1 ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_refresh_queue_worker_completed_count(mask_queue_controller) !=
+          mask_queue_worker_completed_before + 1 ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_running(mask_queue_controller) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+           thumbnail_refresh_queue_active_job_id(mask_queue_controller)
+           .isEmpty() ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_refresh_queue_stale_result_count(mask_queue_controller) !=
+          mask_queue_stale_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_entry_cache_store_count(mask_queue_controller) <=
+          mask_queue_store_count_before) {
+    std::cerr << "mask thumbnail queue worker diagnostics:"
+              << " started="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_worker_started_count(mask_queue_controller)
+              << " started_before=" << mask_queue_worker_started_before
+              << " completed="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_worker_completed_count(mask_queue_controller)
+              << " completed_before=" << mask_queue_worker_completed_before
+              << " running="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_worker_running(mask_queue_controller)
+              << " active_job="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_active_job_id(mask_queue_controller)
+                     .toStdString()
+              << " stale="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_refresh_queue_stale_result_count(mask_queue_controller)
+              << " stale_before=" << mask_queue_stale_before
+              << " stores="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_entry_cache_store_count(mask_queue_controller)
+              << " stores_before=" << mask_queue_store_count_before
+              << '\n';
+    return fail("mask thumbnail queue proof should complete through a current background worker and store rendered entries");
+  }
+  const auto mask_queue_sets_after = mask_queue_controller.maskSets();
+  const auto mask_queue_set_after =
+      mask_queue_sets_after.isEmpty() ? QVariantMap{} : mask_queue_sets_after.constFirst().toMap();
+  const auto mask_queue_sources_after =
+      mask_queue_set_after.value(QStringLiteral("sources")).toList();
+  const auto mask_queue_source_after =
+      mask_queue_sources_after.isEmpty() ? QVariantMap{} : mask_queue_sources_after.constFirst().toMap();
+  if (mask_queue_sets_after.isEmpty() ||
+      mask_queue_sources_after.isEmpty() ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailSource")).toString().isEmpty() ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailSource")).toString().isEmpty() ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailProgressive")).toBool() ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailStale")).toBool() ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailRenderQueuedWorkerJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(mask_queue_generation) ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailRenderQueuedWorkerContract")).toString() !=
+          QStringLiteral("thumbnail-render-consumed-queue-worker:v1") ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailRenderQueuedWorkerMaskEntryCount")).toInt() <= 0 ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailCacheHit")).toBool() != true ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailCacheSource")).toString() !=
+          QStringLiteral("entry-cache") ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerRendered")).toBool() != true ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerRenderJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(mask_queue_generation) ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerRenderSource")).toString() !=
+          QStringLiteral("mask-set") ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerRenderMaskEntryCount")).toInt() <= 0 ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerRenderContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-entry:v1") ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailQueueWorkerServiceContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-service|cancellable|entry-cache:v1") ||
+      mask_queue_set_after.value(QStringLiteral("thumbnailRenderQueuedWorkerServiceContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-service|cancellable|entry-cache:v1") ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailRenderQueuedWorkerJobId")).toString() !=
+          mask_queue_set_after.value(QStringLiteral("thumbnailRenderQueuedWorkerJobId")).toString() ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailCacheHit")).toBool() != true ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailCacheSource")).toString() !=
+          QStringLiteral("entry-cache") ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailQueueWorkerRendered")).toBool() != true ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailQueueWorkerRenderSource")).toString() !=
+          QStringLiteral("mask-source") ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailQueueWorkerRenderMaskEntryCount")).toInt() <= 0 ||
+      mask_queue_source_after.value(QStringLiteral("thumbnailQueueWorkerServiceContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-service|cancellable|entry-cache:v1") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_entry_cache_hit_count(mask_queue_controller) <=
+          mask_queue_hit_count_before) {
+    return fail("mask set and source thumbnails should be rendered by the thumbnail queue worker and then consumed from the entry cache");
+  }
+  photo_editor::desktop::EditorPreviewController adjustment_queue_controller;
+  adjustment_queue_controller.loadAsset(
+      QStringLiteral("adjustment-thumbnail-queue-worker-proof"),
+      thumbnail_fixture_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(adjustment_queue_controller)) {
+    return fail("adjustment thumbnail queue proof should start from an idle preview controller");
+  }
+  adjustment_queue_controller.startSelectionBrush(false);
+  const auto adjustment_queue_layers_before = adjustment_queue_controller.photoLayers();
+  if (adjustment_queue_layers_before.isEmpty() ||
+      adjustment_queue_layers_before.constFirst()
+          .toMap()
+          .value(QStringLiteral("thumbnailSource"))
+          .toString()
+          .isEmpty()) {
+    return fail("adjustment thumbnail queue proof should warm an initial masked adjustment thumbnail");
+  }
+  const auto adjustment_queue_store_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_entry_cache_store_count(adjustment_queue_controller);
+  const auto adjustment_queue_hit_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_entry_cache_hit_count(adjustment_queue_controller);
+  const auto adjustment_queue_dispatch_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_dispatched_count(adjustment_queue_controller);
+  const auto adjustment_queue_worker_completed_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_worker_completed_count(adjustment_queue_controller);
+  adjustment_queue_controller.beginActiveBrushStroke();
+  if (!adjustment_queue_controller.setPhotoLayerAdjustmentValue(
+          0,
+          QStringLiteral("exposure"),
+          0.44)) {
+    return fail("adjustment thumbnail queue proof should dirty the masked adjustment layer during a live stroke");
+  }
+  const auto adjustment_queue_layers_deferred = adjustment_queue_controller.photoLayers();
+  const auto adjustment_queue_generation =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_pending_generation(adjustment_queue_controller);
+  const auto adjustment_queue_layer_deferred =
+      adjustment_queue_layers_deferred.isEmpty()
+          ? QVariantMap{}
+          : adjustment_queue_layers_deferred.constFirst().toMap();
+  if (adjustment_queue_layers_deferred.isEmpty() ||
+      adjustment_queue_generation <= 0 ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_deferred(adjustment_queue_controller) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          thumbnail_refresh_queue_pending(adjustment_queue_controller) ||
+      !adjustment_queue_layer_deferred.value(QStringLiteral("thumbnailQueuePending")).toBool() ||
+      adjustment_queue_layer_deferred.value(QStringLiteral("thumbnailQueueJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(adjustment_queue_generation) ||
+      adjustment_queue_layer_deferred.value(QStringLiteral("thumbnailQueueReason")).toString() !=
+          QStringLiteral("photo_layer_thumbnail_refresh_deferred") ||
+      adjustment_queue_layer_deferred.value(QStringLiteral("thumbnailProgressive")).toBool() != true ||
+      adjustment_queue_layer_deferred.value(QStringLiteral("thumbnailStale")).toBool() != true) {
+    return fail("adjustment thumbnail queue proof should expose the queued worker job on a stale masked adjustment row");
+  }
+  if (!finish_brush_stroke(adjustment_queue_controller)) {
+    return fail("adjustment thumbnail queue proof should end the live stroke");
+  }
+  if (!wait_for_thumbnail_queue_dispatch(
+          adjustment_queue_controller,
+          adjustment_queue_dispatch_count_before + 1,
+          adjustment_queue_worker_completed_before + 1,
+          6000)) {
+    return fail("adjustment thumbnail queue proof should dispatch after live stroke blockers settle");
+  }
+  if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_entry_cache_store_count(adjustment_queue_controller) <=
+          adjustment_queue_store_count_before) {
+    return fail("adjustment thumbnail queue worker should store a rendered masked adjustment layer entry");
+  }
+  const auto adjustment_queue_layers_after = adjustment_queue_controller.photoLayers();
+  const auto adjustment_queue_layer_after =
+      adjustment_queue_layers_after.isEmpty()
+          ? QVariantMap{}
+          : adjustment_queue_layers_after.constFirst().toMap();
+  if (adjustment_queue_layers_after.isEmpty() ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailSource")).toString().isEmpty() ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailProgressive")).toBool() ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailStale")).toBool() ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailKind")).toString() !=
+          QStringLiteral("masked-adjustment-layer") ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailSharedRenderPath")).toBool() != true ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailCacheHit")).toBool() != true ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailCacheSource")).toString() !=
+          QStringLiteral("entry-cache") ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRendered")).toBool() != true ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(adjustment_queue_generation) ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderSource")).toString() !=
+          QStringLiteral("masked-adjustment-photo-layer") ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderEntryCount")).toInt() <= 0 ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-entry:v1") ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerServiceContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-service|cancellable|entry-cache:v1") ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailRenderQueuedWorkerJobId")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-%1").arg(adjustment_queue_generation) ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailRenderQueuedWorkerEntryCount")).toInt() <= 0 ||
+      adjustment_queue_layer_after.value(QStringLiteral("thumbnailRenderQueuedWorkerServiceContract")).toString() !=
+          QStringLiteral("thumbnail-refresh-queue-worker-service|cancellable|entry-cache:v1") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              thumbnail_entry_cache_hit_count(adjustment_queue_controller) <=
+          adjustment_queue_hit_count_before) {
+    std::cerr << "thumbnail queue diagnostics: "
+              << "sourceEmpty="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailSource")).toString().isEmpty()
+              << " progressive="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailProgressive")).toBool()
+              << " stale="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailStale")).toBool()
+              << " kind="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailKind")).toString().toStdString()
+              << " shared="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailSharedRenderPath")).toBool()
+              << " cacheHit="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailCacheHit")).toBool()
+              << " cacheSource="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailCacheSource")).toString().toStdString()
+              << " workerRendered="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRendered")).toBool()
+              << " workerJob="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderJobId")).toString().toStdString()
+              << " expectedJob="
+              << QStringLiteral("thumbnail-refresh-queue-%1").arg(adjustment_queue_generation).toStdString()
+              << " renderSource="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderSource")).toString().toStdString()
+              << " workerEntries="
+              << adjustment_queue_layer_after.value(QStringLiteral("thumbnailQueueWorkerRenderEntryCount")).toInt()
+              << " hitBefore=" << adjustment_queue_hit_count_before
+              << " hitAfter="
+              << photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     thumbnail_entry_cache_hit_count(adjustment_queue_controller)
+              << '\n';
+    return fail("masked adjustment thumbnails should be rendered by the thumbnail queue worker and consumed from the entry cache");
   }
   const auto post_entry_layer_thumbnail_refresh_count =
       photo_editor::desktop::EditorPreviewControllerTestAccess::

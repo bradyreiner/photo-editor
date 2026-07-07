@@ -274,7 +274,9 @@ GlassSurface {
                             font.family: theme.fontUi
                             font.pixelSize: 12
                             font.weight: Font.Medium
-                            elide: Text.ElideRight
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            maximumLineCount: 2
+                            elide: Text.ElideNone
                             Layout.fillWidth: true
                         }
 
@@ -386,8 +388,11 @@ GlassSurface {
                         }
                     }
 
-                    Slider {
+                    ToolValueSlider {
                         Layout.fillWidth: true
+                        label: "Source position"
+                        valueText: formatSeconds(root.previewSeconds)
+                        tooltipText: "Scrub the source preview"
                         from: 0
                         to: root.hasSource && sourceState.durationSeconds ? sourceState.durationSeconds : 1
                         value: root.previewSeconds
@@ -492,95 +497,16 @@ GlassSurface {
                 spacing: 8
                 model: root.assetCatalog
 
-                delegate: Rectangle {
-                    required property string assetId
-                    required property string cameraLabel
-                    required property string filePath
-                    required property string thumbnailSource
-                    required property string mediaType
-                    required property string durationText
-
-                    readonly property string titleText: cameraLabel.length > 0 ? cameraLabel : assetId
-                    readonly property bool matchesSearch: root.mediaSearchText.length === 0
-                                                         || titleText.toLowerCase().indexOf(root.mediaSearchText.toLowerCase()) >= 0
-                    visible: mediaType === "video" && matchesSearch
-                    width: ListView.view.width
-                    height: visible ? 88 : 0
-                    radius: 8
-                    color: theme.alpha(theme.ink900, 0.9)
-                    border.width: 1
-                    border.color: theme.alpha(theme.lineSoft, 0.34)
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 8
-                        spacing: 8
-
-                        Rectangle {
-                            Layout.preferredWidth: 84
-                            Layout.preferredHeight: 64
-                            radius: 6
-                            color: "#0b1014"
-                            clip: true
-
-                            Image {
-                                anchors.fill: parent
-                                source: thumbnailSource
-                                fillMode: Image.PreserveAspectCrop
-                                cache: true
-                                asynchronous: true
-                                visible: source.toString().length > 0
-                            }
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 3
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: titleText
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 11
-                                font.weight: Font.Medium
-                                elide: Text.ElideRight
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: "Video  •  " + durationText
-                                color: theme.textMuted
-                                font.family: theme.fontMono
-                                font.pixelSize: 9
-                                elide: Text.ElideRight
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 6
-
-                                ActionButton {
-                                    text: "Source"
-                                    compact: true
-                                    onClicked: root.loadIntoSource(assetId, filePath, titleText, thumbnailSource)
-                                }
-
-                                ActionButton {
-                                    text: "Ins"
-                                    compact: true
-                                    tooltipText: "Insert at playhead"
-                                    onClicked: timelineDocument.insertClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
-                                }
-
-                                ActionButton {
-                                    text: "Ovr"
-                                    compact: true
-                                    tooltipText: "Overwrite at playhead"
-                                    onClicked: timelineDocument.overwriteClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
-                                }
-                            }
-                        }
+                delegate: TimelineMediaAssetRow {
+                    mediaSearchText: root.mediaSearchText
+                    onSourceRequested: function(assetId, filePath, titleText, thumbnailSource) {
+                        root.loadIntoSource(assetId, filePath, titleText, thumbnailSource)
+                    }
+                    onInsertRequested: function(assetId, filePath, titleText, thumbnailSource) {
+                        timelineDocument.insertClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
+                    }
+                    onOverwriteRequested: function(assetId, filePath, titleText, thumbnailSource) {
+                        timelineDocument.overwriteClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)
                     }
                 }
             }

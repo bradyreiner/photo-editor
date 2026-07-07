@@ -1299,15 +1299,21 @@ inline QString normalized_brush_stroke_operation(const QString& operation) {
 }
 
 inline QString normalized_mask_blend_mode(const QString& blend_mode) {
-  const auto normalized = blend_mode.trimmed().toLower();
+  auto normalized = blend_mode.trimmed().toLower();
+  if (normalized == QStringLiteral("soft light")) {
+    normalized = QStringLiteral("soft-light");
+  } else if (normalized == QStringLiteral("hard light")) {
+    normalized = QStringLiteral("hard-light");
+  } else if (normalized == QStringLiteral("linear light")) {
+    normalized = QStringLiteral("linear-light");
+  }
   if (normalized == QStringLiteral("normal") || normalized == QStringLiteral("multiply") ||
       normalized == QStringLiteral("screen") || normalized == QStringLiteral("overlay") ||
-      normalized == QStringLiteral("soft light") || normalized == QStringLiteral("soft-light") ||
-      normalized == QStringLiteral("hard light") || normalized == QStringLiteral("hard-light") ||
+      normalized == QStringLiteral("soft-light") ||
+      normalized == QStringLiteral("hard-light") ||
       normalized == QStringLiteral("color") || normalized == QStringLiteral("luminosity") ||
       normalized == QStringLiteral("hue") || normalized == QStringLiteral("saturation") ||
-      normalized == QStringLiteral("difference") || normalized == QStringLiteral("linear light") ||
-      normalized == QStringLiteral("linear-light") ||
+      normalized == QStringLiteral("difference") || normalized == QStringLiteral("linear-light") ||
       normalized == QStringLiteral("lighten") || normalized == QStringLiteral("darken") ||
       normalized == QStringLiteral("replace")) {
     return normalized;

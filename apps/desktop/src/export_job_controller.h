@@ -81,6 +81,7 @@ class ExportJobController final : public QObject {
   Q_INVOKABLE void retryJob(const QString& job_id);
   Q_INVOKABLE void removeJob(const QString& job_id);
   Q_INVOKABLE void clearFinishedJobs();
+  Q_INVOKABLE void initializeFromStore();
 
  signals:
   void jobsChanged();

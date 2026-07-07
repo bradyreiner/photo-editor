@@ -285,6 +285,21 @@ int main(int argc, char** argv) {
       controller.maskPreviewDisplayMode() != QStringLiteral("marching-ants")) {
     return fail("marching ants should be a normal user-facing display mode");
   }
+  controller.setMaskPreviewMode(QStringLiteral("outline"));
+  if (controller.maskPreviewMode() != QStringLiteral("outline") ||
+      controller.maskPreviewDisplayMode() != QStringLiteral("outline")) {
+    return fail("outline should be a normal one-color boundary display mode");
+  }
+  controller.setMaskPreviewMode(QStringLiteral("grayscale-alpha"));
+  if (controller.maskPreviewMode() != QStringLiteral("grayscale") ||
+      controller.maskPreviewDisplayMode() != QStringLiteral("grayscale-alpha")) {
+    return fail("grayscale alpha should use the public matte display name");
+  }
+  controller.setMaskPreviewMode(QStringLiteral("isolated-mask"));
+  if (controller.maskPreviewMode() != QStringLiteral("on-black") ||
+      controller.maskPreviewDisplayMode() != QStringLiteral("isolated-mask")) {
+    return fail("isolated mask should use the public isolated display name");
+  }
   controller.setMaskPreviewMode(QStringLiteral("hidden"));
   if (controller.maskPreviewMode() != QStringLiteral("none") ||
       controller.maskPreviewDisplayMode() != QStringLiteral("hidden")) {
@@ -298,10 +313,16 @@ int main(int argc, char** argv) {
 
   const auto mask_inspector_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"));
+  const auto mask_view_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml"));
   const auto edit_view_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/EditView.qml"));
   const auto studio_workspace_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/StudioWorkspace.qml"));
+  const auto layer_row_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/LayerRow.qml"));
+  const auto coordinate_mapper_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/CanvasCoordinateMapper.qml"));
   const auto shared_overlay_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"));
   const auto canvas_overlay_source =
@@ -310,6 +331,12 @@ int main(int argc, char** argv) {
       read_source_file(QStringLiteral("apps/desktop/src/editor_preview_controller.cpp"));
   const auto controller_header_source =
       read_source_file(QStringLiteral("apps/desktop/src/editor_preview_controller.h"));
+  const auto thumbnail_queue_service_header_source =
+      read_source_file(QStringLiteral("apps/desktop/src/thumbnail_refresh_queue_service.h"));
+  const auto thumbnail_queue_service_source =
+      read_source_file(QStringLiteral("apps/desktop/src/thumbnail_refresh_queue_service.cpp"));
+  const auto color_adjustments_source =
+      read_source_file(QStringLiteral("engine/src/pipeline/color_adjustments.cpp"));
   const auto normal_flow_index = mask_inspector_source.indexOf(QStringLiteral("normalMaskPreviewModeFlow"));
   const auto diagnostics_toggle_index =
       mask_inspector_source.indexOf(QStringLiteral("maskPreviewDiagnosticsToggleButton"));
@@ -317,31 +344,56 @@ int main(int argc, char** argv) {
       mask_inspector_source.indexOf(QStringLiteral("diagnosticMaskPreviewModeFlow"));
   const auto color_overlay_index =
       mask_inspector_source.indexOf(QStringLiteral("maskPreviewOverlayButton"));
+  const auto outline_index =
+      mask_inspector_source.indexOf(QStringLiteral("maskPreviewOutlineButton"));
   const auto marching_ants_index =
       mask_inspector_source.indexOf(QStringLiteral("maskPreviewMarchingAntsButton"));
+  const auto hidden_index =
+      mask_inspector_source.indexOf(QStringLiteral("maskPreviewNoneButton"));
   const auto color_on_bw_index =
       mask_inspector_source.indexOf(QStringLiteral("maskPreviewColorOnBwButton"));
+  const auto grayscale_alpha_index =
+      mask_inspector_source.indexOf(QStringLiteral("maskPreviewMatteButton"));
+  const auto isolated_mask_index =
+      mask_inspector_source.indexOf(QStringLiteral("maskPreviewOnBlackButton"));
   if (mask_inspector_source.isEmpty() ||
       edit_view_source.isEmpty() ||
       studio_workspace_source.isEmpty() ||
+      coordinate_mapper_source.isEmpty() ||
       shared_overlay_source.isEmpty() ||
       canvas_overlay_source.isEmpty() ||
       controller_source.isEmpty() ||
       controller_header_source.isEmpty() ||
+      thumbnail_queue_service_header_source.isEmpty() ||
+      thumbnail_queue_service_source.isEmpty() ||
+      color_adjustments_source.isEmpty() ||
       normal_flow_index < 0 ||
       diagnostics_toggle_index < 0 ||
       diagnostic_flow_index < 0 ||
       color_overlay_index < normal_flow_index ||
       color_overlay_index > diagnostics_toggle_index ||
+      outline_index < normal_flow_index ||
+      outline_index > diagnostics_toggle_index ||
       marching_ants_index < normal_flow_index ||
       marching_ants_index > diagnostics_toggle_index ||
+      hidden_index < normal_flow_index ||
+      hidden_index > diagnostics_toggle_index ||
       color_on_bw_index < diagnostic_flow_index ||
+      grayscale_alpha_index < diagnostic_flow_index ||
+      isolated_mask_index < diagnostic_flow_index ||
       !mask_inspector_source.contains(QStringLiteral("text: \"Color Overlay\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("text: \"Outline\"")) ||
       !mask_inspector_source.contains(QStringLiteral("text: \"Marching Ants\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("text: \"Hidden\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("text: \"Grayscale Alpha\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("text: \"Isolated Mask\"")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewOverlayOpacitySlider")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewOverlayColorSwatch")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewOverlayColorButton")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewOverlayColorResetButton")) ||
+      !mask_inspector_source.contains(QStringLiteral("rubylith-overlay-preset:v1|display-mode:overlay|color:#ff2f5f|single-color:true|separate-from-diagnostics:true")) ||
+      !mask_inspector_source.contains(QStringLiteral("maskPreviewRubylithOverlayPresetButton")) ||
+      !mask_inspector_source.contains(QStringLiteral("editorPreview.maskPreviewOverlayColor = \"#ff2f5f\"")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewShowActiveOnlyButton")) ||
       !mask_inspector_source.contains(QStringLiteral("editorPreview.maskPreviewShowAll = false")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewShowAllButton")) ||
@@ -349,10 +401,125 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("maskPreviewShowInvertedButton")) ||
       !mask_inspector_source.contains(QStringLiteral("editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted")) ||
       !mask_inspector_source.contains(QStringLiteral("text: root.diagnosticMaskPreviewModesVisible ? \"Hide Matte Diagnostics\" : \"Matte Diagnostics\"")) ||
-      !mask_inspector_source.contains(QStringLiteral("visible: root.diagnosticMaskPreviewModesVisible")) ||
+      !mask_inspector_source.contains(QStringLiteral("visible: editRoot.developerDiagnosticsEnabled === true &&")) ||
+      !mask_inspector_source.contains(QStringLiteral("developer-diagnostics-menu:v2|developer-mode-gated:true|normal-mask-modes:separate|matte-debug:collapsed|runtime-detail:collapsed|raw-alpha:diagnostic-only|confidence:false-color-focus:diagnostic-only|default-visible:false")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string diagnosticsMenuContract: root.developerDiagnosticsMenuContract")) ||
+      !mask_inspector_source.contains(QStringLiteral("mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only")) ||
+      !mask_inspector_source.contains(QStringLiteral("adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only")) ||
+      !mask_inspector_source.contains(QStringLiteral("function maskControlTargetSupportSignature(")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string targetSupport: \"mask\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)")) ||
+      !mask_inspector_source.contains(QStringLiteral("label: \"MASK OPACITY\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("label: \"MASK DENSITY\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string parameterRole: \"overlay-opacity\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-opacity\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-density\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string parameterRole: \"brush-flow\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("readonly property string parameterRole: \"brush-opacity\"")) ||
+      !mask_view_source.contains(QStringLiteral("mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only")) ||
+      !mask_view_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-opacity\"")) ||
+      !mask_view_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-density\"")) ||
+      !mask_view_source.contains(QStringLiteral("readonly property string parameterRole: \"brush-flow\"")) ||
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"color-on-bw\"")) ||
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"image-on-bw\"")) ||
       !edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"marching-ants\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function photoLayerStateBadges(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function photoLayerStateBadgeSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerStateBadgeRow\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerStateBadge\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-state-badges:v1|global:base-row")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageGlobalAdjustmentBadge\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only")) ||
+      !studio_workspace_source.contains(QStringLiteral("adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only")) ||
+      !studio_workspace_source.contains(QStringLiteral("target-aware-adjustment-command-router:v1|commands:slider,preset,reset|routes:base-image->global,adjustment-layer->photo-layer-recipe|blocked:mask,unsupported-photo-layer,locked-layer,unsupported-control|no-global-fallback:true")) ||
+      !studio_workspace_source.contains(QStringLiteral("function normalizedAdjustmentControlTargets(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function adjustmentControlTargetSupportSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function adjustmentControlSupportsActiveTarget(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function targetAwareAdjustmentCommandSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function routePrimaryAdjustmentValueCommand(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function routePrimaryAdjustmentResetCommand(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function routePrimaryPresetCommand(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function layerLocalPresetApplicationSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("return root.routePrimaryAdjustmentValueCommand(adjustment, value, \"base-image,adjustment-layer\")")) ||
+      !studio_workspace_source.contains(QStringLiteral("return root.routePrimaryAdjustmentResetCommand(groupName, \"base-image,adjustment-layer\")")) ||
+      !studio_workspace_source.contains(QStringLiteral("return root.routePrimaryPresetCommand(name, \"base-image,adjustment-layer\")")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-local-preset-apply:v1")) ||
+      !studio_workspace_source.contains(QStringLiteral("uses-applyPresetToPhotoLayer:true")) ||
+      !studio_workspace_source.contains(QStringLiteral("uses-applyPresetWithIntensity-only-for-base:true")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string layerLocalPresetApplyContract: root.layerLocalPresetApplicationSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("property string targetSupport: \"base-image,adjustment-layer\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property bool supportsActiveEditTarget: root.adjustmentControlSupportsActiveTarget(targetSupport)")) ||
+      !studio_workspace_source.contains(QStringLiteral("targetSupport: \"mask\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string targetSupport: \"adjustment-layer,photo-layer\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("label: \"Mask Density\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("label: \"Mask Opacity\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("label: \"Brush Flow\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string parameterRole: \"layer-opacity\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-density\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string parameterRole: \"mask-opacity\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string parameterRole: \"brush-flow\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerMaskOpacitySlider\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerMaskDensitySlider\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.setPhotoLayerMaskOpacity(layerIndex, value / 100.0)")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.setPhotoLayerMaskDensity(layerIndex, value / 100.0)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function layerKeyboardNavigationSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-keyboard-navigation:v1|up-down:select|enter:edit|space:visibility|shift:multi-select|modifier-up-down:reorder|escape:base-focus")) ||
+      !studio_workspace_source.contains(QStringLiteral("function selectedPhotoLayerBatchTargets(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function selectedPhotoLayerBatchMenuItems(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handleSelectedPhotoLayerBatchAction(")) ||
+      !studio_workspace_source.contains(QStringLiteral("selected-layer-batch-actions:v1|visibility:true|lock:true|delete:true|duplicate:true|opacity:true|blend:true|paste-adjustments:true|paste-global:true")) ||
+      !studio_workspace_source.contains(QStringLiteral("function layerDuplicatePolicySignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-duplicate-policy:v1|with-masks:duplicatePhotoLayerWithMasks|without-masks:duplicatePhotoLayerWithoutMasks|locked:blocked|batch:both")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string layerDuplicatePolicyContract: root.layerDuplicatePolicySignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("layers-only-focus-mode:v1|tab:layers|global-panels:hidden|layer-stack:true|mask-stack:true|layer-local-controls:true|restore:previous-inspector-tab|target:layer-or-mask")) ||
+      !studio_workspace_source.contains(QStringLiteral("function layersOnlyFocusModeSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function setLayersOnlyFocusMode(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function toggleLayersOnlyFocusMode(")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"layersOnlyFocusModeButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"layers-focus\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.toggleLayersOnlyFocusMode()")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.editInspectorTab = \"layers\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"duplicate-with-masks\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"duplicate-without-masks\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"duplicate-selected-without-masks\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.duplicatePhotoLayerWithMasks(index)")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.duplicatePhotoLayerWithoutMasks(index)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function photoLayerBlendModesForLayer(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function photoLayerBlendModeSupportSignature(")) ||
+      !studio_workspace_source.contains(QStringLiteral("photo-layer-blend-mode-support:v1")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("enabled: !layerLocked && root.photoLayerBlendModeControlsEnabled(layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("model: root.photoLayerBlendLabelsForLayer(layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.photoLayerBlendModeAtForLayer(layerData, index)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"selectedPhotoLayerBatchActionsButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.handleSelectedPhotoLayerBatchAction(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handlePhotoLayerRowKey(event, layerIndex, layer)")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.handlePhotoLayerRowKey(event, layerIndex, layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("Keys.priority: Keys.BeforeItem")) ||
+      !layer_row_source.contains(QStringLiteral("thumbnailDprContract: \"layer-row-thumbnail-dpr:v1|source-size:screen-aware|base-image:true|display:\"")) ||
+      !layer_row_source.contains(QStringLiteral("readonly property real thumbnailDevicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))")) ||
+      !layer_row_source.contains(QStringLiteral("sourceSize.width: root.screenAwareThumbnailSourceSize")) ||
+      !layer_row_source.contains(QStringLiteral("sourceSize.height: root.screenAwareThumbnailSourceSize")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string baseLayerThumbnailDprContract: thumbnailDprContract")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailSourceSize: root.thumbnailSourceSizeForDisplay(thumbnailZoneSize, 96)")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-reorder-drop-targets:v1|before:")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerDropTargetBefore\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerDropTargetAfter\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onClicked: editorPreview.movePhotoLayer(layerIndex, -1)")) ||
+      !studio_workspace_source.contains(QStringLiteral("onClicked: editorPreview.movePhotoLayer(layerIndex, 1)")) ||
+      !studio_workspace_source.contains(QStringLiteral("property bool developerDiagnosticsEnabled: false")) ||
+      !studio_workspace_source.contains(QStringLiteral("developer-diagnostics-menu:v2|developer-mode-gated:true|canvas-overlays:collapsed|focus:false-color:gamut:zone:diagnostic-only|hidden-during-mask-work:true|hidden-during-primary-hud:true|default-visible:false")) ||
+      !studio_workspace_source.contains(QStringLiteral("tooltip: \"Open developer diagnostic overlays.\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: root.developerDiagnosticsEnabled && root.diagnosticsPanelOpen && !root.maskWorkActive && !editViewport.primaryCanvasHudActive")) ||
+      !studio_workspace_source.contains(QStringLiteral("CanvasCoordinateMapper")) ||
+      !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("coordinate-transform:v1|view-to-image:true|image-to-view:true|crop:true|rotation:true|zoom-pan:true|device-pixel-ratio:true|roundtrip:true|clamp:true")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("function imageToViewPoint(")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("function viewToImagePoint(")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("function imageToViewRect(")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("function viewToImageRect(")) ||
+      !coordinate_mapper_source.contains(QStringLiteral("function devicePixelRectForViewRect(")) ||
       !studio_workspace_source.contains(QStringLiteral("if (editorPreview.maskPreviewDisplayMode !== \"marching-ants\")")) ||
       !shared_overlay_source.contains(QStringLiteral("liveOverlayPerformanceContract")) ||
       !shared_overlay_source.contains(QStringLiteral("no-preview-render-block:v1")) ||
@@ -365,6 +532,39 @@ int main(int argc, char** argv) {
       !shared_overlay_source.contains(QStringLiteral("editorPreview.maskPreviewMode === \"marching-ants\"")) ||
       !canvas_overlay_source.contains(QStringLiteral("editorPreview.maskPreviewMode !== \"marching-ants\"")) ||
       !controller_source.contains(QStringLiteral("QtConcurrent::run([request]() { return compute_brush_raster_commit_result(request); })")) ||
+      !controller_source.contains(QStringLiteral("duplicatePhotoLayerWithMasks")) ||
+      !controller_source.contains(QStringLiteral("duplicatePhotoLayerWithoutMasks")) ||
+      !controller_source.contains(QStringLiteral("duplicateMaskPolicy")) ||
+      !controller_source.contains(QStringLiteral("clear_photo_layer_mask_links")) ||
+      !controller_source.contains(QStringLiteral("photo_layer_blend_mode_supported")) ||
+      !controller_source.contains(QStringLiteral("kind == QStringLiteral(\"group\")")) ||
+      !controller_source.contains(QStringLiteral("mode == QStringLiteral(\"soft-light\")")) ||
+      !controller_source.contains(QStringLiteral("setPhotoLayerMaskOpacity")) ||
+      !controller_source.contains(QStringLiteral("setPhotoLayerMaskDensity")) ||
+      !controller_source.contains(QStringLiteral("Layer mask opacity change")) ||
+      !controller_source.contains(QStringLiteral("Layer mask density change")) ||
+      !controller_source.contains(QStringLiteral("active_mask_opacity")) ||
+      !controller_source.contains(QStringLiteral("active_mask_density")) ||
+      !controller_source.contains(QStringLiteral("active_mask_brush_flow")) ||
+      !controller_source.contains(QStringLiteral("mask_preview_overlay_opacity_")) ||
+      !color_adjustments_source.contains(QStringLiteral("layer.mask_density")) ||
+      !color_adjustments_source.contains(QStringLiteral("layer.mask_opacity")) ||
+      !color_adjustments_source.contains(QStringLiteral("photo-layer-effect-detail-order:v1|layer-recipe:tone->curves->color->effects-detail|effects-detail:before-mask-opacity-blend|mask-opacity-density:alpha-only|global-spatial-detail:after-layer-composite")) ||
+      !color_adjustments_source.contains(QStringLiteral("has_photo_layer_effect_detail_adjustments")) ||
+      !color_adjustments_source.contains(QStringLiteral("has_photo_layer_spatial_effect_detail_adjustments")) ||
+      !color_adjustments_source.contains(QStringLiteral("PhotoLayerEffectDetailContext")) ||
+      !color_adjustments_source.contains(QStringLiteral("guided_luminance_blur_into(")) ||
+      !color_adjustments_source.contains(QStringLiteral("apply_photo_layer_effect_detail_adjustments")) ||
+      !controller_source.contains(QStringLiteral("createAdjustmentLayerFromCurrentGlobalEdits")) ||
+      !controller_source.contains(QStringLiteral("bakePhotoLayerAdjustmentsToGlobal")) ||
+      !controller_source.contains(QStringLiteral("edit_state_with_photo_layer_adjustment_recipe")) ||
+      !controller_source.contains(QStringLiteral("Bake adjustment layer edits to Base Image")) ||
+      !controller_source.contains(QStringLiteral("LayerAdjustmentRecipe:v1|mirrors-global-edit-recipe:true|flat-fields:compat|nested:adjustments.colorMixer,colorGrading,lut|copy-paste-sync-bake:true|future-engine-model:true")) ||
+      !controller_source.contains(QStringLiteral("layer-adjustment-recipe-compat:v1|read:legacy-flat-fields+adjustments-map|write:legacy-flat-fields+adjustments-map|preserve-existing-projects:true|migration-target:LayerAdjustmentRecipe")) ||
+      !controller_source.contains(QStringLiteral("layer_adjustment_recipe_schema_contract()")) ||
+      !controller_source.contains(QStringLiteral("layer_adjustment_recipe_compatibility_contract()")) ||
+      !controller_source.contains(QStringLiteral("photo_layer_adjustment_recipe_keys")) ||
+      !controller_source.contains(QStringLiteral("replace_photo_layer_adjustment_recipe")) ||
       !controller_source.contains(QStringLiteral("{QStringLiteral(\"commit_deferred\"), true}")) ||
       !controller_source.contains(QStringLiteral("{QStringLiteral(\"async_worker\"), true}")) ||
       !controller_source.contains(QStringLiteral("{QStringLiteral(\"raster_worker_thread\"), result.worker_thread}")) ||
@@ -372,6 +572,17 @@ int main(int argc, char** argv) {
       !controller_source.contains(QStringLiteral("mask_thumbnail_refresh_deferred")) ||
       !controller_source.contains(QStringLiteral("emit controlsChanged();")) ||
       !controller_source.contains(QStringLiteral("runQueuedThumbnailRefresh")) ||
+      !controller_source.contains(QStringLiteral("layerThumbnailServiceOwnershipContract")) ||
+      !controller_source.contains(QStringLiteral("layer_thumbnail_service_ownership_contract()")) ||
+      !controller_source.contains(QStringLiteral("thumbnailColorManaged")) ||
+      !controller_source.contains(QStringLiteral("layer-thumbnail-active-color-management:v1|adjustment:shared-preview-render|render-mode:layer_thumbnail|fallback:raster-explicit")) ||
+      !thumbnail_queue_service_header_source.contains(QStringLiteral("layer-thumbnail-service:v1|requests:ThumbnailRefreshQueueRequest|cancellation:atomic|cache:thumbnail-entry-cache|status:thumbnailRefreshQueueFields|invalidation:thumbnail_invalidation_key|independent-main-preview:true")) ||
+      !thumbnail_queue_service_header_source.contains(QStringLiteral("struct ThumbnailRefreshQueueRequest final")) ||
+      !thumbnail_queue_service_header_source.contains(QStringLiteral("std::shared_ptr<std::atomic_bool> cancellation")) ||
+      !thumbnail_queue_service_header_source.contains(QStringLiteral("QString thumbnail_invalidation_key(")) ||
+      !thumbnail_queue_service_header_source.contains(QStringLiteral("QString thumbnail_entry_cache_key(")) ||
+      !thumbnail_queue_service_source.contains(QStringLiteral("thumbnailColorManaged")) ||
+      !thumbnail_queue_service_source.contains(QStringLiteral("layer-thumbnail-active-color-management:v1|adjustment:shared-preview-render|render-mode:layer_thumbnail|fallback:raster-explicit")) ||
       !controller_source.contains(QStringLiteral("kFrameCoalescedPreviewRenderBudgetMs = 16")) ||
       !controller_source.contains(QStringLiteral("kLayerAdjustmentRenderDebounceMs = kFrameCoalescedPreviewRenderBudgetMs")) ||
       !controller_source.contains(QStringLiteral("kLayerAdjustmentSliderDragLatencyBudgetMs")) ||
@@ -397,6 +608,12 @@ int main(int argc, char** argv) {
       !controller_header_source.contains(QStringLiteral("QString active_layer_id")) ||
       !controller_header_source.contains(QStringLiteral("QString active_mask_id")) ||
       !controller_header_source.contains(QStringLiteral("QString active_mask_set_id")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool duplicatePhotoLayerWithMasks(int index);")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool duplicatePhotoLayerWithoutMasks(int index);")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool setPhotoLayerMaskOpacity(int index, double opacity);")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool setPhotoLayerMaskDensity(int index, double density);")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool createAdjustmentLayerFromCurrentGlobalEdits(const QString& name = {});")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool bakePhotoLayerAdjustmentsToGlobal(int index);")) ||
       !controller_header_source.contains(QStringLiteral("int cancelled_render_count")) ||
       !controller_header_source.contains(QStringLiteral("QString stale_preview_fallback")) ||
       !controller_source.contains(QStringLiteral("{QStringLiteral(\"frame_budget_ms\"), kFrameCoalescedPreviewRenderBudgetMs}")) ||
@@ -419,6 +636,7 @@ int main(int argc, char** argv) {
       !controller_header_source.contains(QStringLiteral("Q_PROPERTY(bool scopesVisible READ scopesVisible WRITE setScopesVisible")) ||
       !controller_source.contains(QStringLiteral("mask-scope-visible-and-settled:v1")) ||
       !controller_source.contains(QStringLiteral("preview.histogram.skipped")) ||
+      !controller_source.contains(QStringLiteral("preview.thumbnail.contained_failure")) ||
       !controller_source.contains(QStringLiteral("mask_scope_dirty")) ||
       !controller_source.contains(QStringLiteral("settled_for_histogram")) ||
       !controller_source.contains(QStringLiteral("(!mask_scope_dirty || result.full_resolution || scopes_visible_)")) ||

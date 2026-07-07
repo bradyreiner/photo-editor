@@ -6,14 +6,21 @@ ComboBox {
     id: root
 
     property color accent: theme.accentWarm400
+    property bool fitTextToWidth: true
+    property bool showFullTextTooltip: true
 
     Theme { id: theme }
 
     implicitHeight: theme.controlHeight
+    implicitWidth: Math.max(theme.menuMinWidth, selectedLabel.implicitWidth + theme.space24 + theme.space16)
     font.family: theme.fontUi
     font.pixelSize: 11
     hoverEnabled: true
     activeFocusOnTab: true
+    ToolTip.visible: root.hovered && root.showFullTextTooltip && selectedLabel.contentWidth > selectedLabel.width + 1
+    ToolTip.delay: 250
+    ToolTip.timeout: 3000
+    ToolTip.text: root.displayText
 
     delegate: ItemDelegate {
         id: optionDelegate
@@ -21,14 +28,23 @@ ComboBox {
         required property var modelData
         width: root.width
         highlighted: root.highlightedIndex === index
+        ToolTip.visible: optionDelegate.hovered && root.showFullTextTooltip && optionLabel.contentWidth > optionLabel.width + 1
+        ToolTip.delay: 250
+        ToolTip.timeout: 3000
+        ToolTip.text: String(optionDelegate.modelData)
 
         contentItem: Text {
+            id: optionLabel
             text: optionDelegate.modelData
             color: optionDelegate.highlighted ? theme.textStrong : theme.textMain
             font.family: root.font.family
             font.pixelSize: 11
             verticalAlignment: Text.AlignVCenter
-            elide: Text.ElideRight
+            maximumLineCount: 1
+            elide: Text.ElideNone
+            fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
+            minimumPixelSize: 9
+            clip: true
             leftPadding: theme.space12
             rightPadding: theme.space12
         }
@@ -50,6 +66,7 @@ ComboBox {
     }
 
     contentItem: Text {
+        id: selectedLabel
         text: root.displayText
         color: root.enabled ? theme.textStrong : theme.alpha(theme.textMuted, 0.68)
         leftPadding: theme.space12
@@ -57,7 +74,11 @@ ComboBox {
         verticalAlignment: Text.AlignVCenter
         font.family: root.font.family
         font.pixelSize: root.font.pixelSize
-        elide: Text.ElideRight
+        maximumLineCount: 1
+        elide: Text.ElideNone
+        fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize
+        minimumPixelSize: 9
+        clip: true
     }
 
     background: Rectangle {
@@ -79,7 +100,7 @@ ComboBox {
 
     popup: Popup {
         y: root.height + theme.space4
-        width: root.width
+        width: Math.max(root.width, theme.menuMinWidth)
         padding: theme.space4
 
         contentItem: ListView {

@@ -27,6 +27,8 @@ DEFAULT_SCENARIOS = (
     "perf-preview-raw",
     "perf-thumbnail-cold-warm",
     "perf-mask-brush",
+    "perf-interaction-workflow",
+    "perf-actual-app-workflow",
     "perf-export-batch",
     "perf-timeline-scroll",
     "perf-timeline-playback",
@@ -88,6 +90,14 @@ def parse_args() -> argparse.Namespace:
         "--keep-open",
         action="store_true",
         help="Leave the app running after target events are observed.",
+    )
+    parser.add_argument(
+        "--allow-gui-unavailable",
+        action="store_true",
+        help=(
+            "Return success with a skipped status when a macOS GUI session is unavailable "
+            "before observability can start."
+        ),
     )
     parser.add_argument(
         "app_args",
@@ -214,6 +224,21 @@ def run_summary(run_dir: Path, artifact_dir: Path) -> None:
     (artifact_dir / "summary.json").write_text(json_result.stdout, encoding="utf-8")
 
 
+def gui_unavailable_abort(process_returncode: int | None, desktop_log: Path, process_output: Path) -> bool:
+    if process_returncode not in {-6, 134}:
+        return False
+    if desktop_log.exists():
+        return False
+    try:
+        output = process_output.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return (
+        "PasteBoard: Error creating pasteboard" in output
+        or "Connection Invalid error for service com.apple.hiservices-xpcservice" in output
+    )
+
+
 def main() -> int:
     args = parse_args()
     app = args.app.resolve()
@@ -253,7 +278,16 @@ def main() -> int:
         app_args = app_args[1:]
     command = [str(app), *app_args]
     started_at = datetime.now(timezone.utc).isoformat()
-    process = subprocess.Popen(command, cwd=REPO_ROOT, env=env)
+    process_output = artifact_dir / "process-output.log"
+    with process_output.open("w", encoding="utf-8") as process_output_handle:
+        process = subprocess.Popen(
+            command,
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=process_output_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
     desktop_log = run_dir / "desktop.jsonl"
     seen_events, peak_rss_kb = wait_for_events(desktop_log, target_events, args.timeout, process)
     target_met = target_events.issubset(seen_events)
@@ -267,6 +301,13 @@ def main() -> int:
         terminate_process(process)
 
     ended_at = datetime.now(timezone.utc).isoformat()
+    process_returncode = process.poll()
+    skipped = (
+        not target_met
+        and args.allow_gui_unavailable
+        and gui_unavailable_abort(process_returncode, desktop_log, process_output)
+    )
+    skip_reason = "gui_session_unavailable" if skipped else None
     run_summary(run_dir, artifact_dir)
     manifest = {
         "scenario": args.scenario,
@@ -285,16 +326,22 @@ def main() -> int:
         "summary_text": str(artifact_dir / "summary.txt"),
         "summary_json": str(artifact_dir / "summary.json"),
         "artifact_dir": str(artifact_dir),
-        "process_returncode": process.poll(),
+        "process_output": str(process_output),
+        "process_returncode": process_returncode,
         "peak_rss_kb": peak_rss_kb,
         "gpu_memory_kb": None,
+        "skipped": skipped,
+        "skip_reason": skip_reason,
     }
     write_json(artifact_dir / "manifest.json", manifest)
 
     print(f"artifact_dir={artifact_dir}")
     print(f"run_dir={run_dir}")
     print(f"target_events_met={str(target_met).lower()}")
-    return 0 if target_met else 1
+    if skipped:
+        print("benchmark_status=skipped")
+        print(f"skip_reason={skip_reason}")
+    return 0 if target_met or skipped else 1
 
 
 if __name__ == "__main__":

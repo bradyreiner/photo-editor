@@ -41,6 +41,10 @@ This checklist is scoped to additions that should materially improve agent work 
 
 - [x] Add `change_verification_plan`.
   - Input: changed files or a task summary. Output: smallest useful validation loop and why.
+- [x] Add native desktop workflow tools that avoid accidental all-target test builds.
+  - `native_dev_plan` explains launch-ready, app-only, QML lint, smoke, full, and relaunch loops.
+  - `run_native_dev_checks` and `start_native_dev_task` build only the app target for normal launch prep, with smoke/full validation as explicit modes.
+  - `cmake_build` accepts safe explicit targets and rejects high-risk targets such as install/package.
 - [x] Add `run_focused_checks`.
   - Input: changed files. Run the narrowest relevant checks when confidence is high.
 - [x] Split `run_repo_checks` into structured steps.

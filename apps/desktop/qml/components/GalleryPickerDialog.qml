@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
+    objectName: "galleryPickerDialog"
 
     required property var theme
     property string dialogTitle: "Gallery"
@@ -25,6 +26,9 @@ Dialog {
     readonly property string selectedFilePath: hasSelection ? String(selectedAsset.filePath || "") : ""
     readonly property string selectedTimelineDocumentPath: hasSelection ? String(selectedAsset.timelineDocumentPath || "") : ""
     readonly property bool selectedOnline: hasSelection ? Boolean(selectedAsset.online) : false
+    readonly property string dialogVisibilityContract: "dialog-visibility:v1|gallery-picker|always:title-scope-grid-selection-panel-close|contextual:selected-preview-offline-warning-side-footer-empty-state|one-expansion:project-scope-all-media-asset-activation|hover-focus:asset-card-selection-keyboard|diagnostic:offline-path-detail|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v1|gallery-picker|grid:dominant|scope:header|selection-panel:always|preview:contextual|footer:contextual|cards:shared-readable|empty-state:bounded-card|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v1|select-asset:grid-card|activate-asset:double-click-or-enter|scope-project:header-toggle|scope-all:header-toggle|offline-state:selection-panel|side-footer:contextual-loader"
 
     signal projectScopeRequested()
     signal allMediaScopeRequested()
@@ -170,141 +174,73 @@ Dialog {
                         cellHeight: 212
                         model: root.assets
 
-                        delegate: Rectangle {
+                        delegate: GalleryAssetCard {
                             required property int index
                             required property var modelData
 
-                            readonly property string assetId: String(modelData.assetId || "")
-                            readonly property string cameraLabel: String(modelData.cameraLabel || "")
-                            readonly property string thumbnailSource: String(modelData.thumbnailSource || "")
-                            readonly property string mediaType: String(modelData.mediaType || "")
-                            readonly property string durationText: String(modelData.durationText || "")
-                            readonly property bool online: Boolean(modelData.online)
-
-                            width: mediaGrid.cellWidth
-                            height: mediaGrid.cellHeight
-                            radius: 14
-                            color: root.selectedAssetId === assetId
-                                   ? root.theme.alpha(root.theme.accentWarm500, 0.16)
-                                   : root.theme.alpha(root.theme.ink900, 0.88)
-                            border.width: 1
-                            border.color: root.selectedAssetId === assetId
-                                          ? root.theme.accentWarm300
-                                          : root.theme.alpha(root.theme.lineSoft, 0.34)
-                            opacity: online ? 1 : 0.56
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                spacing: 8
-
-                                Rectangle {
-                                    Layout.fillWidth: true
-                                    Layout.preferredHeight: 132
-                                    radius: 10
-                                    color: "#0b1014"
-                                    clip: true
-
-                                    Image {
-                                        id: cardPreview
-                                        anchors.fill: parent
-                                        source: thumbnailSource
-                                        fillMode: Image.PreserveAspectCrop
-                                        asynchronous: true
-                                        cache: true
-                                        visible: thumbnailSource.length > 0
-                                    }
-
-                                    Rectangle {
-                                        anchors.right: parent.right
-                                        anchors.top: parent.top
-                                        anchors.margins: 8
-                                        visible: cardPreview.status === Image.Ready && root.aspectRatioText(cardPreview.sourceSize.width, cardPreview.sourceSize.height).length > 0
-                                        radius: 8
-                                        color: root.theme.alpha(root.theme.ink950, 0.88)
-                                        border.width: 1
-                                        border.color: root.theme.alpha(root.theme.lineSoft, 0.52)
-                                        implicitWidth: ratioLabel.implicitWidth + 12
-                                        implicitHeight: ratioLabel.implicitHeight + 6
-
-                                        Label {
-                                            id: ratioLabel
-                                            anchors.centerIn: parent
-                                            text: root.aspectRatioText(cardPreview.sourceSize.width, cardPreview.sourceSize.height)
-                                            color: root.theme.textStrong
-                                            font.family: root.theme.fontMono
-                                            font.pixelSize: 10
-                                        }
-                                    }
-
-                                    Label {
-                                        anchors.centerIn: parent
-                                        visible: thumbnailSource.length === 0
-                                        text: mediaType === "timeline" ? "Timeline" : "Preview"
-                                        color: root.theme.textMuted
-                                        font.family: root.theme.fontUi
-                                        font.pixelSize: 11
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: cameraLabel.length > 0 ? cameraLabel : assetId
-                                    color: root.theme.textStrong
-                                    font.family: root.theme.fontUi
-                                    font.pixelSize: 12
-                                    font.weight: Font.Medium
-                                    elide: Text.ElideRight
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Label {
-                                        text: mediaType === "photo"
-                                              ? "Photo"
-                                              : mediaType === "audio"
-                                                ? "Audio"
-                                                : mediaType === "timeline"
-                                                  ? "Timeline"
-                                                  : "Video"
-                                        color: root.theme.textMuted
-                                        font.family: root.theme.fontMono
-                                        font.pixelSize: 10
-                                    }
-
-                                    Item { Layout.fillWidth: true }
-
-                                    Label {
-                                        text: durationText
-                                        visible: durationText.length > 0
-                                        color: root.theme.textMuted
-                                        font.family: root.theme.fontMono
-                                        font.pixelSize: 10
-                                    }
-                                }
+                            assetIndex: index
+                            asset: modelData
+                            selected: root.selectedAssetId === String(modelData.assetId || "")
+                            onSelectedRequested: function(assetIndex) {
+                                root.selectAssetIndex(assetIndex)
                             }
-
-                            MouseArea {
-                                anchors.fill: parent
-
-                                onClicked: root.selectAssetIndex(index)
-                                onDoubleClicked: {
-                                    root.selectAssetIndex(index)
-                                    root.assetActivated(root.selectedAsset)
-                                }
+                            onActivated: function(assetIndex) {
+                                root.selectAssetIndex(assetIndex)
+                                root.assetActivated(root.selectedAsset)
                             }
                         }
                     }
 
-                    Label {
+                    Rectangle {
+                        id: galleryEmptyStateCard
+                        objectName: "galleryPickerEmptyStateCard"
+                        readonly property string emptyStateContract: "gallery-empty-state:v1|bounded-card:true|icon-zone:true|text-wrap:true|max-lines:3|no-elide:true|no-overlap:true"
                         anchors.centerIn: parent
                         visible: root.assets.length === 0
-                        text: root.emptyStateText
-                        color: root.theme.textMuted
-                        font.family: root.theme.fontUi
-                        font.pixelSize: 12
+                        width: Math.min(parent.width - 40, Math.max(240, galleryEmptyStateContent.implicitWidth + 32))
+                        height: galleryEmptyStateContent.implicitHeight + 28
+                        radius: 14
+                        color: root.theme.alpha(root.theme.ink900, 0.84)
+                        border.width: 1
+                        border.color: root.theme.alpha(root.theme.lineSoft, 0.38)
+
+                        ColumnLayout {
+                            id: galleryEmptyStateContent
+                            anchors.fill: parent
+                            anchors.margins: 14
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.alignment: Qt.AlignHCenter
+                                Layout.preferredWidth: 28
+                                Layout.preferredHeight: 28
+                                radius: 14
+                                color: root.theme.alpha(root.theme.accentCool400, 0.14)
+                                border.width: 1
+                                border.color: root.theme.alpha(root.theme.accentCool400, 0.34)
+
+                                AppIcon {
+                                    anchors.centerIn: parent
+                                    width: 14
+                                    height: 14
+                                    name: "media"
+                                    color: root.theme.textMuted
+                                }
+                            }
+
+                            Label {
+                                objectName: "galleryPickerEmptyStateLabel"
+                                Layout.fillWidth: true
+                                text: root.emptyStateText
+                                color: root.theme.textMuted
+                                font.family: root.theme.fontUi
+                                font.pixelSize: 12
+                                horizontalAlignment: Text.AlignHCenter
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                maximumLineCount: 3
+                                elide: Text.ElideNone
+                            }
+                        }
                     }
                 }
             }

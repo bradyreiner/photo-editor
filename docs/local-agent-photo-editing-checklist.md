@@ -104,6 +104,8 @@ This checklist defines the requirements and goals for an in-app, locally run edi
   - [x] Export after review.
   - [x] Add an Agent panel run-mode selector for analyze, draft, batch validation, and export preflight.
 - [x] Let users choose tool permissions:
+  - [x] Normal users choose Conservative, Balanced, Full edit, or Full edit + retouch instead of starting from raw tool toggles.
+  - [x] Advanced users can still expand Details and edit exact tool permissions.
   - [x] Global tone/color.
   - [x] Curves/levels.
   - [x] HSL/color mixer/grading.
@@ -388,6 +390,18 @@ Suggested MCP tools:
   - [x] Selected-set drafts reject global crop/optics, mask, and retouch patch groups unless the style `batchBehavior` explicitly opts in.
 - [x] Show batch summary before commit.
   - [x] Return selected-set draft summaries with asset ids, per-asset status, warnings, proof paths, and recipe diffs.
+- [x] Create representative samples before applying large batches.
+  - [x] For selected sets with three or more photos and fewer representative clusters than targets, draft only the representative sample assets first.
+  - [x] Preserve `fullTargetAssetIds`, `remainingAssetIds`, and planned per-asset patches in the draft report for review and continuation.
+  - [x] Confirmed sample-review Apply to All drafts only the remaining photos inside the same rollbackable draft transaction.
+  - [x] Sample-review feedback can revise the representative samples immediately by rolling back the sample draft, rerunning sample creation with the feedback, and leaving remaining photos untouched.
+  - [x] Deferred sample feedback is written to durable style memory only after confirmed Apply to All approval.
+  - [x] Batch summaries include simple review counts and an issue-first review list so successful assets can stay hidden by default.
+  - [x] Review issues support accepting an issue without pixel changes and rolling back one photo while keeping the remaining draft active.
+  - [x] Review issues support fixing one photo by reusing the bounded validation repair path and merging the repaired asset report back into the current batch review.
+  - [x] Review issues support fixing all safe outliers by looping through current non-failed issue rows and preserving the active draft transaction.
+  - [x] Review issue rows carry and display rendered proof thumbnails, validation/style reasons, and suggested actions.
+  - [x] Review issue rows keep detailed validation evidence collapsed under a `Details` toggle.
   - [x] Return selected-set validation summaries with asset ids, per-asset status, warnings, proof paths, and report paths.
   - [x] Persist `batchSummary` with status counts, proof/diff counts, commit readiness, and confirmation requirement in draft reports and manifests.
 - [x] Commit as a reversible batch transaction.

@@ -75,7 +75,7 @@ struct WorkingImageQImageTelemetry final {
     return true;
   };
 
-  constexpr auto kParallelPackPixelThreshold = qint64{2'000'000};
+  constexpr auto kParallelPackPixelThreshold = qint64{200'000};
   const auto pixel_count =
       static_cast<qint64>(bounded.width()) * static_cast<qint64>(bounded.height());
   if (pixel_count < kParallelPackPixelThreshold || bounded.height() <= 1) {

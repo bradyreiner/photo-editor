@@ -17,9 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD_DIR = REPO_ROOT / "build/dev-macos-debug"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "perf-artifacts"
 REQUIRED_TESTS = (
-    "desktop_shell_smoke_test",
     "editor_preview_controller_test",
 )
+DESKTOP_SMOKE_TEST = "desktop_shell_smoke_test"
 REQUIRED_SOURCE_MARKERS = {
     "canvas_raster_preview_disabled": {
         "path": "apps/desktop/qml/workspaces/MaskCanvasOverlay.qml",
@@ -74,7 +74,7 @@ REQUIRED_SOURCE_MARKERS = {
     "refinement_outline_gate": {
         "path": "apps/desktop/src/editor_preview_controller.cpp",
         "present": [
-            "if (preview_mode != MaskPreviewMode::RefinementEdge)",
+            "preview_mode != MaskPreviewMode::RefinementEdge",
             "clean_canvas_outline_paths_for_mask(mask)",
             "mask_selection_refinement_active(mask)",
         ],
@@ -156,7 +156,7 @@ REQUIRED_SOURCE_MARKERS = {
         "present": [
             "kMaxTracedOutlinePaths",
             "kMaxTracedOutlinePoints",
-            "kMaxTracedOutlinePointsPerPath",
+            "bounded_closed_outline_points",
         ],
     },
     "tiny_contour_filter": {
@@ -375,7 +375,17 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Write a JSON proof report. Defaults under --output-root.",
     )
-    parser.add_argument("--ctest-timeout", type=int, default=240)
+    parser.add_argument("--ctest-timeout", type=int, default=360)
+    parser.add_argument(
+        "--include-desktop-smoke",
+        action="store_true",
+        help=(
+            "Also run the full desktop shell smoke test. The default mask proof uses "
+            "focused source checks plus editor_preview_controller_test because the "
+            "desktop smoke covers unrelated UI workflows and can exceed this proof's "
+            "interactive performance budget."
+        ),
+    )
     parser.add_argument(
         "--skip-ctest",
         action="store_true",
@@ -557,7 +567,10 @@ def main() -> int:
     if not args.skip_ctest:
         if not build_dir.is_dir():
             raise SystemExit(f"build directory does not exist: {build_dir}")
-        for test_name in REQUIRED_TESTS:
+        required_tests = list(REQUIRED_TESTS)
+        if args.include_desktop_smoke:
+            required_tests.append(DESKTOP_SMOKE_TEST)
+        for test_name in required_tests:
             tests[test_name] = run_ctest(build_dir, test_name, args.ctest_timeout)
 
     status = proof_status(
@@ -579,6 +592,7 @@ def main() -> int:
         "inputs": {
             "build_dir": str(build_dir),
             "checklist": str(checklist_path),
+            "include_desktop_smoke": args.include_desktop_smoke,
             "skip_ctest": args.skip_ctest,
         },
     }

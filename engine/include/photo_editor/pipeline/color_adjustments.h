@@ -372,6 +372,8 @@ struct PhotoLayer final {
   int mask_width = 0;
   int mask_height = 0;
   bool mask_inverted = false;
+  double mask_opacity = 1.0;
+  double mask_density = 1.0;
   std::vector<ColorPixel> pixels;
   int pixel_width = 0;
   int pixel_height = 0;

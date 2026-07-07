@@ -115,7 +115,13 @@ def require_existing_app(path: Path, label: str) -> Path:
 def run_parity_gate(args: argparse.Namespace) -> bool:
     parity_app = require_existing_app(args.parity_app, "--parity-app")
     result = run_command([str(parity_app)])
-    if result.returncode == SKIP_EXIT_CODE:
+    gpu_unavailable = (
+        result.returncode == SKIP_EXIT_CODE
+        or "GPU render backend unavailable" in result.stdout
+        or "no_system_metal_device" in result.stdout
+        or "gpu_backend_unavailable" in result.stdout
+    )
+    if gpu_unavailable:
         message = (
             "render_parity_test skipped because the GPU render backend is unavailable. "
             "Metal proof requires this test to run on a Metal-capable host."

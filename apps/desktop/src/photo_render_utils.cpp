@@ -2,6 +2,7 @@
 
 #include "app_bootstrap.h"
 #include "decoded_image_cache.h"
+#include "mask_alpha_provider.h"
 #include "photo_editor/pipeline/color_adjustments.h"
 #include "photo_editor/pipeline/color_pipeline.h"
 #include "raw_image_decoder.h"
@@ -14,12 +15,15 @@
 #include <QColor>
 #include <QColorSpace>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
 #include <QImageReader>
+#include <QJsonDocument>
 #include <QPainter>
+#include <QStringList>
 
 #include <algorithm>
 #include <array>
@@ -259,6 +263,54 @@ double map_double_value(const QVariantMap& map, const QString& key, double fallb
 
 bool map_bool_value(const QVariantMap& map, const QString& key, bool fallback) {
   return map.contains(key) ? map.value(key).toBool() : fallback;
+}
+
+QString variant_sha1(const QVariant& value) {
+  return QString::fromLatin1(
+      QCryptographicHash::hash(
+          QJsonDocument::fromVariant(value).toJson(QJsonDocument::Compact),
+          QCryptographicHash::Sha1)
+          .toHex());
+}
+
+QStringList normalized_string_list_value(
+    const QVariantMap& map,
+    const QString& list_key,
+    const QString& single_key) {
+  QStringList values;
+  const auto append_value = [&](const QString& raw_value) {
+    const auto value = raw_value.simplified();
+    if (!value.isEmpty() && !values.contains(value)) {
+      values.push_back(value);
+    }
+  };
+
+  const auto list_value = map.value(list_key);
+  if (list_value.canConvert<QStringList>()) {
+    for (const auto& value : list_value.toStringList()) {
+      append_value(value);
+    }
+  } else {
+    for (const auto& value : list_value.toList()) {
+      append_value(value.toString());
+    }
+  }
+  append_value(map.value(single_key).toString());
+  return values;
+}
+
+QStringList selection_mask_set_ids_for_layer(const QVariantMap& layer) {
+  return normalized_string_list_value(
+      layer,
+      QStringLiteral("selectionMaskSetIds"),
+      QStringLiteral("selectionMaskSetId"));
+}
+
+QStringList selection_mask_set_names_for_layer(const QVariantMap& layer) {
+  return normalized_string_list_value(
+      layer,
+      QStringLiteral("selectionMaskSetNames"),
+      QStringLiteral("selectionMaskSetName"));
 }
 
 enum class MaskRasterPolicy {
@@ -1027,6 +1079,181 @@ void populate_photo_layer_mask(photo_editor::pipeline::PhotoLayer* target, const
   target->mask_width = mask_width;
   target->mask_height = mask_height;
   target->mask_inverted = layer.value(QStringLiteral("maskInverted")).toBool();
+  target->mask_opacity =
+      std::clamp(layer.value(QStringLiteral("maskOpacity"), 1.0).toDouble(), 0.0, 1.0);
+  target->mask_density =
+      std::clamp(layer.value(QStringLiteral("maskDensity"), 1.0).toDouble(), 0.0, 1.0);
+}
+
+QSize selection_layer_mask_raster_size(
+    const QVariantList& masks,
+    const QVariantMap& layer,
+    const QSize& output_size) {
+  if (output_size.isValid() && output_size.width() > 0 && output_size.height() > 0) {
+    return output_size;
+  }
+
+  const auto layer_ids = selection_mask_set_ids_for_layer(layer);
+  const auto layer_names = selection_mask_set_names_for_layer(layer);
+  for (const auto& value : masks) {
+    const auto mask = value.toMap();
+    const auto set_id = mask.value(QStringLiteral("maskSetId")).toString().simplified();
+    const auto set_name = mask.value(QStringLiteral("maskSetName")).toString().simplified();
+    const auto matches = (!set_id.isEmpty() && layer_ids.contains(set_id)) ||
+                         (!set_name.isEmpty() && layer_names.contains(set_name));
+    if (!matches) {
+      continue;
+    }
+    const auto segmentation_data = mask.value(QStringLiteral("segmentationData")).toByteArray();
+    const auto segmentation_width = mask.value(QStringLiteral("segmentationWidth")).toInt();
+    const auto segmentation_height = mask.value(QStringLiteral("segmentationHeight")).toInt();
+    if (valid_segmentation_payload(segmentation_data, segmentation_width, segmentation_height)) {
+      return QSize(segmentation_width, segmentation_height);
+    }
+  }
+  return QSize(1024, 1024);
+}
+
+bool selection_layer_mask_set_is_identity(const photo_editor::pipeline::LocalMaskSet& mask_set) {
+  return mask_set.enabled &&
+         !mask_set.selection_invert &&
+         std::abs(mask_set.selection_expand) <= 1e-6 &&
+         std::abs(mask_set.selection_smooth) <= 1e-6 &&
+         std::abs(mask_set.selection_fine_edge) <= 1e-6 &&
+         std::abs(mask_set.selection_edge_contrast) <= 1e-6 &&
+         std::abs(mask_set.opacity - 1.0) <= 1e-6 &&
+         std::abs(mask_set.density - 1.0) <= 1e-6;
+}
+
+bool selection_layer_source_is_stored_raster_passthrough(
+    const photo_editor::pipeline::LocalMask& source) {
+  const auto expected_size =
+      static_cast<std::size_t>(source.segmentation_width) *
+      static_cast<std::size_t>(source.segmentation_height);
+  const auto source_kind = QString::fromStdString(source.kind);
+  return source.enabled &&
+         source.operation == "add" &&
+         !source.invert &&
+         std::abs(source.opacity - 1.0) <= 1e-6 &&
+         std::abs(source.density - 1.0) <= 1e-6 &&
+         (source.kind == "brush" || is_ai_segmentation_mask_kind(source_kind)) &&
+         source.segmentation_width > 0 &&
+         source.segmentation_height > 0 &&
+         source.segmentation_mask.size() == expected_size;
+}
+
+bool populate_photo_layer_selection_mask_from_stored_source(
+    photo_editor::pipeline::PhotoLayer* target,
+    const QVariantMap& layer,
+    const photo_editor::pipeline::LocalMaskSet& mask_set,
+    const QSize& raster_size) {
+  if (target == nullptr || mask_set.sources.size() != 1 ||
+      !selection_layer_mask_set_is_identity(mask_set)) {
+    return false;
+  }
+
+  const auto& source = mask_set.sources.front();
+  if (!selection_layer_source_is_stored_raster_passthrough(source)) {
+    return false;
+  }
+
+  const QByteArray source_data(
+      reinterpret_cast<const char*>(source.segmentation_mask.data()),
+      static_cast<qsizetype>(source.segmentation_mask.size()));
+
+  QVariantMap cache_payload;
+  cache_payload.insert(
+      QStringLiteral("version"),
+      QStringLiteral("render-utils-linked-layer-mask-alpha-provider-cache-v1"));
+  cache_payload.insert(QStringLiteral("layerId"), layer.value(QStringLiteral("id")).toString());
+  cache_payload.insert(QStringLiteral("maskSetId"), QString::fromStdString(mask_set.id));
+  cache_payload.insert(QStringLiteral("maskSetName"), QString::fromStdString(mask_set.name));
+  cache_payload.insert(QStringLiteral("sourceKind"), QString::fromStdString(source.kind));
+  cache_payload.insert(QStringLiteral("sourceOperation"), QString::fromStdString(source.operation));
+  cache_payload.insert(QStringLiteral("sourceWidth"), source.segmentation_width);
+  cache_payload.insert(QStringLiteral("sourceHeight"), source.segmentation_height);
+  cache_payload.insert(QStringLiteral("targetWidth"), raster_size.width());
+  cache_payload.insert(QStringLiteral("targetHeight"), raster_size.height());
+  cache_payload.insert(
+      QStringLiteral("sourceAlphaSha256"),
+      QString::fromLatin1(QCryptographicHash::hash(source_data, QCryptographicHash::Sha256).toHex()));
+  const auto cache_key = QStringLiteral("sha1:%1").arg(variant_sha1(cache_payload));
+  const auto alpha_result = evaluate_mask_alpha_cached(
+      cache_key,
+      raster_size,
+      1,
+      [&](int, int, double normalized_x, double normalized_y) {
+        const auto source_x = source.segmentation_width > 1
+                                  ? normalized_x * static_cast<double>(source.segmentation_width - 1)
+                                  : 0.0;
+        const auto source_y = source.segmentation_height > 1
+                                  ? normalized_y * static_cast<double>(source.segmentation_height - 1)
+                                  : 0.0;
+        const auto x0 = std::clamp(static_cast<int>(std::floor(source_x)), 0, source.segmentation_width - 1);
+        const auto y0 = std::clamp(static_cast<int>(std::floor(source_y)), 0, source.segmentation_height - 1);
+        const auto x1 = std::min(source.segmentation_width - 1, x0 + 1);
+        const auto y1 = std::min(source.segmentation_height - 1, y0 + 1);
+        const auto fx = source_x - static_cast<double>(x0);
+        const auto fy = source_y - static_cast<double>(y0);
+        const auto sample = [&](int sample_x, int sample_y) {
+          return static_cast<double>(
+              static_cast<unsigned char>(source_data.at(sample_y * source.segmentation_width + sample_x))) /
+                 255.0;
+        };
+        const auto top = std::lerp(sample(x0, y0), sample(x1, y0), fx);
+        const auto bottom = std::lerp(sample(x0, y1), sample(x1, y1), fx);
+        return std::lerp(top, bottom, fy);
+      });
+  if (!alpha_result.valid ||
+      !valid_segmentation_payload(alpha_result.alpha_mask, raster_size.width(), raster_size.height())) {
+    return false;
+  }
+
+  target->mask_data.assign(alpha_result.alpha_mask.cbegin(), alpha_result.alpha_mask.cend());
+  target->mask_width = raster_size.width();
+  target->mask_height = raster_size.height();
+  target->mask_inverted = layer.value(QStringLiteral("maskInverted")).toBool();
+  return true;
+}
+
+void populate_photo_layer_selection_mask(
+    photo_editor::pipeline::PhotoLayer* target,
+    const QVariantMap& layer,
+    const QVariantList& masks,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size) {
+  if (target == nullptr || !layer.value(QStringLiteral("selectionScoped")).toBool()) {
+    return;
+  }
+
+  const auto mask_set_ids = selection_mask_set_ids_for_layer(layer);
+  const auto mask_set_names = selection_mask_set_names_for_layer(layer);
+  if (mask_set_ids.isEmpty() && mask_set_names.isEmpty()) {
+    return;
+  }
+
+  const auto raster_size = selection_layer_mask_raster_size(masks, layer, output_size);
+  if (!raster_size.isValid() || raster_size.width() <= 0 || raster_size.height() <= 0) {
+    return;
+  }
+
+  const auto mask_sets = pipeline_local_mask_sets(masks, raster_policy, raster_size);
+  const auto ordered_count = std::max(mask_set_ids.size(), mask_set_names.size());
+  for (auto index = 0; index < ordered_count; ++index) {
+    const auto target_id = index < mask_set_ids.size() ? mask_set_ids.at(index) : QString();
+    const auto target_name = index < mask_set_names.size() ? mask_set_names.at(index) : QString();
+    for (const auto& set : mask_sets) {
+      const auto set_id = QString::fromStdString(set.id).simplified();
+      const auto set_name = QString::fromStdString(set.name).simplified();
+      const auto matches =
+          (!target_id.isEmpty() && set_id == target_id) ||
+          (target_id.isEmpty() && !target_name.isEmpty() && set_name == target_name);
+      if (matches &&
+          populate_photo_layer_selection_mask_from_stored_source(target, layer, set, raster_size)) {
+        return;
+      }
+    }
+  }
 }
 
 void populate_photo_layer_pixels(photo_editor::pipeline::PhotoLayer* target, const QVariantMap& layer) {
@@ -1079,7 +1306,11 @@ void populate_photo_layer_pixels(photo_editor::pipeline::PhotoLayer* target, con
   target->transform_rotation = qBound(-3600.0, layer.value(QStringLiteral("rotation")).toDouble(), 3600.0);
 }
 
-std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(const QVariantList& layers) {
+std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(
+    const QVariantList& layers,
+    const QVariantList& masks,
+    MaskRasterPolicy raster_policy,
+    const QSize& output_size) {
   std::vector<photo_editor::pipeline::PhotoLayer> photo_layers;
   photo_layers.reserve(static_cast<std::size_t>(layers.size()));
   auto solo_active = false;
@@ -1279,6 +1510,9 @@ std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(const QVar
         .fill_color = layer_fill_color(layer),
     };
     populate_photo_layer_mask(&photo_layer, layer);
+    if (photo_layer.mask_data.empty()) {
+      populate_photo_layer_selection_mask(&photo_layer, layer, masks, raster_policy, output_size);
+    }
     populate_photo_layer_pixels(&photo_layer, layer);
     photo_layers.push_back(std::move(photo_layer));
   }
@@ -1498,7 +1732,7 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .radial_mask_rotation = state.radial_mask_rotation,
       .local_mask_sets = pipeline_local_mask_sets(state.mask_stack, raster_policy, output_size),
       .retouch_masks = pipeline_retouch_masks(state.mask_stack, raster_policy, output_size),
-      .photo_layers = pipeline_photo_layers(state.layers),
+      .photo_layers = pipeline_photo_layers(state.layers, state.mask_stack, raster_policy, output_size),
   };
 }
 
@@ -1833,7 +2067,13 @@ QImage render_output_image_with_backend(
   auto& metal = metal_backend();
   const auto fallback_reason = gpu_fallback_reason(state, pipeline_state, pixels, metal.available());
   const auto gpu_supported = fallback_reason.isEmpty();
-  if (backend_preference == RenderBackendPreference::GpuOnly && !gpu_supported) {
+  const auto can_use_metal_aware_engine =
+      backend_preference != RenderBackendPreference::CpuOnly &&
+      metal.available() &&
+      fallback_reason == QStringLiteral("local_mask_sets");
+  if (backend_preference == RenderBackendPreference::GpuOnly &&
+      !gpu_supported &&
+      !can_use_metal_aware_engine) {
     if (telemetry != nullptr) {
       telemetry->backend = QStringLiteral("none");
       telemetry->fallback_reason = fallback_reason;
@@ -1856,8 +2096,22 @@ QImage render_output_image_with_backend(
               ? QStringLiteral("cpu_requested")
               : fallback_reason;
     }
+    photo_editor::pipeline::ColorAdjustmentTelemetry engine_telemetry;
     photo_editor::pipeline::apply_color_adjustments(
-        &pixels, width, height, pipeline_state, removal_quality);
+        &pixels,
+        width,
+        height,
+        pipeline_state,
+        removal_quality,
+        photo_editor::pipeline::CancellationToken{},
+        &engine_telemetry);
+    if (telemetry != nullptr &&
+        telemetry->backend == QStringLiteral("cpu") &&
+        engine_telemetry.gpu_command_buffer_count > 0 &&
+        engine_telemetry.gpu_kernel_dispatch_count > 0) {
+      telemetry->backend = QStringLiteral("metal");
+      telemetry->fallback_reason.clear();
+    }
   }
 #else
   if (backend_preference == RenderBackendPreference::GpuOnly) {

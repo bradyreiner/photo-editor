@@ -7,10 +7,16 @@ import "../components"
 
 Rectangle {
     id: root
+    objectName: "maskWorkspace"
 
     Theme { id: theme }
 
     color: "transparent"
+    readonly property string maskVisibilityContract: "mask-visibility:v1|always:canvas-inspector-active-context-source-controls-overlay-state|contextual:brush-cursor-lasso-polygon-handles-alpha-import-refine-toolbar-pending-apply-cancel|one-expansion:mask-source-variants-context-menu-refine-options-adjustment-groups|hover-focus:mask-source-actions-reorder-visibility-solo-lock|diagnostic:generated-unsupported-preview-failure-runtime-detail|preserve:functionality"
+    readonly property string maskSurfaceContract: "mask-surfaces:v1|canvas:dominant-overlay|sources:generated-geometric-brush-alpha|inspector:active-mask-stack-adjustments|overlays:brush-lasso-polygon-outline|pending:apply-cancel-retry-visible|context-menu:one-expansion|no-elide:true|no-overlap:true"
+    readonly property string maskWorkflowPolishContract: "mask-workflow-polish:v1|first-glance:canvas-active-selection-inspector-source-tools|close-inspection:context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved"
+    readonly property string maskPageCompletionContract: "page-completion:v1|masks|sidebar:source-variant-controls-search|content:canvas-overlay-brush-lasso-polygon-handles|inspector:active-context-mask-stack-refine-adjustments|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error"
+    readonly property string maskLayerParameterTerminologyContract: "mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only"
     property bool objectPickArmed: false
     property bool objectPickCreateNew: false
     property string objectPickMode: "selection"
@@ -105,19 +111,26 @@ Rectangle {
                 font.family: theme.fontMono
                 font.pixelSize: 10
                 font.letterSpacing: 0
-                elide: Text.ElideRight
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: 8
+                elide: Text.ElideNone
             }
 
-            CheckBox {
+            ToolOptionToggle {
                 objectName: "alphaMaskImportInvertCheck"
-                text: "Invert"
+                Layout.fillWidth: true
+                label: "Invert"
+                helperText: "Invert the imported alpha mask."
                 checked: editorPreview.alphaMaskImportInvert
-                onToggled: editorPreview.alphaMaskImportInvert = checked
+                onToggled: checked => editorPreview.alphaMaskImportInvert = checked
             }
 
-            Slider {
+            ToolValueSlider {
                 objectName: "alphaMaskImportThresholdSlider"
                 Layout.fillWidth: true
+                label: "Threshold"
+                valueText: Math.round(value * 100) + "%"
+                tooltipText: "Alpha mask threshold"
                 from: 0
                 to: 1
                 stepSize: 0.01
@@ -125,9 +138,10 @@ Rectangle {
                 onMoved: editorPreview.alphaMaskImportThreshold = value
             }
 
-            ComboBox {
+            ToneComboBox {
                 objectName: "alphaMaskImportResampleModeCombo"
                 Layout.fillWidth: true
+                accent: theme.focusRing
                 model: ["Original", "Match Source"]
                 currentIndex: editorPreview.alphaMaskImportResampleMode === "Match Source" ? 1 : 0
                 onActivated: editorPreview.alphaMaskImportResampleMode = currentText
@@ -320,6 +334,31 @@ Rectangle {
                "|polygon:" + (context === "polygon").toString() +
                "|smart-select:" + (context === "smart-select").toString() +
                "|retouch:" + (context === "retouch").toString()
+    }
+
+    function maskWorkflowPolishSignature() {
+        const context = root.activeMaskEditingContext()
+        const pending = root.objectPickArmed ||
+                        root.polygonDrawArmed ||
+                        root.lassoDrawArmed ||
+                        root.cloneSourcePickArmed ||
+                        editorPreview.smartSelectStrokeActive ||
+                        editorPreview.smartSelectPreviewActive ||
+                        editorPreview.brushStrokeActive ||
+                        editorPreview.alphaMaskImportPreviewActive
+        return "mask-workflow-polish:v1" +
+               "|asset:" + String(editorPreview.hasAsset) +
+               "|context:" + context +
+               "|active:" + String(editorPreview.hasActiveMask) +
+               "|sets:" + String(editorPreview.maskSetCount) +
+               "|sources:" + String(editorPreview.maskCount) +
+               "|operation:" + String(editorPreview.hasActiveMask ? editorPreview.activeMaskOperation : root.maskCreationOperation) +
+               "|preview:" + String(editorPreview.maskPreviewDisplayMode || "overlay") +
+               "|create-open:" + String(root.createMaskChooserOpen) +
+               "|search:" + String(root.maskSearchText().length > 0) +
+               "|pending:" + String(pending) +
+               "|inspector:true|canvas:true|source-list:true" +
+               "|preserve:object-subject-sky-background-brush-lasso-polygon-gradient-range-alpha-import-combine-preview-invert-refine-rename-reorder-duplicate-delete"
     }
 
     function percentText(value) {
@@ -1979,7 +2018,9 @@ Rectangle {
                                     font.family: "Avenir Next"
                                     font.pixelSize: 12
                                     font.weight: Font.Medium
-                                    elide: Text.ElideRight
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 8
+                                    elide: Text.ElideNone
                                 }
 
                                 Label {
@@ -2542,20 +2583,28 @@ Rectangle {
                                                 spacing: 1
 
                                                 Label {
+                                                    Layout.fillWidth: true
                                                     text: modelData.name
                                                     color: "#f2f4f6"
                                                     font.family: "Avenir Next"
                                                     font.pixelSize: 13
                                                     font.weight: Font.Medium
+                                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideNone
                                                 }
 
                                                 Label {
+                                                    Layout.fillWidth: true
                                                     text: modelData.sourceCount === 1
                                                           ? "1 component"
                                                           : modelData.sourceCount.toString() + " components"
                                                     color: "#8f98a2"
                                                     font.family: "Avenir Next"
                                                     font.pixelSize: 11
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 8
+                                                    elide: Text.ElideNone
                                                 }
                                             }
                                         }
@@ -2568,7 +2617,9 @@ Rectangle {
                                             font.family: "Avenir Next"
                                             font.pixelSize: 10
                                             font.weight: Font.DemiBold
-                                            elide: Text.ElideRight
+                                            fontSizeMode: Text.HorizontalFit
+                                            minimumPixelSize: 8
+                                            elide: Text.ElideNone
                                             visible: modelData.sourceCount > 0
                                         }
 
@@ -2641,67 +2692,87 @@ Rectangle {
                                                     }
                                                 }
 
-                                                Menu {
+                                                AppMenu {
                                                     id: maskSourceContextMenu
                                                     objectName: "maskSourceContextMenu"
+                                                    accent: root.maskAccent(modelData)
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextSelectItem"
                                                         text: "Select"
+                                                        iconName: "select"
+                                                        accent: maskSourceContextMenu.accent
                                                         onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextRenameItem"
                                                         text: "Rename"
+                                                        iconName: "edit"
+                                                        accent: maskSourceContextMenu.accent
                                                         onTriggered: root.renameMaskRow(modelData.flatIndex)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextEnableItem"
                                                         text: modelData.enabled ? "Disable" : "Enable"
+                                                        iconName: modelData.enabled ? "hidden" : "visible"
+                                                        accent: maskSourceContextMenu.accent
                                                         enabled: !modelData.locked
                                                         onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextSoloItem"
                                                         text: modelData.solo ? "Clear Solo" : "Solo"
+                                                        iconName: "star"
+                                                        accent: maskSourceContextMenu.accent
                                                         enabled: !modelData.locked
                                                         onTriggered: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextLockItem"
                                                         text: modelData.locked ? "Unlock" : "Lock"
+                                                        iconName: "lock"
+                                                        accent: maskSourceContextMenu.accent
                                                         onTriggered: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
                                                     }
 
                                                     MenuSeparator {}
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextMoveUpItem"
                                                         text: "Move Up"
+                                                        iconName: "move-up"
+                                                        accent: maskSourceContextMenu.accent
                                                         enabled: modelData.flatIndex > 0
                                                         onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextMoveDownItem"
                                                         text: "Move Down"
+                                                        iconName: "move-down"
+                                                        accent: maskSourceContextMenu.accent
                                                         enabled: modelData.flatIndex < editorPreview.maskCount - 1
                                                         onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextDuplicateItem"
                                                         text: "Duplicate"
+                                                        iconName: "plus"
+                                                        accent: maskSourceContextMenu.accent
                                                         onTriggered: root.duplicateMaskRow(modelData.flatIndex)
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         objectName: "maskSourceContextDeleteItem"
                                                         text: "Delete"
+                                                        iconName: "delete"
+                                                        danger: true
+                                                        accent: maskSourceContextMenu.accent
                                                         onTriggered: root.deleteMaskRow(modelData.flatIndex)
                                                     }
                                                 }
@@ -2750,18 +2821,26 @@ Rectangle {
                                                         spacing: 1
 
                                                         Label {
+                                                            Layout.fillWidth: true
                                                             text: modelData.name
                                                             color: "#f2f4f6"
                                                             font.family: "Avenir Next"
                                                             font.pixelSize: 12
                                                             font.weight: Font.Medium
+                                                            fontSizeMode: Text.HorizontalFit
+                                                            minimumPixelSize: 8
+                                                            elide: Text.ElideNone
                                                         }
 
                                                         Label {
+                                                            Layout.fillWidth: true
                                                             text: modelData.kind + " · " + modelData.operation
                                                             color: "#8f98a2"
                                                             font.family: "Avenir Next"
                                                             font.pixelSize: 10
+                                                            fontSizeMode: Text.HorizontalFit
+                                                            minimumPixelSize: 7
+                                                            elide: Text.ElideNone
                                                         }
                                                     }
 
@@ -2868,61 +2947,79 @@ Rectangle {
                                         }
                                     }
 
-                                    Menu {
+                                    AppMenu {
                                         id: retouchRowContextMenu
                                         objectName: "retouchRowContextMenu"
+                                        accent: root.maskAccent(modelData)
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextSelectItem"
                                             text: "Select"
+                                            iconName: "select"
+                                            accent: retouchRowContextMenu.accent
                                             onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextApplyItem"
                                             text: "Apply"
+                                            iconName: "check"
+                                            accent: retouchRowContextMenu.accent
                                             visible: !modelData.committed
                                             onTriggered: root.applyRetouchRow(modelData.flatIndex)
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextCancelItem"
                                             text: "Cancel"
+                                            iconName: "close"
+                                            accent: retouchRowContextMenu.accent
                                             visible: !modelData.committed
                                             onTriggered: root.cancelRetouchRow(modelData.flatIndex)
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextRenameItem"
                                             text: "Rename"
+                                            iconName: "edit"
+                                            accent: retouchRowContextMenu.accent
                                             onTriggered: root.renameMaskRow(modelData.flatIndex)
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextEnableItem"
                                             text: modelData.enabled ? "Disable" : "Enable"
+                                            iconName: modelData.enabled ? "hidden" : "visible"
+                                            accent: retouchRowContextMenu.accent
                                             onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                         }
 
                                         MenuSeparator {}
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextMoveUpItem"
                                             text: "Move Up"
+                                            iconName: "move-up"
+                                            accent: retouchRowContextMenu.accent
                                             enabled: modelData.flatIndex > 0
                                             onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextMoveDownItem"
                                             text: "Move Down"
+                                            iconName: "move-down"
+                                            accent: retouchRowContextMenu.accent
                                             enabled: modelData.flatIndex < editorPreview.maskCount - 1
                                             onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
                                         }
 
-                                        MenuItem {
+                                        AppMenuItem {
                                             objectName: "retouchRowContextDeleteItem"
                                             text: "Delete"
+                                            iconName: "delete"
+                                            danger: true
+                                            accent: retouchRowContextMenu.accent
                                             onTriggered: root.deleteMaskRow(modelData.flatIndex)
                                         }
                                     }
@@ -3011,8 +3108,12 @@ Rectangle {
                                 visible: editorPreview.retouchCount > 0
 
                                 ActionButton {
-                                    Layout.fillWidth: true
+                                    Layout.fillWidth: false
                                     text: "Before"
+                                    iconName: "compare"
+                                    showText: false
+                                    tooltipText: "Show retouch before"
+                                    Accessible.name: "Show retouch before"
                                     compact: true
                                     accent: "#8fb7d8"
                                     tone: active ? "primary" : "secondary"
@@ -3021,8 +3122,12 @@ Rectangle {
                                 }
 
                                 ActionButton {
-                                    Layout.fillWidth: true
+                                    Layout.fillWidth: false
                                     text: "After"
+                                    iconName: "compare"
+                                    showText: false
+                                    tooltipText: "Show retouch after"
+                                    Accessible.name: "Show retouch after"
                                     compact: true
                                     accent: "#8fb7d8"
                                     tone: active ? "primary" : "secondary"
@@ -3073,7 +3178,9 @@ Rectangle {
                                         font.family: "Avenir Next"
                                         font.pixelSize: 13
                                         font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        maximumLineCount: 2
+                                        elide: Text.ElideNone
                                     }
 
                                     Label {
@@ -3099,7 +3206,9 @@ Rectangle {
                                         color: "#8f98a2"
                                         font.family: "Avenir Next"
                                         font.pixelSize: 10
-                                        elide: Text.ElideRight
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 8
+                                        elide: Text.ElideNone
                                     }
 
                                     Label {
@@ -3109,7 +3218,9 @@ Rectangle {
                                         color: "#8f98a2"
                                         font.family: "Avenir Next"
                                         font.pixelSize: 10
-                                        elide: Text.ElideRight
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 8
+                                        elide: Text.ElideNone
                                     }
 
                                     Label {
@@ -3119,7 +3230,9 @@ Rectangle {
                                         color: "#8f98a2"
                                         font.family: "Avenir Next"
                                         font.pixelSize: 10
-                                        elide: Text.ElideRight
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 8
+                                        elide: Text.ElideNone
                                     }
 
                                     Label {
@@ -3179,6 +3292,7 @@ Rectangle {
                         InspectorSlider {
                             objectName: "activeMaskOpacitySlider"
                             Layout.fillWidth: true
+                            readonly property string parameterRole: "mask-opacity"
                             label: "Mask Opacity"
                             valueText: root.percentText(editorPreview.activeMaskOpacity)
                             from: 0
@@ -3194,6 +3308,7 @@ Rectangle {
                         InspectorSlider {
                             objectName: "activeMaskDensitySlider"
                             Layout.fillWidth: true
+                            readonly property string parameterRole: "mask-density"
                             label: "Mask Density"
                             valueText: root.percentText(editorPreview.activeMaskDensity)
                             from: 0
@@ -4154,6 +4269,7 @@ Rectangle {
 
                         InspectorSlider {
                             Layout.fillWidth: true
+                            readonly property string parameterRole: "brush-flow"
                             label: "Brush Flow"
                             valueText: Math.round(editorPreview.activeMaskBrushFlow * 100).toString() + "%"
                             from: 0.05

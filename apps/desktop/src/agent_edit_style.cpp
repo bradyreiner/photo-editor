@@ -76,24 +76,24 @@ bool executable_style_key(const QString& key) {
   return forbidden.contains(normalized);
 }
 
-bool first_release_reference_payload_key(const QString& key) {
+bool unsafe_style_reference_payload_key(const QString& key) {
   auto normalized = key.trimmed().toLower();
   normalized.remove(QLatin1Char('_'));
   normalized.remove(QLatin1Char('-'));
   normalized.remove(QLatin1Char(' '));
-  static const QStringList deferred = {
-      QStringLiteral("examples"),
-      QStringLiteral("exampleimages"),
-      QStringLiteral("examplephotos"),
-      QStringLiteral("imagereferences"),
-      QStringLiteral("referenceimage"),
-      QStringLiteral("referenceimages"),
-      QStringLiteral("referencephoto"),
-      QStringLiteral("referencephotos"),
-      QStringLiteral("styleexamples"),
-      QStringLiteral("visualexamples"),
+  static const QStringList unsafe = {
+      QStringLiteral("base64"),
+      QStringLiteral("binary"),
+      QStringLiteral("bytes"),
+      QStringLiteral("dataurl"),
+      QStringLiteral("embeddedimage"),
+      QStringLiteral("imagebytes"),
+      QStringLiteral("imagepayload"),
+      QStringLiteral("rawbytes"),
+      QStringLiteral("thumbnaildata"),
+      QStringLiteral("thumbnaildataurl"),
   };
-  return deferred.contains(normalized);
+  return unsafe.contains(normalized);
 }
 
 void append_executable_style_payload_errors(
@@ -128,7 +128,7 @@ void append_executable_style_payload_errors(
   }
 }
 
-void append_deferred_reference_payload_errors(
+void append_unsafe_reference_payload_errors(
     const QJsonValue& value,
     const QString& path,
     QStringList* errors) {
@@ -140,19 +140,19 @@ void append_deferred_reference_payload_errors(
     for (auto iterator = object.constBegin(); iterator != object.constEnd(); ++iterator) {
       const auto child_path = path.isEmpty() ? iterator.key()
                                              : QStringLiteral("%1.%2").arg(path, iterator.key());
-      if (first_release_reference_payload_key(iterator.key())) {
+      if (unsafe_style_reference_payload_key(iterator.key())) {
         errors->append(
-            QStringLiteral("Style reference/example image payloads are deferred for schema v1 text-rulebook styles: %1")
+            QStringLiteral("Style profile references must store metadata, paths, or recipe summaries, not embedded image payloads: %1")
                 .arg(child_path));
       }
-      append_deferred_reference_payload_errors(iterator.value(), child_path, errors);
+      append_unsafe_reference_payload_errors(iterator.value(), child_path, errors);
     }
     return;
   }
   if (value.isArray()) {
     const auto array = value.toArray();
     for (int index = 0; index < array.size(); ++index) {
-      append_deferred_reference_payload_errors(
+      append_unsafe_reference_payload_errors(
           array.at(index),
           QStringLiteral("%1[%2]").arg(path).arg(index),
           errors);
@@ -537,7 +537,7 @@ AgentEditStyleValidationResult validate_agent_edit_style_object(
     const QJsonObject& object) {
   AgentEditStyleValidationResult result;
   append_executable_style_payload_errors(object, QStringLiteral("style"), &result.errors);
-  append_deferred_reference_payload_errors(object, QStringLiteral("style"), &result.errors);
+  append_unsafe_reference_payload_errors(object, QStringLiteral("style"), &result.errors);
 
   const auto schema_value = object.value(QStringLiteral("schema_version"));
   const auto schema_number = schema_value.toDouble(-1.0);
@@ -574,6 +574,22 @@ AgentEditStyleValidationResult validate_agent_edit_style_object(
   if (object.contains(QStringLiteral("reference_policy")) &&
       !object.value(QStringLiteral("reference_policy")).isObject()) {
     result.errors.append(QStringLiteral("reference_policy must be an object"));
+  }
+  if (object.contains(QStringLiteral("learned_profile")) &&
+      !object.value(QStringLiteral("learned_profile")).isObject()) {
+    result.errors.append(QStringLiteral("learned_profile must be an object"));
+  }
+  if (object.contains(QStringLiteral("tool_knowledge")) &&
+      !object.value(QStringLiteral("tool_knowledge")).isObject()) {
+    result.errors.append(QStringLiteral("tool_knowledge must be an object"));
+  }
+  if (object.contains(QStringLiteral("quality_model")) &&
+      !object.value(QStringLiteral("quality_model")).isObject()) {
+    result.errors.append(QStringLiteral("quality_model must be an object"));
+  }
+  if (object.contains(QStringLiteral("project_workflow")) &&
+      !object.value(QStringLiteral("project_workflow")).isObject()) {
+    result.errors.append(QStringLiteral("project_workflow must be an object"));
   }
 
   const auto allowed_tools = object.value(QStringLiteral("allowed_tools")).toObject();
@@ -675,14 +691,36 @@ AgentEditStyleValidationResult validate_agent_edit_style_object(
     const auto mode = reference_policy.value(QStringLiteral("mode")).toString();
     const auto reference_image_matching =
         reference_policy.value(QStringLiteral("reference_image_matching")).toString();
-    if (mode != QStringLiteral("text_rulebook_only")) {
-      result.errors.append(QStringLiteral("reference_policy.mode must be text_rulebook_only for schema v1"));
+    const auto learned_profile_mode = mode == QStringLiteral("learned_style_profile");
+    if (mode != QStringLiteral("text_rulebook_only") && !learned_profile_mode) {
+      result.errors.append(QStringLiteral("reference_policy.mode must be text_rulebook_only or learned_style_profile for schema v1"));
     }
-    if (reference_image_matching != QStringLiteral("deferred")) {
-      result.errors.append(QStringLiteral("reference_policy.reference_image_matching must be deferred for schema v1"));
+    if (learned_profile_mode) {
+      if (reference_image_matching != QStringLiteral("metadata_only")) {
+        result.errors.append(QStringLiteral("reference_policy.reference_image_matching must be metadata_only for learned style profiles"));
+      }
+      if (!reference_policy.value(QStringLiteral("examples_supported")).toBool()) {
+        result.warnings.append(QStringLiteral("learned style profiles should set reference_policy.examples_supported to true"));
+      }
+    } else if (reference_image_matching != QStringLiteral("deferred")) {
+      result.errors.append(QStringLiteral("reference_policy.reference_image_matching must be deferred for text-rulebook styles"));
     }
-    if (reference_policy.value(QStringLiteral("examples_supported")).toBool()) {
+    if (!learned_profile_mode && reference_policy.value(QStringLiteral("examples_supported")).toBool()) {
       result.errors.append(QStringLiteral("reference_policy.examples_supported must be false for schema v1"));
+    }
+  }
+
+  const auto learned_profile = object.value(QStringLiteral("learned_profile")).toObject();
+  if (!learned_profile.isEmpty()) {
+    const auto source_asset_count = learned_profile.value(QStringLiteral("source_asset_count"));
+    if (source_asset_count.isDouble() && source_asset_count.toInt() < 1) {
+      result.errors.append(QStringLiteral("learned_profile.source_asset_count must be at least 1"));
+    }
+    const auto references = learned_profile.value(QStringLiteral("reference_examples"));
+    if (references.isArray() && references.toArray().size() > 200) {
+      result.errors.append(QStringLiteral("learned_profile.reference_examples supports at most 200 entries"));
+    } else if (!references.isUndefined() && !references.isArray()) {
+      result.errors.append(QStringLiteral("learned_profile.reference_examples must be an array"));
     }
   }
 
@@ -723,6 +761,10 @@ AgentEditStyle parse_agent_edit_style_object(
   style.reference_policy = object.contains(QStringLiteral("reference_policy"))
                                ? object_map(object, QStringLiteral("reference_policy"))
                                : reference_policy().toVariantMap();
+  style.learned_profile = object_map(object, QStringLiteral("learned_profile"));
+  style.tool_knowledge = object_map(object, QStringLiteral("tool_knowledge"));
+  style.quality_model = object_map(object, QStringLiteral("quality_model"));
+  style.project_workflow = object_map(object, QStringLiteral("project_workflow"));
   style.source = source;
   return style;
 }
@@ -738,6 +780,10 @@ QVariantMap agent_edit_style_map(const AgentEditStyle& style) {
   map.insert(QStringLiteral("validation"), style.validation);
   map.insert(QStringLiteral("batchBehavior"), style.batch_behavior);
   map.insert(QStringLiteral("referencePolicy"), style.reference_policy);
+  map.insert(QStringLiteral("learnedProfile"), style.learned_profile);
+  map.insert(QStringLiteral("toolKnowledge"), style.tool_knowledge);
+  map.insert(QStringLiteral("qualityModel"), style.quality_model);
+  map.insert(QStringLiteral("projectWorkflow"), style.project_workflow);
   map.insert(QStringLiteral("source"), style.source);
   return map;
 }

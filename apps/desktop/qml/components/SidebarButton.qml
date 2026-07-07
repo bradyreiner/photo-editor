@@ -15,33 +15,36 @@ Button {
     property bool badgeEmphasis: false
     property bool compact: false
     property bool iconOnly: false
+    property bool showFullTextTooltip: true
     property string shape: "auto" // auto, standard, clipped
 
     Theme { id: theme }
 
-    readonly property bool clippedShape: root.shape === "clipped" || root.shape === "auto"
+    readonly property bool clippedShape: root.shape === "clipped"
     readonly property color iconOnlyFill: root.down
-                                            ? theme.alpha(root.accent, 0.22)
+                                            ? theme.alpha(theme.glassLift, 0.40)
                                           : root.highlighted
-                                            ? theme.alpha(root.accent, 0.18)
-                                            : (root.hovered ? theme.alpha(root.accent, 0.10) : theme.alpha(theme.ink950, 0.50))
+                                            ? theme.alpha(theme.glassLift, 0.34)
+                                            : (root.hovered ? theme.alpha(theme.glassLift, 0.30) : theme.alpha(theme.ink950, 0.50))
     readonly property color iconOnlyBorder: root.visualFocus
                                            ? theme.alpha(theme.focusRing, 0.9)
                                            : root.highlighted
-                                               ? theme.alpha(root.accent, 0.76)
-                                               : (root.hovered ? theme.alpha(root.accent, 0.46) : theme.alpha(root.accent, 0.24))
+                                               ? "transparent"
+                                               : "transparent"
 
-    implicitHeight: iconOnly ? 40 : (compact ? theme.controlHeight : theme.controlHeightTall)
-    implicitWidth: iconOnly ? 40 : implicitBackgroundWidth
+    implicitHeight: iconOnly ? theme.railButtonSize : (compact ? theme.sidebarRowHeightCompact : theme.sidebarRowHeight)
+    implicitWidth: iconOnly ? theme.railButtonSize : Math.max(implicitBackgroundWidth, titleLabel.implicitWidth + (root.badgeText.length > 0 ? badgeLabel.implicitWidth + 54 : 46))
     font.family: theme.fontUi
     font.pixelSize: compact ? 11 : 12
     hoverEnabled: true
     activeFocusOnTab: true
+    Accessible.name: root.tooltipText.length > 0 ? root.tooltipText : (root.title.length > 0 ? root.title : root.kind)
+    Accessible.description: root.subtitle
 
-    ToolTip.visible: root.hovered && root.tooltipText.length > 0
+    ToolTip.visible: root.hovered && (root.tooltipText.length > 0 || (root.showFullTextTooltip && titleLabel.visible && (titleLabel.truncated || titleLabel.contentWidth > titleLabel.width + 1)))
     ToolTip.delay: 250
     ToolTip.timeout: 3000
-    ToolTip.text: root.tooltipText
+    ToolTip.text: root.tooltipText.length > 0 ? root.tooltipText : root.title
 
     background: Item {
         Rectangle {
@@ -51,14 +54,14 @@ Button {
             color: root.down
                    ? theme.alpha(theme.ink750, 0.96)
                    : root.highlighted
-                     ? theme.alpha(root.accent, 0.12)
+                     ? theme.alpha(theme.glassLift, 0.34)
                      : (root.hovered ? theme.alpha(theme.ink700, 0.24) : "transparent")
-            border.width: root.visualFocus ? 2 : 1
+            border.width: root.visualFocus ? 2 : 0
             border.color: root.visualFocus
                           ? theme.alpha(theme.focusRing, 0.9)
                           : root.highlighted
-                            ? theme.alpha(root.accent, 0.34)
-                            : (root.hovered ? theme.alpha(theme.lineStrong, 0.16) : "transparent")
+                            ? "transparent"
+                            : "transparent"
         }
 
         CutCornerSurface {
@@ -74,16 +77,16 @@ Button {
                        : root.down
                          ? theme.alpha(theme.ink750, 0.96)
                          : root.highlighted
-                           ? theme.alpha(root.accent, 0.12)
+                           ? theme.alpha(theme.glassLift, 0.34)
                            : (root.hovered ? theme.alpha(theme.ink700, 0.24) : "transparent")
-            borderWidth: root.visualFocus ? 2 : 1
+            borderWidth: root.visualFocus ? 2 : 0
             borderColor: root.iconOnly
                          ? root.iconOnlyBorder
                          : root.visualFocus
                            ? theme.alpha(theme.focusRing, 0.9)
                            : root.highlighted
-                              ? theme.alpha(root.accent, 0.34)
-                              : (root.hovered ? theme.alpha(root.accent, 0.34) : theme.alpha(root.accent, 0.18))
+                              ? "transparent"
+                              : "transparent"
         }
 
         Rectangle {
@@ -94,7 +97,7 @@ Button {
             anchors.bottom: parent.bottom
             anchors.bottomMargin: root.iconOnly ? 5 : 5
             color: root.accent
-            opacity: root.enabled ? (root.highlighted ? 1.0 : (root.hovered ? 0.74 : 0.42)) : 0.18
+            opacity: root.enabled && root.shape === "clipped" ? (root.highlighted ? 1.0 : (root.hovered ? 0.74 : 0.42)) : 0
             rotation: 34
             transformOrigin: Item.Center
 
@@ -168,6 +171,7 @@ Button {
             }
 
             Text {
+                id: titleLabel
                 Layout.fillWidth: true
                 text: root.title
                 color: root.highlighted ? theme.textStrong : (root.hovered ? theme.textMain : theme.textMuted)
@@ -176,7 +180,10 @@ Button {
                 font.weight: root.highlighted ? Font.DemiBold : Font.Medium
                 Layout.alignment: Qt.AlignVCenter
                 verticalAlignment: Text.AlignVCenter
-                elide: Text.ElideRight
+                elide: Text.ElideNone
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: 9
+                maximumLineCount: 1
             }
 
             Rectangle {

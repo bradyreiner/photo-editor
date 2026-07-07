@@ -1122,10 +1122,13 @@ QVariantMap run_import_work(const QString& source_path, const QJsonObject& metad
 }  // namespace
 
 JobRunner::JobRunner(QObject* parent) : QObject(parent) {
-  (void)recoverInterruptedJobRecords(nullptr);
   connect(&async_job_watcher_, &QFutureWatcher<QVariantMap>::finished, this, &JobRunner::handleAsyncJobFinished);
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &JobRunner::wake);
-  QTimer::singleShot(0, this, &JobRunner::processNextJob);
+}
+
+void JobRunner::initializeFromStore() {
+  (void)recoverInterruptedJobRecords(nullptr);
+  wake();
 }
 
 void JobRunner::wake() {

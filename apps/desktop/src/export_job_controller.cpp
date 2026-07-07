@@ -366,7 +366,6 @@ QJsonObject export_crop_metadata(
 
 ExportJobController::ExportJobController(QObject* parent) : QObject(parent) {
   connect(jobStoreNotifier(), &JobStoreNotifier::jobsChanged, this, &ExportJobController::refreshJobs);
-  loadPersistedJobs(false);
 }
 
 QVariantList ExportJobController::jobs() const {
@@ -383,6 +382,10 @@ int ExportJobController::jobCount() const { return static_cast<int>(jobs_.size()
 bool ExportJobController::busy() const { return busy_; }
 
 QString ExportJobController::status() const { return status_; }
+
+void ExportJobController::initializeFromStore() {
+  loadPersistedJobs(true);
+}
 
 QString ExportJobController::defaultDestinationDirectory() const {
   auto root = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);

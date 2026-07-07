@@ -194,6 +194,16 @@ Text vs icon:
 - Use tooltip text for secondary explanation.
 - Remove labels that repeat the section title.
 
+Readable text:
+
+- Do not use visible `...` as a normal label treatment. It looks unfinished and makes controls harder to trust.
+- Primary labels must either fit, wrap, or live in a wider menu/popover.
+- Compact buttons may horizontally fit text down to the approved minimum size, but they must expose the full label through tooltip and accessibility name.
+- Menus, popovers, dialogs, cards, layer rows, export rows, and review cards should wrap important names to two lines before clipping.
+- Metadata such as long file paths, endpoint URLs, and debug strings may clip only when the full value is available in a tooltip, details view, or copyable field.
+- If a dense grid cannot show full names cleanly, use wider tiles, fewer columns, or a list-style selector before truncating.
+- Agent style names, tool names, layer names, preset names, and export preset names are functional labels, not decoration. They must remain readable.
+
 Accent vs neutral:
 
 - Use accent for active, selected, primary, changed, warning, or error states.
@@ -3253,6 +3263,8 @@ Visual gate:
 - Every visible card or border carries real structure; unnecessary borders are removed or replaced with spacing/fill.
 - No unexpected row-height shifts on hover, drag, selection, rename, or value edits.
 - No text overlap at narrow and wide panel sizes.
+- No ugly ellipses on buttons, menus, tabs, tool names, primary actions, selected variants, or visible workflow labels.
+- Truncation is allowed only for low-priority metadata, long file paths, filenames, URLs, or technical identifiers, with full text available elsewhere.
 - No nested-card look inside inspectors or layers.
 - Accent color appears only for meaningful state or primary action.
 - Primary action is obvious without making secondary actions disappear.
@@ -3289,6 +3301,7 @@ Screenshot gate:
 - Check both a default state and an active-interaction state.
 - Run the first-glance, close-inspection, and clutter reviews from the Visual Polish System.
 - Reject screenshots where the controls overpower the image, board, layer stack, or timeline.
+- Reject screenshots where important labels require `...` to understand the screen.
 
 ## Priority Polish Backlog
 
@@ -3337,6 +3350,92 @@ Screenshot gate:
 5. Advanced Color screenshot: refine color wheels, labels, and section rhythm.
 6. Carousel screenshot: polish board boundary, placeholder, right panel hierarchy.
 7. Export screenshot: clarify preset/settings/queue hierarchy.
+
+## Guideline Compliance Proof
+
+This section proves that the planning artifact covers the requested guidelines. It does not claim the app implementation is complete. Implementation proof still requires the agent tickets, builds/checks, interaction checks, and screenshots described above.
+
+### User Requirement Matrix
+
+1. Keep the current product shape.
+   - Enforced by: `Product Stance`, `Scope Guardrails`, `Agent Non-Goals`, `Execution Plan`.
+   - Proof condition: every ticket states non-goals and confirms major workspace regions did not move.
+
+2. Make the app feel professional, modern, expensive, and low-clutter.
+   - Enforced by: `Professional Modern Aesthetic Standard`, `Minimal Clutter Standard`, `Premium Restraint Rules`, `Visual Polish System`, `Polish Gates`.
+   - Proof condition: before/after screenshots pass first-glance, close-inspection, clutter, and visual gates.
+
+3. Preserve full functionality.
+   - Enforced by: `Full Functionality Without Clutter`, `Editing Visibility Model`, `Function Preservation Rule`, `Ticket 11: Visibility and function preservation audit`.
+   - Proof condition: every moved function has a documented new location and discovery path; no function disappears silently.
+
+4. Make editing easy.
+   - Enforced by: `Easy Powerful Editing Model`, `Tool Visibility Standard`, `Tool Expansion Standard`, `Tool Switching Standard`.
+   - Proof condition: users can see tool families, select tools, expand variants, customize common settings, switch tools, and return to a calm workspace.
+
+5. Make tools visible, expandable, switchable, and customizable.
+   - Enforced by: `Tool Visibility Standard`, `Tool Expansion Standard`, `Tool Customization Standard`, `Edit Tool Switching`, `Ticket 9: Edit tool discovery, expansion, and switching`.
+   - Proof condition: active family and active variant are visible; variants/customization are one expansion away or closer; switching clears stale HUDs/menus.
+
+6. Improve UI behavior for each tool.
+   - Enforced by: `Every Tool Needs A Behavior Contract`, `Tool Lifecycle Contract`, `Global UI Behavior Standards`, `Tool Behavior Plan`, `Cross-Tool Behavior Checklist`.
+   - Proof condition: each tool has entry, active, pending, committed, canceled, disabled, and failed behavior where applicable.
+
+7. Increase modularity.
+   - Enforced by: `Make The UI Modular`, `Modular UI Architecture`, `Component Ownership Rule`, `Component-First Priority Model`.
+   - Proof condition: tickets extend existing primitives or justify new narrow primitives; one-off component behavior is reduced.
+
+8. Use buttons, menus, split buttons, popovers, and inspectors correctly.
+   - Enforced by: `Buttons Should Expand Into Menus`, `Design Choice Rules`, `Button/Menu Decision Matrix`, `Button Rules`, `Menu And Popover Rules`.
+   - Proof condition: primary actions stay obvious; secondary/variant actions are discoverable; menus are grouped, keyboard navigable, and destructive actions are separated.
+
+9. Make layers look and behave like a premium stack.
+   - Enforced by: `Layers`, `Layer Visual Quality Bar`, `Ticket 10: Layer stack`, `Component Ticket Breakdown` layer risk control.
+   - Proof condition: select, rename, reorder, visibility, opacity, active mask, transform entry/exit, and Escape behavior are verified.
+
+10. Define spacing, padding, margins, rails, toolbars, buttons, sliders, menus, borders, and outlines.
+    - Enforced by: `Measurement System`, `Layout Zones`, `Surface And Radius Rules`, `Border And Outline Rules`, `Button Rules`, `Slider Rules`, `Toolbar Rules`, `Menu And Popover Rules`.
+    - Proof condition: pages use the documented size ranges, 4 px spacing system, stable row heights, and consistent surface hierarchy.
+
+11. Include every page.
+    - Enforced by: `Page Coverage Matrix`, `Component Ticket Breakdown`, `Page Completion Checklist`, `Execution Plan`.
+    - Proof condition: Library, Import, Edit, Masks, Carousel, Timeline, Export, app shell, and shared dialogs are audited in each relevant component ticket.
+
+12. Prioritize each component.
+    - Enforced by: `Component-First Priority Model`, `Component Ticket Breakdown`, `Recommended Next Step`.
+    - Proof condition: implementation follows component-ticket order before page-specific cleanup.
+
+13. Decide what is visible at each point in the editing process.
+    - Enforced by: `Editing Visibility Model`, `Editing State Visibility`, `Visibility Audit Checklist`.
+    - Proof condition: each page/ticket identifies always-visible, contextual, one-expansion-away, hover/focus, and diagnostic-only functionality.
+
+14. Avoid incomplete/truncated text and ugly `...`.
+    - Enforced by: `Text Fit And Truncation Rules`, `Button Rules`, `Menu And Popover Rules`, `Visual gate`, `Screenshot gate`.
+    - Proof condition: important labels do not require ellipses; truncation is limited to low-priority metadata, paths, filenames, URLs, or technical identifiers with full text available elsewhere.
+
+15. Make the plan agent-ready.
+    - Enforced by: `Agent Implementation Contract`, `Master Spec vs Agent Ticket`, `Agent Ticket Template`, `Verification Requirements`, `Agent Stop Conditions`, `Agent Definition Of Done`.
+    - Proof condition: no agent receives the master spec as one task; every implementation task has exact files, non-goals, rules, checks, and rollback risk.
+
+### Plan Completeness Checklist
+
+The plan is complete when the document includes:
+
+- Product scope and non-goals.
+- Professional aesthetic standard.
+- Easy editing model.
+- Visibility/function preservation model.
+- Text-fit/truncation standard.
+- Visual tokens and component rules.
+- Tool behavior contracts.
+- Layer-specific design and behavior rules.
+- Component-first page coverage.
+- Agent ticket template.
+- Verification requirements.
+- Polish gates.
+- Acceptance criteria.
+
+Current document status: complete as a planning artifact. Implementation remains future work and must be proven through the component tickets.
 
 ## Acceptance Criteria
 

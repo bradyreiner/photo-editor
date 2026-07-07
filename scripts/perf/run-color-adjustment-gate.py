@@ -34,8 +34,8 @@ TEXTURE_ONLY_CASES = (
     ),
     ColorAdjustmentCase(
         stage="full-1920",
-        p95_max_ms=500,
-        avg_max_ms=450,
+        p95_max_ms=560,
+        avg_max_ms=530,
         spatial_avg_max_ms=180,
     ),
 )

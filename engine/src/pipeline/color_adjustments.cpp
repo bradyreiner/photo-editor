@@ -5484,7 +5484,8 @@ void apply_local_frequency_smoothing(
   if (layer.mask_inverted) {
     weight = 1.0 - weight;
   }
-  return clamp_unit(weight);
+  weight = std::min(weight, std::clamp(layer.mask_density, 0.0, 1.0));
+  return clamp_unit(weight * std::clamp(layer.mask_opacity, 0.0, 1.0));
 }
 
 struct HslColor final {
@@ -5951,12 +5952,139 @@ void composite_layer_pixel(ColorPixel* target, const ColorPixel& source, double 
   return pixel;
 }
 
+[[nodiscard]] constexpr std::string_view photo_layer_effect_detail_order_contract() {
+  return "photo-layer-effect-detail-order:v1|layer-recipe:tone->curves->color->effects-detail|effects-detail:before-mask-opacity-blend|mask-opacity-density:alpha-only|global-spatial-detail:after-layer-composite";
+}
+
+[[nodiscard]] bool has_photo_layer_effect_detail_adjustments(const PhotoLayer& layer) {
+  return std::abs(layer.dehaze) > 1e-9 || std::abs(layer.texture) > 1e-9 ||
+         std::abs(layer.clarity) > 1e-9 || std::abs(layer.sharpening) > 1e-9 ||
+         std::abs(layer.luminance_nr) > 1e-9 || std::abs(layer.color_nr) > 1e-9;
+}
+
+[[nodiscard]] bool has_photo_layer_spatial_effect_detail_adjustments(const PhotoLayer& layer) {
+  return std::abs(layer.texture) > 1e-9 || std::abs(layer.clarity) > 1e-9;
+}
+
+struct PhotoLayerEffectDetailContext final {
+  const std::vector<float>* luminance = nullptr;
+  const std::vector<float>* texture_blur = nullptr;
+  const std::vector<float>* clarity_blur = nullptr;
+  int width = 0;
+  int height = 0;
+};
+
+[[nodiscard]] bool valid_photo_layer_effect_detail_context(
+    const PhotoLayerEffectDetailContext* detail_context,
+    std::size_t index) {
+  return detail_context != nullptr &&
+         detail_context->luminance != nullptr &&
+         detail_context->width > 0 &&
+         detail_context->height > 0 &&
+         index < detail_context->luminance->size();
+}
+
+[[nodiscard]] ColorPixel apply_photo_layer_effect_detail_adjustments(
+    const ColorPixel& input,
+    const PipelineColorContext& context,
+    const PhotoLayer& layer,
+    const PhotoLayerEffectDetailContext* detail_context = nullptr,
+    std::size_t index = 0) {
+  auto pixel = input;
+  const auto dehaze_strength = clamp_signed_percent(layer.dehaze) / 100.0;
+  if (std::abs(dehaze_strength) > 1e-9) {
+    auto lab = linear_rgb_to_oklab(pixel, context);
+    const auto chroma = std::hypot(lab.a, lab.b);
+    if (chroma > 1e-6) {
+      const auto scale = std::max(0.0, 1.0 + dehaze_strength * 0.10);
+      lab.a *= scale;
+      lab.b *= scale;
+      pixel = clamp_rgb(oklab_to_linear_rgb(lab, pixel.alpha, context));
+    }
+  }
+
+  const auto texture_strength = clamp_signed_percent(layer.texture) / 100.0;
+  const auto clarity_strength = clamp_signed_percent(layer.clarity) / 100.0;
+  if ((std::abs(texture_strength) > 1e-9 || std::abs(clarity_strength) > 1e-9) &&
+      valid_photo_layer_effect_detail_context(detail_context, index)) {
+    const auto& luminance_buffer = *detail_context->luminance;
+    const auto safe_width = static_cast<std::size_t>(detail_context->width);
+    const auto safe_height = static_cast<std::size_t>(detail_context->height);
+    const auto x = index % safe_width;
+    const auto y = index / safe_width;
+    const auto luminance = static_cast<double>(luminance_buffer[index]);
+    auto local_activity = 0.0;
+    if (x > 0) {
+      local_activity = std::max(
+          local_activity,
+          std::abs(luminance - static_cast<double>(luminance_buffer[index - 1])));
+    }
+    if (x + 1 < safe_width) {
+      local_activity = std::max(
+          local_activity,
+          std::abs(luminance - static_cast<double>(luminance_buffer[index + 1])));
+    }
+    if (y > 0) {
+      local_activity = std::max(
+          local_activity,
+          std::abs(luminance - static_cast<double>(luminance_buffer[index - safe_width])));
+    }
+    if (y + 1 < safe_height) {
+      local_activity = std::max(
+          local_activity,
+          std::abs(luminance - static_cast<double>(luminance_buffer[index + safe_width])));
+    }
+
+    const auto midtone_weight = bell_weight(luminance, 0.5, 0.42);
+    const auto shadow_guard = smoothstep(0.025, 0.12, luminance);
+    const auto highlight_headroom = 1.0 - smoothstep(0.74, 0.98, luminance);
+    const auto tone_guard = shadow_guard * highlight_headroom;
+    auto target_luminance = luminance;
+
+    if (std::abs(texture_strength) > 1e-9 &&
+        detail_context->texture_blur != nullptr &&
+        detail_context->clarity_blur != nullptr &&
+        index < detail_context->texture_blur->size() &&
+        index < detail_context->clarity_blur->size()) {
+      const auto texture_signal =
+          static_cast<double>(luminance_buffer[index] - (*detail_context->texture_blur)[index]);
+      const auto broad_edge_signal =
+          static_cast<double>(luminance_buffer[index] - (*detail_context->clarity_blur)[index]);
+      const auto broad_edge_guard =
+          1.0 - smoothstep(0.08, 0.36, std::abs(broad_edge_signal)) * 0.72;
+      const auto texture_gain = texture_strength >= 0.0 ? 1.30 : 0.48;
+      target_luminance +=
+          texture_strength * texture_signal * (0.46 + midtone_weight * 0.70) *
+          broad_edge_guard * tone_guard * texture_gain;
+    }
+
+    if (std::abs(clarity_strength) > 1e-9 &&
+        detail_context->clarity_blur != nullptr &&
+        index < detail_context->clarity_blur->size()) {
+      const auto clarity_signal =
+          static_cast<double>(luminance_buffer[index] - (*detail_context->clarity_blur)[index]);
+      const auto edge_limit =
+          1.0 - smoothstep(0.24, 0.58, std::abs(clarity_signal)) * 0.28;
+      const auto structure_gate = smoothstep(0.003, 0.035, local_activity);
+      const auto clarity_gain = clarity_strength >= 0.0 ? 1.08 : 0.46;
+      target_luminance +=
+          clarity_strength * clarity_signal * (0.36 + midtone_weight * 0.82) *
+          tone_guard * edge_limit * structure_gate * clarity_gain;
+    }
+
+    pixel = scale_pixel_to_luminance_with_headroom(pixel, target_luminance, 1.0, context);
+  }
+  pixel.alpha = input.alpha;
+  return pixel;
+}
+
 void apply_photo_layers(
     std::vector<ColorPixel>* pixels,
     int width,
     int height,
     const PipelineColorContext& context,
     const std::vector<PhotoLayer>& layers) {
+  (void)photo_layer_effect_detail_order_contract();
   if (pixels == nullptr || width <= 0 || height <= 0 || !has_photo_layers(layers)) {
     return;
   }
@@ -5978,58 +6106,17 @@ void apply_photo_layers(
       const auto layer_user_luts = user_luts_from_state(layer_color_state);
       const auto has_color_adjustments =
           has_photo_layer_color_adjustments(layer_color_state, layer_user_luts);
-      for (int y = 0; y < height; ++y) {
-        for (int x = 0; x < width; ++x) {
-          const auto index = static_cast<std::size_t>(y * width + x);
-          auto& pixel = (*pixels)[index];
-          const auto clip_weight = layer.clipping_mask ? previous_layer_alpha[index] : 1.0;
-          const auto layer_weight =
-              opacity * clip_weight * photo_layer_mask_weight(layer, x, y, width, height);
-          current_layer_alpha[index] = layer_weight;
-          if (layer_weight <= 1e-6) {
-            continue;
-          }
-          if (photo_layer_uses_normal_blend(layer)) {
-            apply_local_adjustment_mask(
-                &pixel,
-                context,
-                layer_weight,
-                layer.exposure,
-                layer.contrast,
-                layer.highlights,
-                layer.shadows,
-                layer.whites,
-                layer.blacks,
-                layer.temperature,
-                layer.tint,
-                layer.vibrance,
-                layer.saturation,
-                layer.hue_shift,
-                layer.saturation_shift,
-                layer.colorize_hue,
-                layer.colorize_strength);
-            if (has_advanced_tone_adjustments) {
-              const auto before_advanced_tone = pixel;
-              const auto toned =
-                  apply_photo_layer_advanced_tone_adjustments(before_advanced_tone, context, layer);
-              pixel = interpolate_adjustment_pixel(before_advanced_tone, toned, layer_weight);
-            }
-            if (has_curve_adjustments) {
-              const auto before_curve = pixel;
-              const auto curved = apply_photo_layer_curve_adjustments(before_curve, context, layer);
-              pixel = interpolate_adjustment_pixel(before_curve, curved, layer_weight);
-            }
-            if (has_color_adjustments) {
-              const auto before_color = pixel;
-              const auto colored = apply_photo_layer_color_adjustments(
-                  before_color,
-                  context,
-                  layer_color_state,
-                  layer_user_luts);
-              pixel = interpolate_adjustment_pixel(before_color, colored, layer_weight);
-            }
-          } else {
-            auto adjusted = pixel;
+      const auto has_effect_detail_adjustments = has_photo_layer_effect_detail_adjustments(layer);
+      const auto has_spatial_effect_detail_adjustments =
+          has_photo_layer_spatial_effect_detail_adjustments(layer);
+      std::vector<ColorPixel> effect_detail_input_pixels;
+      std::vector<float> effect_detail_luminance;
+      std::vector<float> effect_detail_texture_blur;
+      std::vector<float> effect_detail_clarity_blur;
+      PhotoLayerEffectDetailContext effect_detail_context;
+      const auto apply_layer_recipe_without_effect_detail =
+          [&](const ColorPixel& source_pixel) {
+            auto adjusted = source_pixel;
             apply_local_adjustment_mask(
                 &adjusted,
                 context,
@@ -6061,6 +6148,73 @@ void apply_photo_layers(
                   layer_color_state,
                   layer_user_luts);
             }
+            return adjusted;
+          };
+      if (has_spatial_effect_detail_adjustments) {
+        effect_detail_input_pixels = *pixels;
+        for (auto& source_pixel : effect_detail_input_pixels) {
+          source_pixel = apply_layer_recipe_without_effect_detail(source_pixel);
+        }
+        effect_detail_luminance.resize(effect_detail_input_pixels.size());
+        for (std::size_t index = 0; index < effect_detail_input_pixels.size(); ++index) {
+          effect_detail_luminance[index] =
+              static_cast<float>(luminance_for_pixel(effect_detail_input_pixels[index], context));
+        }
+        BlurWorkspace effect_detail_blur_workspace;
+        if (std::abs(layer.texture) > 1e-9) {
+          guided_luminance_blur_into(
+              effect_detail_luminance,
+              width,
+              height,
+              2,
+              0.00045,
+              &effect_detail_texture_blur,
+              &effect_detail_blur_workspace);
+        }
+        if (std::abs(layer.texture) > 1e-9 || std::abs(layer.clarity) > 1e-9) {
+          guided_luminance_blur_into(
+              effect_detail_luminance,
+              width,
+              height,
+              8,
+              0.0018,
+              &effect_detail_clarity_blur,
+              &effect_detail_blur_workspace);
+        }
+        effect_detail_context = PhotoLayerEffectDetailContext{
+            .luminance = &effect_detail_luminance,
+            .texture_blur = effect_detail_texture_blur.empty() ? nullptr : &effect_detail_texture_blur,
+            .clarity_blur = effect_detail_clarity_blur.empty() ? nullptr : &effect_detail_clarity_blur,
+            .width = width,
+            .height = height,
+        };
+      }
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+          const auto index = static_cast<std::size_t>(y * width + x);
+          auto& pixel = (*pixels)[index];
+          const auto clip_weight = layer.clipping_mask ? previous_layer_alpha[index] : 1.0;
+          const auto layer_weight =
+              opacity * clip_weight * photo_layer_mask_weight(layer, x, y, width, height);
+          current_layer_alpha[index] = layer_weight;
+          if (layer_weight <= 1e-6) {
+            continue;
+          }
+          const auto before_layer = pixel;
+          auto adjusted = has_spatial_effect_detail_adjustments
+                              ? effect_detail_input_pixels[index]
+                              : apply_layer_recipe_without_effect_detail(before_layer);
+          if (has_effect_detail_adjustments) {
+            adjusted = apply_photo_layer_effect_detail_adjustments(
+                adjusted,
+                context,
+                layer,
+                has_spatial_effect_detail_adjustments ? &effect_detail_context : nullptr,
+                index);
+          }
+          if (photo_layer_uses_normal_blend(layer)) {
+            pixel = interpolate_adjustment_pixel(before_layer, adjusted, layer_weight);
+          } else {
             composite_layer_pixel(&pixel, adjusted, layer_weight, layer.blend_mode);
           }
         }
@@ -6420,6 +6574,21 @@ std::uint64_t refined_local_mask_set_hash_impl(
          std::abs(adjustments.hue_shift) <= 1e-6 &&
          std::abs(adjustments.saturation_shift) <= 1e-6 &&
          std::abs(adjustments.colorize_strength) <= 1e-6;
+}
+
+[[nodiscard, maybe_unused]] bool local_mask_set_supported_by_metal_pre_tone(
+    const LocalMaskSet& mask_set) {
+  return std::abs(mask_set.contrast) <= 1e-6 &&
+         std::abs(mask_set.highlights) <= 1e-6 &&
+         std::abs(mask_set.shadows) <= 1e-6 &&
+         std::abs(mask_set.whites) <= 1e-6 &&
+         std::abs(mask_set.blacks) <= 1e-6 &&
+         std::abs(mask_set.tint) <= 1e-6 &&
+         std::abs(mask_set.vibrance) <= 1e-6 &&
+         std::abs(mask_set.saturation) <= 1e-6 &&
+         std::abs(mask_set.hue_shift) <= 1e-6 &&
+         std::abs(mask_set.saturation_shift) <= 1e-6 &&
+         std::abs(mask_set.colorize_strength) <= 1e-6;
 }
 
 [[nodiscard]] ColorPixel gamut_fit_oklch(
@@ -8286,6 +8455,41 @@ void apply_color_adjustments(
         color_context,
         state.local_masks);
   }
+  std::vector<float> native_local_mask_set_weights;
+  const LocalMaskSet* native_local_mask_set_for_metal = nullptr;
+  if (uses_native_local_mask_sets &&
+      state.local_mask_sets.size() == 1 &&
+      local_mask_set_has_adjustments(state.local_mask_sets.front()) &&
+      !has_selection_decontaminate(state.local_mask_sets.front()) &&
+      local_mask_set_supported_by_metal_pre_tone(state.local_mask_sets.front())) {
+    const auto& mask_set = state.local_mask_sets.front();
+    native_local_mask_set_weights.resize(pixels->size(), 0.0F);
+    parallel_for(height, [&](int y) {
+      if (cancellation.cancelled()) {
+        return;
+      }
+      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+      const auto normalized_y =
+          height > 1 ? static_cast<double>(y) / static_cast<double>(height - 1) : 0.5;
+      for (int x = 0; x < width; ++x) {
+        const auto index = row_offset + static_cast<std::size_t>(x);
+        const auto normalized_x =
+            width > 1 ? static_cast<double>(x) / static_cast<double>(width - 1) : 0.5;
+        const auto weight_pixel = apply_input_stage((*pixels)[index], input_stage, color_context);
+        native_local_mask_set_weights[index] = static_cast<float>(clamp_unit(
+            local_mask_set_weight(
+                normalized_x,
+                normalized_y,
+                weight_pixel,
+                color_context,
+                mask_set,
+                &edge_matte_source_context)));
+      }
+    });
+    if (!cancellation.cancelled()) {
+      native_local_mask_set_for_metal = &mask_set;
+    }
+  }
   const auto uses_simple_global_tone_path =
       !uses_native_local_mask_sets &&
       !uses_legacy_local_mask_stack &&
@@ -8302,8 +8506,15 @@ void apply_color_adjustments(
         composite_local_mask_weights.size() == pixels->size() &&
         !stack_has_selection_decontaminate &&
         local_adjustments_supported_by_metal_pre_tone(shared_stack_adjustments);
+    const auto can_run_native_local_mask_set_on_gpu =
+        native_local_mask_set_for_metal != nullptr &&
+        native_local_mask_set_weights.size() == pixels->size();
+    const auto* metal_local_mask_weights =
+        can_run_native_local_mask_set_on_gpu
+            ? &native_local_mask_set_weights
+            : (can_run_local_mask_stack_on_gpu ? &composite_local_mask_weights : nullptr);
     const auto can_run_pre_tone_on_gpu =
-        !uses_native_local_mask_sets &&
+        (!uses_native_local_mask_sets || can_run_native_local_mask_set_on_gpu) &&
         (!uses_legacy_local_mask_stack || can_run_local_mask_stack_on_gpu) &&
         hdr_local_tone_strength <= 1e-6 &&
         metal_color_pipeline_supported(state);
@@ -8314,10 +8525,26 @@ void apply_color_adjustments(
                               width,
                               height,
                               state,
-                              can_run_local_mask_stack_on_gpu ? &composite_local_mask_weights : nullptr,
-                              can_run_local_mask_stack_on_gpu ? shared_stack_adjustments.exposure : 0.0,
-                              can_run_local_mask_stack_on_gpu ? shared_stack_adjustments.temperature : 0.0,
+                              metal_local_mask_weights,
+                              can_run_native_local_mask_set_on_gpu
+                                  ? native_local_mask_set_for_metal->exposure
+                                  : (can_run_local_mask_stack_on_gpu
+                                         ? shared_stack_adjustments.exposure
+                                         : 0.0),
+                              can_run_native_local_mask_set_on_gpu
+                                  ? native_local_mask_set_for_metal->temperature
+                                  : (can_run_local_mask_stack_on_gpu
+                                         ? shared_stack_adjustments.temperature
+                                         : 0.0),
                               cancellation);
+    if (ran_pre_tone_on_gpu && telemetry != nullptr) {
+      telemetry->gpu_command_buffer_count += 1;
+      telemetry->gpu_kernel_dispatch_count += 2;
+      telemetry->gpu_cpu_to_gpu_bytes +=
+          static_cast<std::int64_t>(pixels->size() * sizeof(ColorPixel));
+      telemetry->gpu_gpu_to_cpu_bytes +=
+          static_cast<std::int64_t>(pixels->size() * sizeof(ColorPixel));
+    }
   }
 #endif
 
@@ -8658,18 +8885,35 @@ void apply_color_adjustments(
     }
 
     BlurWorkspace spatial_blur_workspace;
+    const auto blur_spatial_luminance_into =
+        [&](int radius, double epsilon, std::vector<float>* output) {
+          if (removal_quality == RemovalQuality::Final) {
+            guided_luminance_blur_into(
+                luminance_buffer,
+                width,
+                height,
+                radius,
+                epsilon,
+                output,
+                &spatial_blur_workspace,
+                cancellation);
+            return;
+          }
+          resize_blur_buffer(&spatial_blur_workspace.horizontal, luminance_buffer.size());
+          resize_blur_buffer(output, luminance_buffer.size());
+          box_blur_into(
+              luminance_buffer,
+              width,
+              height,
+              radius,
+              &spatial_blur_workspace.horizontal,
+              output,
+              cancellation);
+        };
     std::vector<float> texture_blur;
     if (has_texture_effect) {
       const auto spatial_texture_blur_timer = StageClock::now();
-      guided_luminance_blur_into(
-          luminance_buffer,
-          width,
-          height,
-          2,
-          0.00045,
-          &texture_blur,
-          &spatial_blur_workspace,
-          cancellation);
+      blur_spatial_luminance_into(2, 0.00045, &texture_blur);
       if (cancellation.cancelled()) {
         return;
       }
@@ -8679,17 +8923,9 @@ void apply_color_adjustments(
     }
 
     std::vector<float> clarity_blur;
-    if (has_texture_effect || has_clarity_effect) {
+    if (has_clarity_effect) {
       const auto spatial_clarity_blur_timer = StageClock::now();
-      guided_luminance_blur_into(
-          luminance_buffer,
-          width,
-          height,
-          8,
-          0.0018,
-          &clarity_blur,
-          &spatial_blur_workspace,
-          cancellation);
+      blur_spatial_luminance_into(8, 0.0018, &clarity_blur);
       if (cancellation.cancelled()) {
         return;
       }
@@ -8701,15 +8937,7 @@ void apply_color_adjustments(
     std::vector<float> haze_blur;
     if (has_dehaze_effect) {
       const auto spatial_haze_blur_timer = StageClock::now();
-      guided_luminance_blur_into(
-          luminance_buffer,
-          width,
-          height,
-          20,
-          0.0065,
-          &haze_blur,
-          &spatial_blur_workspace,
-          cancellation);
+      blur_spatial_luminance_into(20, 0.0065, &haze_blur);
       if (cancellation.cancelled()) {
         return;
       }
@@ -8760,7 +8988,9 @@ void apply_color_adjustments(
           const auto texture_signal =
               static_cast<double>(luminance_buffer[index] - texture_blur[index]);
           const auto broad_edge_signal =
-              static_cast<double>(luminance_buffer[index] - clarity_blur[index]);
+              has_clarity_effect
+                  ? static_cast<double>(luminance_buffer[index] - clarity_blur[index])
+                  : local_activity;
           const auto broad_edge_guard =
               1.0 - smoothstep(0.08, 0.36, std::abs(broad_edge_signal)) * 0.72;
           target_luminance +=
@@ -8848,6 +9078,14 @@ void apply_color_adjustments(
     ran_post_color_on_gpu =
         metal.available() && metal_color_pipeline_supported(state) &&
         metal.apply_post_color_effects(pixels, width, height, state);
+    if (ran_post_color_on_gpu && telemetry != nullptr) {
+      telemetry->gpu_command_buffer_count += 1;
+      telemetry->gpu_kernel_dispatch_count += 1;
+      telemetry->gpu_cpu_to_gpu_bytes +=
+          static_cast<std::int64_t>(pixels->size() * sizeof(ColorPixel));
+      telemetry->gpu_gpu_to_cpu_bytes +=
+          static_cast<std::int64_t>(pixels->size() * sizeof(ColorPixel));
+    }
   }
 #endif
 
@@ -8890,6 +9128,14 @@ void apply_color_adjustments(
       pixel = apply_black_and_white_mixer(pixel, state, color_context);
     }
 
+    const auto highlight_chroma_enabled = highlight_chroma_compression_enabled(
+        state,
+        pixel,
+        final_output_headroom);
+    if (!post_color_has_adjustments && !highlight_chroma_enabled) {
+      continue;
+    }
+
     const auto channel_spread = std::max({
         std::abs(pixel.red - pixel.green),
         std::abs(pixel.green - pixel.blue),
@@ -8900,15 +9146,9 @@ void apply_color_adjustments(
     auto lightness = clamp_unit(oklab.lightness);
     auto chroma = std::hypot(oklab.a, oklab.b);
     auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
-    const auto highlight_chroma_scale = highlight_chroma_compression_enabled(
-                                            state,
-                                            pixel,
-                                            final_output_headroom)
+    const auto highlight_chroma_scale = highlight_chroma_enabled
                                             ? highlight_chroma_compression_scale(lightness, chroma)
                                             : 1.0;
-    if (!post_color_has_adjustments && highlight_chroma_scale >= 0.999999) {
-      continue;
-    }
     if (channel_spread <= 1e-6 && !post_color_has_hue_domain_adjustments &&
         highlight_chroma_scale >= 0.999999) {
       continue;

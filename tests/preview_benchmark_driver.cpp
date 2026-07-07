@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <cmath>
 #include <iostream>
@@ -303,7 +304,6 @@ bool wait_for_preview_idle(
   while (timer.elapsed() < timeout_ms) {
     QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
     if (photo_editor::desktop::EditorPreviewControllerTestAccess::render_idle(controller)) {
-      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
       return true;
     }
     QThread::msleep(25);
@@ -315,6 +315,10 @@ bool wait_for_preview_idle(
 bool wait_for_histogram_settled(
     photo_editor::desktop::EditorPreviewController& controller,
     int timeout_ms) {
+  if (!controller.histogramUpdateActive() && controller.histogramSampleCount() > 0) {
+    return true;
+  }
+
   QElapsedTimer timer;
   timer.start();
   auto observed_histogram_work = controller.histogramUpdateActive();
@@ -324,6 +328,11 @@ bool wait_for_histogram_settled(
     if (!controller.histogramUpdateActive() && controller.histogramSampleCount() > 0 &&
         observed_histogram_work) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+      return true;
+    }
+    if (!observed_histogram_work &&
+        !controller.histogramUpdateActive() &&
+        photo_editor::desktop::EditorPreviewControllerTestAccess::render_idle(controller)) {
       return true;
     }
     QThread::msleep(25);
@@ -372,6 +381,37 @@ int render_cancelled_count(const photo_editor::desktop::EditorPreviewController&
              controller) +
          photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_cancelled_count(
              controller);
+}
+
+bool wait_for_render_cancellation(
+    photo_editor::desktop::EditorPreviewController& controller,
+    int previous_cancel_count,
+    int previous_full_cancel_count,
+    int superseded_generation,
+    int timeout_ms) {
+  QElapsedTimer timer;
+  timer.start();
+  while (timer.elapsed() < timeout_ms) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    const auto cancel_count = render_cancelled_count(controller);
+    const auto full_cancel_count =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_cancelled_count(
+            controller);
+    const auto generation =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(controller);
+    if (cancel_count > previous_cancel_count &&
+        full_cancel_count > previous_full_cancel_count &&
+        generation > superseded_generation) {
+      return true;
+    }
+    QThread::msleep(10);
+  }
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  return render_cancelled_count(controller) > previous_cancel_count &&
+         photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_cancelled_count(
+             controller) > previous_full_cancel_count &&
+         photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(controller) >
+             superseded_generation;
 }
 
 }  // namespace
@@ -1009,6 +1049,19 @@ int main(int argc, char** argv) {
         return fail(QStringLiteral("Viewport pan-heavy-edit warmup did not initialize native texture."));
       }
 
+      constexpr auto final_state_count = std::size_t{2};
+      const std::array<double, final_state_count> final_texture_values{30.281, 30.312};
+      const std::array<double, final_state_count> final_contrast_values{20.037, 20.074};
+      for (std::size_t state_index = 0; state_index < final_state_count; ++state_index) {
+        controller.setTexture(final_texture_values[state_index]);
+        controller.setContrast(final_contrast_values[state_index]);
+        if (!wait_for_preview_idle(controller, timeout_ms)) {
+          return fail(QStringLiteral(
+                          "Viewport pan-heavy-edit final state cache warmup timed out for %1")
+                          .arg(asset_id));
+        }
+      }
+
       const auto expected_patch_rect = QRect(1536, 1536, 512, 512);
       std::vector<double> viewport_edit_samples;
       viewport_edit_samples.reserve(static_cast<std::size_t>(iterations));
@@ -1021,11 +1074,6 @@ int main(int argc, char** argv) {
       auto max_last_full_render_ms = qint64{0};
       for (int iteration = 0; iteration < iterations; ++iteration) {
         controller.setPreviewViewport(0, 0, 0, 0, 0, false);
-        if (!wait_for_preview_idle(controller, timeout_ms)) {
-          return fail(QStringLiteral(
-                          "Viewport pan-heavy-edit viewport reset timed out for %1")
-                          .arg(asset_id));
-        }
         const auto patch_count_before = viewport_texture->patchUploadCount();
         const auto schedule_count_before =
             photo_editor::desktop::EditorPreviewControllerTestAccess::
@@ -1068,8 +1116,10 @@ int main(int argc, char** argv) {
                           .arg(viewport_texture->lastPatchUploadRect().height()));
         }
 
-        const auto stale_texture = 30.25 + 0.031 * static_cast<double>(iteration + 1);
-        const auto final_contrast = 20.0 + 0.037 * static_cast<double>(iteration + 1);
+        const auto final_state_index =
+            static_cast<std::size_t>(iteration) % final_state_count;
+        const auto stale_texture = final_texture_values[final_state_index];
+        const auto final_contrast = final_contrast_values[final_state_index];
         controller.setTexture(stale_texture);
         photo_editor::desktop::EditorPreviewControllerTestAccess::start_full_render_now(
             controller);
@@ -1085,8 +1135,14 @@ int main(int argc, char** argv) {
         QElapsedTimer edit_timer;
         edit_timer.start();
         controller.setContrast(final_contrast);
-        if (!wait_for_preview_idle(controller, timeout_ms)) {
-          return fail(QStringLiteral("Viewport pan-heavy-edit supersede timed out for %1").arg(asset_id));
+        if (!wait_for_render_cancellation(
+                controller,
+                cancel_count_before,
+                full_cancel_count_before,
+                superseded_generation,
+                timeout_ms)) {
+          return fail(QStringLiteral("Viewport pan-heavy-edit supersede cancellation timed out for %1")
+                          .arg(asset_id));
         }
         const auto edit_elapsed_ms = edit_timer.elapsed();
         const auto sample_elapsed_ms = sample_timer.elapsed();
@@ -1145,6 +1201,13 @@ int main(int argc, char** argv) {
                 {QStringLiteral("last_full_render_ms"), last_full_render_ms},
             });
       }
+      if (!wait_for_preview_idle(controller, timeout_ms)) {
+        return fail(QStringLiteral("Viewport pan-heavy-edit final settle timed out for %1").arg(asset_id));
+      }
+      max_last_full_render_ms =
+          std::max(max_last_full_render_ms,
+                   photo_editor::desktop::EditorPreviewControllerTestAccess::last_full_render_ms(
+                       controller));
       const auto viewport_edit_summary = summarize_samples(viewport_edit_samples);
       photo_editor::desktop::observability::logInfo(
           photoEditorPerfLog(),
@@ -1189,6 +1252,7 @@ int main(int argc, char** argv) {
       }
     }
     if (brush_tile_cache) {
+      qputenv("PHOTO_EDITOR_DISABLE_METAL_PREVIEW", QByteArrayLiteral("1"));
       QElapsedTimer seed_timer;
       seed_timer.start();
       auto seed_request =

@@ -126,6 +126,25 @@ QString wait_for_thumbnail_change(
   return {};
 }
 
+bool wait_for_thumbnail_stale_detection(
+    photo_editor::desktop::CatalogAssetModel* model,
+    int row,
+    int timeout_ms = 3000) {
+  QElapsedTimer timer;
+  timer.start();
+
+  while (timer.elapsed() < timeout_ms) {
+    if (model->data(
+            model->index(row, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailStaleDetectedRole).toBool()) {
+      return true;
+    }
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  }
+
+  return false;
+}
+
 bool wait_for_import_completion(
     photo_editor::desktop::CatalogAssetModel* model,
     int timeout_ms = 15000) {
@@ -583,6 +602,44 @@ int main(int argc, char** argv) {
             edited_recipe,
             {QStringLiteral("tone")}) != 1) {
       return fail("recipe apply should update an asset with an active thumbnail task");
+    }
+    if (thumbnail_model.applyThumbnailResultForTesting(
+            QStringLiteral("asset-recipe-race-thumb"),
+            image_path,
+            QString(),
+            QStringLiteral("file:///stale-catalog-thumbnail.jpg"))) {
+      return fail("stale injected catalog thumbnail result should not apply over the current recipe");
+    }
+
+    if (!wait_for_thumbnail_stale_detection(&thumbnail_model, 0)) {
+      return fail("catalog grid should expose stale thumbnail recipe mismatch metadata");
+    }
+    const auto stale_reason =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailStaleDetectionReasonRole).toString();
+    const auto stale_previous_hash =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailStalePreviousRecipeHashRole).toString();
+    const auto stale_current_hash =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailStaleCurrentRecipeHashRole).toString();
+    const auto stale_signature =
+        thumbnail_model.data(
+            thumbnail_model.index(0, 0),
+            photo_editor::desktop::CatalogAssetModel::ThumbnailStaleDetectionSignatureRole).toString();
+    if (stale_reason != QStringLiteral("catalog_thumbnail_recipe_mismatch") ||
+        !thumbnail_model.data(
+             thumbnail_model.index(0, 0),
+             photo_editor::desktop::CatalogAssetModel::ThumbnailStaleMismatchRole).toBool() ||
+        stale_previous_hash.isEmpty() ||
+        stale_previous_hash == stale_current_hash ||
+        !stale_signature.contains(QStringLiteral("catalog-thumbnail-stale|detected:true|mismatch:true")) ||
+        !stale_signature.contains(stale_previous_hash) ||
+        !stale_signature.contains(stale_current_hash)) {
+      return fail("catalog stale thumbnail metadata should include reason, mismatch, old hash, and current hash");
     }
 
     if (!wait_for_thumbnail(&thumbnail_model, 0)) {

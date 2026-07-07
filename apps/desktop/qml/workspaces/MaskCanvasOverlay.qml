@@ -2259,7 +2259,9 @@ Item {
                     font.family: theme.fontDisplay
                     font.pixelSize: 10
                     font.weight: Font.DemiBold
-                    elide: Text.ElideRight
+                    fontSizeMode: Text.HorizontalFit
+                    minimumPixelSize: 8
+                    elide: Text.ElideNone
                 }
 
                 Label {
@@ -2270,7 +2272,7 @@ Item {
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap
                     maximumLineCount: 2
-                    elide: Text.ElideRight
+                    elide: Text.ElideNone
                 }
             }
         }

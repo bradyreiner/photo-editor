@@ -12,6 +12,7 @@ Item {
     property bool compact: false
     property bool enabled: true
     property bool fillButtonWidth: true
+    property int minimumReadableWidth: 0
     readonly property bool armed: armedState
     signal confirmed()
 
@@ -44,6 +45,7 @@ Item {
             text: root.armed ? root.confirmText : root.text
             iconName: root.iconName
             compact: root.compact
+            minimumReadableWidth: root.minimumReadableWidth
             enabled: root.enabled
             tone: "danger"
             active: root.armed

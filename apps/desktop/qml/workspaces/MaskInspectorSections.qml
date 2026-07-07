@@ -11,8 +11,14 @@ Column {
     Theme { id: theme }
     property string maskSearchQuery: ""
     property bool diagnosticMaskPreviewModesVisible: false
+    property bool runtimeDiagnosticsExpanded: false
     readonly property string normalMaskDisplayContract: "normal-mask-display|overlay|outline|marching-ants|hidden|single-color-overlay|diagnostics-collapsed:v2"
+    readonly property string rubylithOverlayPresetContract: "rubylith-overlay-preset:v1|display-mode:overlay|color:#ff2f5f|single-color:true|separate-from-diagnostics:true"
     readonly property string diagnosticMaskDisplayContract: "diagnostic-mask-display|grayscale-alpha|isolated-mask|advanced-toggle|required-for-matte-inspection:v2"
+    readonly property string developerDiagnosticsMenuContract: "developer-diagnostics-menu:v2|developer-mode-gated:true|normal-mask-modes:separate|matte-debug:collapsed|runtime-detail:collapsed|raw-alpha:diagnostic-only|confidence:false-color-focus:diagnostic-only|default-visible:false"
+    readonly property string runtimeDiagnosticsVisibilityContract: "runtime-diagnostics:v1|chips:always|raw-status:details-only|default-expanded:false|toggle:available|no-debug-text-at-rest:true|functionality:preserved"
+    readonly property string maskLayerParameterTerminologyContract: "mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only"
+    readonly property string adjustmentControlTargetSupportContract: "adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only"
 
     component MaskSection: InspectorSection {
         showAccentMarker: false
@@ -50,6 +56,16 @@ Column {
         return String(editorPreview.inpaintRuntimeLabel || "Local CPU Fill")
     }
 
+    function runtimeDiagnosticsSignature() {
+        return "runtime-diagnostics:v1" +
+                "|expanded:" + String(root.runtimeDiagnosticsExpanded) +
+                "|selection:" + root.smartSelectionRuntimeLabel() +
+                "|retouch:" + root.inpaintRuntimeLabel() +
+                "|status:" + String(editorPreview.aiModelStatus || "").length +
+                "|detail:" + String(editorPreview.aiModelDiagnostics || "").length +
+                "|chips:always|raw:details-only"
+    }
+
     function maskCompareGroupActive(groupKey) {
         return editorPreview.maskCompareAdjustmentGroups.indexOf(groupKey) >= 0
     }
@@ -62,6 +78,22 @@ Column {
         else
             groups.push(groupKey)
         editorPreview.maskCompareAdjustmentGroups = groups
+    }
+
+    function maskControlTargetSupportSignature(rawTargets) {
+        const source = String(rawTargets || "mask").split(",")
+        const targets = []
+        for (let index = 0; index < source.length; ++index) {
+            const target = String(source[index] || "").trim().toLowerCase()
+            if (["base-image", "adjustment-layer", "photo-layer", "mask"].indexOf(target) >= 0 &&
+                    targets.indexOf(target) < 0)
+                targets.push(target)
+        }
+        return root.adjustmentControlTargetSupportContract +
+                "|base-image:" + String(targets.indexOf("base-image") >= 0) +
+                "|adjustment-layer:" + String(targets.indexOf("adjustment-layer") >= 0) +
+                "|photo-layer:" + String(targets.indexOf("photo-layer") >= 0) +
+                "|mask:" + String(targets.indexOf("mask") >= 0)
     }
 
     function renameMaskRow(flatIndex) {
@@ -556,7 +588,9 @@ Column {
                     font.family: theme.fontDisplay
                     font.pixelSize: 13
                     font.weight: Font.DemiBold
-                    elide: Text.ElideRight
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    maximumLineCount: 2
+                    elide: Text.ElideNone
                 }
 
                 Label {
@@ -641,21 +675,27 @@ Column {
 
         ActionButton {
             objectName: "maskPreviewDiagnosticsToggleButton"
+            readonly property string diagnosticsMenuContract: root.developerDiagnosticsMenuContract
             width: parent.width
             text: root.diagnosticMaskPreviewModesVisible ? "Hide Matte Diagnostics" : "Matte Diagnostics"
             compact: true
             accent: root.activeMaskAccent
             tone: root.diagnosticMaskPreviewModesVisible ? "primary" : "secondary"
             active: root.diagnosticMaskPreviewModesVisible
-            enabled: editorPreview.hasAsset
+            visible: editRoot.developerDiagnosticsEnabled === true
+            enabled: editorPreview.hasAsset && editRoot.developerDiagnosticsEnabled === true
             tooltipText: "Show deliberate matte inspection modes separately from the normal selection overlay."
-            onClicked: root.diagnosticMaskPreviewModesVisible = !root.diagnosticMaskPreviewModesVisible
+            onClicked: root.diagnosticMaskPreviewModesVisible =
+                           editRoot.developerDiagnosticsEnabled === true &&
+                           !root.diagnosticMaskPreviewModesVisible
         }
 
         Flow {
             objectName: "diagnosticMaskPreviewModeFlow"
             readonly property string displayContract: root.diagnosticMaskDisplayContract
-            visible: root.diagnosticMaskPreviewModesVisible
+            readonly property string diagnosticsMenuContract: root.developerDiagnosticsMenuContract
+            visible: editRoot.developerDiagnosticsEnabled === true &&
+                     root.diagnosticMaskPreviewModesVisible
             Layout.fillWidth: true
             width: parent.width
             spacing: 6
@@ -761,6 +801,11 @@ Column {
 
         InspectorSlider {
             objectName: "maskPreviewOverlayOpacitySlider"
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
+            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+            readonly property string parameterRole: "overlay-opacity"
             width: parent.width
             label: "OVERLAY OPACITY"
             from: 0
@@ -811,6 +856,24 @@ Column {
                 accent: root.activeMaskAccent
                 tooltipText: "Use automatic operation colors for selection preview overlays."
                 onClicked: editorPreview.maskPreviewOverlayColor = ""
+            }
+
+            ActionButton {
+                objectName: "maskPreviewRubylithOverlayPresetButton"
+                readonly property string rubylithOverlayPresetContract: root.rubylithOverlayPresetContract
+                text: "Rubylith"
+                compact: true
+                accent: "#ff2f5f"
+                tone: String(editorPreview.maskPreviewOverlayColor || "").toLowerCase() === "#ff2f5f"
+                      && editorPreview.maskPreviewDisplayMode === "overlay" ? "primary" : "secondary"
+                active: String(editorPreview.maskPreviewOverlayColor || "").toLowerCase() === "#ff2f5f"
+                        && editorPreview.maskPreviewDisplayMode === "overlay"
+                enabled: editorPreview.hasAsset
+                tooltipText: "Use a classic single-color red selection overlay."
+                onClicked: {
+                    editorPreview.maskPreviewMode = "overlay"
+                    editorPreview.maskPreviewOverlayColor = "#ff2f5f"
+                }
             }
         }
 
@@ -957,7 +1020,9 @@ Column {
                     anchors.fill: parent
                     anchors.margins: 6
                     text: "Selection · " + root.smartSelectionRuntimeLabel()
-                    elide: Text.ElideRight
+                    fontSizeMode: Text.HorizontalFit
+                    minimumPixelSize: 8
+                    elide: Text.ElideNone
                     verticalAlignment: Text.AlignVCenter
                     color: editorPreview.aiSmartSelectionAvailable ? "#9adfca" : "#d9aa70"
                     font.family: theme.fontUi
@@ -978,7 +1043,9 @@ Column {
                     anchors.fill: parent
                     anchors.margins: 6
                     text: "Retouch · " + root.inpaintRuntimeLabel()
-                    elide: Text.ElideRight
+                    fontSizeMode: Text.HorizontalFit
+                    minimumPixelSize: 8
+                    elide: Text.ElideNone
                     verticalAlignment: Text.AlignVCenter
                     color: editorPreview.aiInpaintAvailable ? "#9adfca" : "#d9aa70"
                     font.family: theme.fontUi
@@ -987,9 +1054,29 @@ Column {
             }
         }
 
+        ActionButton {
+            objectName: "maskRuntimeDiagnosticsToggleButton"
+            Layout.fillWidth: true
+            text: root.runtimeDiagnosticsExpanded ? "Hide Runtime Details" : "Runtime Details"
+            iconName: "menu"
+            compact: true
+            tone: "secondary"
+            active: root.runtimeDiagnosticsExpanded
+            visible: editRoot.developerDiagnosticsEnabled === true
+            enabled: editRoot.developerDiagnosticsEnabled === true
+            tooltipText: "Show local model status and diagnostics without making debug text part of normal editing."
+            onClicked: root.runtimeDiagnosticsExpanded =
+                           editRoot.developerDiagnosticsEnabled === true &&
+                           !root.runtimeDiagnosticsExpanded
+        }
+
         Label {
             objectName: "maskRuntimeDiagnosticsLabel"
             Layout.fillWidth: true
+            visible: editRoot.developerDiagnosticsEnabled === true &&
+                     root.runtimeDiagnosticsExpanded
+            readonly property string visibilityContract: root.runtimeDiagnosticsVisibilityContract
+            readonly property string runtimeDiagnosticsSignature: root.runtimeDiagnosticsSignature()
             text: "Selection: " + root.smartSelectionRuntimeLabel() +
                   " · Retouch: " + root.inpaintRuntimeLabel() +
                   "\n" + editorPreview.aiModelStatus +
@@ -1170,7 +1257,9 @@ Column {
                                     font.family: theme.fontUi
                                     font.pixelSize: 13
                                     font.weight: Font.DemiBold
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    maximumLineCount: 2
+                                    elide: Text.ElideNone
                                 }
 
                                 Label {
@@ -1181,7 +1270,9 @@ Column {
                                     color: "#8f98a2"
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
-                                    elide: Text.ElideRight
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 8
+                                    elide: Text.ElideNone
                                 }
                             }
 
@@ -1213,7 +1304,9 @@ Column {
                             font.family: theme.fontUi
                             font.pixelSize: 10
                             font.weight: Font.DemiBold
-                            elide: Text.ElideRight
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 8
+                            elide: Text.ElideNone
                             visible: modelData.sourceCount > 0
                         }
 
@@ -1283,67 +1376,87 @@ Column {
                                     }
                                 }
 
-                                Menu {
+                                AppMenu {
                                     id: maskInspectorSourceContextMenu
                                     objectName: "maskInspectorSourceContextMenu"
+                                    accent: root.activeMaskAccent
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextSelectItem"
                                         text: "Select"
+                                        iconName: "select"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextRenameItem"
                                         text: "Rename"
+                                        iconName: "edit"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         onTriggered: root.renameMaskRow(modelData.flatIndex)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextEnableItem"
                                         text: modelData.enabled ? "Disable" : "Enable"
+                                        iconName: modelData.enabled ? "hidden" : "visible"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         enabled: !modelData.locked
                                         onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextSoloItem"
                                         text: modelData.solo ? "Clear Solo" : "Solo"
+                                        iconName: "star"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         enabled: !modelData.locked
                                         onTriggered: root.toggleMaskRowSolo(modelData.flatIndex, modelData.solo)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextLockItem"
                                         text: modelData.locked ? "Unlock" : "Lock"
+                                        iconName: "lock"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         onTriggered: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
                                     }
 
                                     MenuSeparator {}
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextMoveUpItem"
                                         text: "Move Up"
+                                        iconName: "move-up"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         enabled: modelData.flatIndex > 0
                                         onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextMoveDownItem"
                                         text: "Move Down"
+                                        iconName: "move-down"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         enabled: modelData.flatIndex < editorPreview.maskCount - 1
                                         onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextDuplicateItem"
                                         text: "Duplicate"
+                                        iconName: "plus"
+                                        accent: maskInspectorSourceContextMenu.accent
                                         onTriggered: root.duplicateMaskRow(modelData.flatIndex)
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         objectName: "maskInspectorSourceContextDeleteItem"
                                         text: "Delete"
+                                        iconName: "delete"
+                                        danger: true
+                                        accent: maskInspectorSourceContextMenu.accent
                                         onTriggered: root.deleteMaskRow(modelData.flatIndex)
                                     }
                                 }
@@ -1405,7 +1518,9 @@ Column {
                                             font.family: theme.fontUi
                                             font.pixelSize: 12
                                             font.weight: Font.Medium
-                                            elide: Text.ElideRight
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
                                         }
 
                                         Label {
@@ -1415,7 +1530,9 @@ Column {
                                             color: "#8f98a2"
                                             font.family: theme.fontUi
                                             font.pixelSize: 10
-                                            elide: Text.ElideRight
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
                                         }
 
                                         Label {
@@ -1426,7 +1543,9 @@ Column {
                                             color: editRoot.maskAccent(modelData)
                                             font.family: theme.fontUi
                                             font.pixelSize: 10
-                                            elide: Text.ElideRight
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
                                         }
                                     }
 
@@ -1456,6 +1575,16 @@ Column {
                                         accent: modelData.locked ? "#d98962" : editRoot.maskAccent(modelData)
                                         tooltipText: modelData.locked ? "Unlock this selection" : "Lock this selection"
                                         onClicked: root.toggleMaskRowLocked(modelData.flatIndex, modelData.locked)
+                                    }
+
+                                    ActionButton {
+                                        objectName: "maskSourceInlineDeleteButton"
+                                        text: "Delete"
+                                        iconName: "delete"
+                                        tone: "danger"
+                                        compact: true
+                                        tooltipText: "Delete this mask component."
+                                        onClicked: root.deleteMaskRow(modelData.flatIndex)
                                     }
                                 }
                             }
@@ -1627,61 +1756,79 @@ Column {
                         }
                     }
 
-                    Menu {
+                    AppMenu {
                         id: maskInspectorRetouchContextMenu
                         objectName: "maskInspectorRetouchContextMenu"
+                        accent: root.activeMaskAccent
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextSelectItem"
                             text: "Select"
+                            iconName: "select"
+                            accent: maskInspectorRetouchContextMenu.accent
                             onTriggered: editorPreview.activeMaskIndex = modelData.flatIndex
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextApplyItem"
                             text: "Apply"
+                            iconName: "check"
+                            accent: maskInspectorRetouchContextMenu.accent
                             visible: !modelData.committed
                             onTriggered: root.applyRetouchRow(modelData.flatIndex)
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextCancelItem"
                             text: "Cancel"
+                            iconName: "close"
+                            accent: maskInspectorRetouchContextMenu.accent
                             visible: !modelData.committed
                             onTriggered: root.cancelRetouchRow(modelData.flatIndex)
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextRenameItem"
                             text: "Rename"
+                            iconName: "edit"
+                            accent: maskInspectorRetouchContextMenu.accent
                             onTriggered: root.renameMaskRow(modelData.flatIndex)
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextEnableItem"
                             text: modelData.enabled ? "Disable" : "Enable"
+                            iconName: modelData.enabled ? "hidden" : "visible"
+                            accent: maskInspectorRetouchContextMenu.accent
                             onTriggered: root.toggleMaskRowEnabled(modelData.flatIndex, modelData.enabled)
                         }
 
                         MenuSeparator {}
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextMoveUpItem"
                             text: "Move Up"
+                            iconName: "move-up"
+                            accent: maskInspectorRetouchContextMenu.accent
                             enabled: modelData.flatIndex > 0
                             onTriggered: root.moveMaskRow(modelData.flatIndex, -1)
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextMoveDownItem"
                             text: "Move Down"
+                            iconName: "move-down"
+                            accent: maskInspectorRetouchContextMenu.accent
                             enabled: modelData.flatIndex < editorPreview.maskCount - 1
                             onTriggered: root.moveMaskRow(modelData.flatIndex, 1)
                         }
 
-                        MenuItem {
+                        AppMenuItem {
                             objectName: "maskInspectorRetouchContextDeleteItem"
                             text: "Delete"
+                            iconName: "delete"
+                            danger: true
+                            accent: maskInspectorRetouchContextMenu.accent
                             onTriggered: root.deleteMaskRow(modelData.flatIndex)
                         }
                     }
@@ -1714,7 +1861,9 @@ Column {
                                     font.family: theme.fontUi
                                     font.pixelSize: 13
                                     font.weight: Font.Medium
-                                    elide: Text.ElideRight
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                    maximumLineCount: 2
+                                    elide: Text.ElideNone
                                 }
 
                                 Label {
@@ -1725,7 +1874,9 @@ Column {
                                     color: "#8f98a2"
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
-                                    elide: Text.ElideRight
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 8
+                                    elide: Text.ElideNone
                                 }
                             }
                         }
@@ -1824,8 +1975,12 @@ Column {
                 visible: editorPreview.retouchCount > 0
 
                 ActionButton {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: false
                     text: "Before"
+                    iconName: "compare"
+                    showText: false
+                    tooltipText: "Show retouch before"
+                    Accessible.name: "Show retouch before"
                     compact: true
                     accent: "#8fb7d8"
                     tone: active ? "primary" : "secondary"
@@ -1834,8 +1989,12 @@ Column {
                 }
 
                 ActionButton {
-                    Layout.fillWidth: true
+                    Layout.fillWidth: false
                     text: "After"
+                    iconName: "compare"
+                    showText: false
+                    tooltipText: "Show retouch after"
+                    Accessible.name: "Show retouch after"
                     compact: true
                     accent: "#8fb7d8"
                     tone: active ? "primary" : "secondary"
@@ -1929,6 +2088,9 @@ Column {
                      (editorPreview.activeMaskRetouchMode === "remove" ||
                       editorPreview.activeMaskRetouchMode === "heal" ||
                       editorPreview.activeMaskRetouchMode === "patch")
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "INPAINT BLEND"
             from: 0
             to: 100
@@ -2045,7 +2207,9 @@ Column {
                 color: "#8f98a2"
                 font.family: theme.fontUi
                 font.pixelSize: 11
-                elide: Text.ElideRight
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: 8
+                elide: Text.ElideNone
             }
         }
 
@@ -2085,9 +2249,11 @@ Column {
                 onClicked: editorPreview.activeMaskInverted = !editorPreview.activeMaskInverted
             }
 
-            ComboBox {
+            ToneComboBox {
                 id: maskBlendModeCombo
+                objectName: "activeMaskBlendModeCombo"
                 Layout.fillWidth: true
+                accent: root.activeMaskAccent
                 model: ["normal", "multiply", "screen", "overlay", "lighten", "darken", "replace"]
                 currentIndex: Math.max(0, model.indexOf(editorPreview.activeMaskBlendMode))
                 enabled: editorPreview.hasActiveMask
@@ -2097,7 +2263,12 @@ Column {
 
         InspectorSlider {
             width: parent.width
-            label: "OPACITY"
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
+            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+            readonly property string parameterRole: "mask-opacity"
+            label: "MASK OPACITY"
             from: 0
             to: 100
             stepSize: 1
@@ -2111,7 +2282,12 @@ Column {
 
         InspectorSlider {
             width: parent.width
-            label: "DENSITY"
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
+            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+            readonly property string parameterRole: "mask-density"
+            label: "MASK DENSITY"
             from: 0
             to: 100
             stepSize: 1
@@ -2239,8 +2415,12 @@ Column {
             }
 
             ActionButton {
-                Layout.fillWidth: true
+                Layout.fillWidth: false
                 text: "Reset"
+                iconName: "reset"
+                showText: false
+                tooltipText: "Reset mask grade"
+                Accessible.name: "Reset mask grade"
                 onClicked: editRoot.applyActiveMaskGradePreset("reset")
             }
         }
@@ -2393,7 +2573,7 @@ Column {
             radius: 8
             color: "#11161a"
             border.width: 1
-            border.color: activeEffectCount > 0 ? Qt.alpha(root.activeMaskAccent, 0.46) : "#252c32"
+            border.color: maskRefineEffectMeter.activeEffectCount > 0 ? Qt.alpha(root.activeMaskAccent, 0.46) : "#252c32"
             implicitHeight: 114
 
             ColumnLayout {
@@ -2406,8 +2586,8 @@ Column {
                     spacing: 8
 
                     Label {
-                        text: activeEffectCount > 0 ? activeEffectCount + " refine effects active" : "Neutral refine"
-                        color: activeEffectCount > 0 ? "#f2f4f6" : "#8f98a2"
+                        text: maskRefineEffectMeter.activeEffectCount > 0 ? maskRefineEffectMeter.activeEffectCount + " refine effects active" : "Neutral refine"
+                        color: maskRefineEffectMeter.activeEffectCount > 0 ? "#f2f4f6" : "#8f98a2"
                         font.family: theme.fontUi
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
@@ -2507,7 +2687,9 @@ Column {
                                 color: modelData.value > 0.01 ? "#cfd5db" : "#65707a"
                                 font.family: theme.fontUi
                                 font.pixelSize: 9
-                                elide: Text.ElideRight
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 7
+                                elide: Text.ElideNone
                             }
                         }
                     }
@@ -2518,6 +2700,9 @@ Column {
         InspectorSlider {
             objectName: "activeMaskShiftEdgeSlider"
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Shift Edge"
             valueText: Math.round(editorPreview.activeMaskSelectionExpand).toString()
             from: -100
@@ -2529,6 +2714,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Feather"
             valueText: editorPreview.activeMaskFeather.toFixed(2)
             from: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") ? 0.0 : 0.05
@@ -2541,6 +2729,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Smooth"
             valueText: Math.round(editorPreview.activeMaskSelectionSmooth).toString()
             from: 0
@@ -2552,6 +2743,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Fine Edge"
             valueText: Math.round(editorPreview.activeMaskSelectionFineEdge).toString()
             from: 0
@@ -2564,6 +2758,9 @@ Column {
         InspectorSlider {
             objectName: "activeMaskContrastEdgeSlider"
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Contrast Edge"
             valueText: Math.round(editorPreview.activeMaskSelectionEdgeContrast).toString()
             from: 0
@@ -2575,6 +2772,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Decontaminate"
             valueText: Math.round(editorPreview.activeMaskSelectionDecontaminate).toString()
             from: 0
@@ -3182,6 +3382,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Brush Size"
             valueText: Math.round(editorPreview.activeMaskBrushSize * 100).toString()
             from: 0.01
@@ -3194,6 +3397,11 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
+            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+            readonly property string parameterRole: "brush-flow"
             label: "Brush Flow"
             valueText: Math.round(editorPreview.activeMaskBrushFlow * 100).toString() + "%"
             from: 0.05
@@ -3206,6 +3414,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Brush Hardness"
             valueText: Math.round(editorPreview.activeMaskBrushHardness * 100).toString() + "%"
             from: 0.0
@@ -3218,6 +3429,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Brush Spacing"
             valueText: Math.round(editorPreview.activeMaskBrushSpacing * 100).toString() + "% of diameter"
             from: 0.05
@@ -3230,6 +3444,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Stroke Smoothing"
             valueText: Math.round(editorPreview.activeMaskBrushSmoothing * 100).toString() + "%"
             from: 0.0
@@ -3242,6 +3459,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Pressure Size"
             valueText: Math.round(editorPreview.activeMaskBrushPressureSize * 100).toString() + "%"
             from: 0.0
@@ -3254,6 +3474,9 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
             label: "Pressure Flow"
             valueText: Math.round(editorPreview.activeMaskBrushPressureFlow * 100).toString() + "%"
             from: 0.0
@@ -3266,6 +3489,11 @@ Column {
 
         InspectorSlider {
             width: parent.width
+            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+            readonly property string targetSupport: "mask"
+            readonly property string targetSupportSignature: root.maskControlTargetSupportSignature(targetSupport)
+            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+            readonly property string parameterRole: "brush-opacity"
             label: "Pressure Opacity"
             valueText: Math.round(editorPreview.activeMaskBrushPressureOpacity * 100).toString() + "%"
             from: 0.0
@@ -3540,8 +3768,12 @@ Column {
             spacing: 8
 
             ActionButton {
-                Layout.fillWidth: true
+                Layout.fillWidth: false
                 text: "Reset"
+                iconName: "reset"
+                showText: false
+                tooltipText: "Reset range refine"
+                Accessible.name: "Reset range refine"
                 compact: true
                 onClicked: {
                     editorPreview.activeMaskRefineLuminanceMin = 0
@@ -3564,7 +3796,9 @@ Column {
                 color: "#8f98a2"
                 font.family: theme.fontUi
                 font.pixelSize: 11
-                elide: Text.ElideRight
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: 8
+                elide: Text.ElideNone
             }
         }
 

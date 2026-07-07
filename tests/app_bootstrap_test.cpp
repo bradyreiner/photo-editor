@@ -87,6 +87,98 @@ int main(int argc, char** argv) {
     return fail("structured observability messages should expose standard performance fields");
   }
 
+  const auto colorized_perf_line =
+      photo_editor::desktop::observability::colorizedConsoleLineForMessage(
+          QtInfoMsg,
+          QStringLiteral("photo_editor.perf"),
+          QStringLiteral("preview.render.completed 42 ms"));
+  if (!colorized_perf_line.startsWith(QStringLiteral("\x1b[36m")) ||
+      !colorized_perf_line.endsWith(QStringLiteral("\x1b[0m"))) {
+    return fail("perf console lines should be colorized cyan with a reset suffix");
+  }
+
+  const auto colorized_warning_line =
+      photo_editor::desktop::observability::colorizedConsoleLineForMessage(
+          QtWarningMsg,
+          QStringLiteral("qt.imageformats.tiff"),
+          QStringLiteral("TIFF tag warning"));
+  if (!colorized_warning_line.startsWith(QStringLiteral("\x1b[33m")) ||
+      !colorized_warning_line.endsWith(QStringLiteral("\x1b[0m"))) {
+    return fail("warning console lines should be colorized yellow with a reset suffix");
+  }
+
+  const QVariantMap compact_fields{
+      {QStringLiteral("stage"), QStringLiteral("interactive")},
+      {QStringLiteral("render_mode"), QStringLiteral("live_preview")},
+      {QStringLiteral("render_reason"), QStringLiteral("slider_drag")},
+      {QStringLiteral("elapsed_ms"), 142},
+      {QStringLiteral("queue_wait_ms"), 9},
+      {QStringLiteral("render_latency_budget_ms"), 100},
+      {QStringLiteral("render_within_latency_budget"), false},
+      {QStringLiteral("backend"), QStringLiteral("metal")},
+      {QStringLiteral("dirty_domain"), QStringLiteral("layers_composite")},
+      {QStringLiteral("cache_hit_count"), 2},
+      {QStringLiteral("cache_lookup_count"), 6},
+      {QStringLiteral("generation"), 33},
+  };
+  const auto compact_line =
+      photo_editor::desktop::observability::compactConsoleLineForEvent(
+          QStringLiteral("preview.render.completed"),
+          compact_fields);
+  const QStringList expected_compact_tokens{
+      QStringLiteral("preview.render.completed"),
+      QStringLiteral("stage=interactive"),
+      QStringLiteral("mode=live_preview"),
+      QStringLiteral("reason=slider_drag"),
+      QStringLiteral("elapsed=142ms"),
+      QStringLiteral("queue=9ms"),
+      QStringLiteral("budget=OVER/100ms"),
+      QStringLiteral("backend=metal"),
+      QStringLiteral("dirty=layers_composite"),
+      QStringLiteral("cache=2/6"),
+      QStringLiteral("gen=33"),
+  };
+  for (const auto& token : expected_compact_tokens) {
+    if (!compact_line.contains(token)) {
+      return fail("compact observability console line should include key performance tokens");
+    }
+  }
+
+  if (!photo_editor::desktop::observability::consoleModePrintsEvent(
+          QtInfoMsg,
+          QStringLiteral("over_budget"),
+          QStringLiteral("preview.render.completed"),
+          compact_fields)) {
+    return fail("over-budget console mode should print slow structured events");
+  }
+
+  const QVariantMap within_budget_fields{
+      {QStringLiteral("elapsed_ms"), 42},
+      {QStringLiteral("render_latency_budget_ms"), 100},
+      {QStringLiteral("render_within_latency_budget"), true},
+  };
+  if (photo_editor::desktop::observability::consoleModePrintsEvent(
+          QtInfoMsg,
+          QStringLiteral("over_budget"),
+          QStringLiteral("preview.render.completed"),
+          within_budget_fields)) {
+    return fail("over-budget console mode should suppress normal info events");
+  }
+  if (photo_editor::desktop::observability::consoleModePrintsEvent(
+          QtInfoMsg,
+          QStringLiteral("quiet"),
+          QStringLiteral("preview.render.completed"),
+          compact_fields)) {
+    return fail("quiet console mode should suppress info events");
+  }
+  if (!photo_editor::desktop::observability::consoleModePrintsEvent(
+          QtWarningMsg,
+          QStringLiteral("quiet"),
+          QStringLiteral("preview.render.failed"),
+          {})) {
+    return fail("quiet console mode should still print warnings");
+  }
+
   const auto missing_helper_name = QStringLiteral("definitely_missing_photo_editor_helper");
   const auto missing_helper_arguments =
       photo_editor::desktop::AppBootstrap::helperArguments(missing_helper_name, {QStringLiteral("arg")});

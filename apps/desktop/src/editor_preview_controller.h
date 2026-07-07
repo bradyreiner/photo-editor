@@ -23,9 +23,11 @@
 #include <QVariantMap>
 #include <QVariantList>
 
+#include "async_mask_job.h"
 #include "brush_preview_compositor.h"
 #include "edit_recipe_state.h"
 #include "editor_preview_texture.h"
+#include "thumbnail_refresh_queue_service.h"
 #include "vision_segmentation.h"
 
 namespace photo_editor::desktop {
@@ -33,17 +35,6 @@ namespace photo_editor::desktop {
 class EditorPreviewImageSink;
 using EditState = EditRecipeState;
 struct EditorPreviewControllerTestAccess;
-
-struct AsyncMaskJob final {
-  QString job_id;
-  QString job_kind;
-  QString stage;
-  QString asset_id;
-  QString file_path;
-  QString state_signature;
-  int generation = 0;
-  int state_revision = 0;
-};
 
 struct RenderRequest final {
   QString file_path;
@@ -733,31 +724,31 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QString activeGeneratedMaskCleanupSummary READ activeGeneratedMaskCleanupSummary NOTIFY controlsChanged)
   Q_PROPERTY(QString maskStackAuditSignature READ maskStackAuditSignature NOTIFY controlsChanged)
   Q_PROPERTY(QString maskMemoryPolicySignature READ maskMemoryPolicySignature CONSTANT)
-  Q_PROPERTY(int activeMaskIndex READ activeMaskIndex WRITE setActiveMaskIndex NOTIFY controlsChanged)
-  Q_PROPERTY(bool hasActiveMask READ hasActiveMask NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskKind READ activeMaskKind NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskToolRole READ activeMaskToolRole NOTIFY controlsChanged)
+  Q_PROPERTY(int activeMaskIndex READ activeMaskIndex WRITE setActiveMaskIndex NOTIFY maskStateChanged)
+  Q_PROPERTY(bool hasActiveMask READ hasActiveMask NOTIFY maskStateChanged)
+  Q_PROPERTY(QString activeMaskKind READ activeMaskKind NOTIFY maskStateChanged)
+  Q_PROPERTY(QString activeMaskToolRole READ activeMaskToolRole NOTIFY maskStateChanged)
   Q_PROPERTY(QString activeMaskRetouchMode READ activeMaskRetouchMode NOTIFY controlsChanged)
   Q_PROPERTY(QString retouchWorkflowStateSignature READ retouchWorkflowStateSignature NOTIFY controlsChanged)
   Q_PROPERTY(bool activeMaskCommitted READ activeMaskCommitted NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskName READ activeMaskName WRITE setActiveMaskName NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskSetName READ activeMaskSetName NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskOperation READ activeMaskOperation WRITE setActiveMaskOperation NOTIFY controlsChanged)
+  Q_PROPERTY(QString activeMaskName READ activeMaskName WRITE setActiveMaskName NOTIFY maskStateChanged)
+  Q_PROPERTY(QString activeMaskSetName READ activeMaskSetName NOTIFY maskStateChanged)
+  Q_PROPERTY(QString activeMaskOperation READ activeMaskOperation WRITE setActiveMaskOperation NOTIFY maskStateChanged)
   Q_PROPERTY(bool activeMaskEnabled READ activeMaskEnabled WRITE setActiveMaskEnabled NOTIFY controlsChanged)
   Q_PROPERTY(bool activeMaskSolo READ activeMaskSolo WRITE setActiveMaskSolo NOTIFY controlsChanged)
   Q_PROPERTY(bool activeMaskLocked READ activeMaskLocked WRITE setActiveMaskLocked NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskEditDisabledReason READ activeMaskEditDisabledReason NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskOpacity READ activeMaskOpacity WRITE setActiveMaskOpacity NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskDensity READ activeMaskDensity WRITE setActiveMaskDensity NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskOpacity READ activeMaskOpacity WRITE setActiveMaskOpacity NOTIFY maskStateChanged)
+  Q_PROPERTY(double activeMaskDensity READ activeMaskDensity WRITE setActiveMaskDensity NOTIFY maskStateChanged)
   Q_PROPERTY(bool activeMaskInverted READ activeMaskInverted WRITE setActiveMaskInverted NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskBlendMode READ activeMaskBlendMode WRITE setActiveMaskBlendMode NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskExposure READ activeMaskExposure WRITE setActiveMaskExposure NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskExposure READ activeMaskExposure WRITE setActiveMaskExposure NOTIFY maskStateChanged)
   Q_PROPERTY(double activeMaskContrast READ activeMaskContrast WRITE setActiveMaskContrast NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskHighlights READ activeMaskHighlights WRITE setActiveMaskHighlights NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskShadows READ activeMaskShadows WRITE setActiveMaskShadows NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskWhites READ activeMaskWhites WRITE setActiveMaskWhites NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskBlacks READ activeMaskBlacks WRITE setActiveMaskBlacks NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskTemperature READ activeMaskTemperature WRITE setActiveMaskTemperature NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskTemperature READ activeMaskTemperature WRITE setActiveMaskTemperature NOTIFY maskStateChanged)
   Q_PROPERTY(double activeMaskTint READ activeMaskTint WRITE setActiveMaskTint NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskVibrance READ activeMaskVibrance WRITE setActiveMaskVibrance NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskSaturation READ activeMaskSaturation WRITE setActiveMaskSaturation NOTIFY controlsChanged)
@@ -781,14 +772,14 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(double activeMaskCenterY READ activeMaskCenterY WRITE setActiveMaskCenterY NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskRadiusX READ activeMaskRadiusX WRITE setActiveMaskRadiusX NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskRadiusY READ activeMaskRadiusY WRITE setActiveMaskRadiusY NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskBrushSize READ activeMaskBrushSize WRITE setActiveMaskBrushSize NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskBrushSizeNormalized READ activeMaskBrushSizeNormalized NOTIFY controlsChanged)
-  Q_PROPERTY(int activeMaskBrushPreviewDiameterPx READ activeMaskBrushPreviewDiameterPx NOTIFY controlsChanged)
-  Q_PROPERTY(int activeMaskBrushFinalDiameterXPx READ activeMaskBrushFinalDiameterXPx NOTIFY controlsChanged)
-  Q_PROPERTY(int activeMaskBrushFinalDiameterYPx READ activeMaskBrushFinalDiameterYPx NOTIFY controlsChanged)
-  Q_PROPERTY(QString activeMaskBrushSizeSummary READ activeMaskBrushSizeSummary NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskBrushFlow READ activeMaskBrushFlow WRITE setActiveMaskBrushFlow NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskBrushHardness READ activeMaskBrushHardness WRITE setActiveMaskBrushHardness NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskBrushSize READ activeMaskBrushSize WRITE setActiveMaskBrushSize NOTIFY maskStateChanged)
+  Q_PROPERTY(double activeMaskBrushSizeNormalized READ activeMaskBrushSizeNormalized NOTIFY maskStateChanged)
+  Q_PROPERTY(int activeMaskBrushPreviewDiameterPx READ activeMaskBrushPreviewDiameterPx NOTIFY maskStateChanged)
+  Q_PROPERTY(int activeMaskBrushFinalDiameterXPx READ activeMaskBrushFinalDiameterXPx NOTIFY maskStateChanged)
+  Q_PROPERTY(int activeMaskBrushFinalDiameterYPx READ activeMaskBrushFinalDiameterYPx NOTIFY maskStateChanged)
+  Q_PROPERTY(QString activeMaskBrushSizeSummary READ activeMaskBrushSizeSummary NOTIFY maskStateChanged)
+  Q_PROPERTY(double activeMaskBrushFlow READ activeMaskBrushFlow WRITE setActiveMaskBrushFlow NOTIFY maskStateChanged)
+  Q_PROPERTY(double activeMaskBrushHardness READ activeMaskBrushHardness WRITE setActiveMaskBrushHardness NOTIFY maskStateChanged)
   Q_PROPERTY(double activeMaskBrushSpacing READ activeMaskBrushSpacing WRITE setActiveMaskBrushSpacing NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskBrushSmoothing READ activeMaskBrushSmoothing WRITE setActiveMaskBrushSmoothing NOTIFY controlsChanged)
   Q_PROPERTY(double activeMaskBrushPressureSize READ activeMaskBrushPressureSize WRITE setActiveMaskBrushPressureSize NOTIFY controlsChanged)
@@ -836,7 +827,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QString activeMaskPreviewQualityTier READ activeMaskPreviewQualityTier NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskPreviewSource READ activeMaskPreviewSource NOTIFY controlsChanged)
   Q_PROPERTY(QString maskPreviewMode READ maskPreviewMode WRITE setMaskPreviewMode NOTIFY controlsChanged)
-  Q_PROPERTY(QString maskPreviewDisplayMode READ maskPreviewDisplayMode NOTIFY controlsChanged)
+  Q_PROPERTY(QString maskPreviewDisplayMode READ maskPreviewDisplayMode NOTIFY maskStateChanged)
   Q_PROPERTY(QStringList maskDisplayModeNames READ maskDisplayModeNames CONSTANT)
   Q_PROPERTY(double maskPreviewOverlayOpacity READ maskPreviewOverlayOpacity WRITE setMaskPreviewOverlayOpacity NOTIFY controlsChanged)
   Q_PROPERTY(QString maskPreviewOverlayColor READ maskPreviewOverlayColor WRITE setMaskPreviewOverlayColor NOTIFY controlsChanged)
@@ -916,6 +907,7 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QString falseColorOverlaySource() const;
   [[nodiscard]] QString gamutOverlaySource() const;
   [[nodiscard]] QString zoneMapOverlaySource() const;
+  Q_INVOKABLE void setDiagnosticOverlaysRequested(bool requested);
   [[nodiscard]] bool colorToolMaskPreviewEnabled() const;
   [[nodiscard]] QString colorToolMaskPreviewSource() const;
   [[nodiscard]] bool displayPreviewNativeAvailable() const;
@@ -1601,6 +1593,7 @@ class EditorPreviewController final : public QObject {
   void setActiveMaskBrushPressureSize(double pressure_size);
   void setActiveMaskBrushPressureFlow(double pressure_flow);
   void setActiveMaskBrushPressureOpacity(double pressure_opacity);
+  Q_INVOKABLE bool resetActiveMaskBrushDefaults();
   void setActiveMaskBrushBuildup(bool brush_buildup);
   void setActiveMaskBrushEraseMode(bool erase_mode);
   void setActiveMaskBrushAutoMask(bool auto_mask);
@@ -1748,6 +1741,8 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE bool saveCameraDefault();
   Q_INVOKABLE bool clearCameraDefault();
   Q_INVOKABLE bool addAdjustmentLayer(const QString& name = {});
+  Q_INVOKABLE bool createAdjustmentLayerFromCurrentGlobalEdits(const QString& name = {});
+  Q_INVOKABLE bool bakePhotoLayerAdjustmentsToGlobal(int index);
   Q_INVOKABLE int ensureActiveSelectionAdjustmentLayer();
   Q_INVOKABLE bool addFillLayer(const QString& color = {}, const QString& name = {});
   Q_INVOKABLE bool addTextLayer(const QString& text = {}, const QString& name = {});
@@ -1778,6 +1773,8 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE bool syncPhotoLayerAdjustments(int source_index, const QVariantList& target_indices);
   Q_INVOKABLE bool setPhotoLayerClippingMask(int index, bool clipping_mask);
   Q_INVOKABLE bool setPhotoLayerMaskEnabled(int index, bool enabled);
+  Q_INVOKABLE bool setPhotoLayerMaskOpacity(int index, double opacity);
+  Q_INVOKABLE bool setPhotoLayerMaskDensity(int index, double density);
   Q_INVOKABLE bool setPhotoLayerText(int index, const QString& text);
   Q_INVOKABLE bool setPhotoLayerTextStyle(
       int index,
@@ -1822,6 +1819,8 @@ class EditorPreviewController final : public QObject {
   Q_INVOKABLE bool setReferenceImage(const QString& file_path);
   Q_INVOKABLE void clearReferenceImage();
   Q_INVOKABLE bool duplicatePhotoLayer(int index);
+  Q_INVOKABLE bool duplicatePhotoLayerWithMasks(int index);
+  Q_INVOKABLE bool duplicatePhotoLayerWithoutMasks(int index);
   Q_INVOKABLE bool movePhotoLayer(int index, int offset);
   Q_INVOKABLE bool deletePhotoLayer(int index);
   Q_INVOKABLE void addMask(const QString& kind);
@@ -1964,6 +1963,7 @@ signals:
   void assetChanged();
   void processingChanged();
   void controlsChanged();
+  void maskStateChanged();
   void activeBrushStrokeChanged();
   void maskOverlayChanged();
   void compareModeChanged();
@@ -2060,7 +2060,10 @@ signals:
   void endEditTransaction();
   void renderPreviewStage(bool full_resolution);
   void handleRenderFinished(bool full_resolution);
+  void handleOverlayRenderFinished();
   void handleRenderResult(bool full_resolution, const RenderResult& result);
+  void publishOverlayRenderResult(const RenderResult& result);
+  void startOverlayRenderStage(const RenderRequest& request);
   void startRenderStage(bool full_resolution, const RenderRequest& request);
   void updateProcessingState();
   [[nodiscard]] RenderRequest currentRenderRequest(bool full_resolution) const;
@@ -2123,6 +2126,10 @@ signals:
   void invalidatePhotoLayerThumbnailCache() const;
   void invalidateMaskDerivedCaches();
   [[nodiscard]] bool thumbnailRefreshDeferred() const;
+  [[nodiscard]] QStringList thumbnailRefreshDeferBlockers() const;
+  [[nodiscard]] QVariantMap thumbnailRefreshQueueFields() const;
+  [[nodiscard]] ThumbnailRefreshQueueCompletion thumbnailRefreshQueueCompletion() const;
+  [[nodiscard]] bool consumeThumbnailStaleWarningLog(const QString& reason) const;
   [[nodiscard]] bool thumbnailEntryCacheLookup(const QString& key, QVariantMap* entry) const;
   void storeThumbnailEntryCache(const QString& key, const QVariantMap& entry) const;
   void clearThumbnailEntryCache() const;
@@ -2141,6 +2148,7 @@ signals:
       const QString& operation = {},
       bool debounce_render = false,
       const QString& undo_label = {});
+  bool duplicate_photo_layer(int index, bool preserve_masks);
   bool updateMaskAt(
       int index,
       const QVariantMap& mask,
@@ -2276,8 +2284,10 @@ signals:
   QStringList saveRecipeArguments(const QString& asset_id, const QString& recipe_json) const;
   [[nodiscard]] QString withDisplayRevision(const QString& source) const;
   bool refreshAlphaMaskImportPreview();
+  void cancelPendingAssetScopedWork();
   void scheduleThumbnailRefreshQueue(const QString& reason) const;
   void runQueuedThumbnailRefresh();
+  void handleThumbnailRefreshQueueFinished();
 
   QVariantList histogram_red_;
   QVariantList histogram_green_;
@@ -2338,6 +2348,7 @@ signals:
   QString gamut_overlay_source_;
   QString zone_map_overlay_source_;
   QString diagnostic_overlay_rendered_cache_key_;
+  bool diagnostic_overlays_requested_ = false;
   bool color_tool_mask_preview_enabled_ = false;
   QString reference_preview_source_;
   QString display_reference_preview_source_;
@@ -2561,6 +2572,15 @@ signals:
   mutable int thumbnail_refresh_queue_dispatched_count_ = 0;
   mutable int thumbnail_refresh_queue_cancelled_count_ = 0;
   mutable QString thumbnail_refresh_queue_cancelled_reason_;
+  mutable int thumbnail_refresh_queue_worker_started_count_ = 0;
+  mutable int thumbnail_refresh_queue_worker_completed_count_ = 0;
+  mutable int thumbnail_refresh_queue_stale_result_count_ = 0;
+  mutable QString thumbnail_refresh_queue_active_job_id_;
+  mutable QString thumbnail_refresh_queue_active_signature_;
+  mutable ThumbnailRefreshQueueCompletion thumbnail_refresh_queue_completion_;
+  mutable QSet<QString> thumbnail_stale_warning_signatures_;
+  mutable std::shared_ptr<std::atomic_bool> thumbnail_refresh_queue_cancellation_;
+  QFutureWatcher<ThumbnailRefreshQueueResult> thumbnail_refresh_queue_watcher_;
   mutable QVariantList cached_mask_sets_;
   mutable QVariantList cached_mask_sets_with_thumbnails_;
   mutable QVariantList cached_retouch_stack_;
@@ -2681,6 +2701,10 @@ signals:
   QTimer interactive_render_timer_;
   QTimer full_render_timer_;
   QTimer photo_layer_adjustment_render_timer_;
+  QFutureWatcher<RenderResult> overlay_render_watcher_;
+  RenderRequest pending_overlay_request_;
+  RenderRequest last_overlay_render_request_;
+  bool overlay_request_pending_ = false;
   QTimer persist_timer_;
   int render_coalesce_request_count_ = 0;
   int edit_intent_count_ = 0;

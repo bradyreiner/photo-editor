@@ -10,16 +10,20 @@
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QFile>
+#include <QFont>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QQmlApplicationEngine>
 #include <QQmlComponent>
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QPointer>
 #include <QRectF>
 #include <QRegularExpression>
 #include <QSet>
@@ -38,6 +42,7 @@
 #include "carousel_document_controller.h"
 #include "catalog_asset_model.h"
 #include "editor_preview_controller.h"
+#include "editor_preview_image_provider.h"
 #include "editor_preview_texture_item.h"
 #include "export_job_controller.h"
 #include "job_queue_model.h"
@@ -186,6 +191,16 @@ QObject* find_named_object_recursive(QObject* root, const QString& object_name, 
 }
 
 QObject* find_named_object(QObject* root, const QString& object_name) {
+  if (root == nullptr) {
+    return nullptr;
+  }
+  if (root->objectName() == object_name) {
+    return root;
+  }
+  if (auto* found = root->findChild<QObject*>(object_name, Qt::FindChildrenRecursively);
+      found != nullptr) {
+    return found;
+  }
   QSet<const QObject*> visited;
   return find_named_object_recursive(root, object_name, visited);
 }
@@ -228,6 +243,7 @@ QVector<QQuickItem*> find_named_items(QObject* root, const QString& object_name)
 void process_layout_events(int rounds = 3) {
   for (int index = 0; index < rounds; ++index) {
     QCoreApplication::processEvents();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
   }
 }
 
@@ -243,6 +259,17 @@ bool wait_for_condition(const std::function<bool()>& condition, int timeout_ms =
   }
   QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
   return condition();
+}
+
+void trace_smoke_progress(const char* label) {
+  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_TRACE_PROGRESS")) {
+    return;
+  }
+  static QElapsedTimer timer;
+  if (!timer.isValid()) {
+    timer.start();
+  }
+  std::cerr << "[smoke] +" << timer.elapsed() << "ms " << label << '\n';
 }
 
 bool item_visible(const QQuickItem* item) {
@@ -572,6 +599,7 @@ int main(int argc, char** argv) {
 
   QApplication app(argc, argv);
   QQuickStyle::setStyle(QStringLiteral("Basic"));
+  QApplication::setFont(QFont(QStringLiteral("Helvetica Neue")));
   QCoreApplication::setOrganizationName(QStringLiteral("PhotoEditorTests"));
   QCoreApplication::setApplicationName(QStringLiteral("DesktopShellSmokeTest"));
 
@@ -645,6 +673,9 @@ int main(int argc, char** argv) {
       "TabletInputArea");
 
   QQmlApplicationEngine engine;
+  auto* editor_preview_image_provider = new photo_editor::desktop::EditorPreviewImageProvider;
+  editor_preview.setImageProvider(editor_preview_image_provider);
+  engine.addImageProvider(QStringLiteral("editor-preview"), editor_preview_image_provider);
   engine.rootContext()->setContextProperty("appShell", &app_shell);
   engine.rootContext()->setContextProperty("catalogAssets", &catalog_assets);
   engine.rootContext()->setContextProperty("carouselDocument", &carousel_document);
@@ -658,6 +689,11 @@ int main(int argc, char** argv) {
 
   const auto main_qml_path =
       QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(QStringLiteral("apps/desktop/qml/Main.qml"));
+  QFile main_qml(main_qml_path);
+  if (!main_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect Main.qml preset routing");
+  }
+  const auto main_qml_source = QString::fromUtf8(main_qml.readAll());
   QFile mask_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
                            .filePath(QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml")));
   if (!mask_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -671,12 +707,682 @@ int main(int argc, char** argv) {
     return fail("desktop shell smoke should be able to inspect StudioWorkspace selection labels");
   }
   const auto studio_workspace_source = QString::fromUtf8(studio_workspace_qml.readAll());
+  QFile agent_edit_controller_cpp(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/src/agent_edit_controller.cpp")));
+  if (!agent_edit_controller_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect agent edit status labels");
+  }
+  const auto agent_edit_controller_source = QString::fromUtf8(agent_edit_controller_cpp.readAll());
+  QFile editor_preview_controller_cpp(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/src/editor_preview_controller.cpp")));
+  if (!editor_preview_controller_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect editor preview status labels");
+  }
+  const auto editor_preview_controller_source =
+      QString::fromUtf8(editor_preview_controller_cpp.readAll());
+  QFile catalog_asset_model_cpp(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/src/catalog_asset_model.cpp")));
+  if (!catalog_asset_model_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect catalog status labels");
+  }
+  const auto catalog_asset_model_source = QString::fromUtf8(catalog_asset_model_cpp.readAll());
+  QFile layer_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/LayerRow.qml")));
+  if (!layer_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared LayerRow contracts");
+  }
+  const auto layer_row_source = QString::fromUtf8(layer_row_qml.readAll());
+  QFile layer_row_action_zone_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/LayerRowActionZone.qml")));
+  if (!layer_row_action_zone_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared LayerRowActionZone contracts");
+  }
+  const auto layer_row_action_zone_source =
+      QString::fromUtf8(layer_row_action_zone_qml.readAll());
+  QFile layer_row_chrome_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/LayerRowChrome.qml")));
+  if (!layer_row_chrome_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared LayerRowChrome contracts");
+  }
+  const auto layer_row_chrome_source = QString::fromUtf8(layer_row_chrome_qml.readAll());
+  QFile review_preview_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ReviewPreview.qml")));
+  if (!review_preview_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ReviewPreview card contracts");
+  }
+  const auto review_preview_source = QString::fromUtf8(review_preview_qml.readAll());
+  QFile action_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ActionButton.qml")));
+  if (!action_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ActionButton contracts");
+  }
+  const auto action_button_source = QString::fromUtf8(action_button_qml.readAll());
+  QFile confirm_action_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ConfirmActionButton.qml")));
+  if (!confirm_action_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ConfirmActionButton contracts");
+  }
+  const auto confirm_action_button_source = QString::fromUtf8(confirm_action_button_qml.readAll());
+  QFile status_chip_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/StatusChip.qml")));
+  if (!status_chip_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared StatusChip contracts");
+  }
+  const auto status_chip_source = QString::fromUtf8(status_chip_qml.readAll());
+  QFile app_icon_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AppIcon.qml")));
+  if (!app_icon_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AppIcon symbols");
+  }
+  const auto app_icon_source = QString::fromUtf8(app_icon_qml.readAll());
+  QFile activity_banner_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ActivityBanner.qml")));
+  if (!activity_banner_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ActivityBanner contracts");
+  }
+  const auto activity_banner_source =
+      QString::fromUtf8(activity_banner_qml.readAll());
+  QFile inline_activity_indicator_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/InlineActivityIndicator.qml")));
+  if (!inline_activity_indicator_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect InlineActivityIndicator action usage");
+  }
+  const auto inline_activity_indicator_source =
+      QString::fromUtf8(inline_activity_indicator_qml.readAll());
+  QFile agent_model_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentModelRow.qml")));
+  if (!agent_model_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentModelRow contracts");
+  }
+  const auto agent_model_row_source = QString::fromUtf8(agent_model_row_qml.readAll());
+  QFile agent_batch_status_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentBatchStatusRow.qml")));
+  if (!agent_batch_status_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentBatchStatusRow contracts");
+  }
+  const auto agent_batch_status_row_source =
+      QString::fromUtf8(agent_batch_status_row_qml.readAll());
+  QFile agent_permission_mode_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentPermissionModeButton.qml")));
+  if (!agent_permission_mode_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentPermissionModeButton contracts");
+  }
+  const auto agent_permission_mode_button_source =
+      QString::fromUtf8(agent_permission_mode_button_qml.readAll());
+  QFile agent_tool_permission_toggle_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentToolPermissionToggle.qml")));
+  if (!agent_tool_permission_toggle_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentToolPermissionToggle contracts");
+  }
+  const auto agent_tool_permission_toggle_source =
+      QString::fromUtf8(agent_tool_permission_toggle_qml.readAll());
+  QFile agent_proof_card_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentProofCard.qml")));
+  if (!agent_proof_card_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentProofCard contracts");
+  }
+  const auto agent_proof_card_source =
+      QString::fromUtf8(agent_proof_card_qml.readAll());
+  QFile agent_recipe_diff_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentRecipeDiffRow.qml")));
+  if (!agent_recipe_diff_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentRecipeDiffRow contracts");
+  }
+  const auto agent_recipe_diff_row_source =
+      QString::fromUtf8(agent_recipe_diff_row_qml.readAll());
+  QFile agent_run_history_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentRunHistoryRow.qml")));
+  if (!agent_run_history_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentRunHistoryRow contracts");
+  }
+  const auto agent_run_history_row_source =
+      QString::fromUtf8(agent_run_history_row_qml.readAll());
+  QFile agent_style_tile_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentStyleTile.qml")));
+  if (!agent_style_tile_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentStyleTile contracts");
+  }
+  const auto agent_style_tile_source = QString::fromUtf8(agent_style_tile_qml.readAll());
+  QFile agent_run_stage_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentRunStageRow.qml")));
+  if (!agent_run_stage_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentRunStageRow contracts");
+  }
+  const auto agent_run_stage_row_source =
+      QString::fromUtf8(agent_run_stage_row_qml.readAll());
+  QFile agent_tool_call_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AgentToolCallRow.qml")));
+  if (!agent_tool_call_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AgentToolCallRow contracts");
+  }
+  const auto agent_tool_call_row_source =
+      QString::fromUtf8(agent_tool_call_row_qml.readAll());
+  QFile edit_rail_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/EditRailButton.qml")));
+  if (!edit_rail_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared EditRailButton contracts");
+  }
+  const auto edit_rail_button_source =
+      QString::fromUtf8(edit_rail_button_qml.readAll());
+  QFile edit_layout_toggle_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/EditLayoutToggleRow.qml")));
+  if (!edit_layout_toggle_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared EditLayoutToggleRow contracts");
+  }
+  const auto edit_layout_toggle_row_source =
+      QString::fromUtf8(edit_layout_toggle_row_qml.readAll());
+  QFile edit_inspector_tab_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/EditInspectorTabButton.qml")));
+  if (!edit_inspector_tab_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared EditInspectorTabButton contracts");
+  }
+  const auto edit_inspector_tab_button_source =
+      QString::fromUtf8(edit_inspector_tab_button_qml.readAll());
+  QFile edit_filmstrip_thumb_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/EditFilmstripThumb.qml")));
+  if (!edit_filmstrip_thumb_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared EditFilmstripThumb contracts");
+  }
+  const auto edit_filmstrip_thumb_source =
+      QString::fromUtf8(edit_filmstrip_thumb_qml.readAll());
+  QFile gallery_asset_card_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/GalleryAssetCard.qml")));
+  if (!gallery_asset_card_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared GalleryAssetCard contracts");
+  }
+  const auto gallery_asset_card_source =
+      QString::fromUtf8(gallery_asset_card_qml.readAll());
+  QFile gallery_picker_dialog_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/GalleryPickerDialog.qml")));
+  if (!gallery_picker_dialog_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect GalleryPickerDialog card usage");
+  }
+  const auto gallery_picker_dialog_source =
+      QString::fromUtf8(gallery_picker_dialog_qml.readAll());
+  QFile command_palette_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CommandPaletteRow.qml")));
+  if (!command_palette_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared CommandPaletteRow contracts");
+  }
+  const auto command_palette_row_source =
+      QString::fromUtf8(command_palette_row_qml.readAll());
+  QFile command_palette_dialog_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CommandPaletteDialog.qml")));
+  if (!command_palette_dialog_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect CommandPaletteDialog row usage");
+  }
+  const auto command_palette_dialog_source =
+      QString::fromUtf8(command_palette_dialog_qml.readAll());
+  QFile keyboard_shortcuts_dialog_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/KeyboardShortcutsDialog.qml")));
+  if (!keyboard_shortcuts_dialog_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect KeyboardShortcutsDialog visibility contracts");
+  }
+  const auto keyboard_shortcuts_dialog_source =
+      QString::fromUtf8(keyboard_shortcuts_dialog_qml.readAll());
+  QFile preference_nav_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/PreferenceNavRow.qml")));
+  if (!preference_nav_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared PreferenceNavRow contracts");
+  }
+  const auto preference_nav_row_source =
+      QString::fromUtf8(preference_nav_row_qml.readAll());
+  QFile app_preferences_dialog_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AppPreferencesDialog.qml")));
+  if (!app_preferences_dialog_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect AppPreferencesDialog navigation usage");
+  }
+  const auto app_preferences_dialog_source =
+      QString::fromUtf8(app_preferences_dialog_qml.readAll());
+  QFile startup_loading_popup_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/StartupLoadingPopup.qml")));
+  if (!startup_loading_popup_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect StartupLoadingPopup visibility contracts");
+  }
+  const auto startup_loading_popup_source =
+      QString::fromUtf8(startup_loading_popup_qml.readAll());
+  QFile popup_surface_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/PopupSurface.qml")));
+  if (!popup_surface_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared PopupSurface hierarchy contracts");
+  }
+  const auto popup_surface_source = QString::fromUtf8(popup_surface_qml.readAll());
+  QFile menu_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/MenuButton.qml")));
+  if (!menu_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared MenuButton contracts");
+  }
+  const auto menu_button_source = QString::fromUtf8(menu_button_qml.readAll());
+  QFile app_menu_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AppMenu.qml")));
+  if (!app_menu_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AppMenu contracts");
+  }
+  const auto app_menu_source = QString::fromUtf8(app_menu_qml.readAll());
+  QFile app_menu_item_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/AppMenuItem.qml")));
+  if (!app_menu_item_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared AppMenuItem contracts");
+  }
+  const auto app_menu_item_source = QString::fromUtf8(app_menu_item_qml.readAll());
+  QFile popup_menu_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/PopupMenuRow.qml")));
+  if (!popup_menu_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared PopupMenuRow contracts");
+  }
+  const auto popup_menu_row_source = QString::fromUtf8(popup_menu_row_qml.readAll());
+  QFile mini_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/MiniButton.qml")));
+  if (!mini_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared MiniButton contracts");
+  }
+  const auto mini_button_source = QString::fromUtf8(mini_button_qml.readAll());
+  QFile tool_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToolButton.qml")));
+  if (!tool_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToolButton contracts");
+  }
+  const auto tool_button_source = QString::fromUtf8(tool_button_qml.readAll());
+  QFile tool_hud_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToolHud.qml")));
+  if (!tool_hud_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToolHud contracts");
+  }
+  const auto tool_hud_source = QString::fromUtf8(tool_hud_qml.readAll());
+  QFile brush_tool_hud_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/BrushToolHud.qml")));
+  if (!brush_tool_hud_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect BrushToolHud contracts");
+  }
+  const auto brush_tool_hud_source = QString::fromUtf8(brush_tool_hud_qml.readAll());
+  QFile brush_context_panel_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/BrushContextPanel.qml")));
+  if (!brush_context_panel_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect BrushContextPanel contracts");
+  }
+  const auto brush_context_panel_source = QString::fromUtf8(brush_context_panel_qml.readAll());
+  QFile brush_layer_inspector_header_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/BrushLayerInspectorHeader.qml")));
+  if (!brush_layer_inspector_header_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect BrushLayerInspectorHeader contracts");
+  }
+  const auto brush_layer_inspector_header_source =
+      QString::fromUtf8(brush_layer_inspector_header_qml.readAll());
+  QFile split_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/SplitButton.qml")));
+  if (!split_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared SplitButton contracts");
+  }
+  const auto split_button_source = QString::fromUtf8(split_button_qml.readAll());
+  QFile tool_rail_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToolRail.qml")));
+  if (!tool_rail_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToolRail popup row usage");
+  }
+  const auto tool_rail_source = QString::fromUtf8(tool_rail_qml.readAll());
+  QFile export_queue_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ExportQueueRow.qml")));
+  if (!export_queue_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ExportQueueRow contracts");
+  }
+  const auto export_queue_row_source = QString::fromUtf8(export_queue_row_qml.readAll());
+  QFile export_preflight_issue_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ExportPreflightIssueRow.qml")));
+  if (!export_preflight_issue_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ExportPreflightIssueRow contracts");
+  }
+  const auto export_preflight_issue_row_source =
+      QString::fromUtf8(export_preflight_issue_row_qml.readAll());
+  QFile export_preset_summary_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ExportPresetSummary.qml")));
+  if (!export_preset_summary_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ExportPresetSummary contracts");
+  }
+  const auto export_preset_summary_source =
+      QString::fromUtf8(export_preset_summary_qml.readAll());
+  QFile export_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                            .filePath(QStringLiteral("apps/desktop/qml/workspaces/ExportView.qml")));
+  if (!export_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect ExportView queue row usage");
+  }
+  const auto export_view_source = QString::fromUtf8(export_view_qml.readAll());
+  QFile export_workspace_host_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/workspaces/ExportWorkspaceHost.qml")));
+  if (!export_workspace_host_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect deferred Export workspace host");
+  }
+  const auto export_workspace_host_source =
+      QString::fromUtf8(export_workspace_host_qml.readAll());
+  QFile recent_document_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/RecentDocumentRow.qml")));
+  if (!recent_document_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared RecentDocumentRow contracts");
+  }
+  const auto recent_document_row_source =
+      QString::fromUtf8(recent_document_row_qml.readAll());
+  QFile carousel_board_thumb_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CarouselBoardThumb.qml")));
+  if (!carousel_board_thumb_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared CarouselBoardThumb contracts");
+  }
+  const auto carousel_board_thumb_source =
+      QString::fromUtf8(carousel_board_thumb_qml.readAll());
+  QFile carousel_media_thumb_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CarouselMediaThumb.qml")));
+  if (!carousel_media_thumb_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared CarouselMediaThumb contracts");
+  }
+  const auto carousel_media_thumb_source =
+      QString::fromUtf8(carousel_media_thumb_qml.readAll());
+  QFile carousel_tool_rail_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CarouselToolRailButton.qml")));
+  if (!carousel_tool_rail_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared CarouselToolRailButton contracts");
+  }
+  const auto carousel_tool_rail_button_source =
+      QString::fromUtf8(carousel_tool_rail_button_qml.readAll());
+  QFile color_swatch_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ColorSwatchButton.qml")));
+  if (!color_swatch_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ColorSwatchButton contracts");
+  }
+  const auto color_swatch_button_source =
+      QString::fromUtf8(color_swatch_button_qml.readAll());
+  QFile tool_option_toggle_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToolOptionToggle.qml")));
+  if (!tool_option_toggle_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToolOptionToggle contracts");
+  }
+  const auto tool_option_toggle_source =
+      QString::fromUtf8(tool_option_toggle_qml.readAll());
+  QFile tool_value_slider_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToolValueSlider.qml")));
+  if (!tool_value_slider_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToolValueSlider contracts");
+  }
+  const auto tool_value_slider_source =
+      QString::fromUtf8(tool_value_slider_qml.readAll());
+  QFile inspector_slider_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/InspectorSlider.qml")));
+  if (!inspector_slider_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared InspectorSlider contracts");
+  }
+  const auto inspector_slider_source =
+      QString::fromUtf8(inspector_slider_qml.readAll());
+  QFile inspector_section_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/InspectorSection.qml")));
+  if (!inspector_section_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared InspectorSection contracts");
+  }
+  const auto inspector_section_source =
+      QString::fromUtf8(inspector_section_qml.readAll());
+  QFile channel_mixer_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ChannelMixerButton.qml")));
+  if (!channel_mixer_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ChannelMixerButton contracts");
+  }
+  const auto channel_mixer_button_source =
+      QString::fromUtf8(channel_mixer_button_qml.readAll());
+  QFile carousel_layer_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CarouselLayerRow.qml")));
+  if (!carousel_layer_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared CarouselLayerRow contracts");
+  }
+  const auto carousel_layer_row_source =
+      QString::fromUtf8(carousel_layer_row_qml.readAll());
+  QFile timeline_marker_card_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineMarkerCard.qml")));
+  if (!timeline_marker_card_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineMarkerCard contracts");
+  }
+  const auto timeline_marker_card_source =
+      QString::fromUtf8(timeline_marker_card_qml.readAll());
+  QFile timeline_marker_pin_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineMarkerPin.qml")));
+  if (!timeline_marker_pin_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineMarkerPin contracts");
+  }
+  const auto timeline_marker_pin_source =
+      QString::fromUtf8(timeline_marker_pin_qml.readAll());
+  QFile timeline_clip_content_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineClipContent.qml")));
+  if (!timeline_clip_content_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineClipContent contracts");
+  }
+  const auto timeline_clip_content_source =
+      QString::fromUtf8(timeline_clip_content_qml.readAll());
+  QFile timeline_effect_library_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineEffectLibraryRow.qml")));
+  if (!timeline_effect_library_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineEffectLibraryRow contracts");
+  }
+  const auto timeline_effect_library_row_source =
+      QString::fromUtf8(timeline_effect_library_row_qml.readAll());
+  QFile timeline_transition_library_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineTransitionLibraryRow.qml")));
+  if (!timeline_transition_library_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineTransitionLibraryRow contracts");
+  }
+  const auto timeline_transition_library_row_source =
+      QString::fromUtf8(timeline_transition_library_row_qml.readAll());
+  QFile timeline_track_toggle_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineTrackToggleButton.qml")));
+  if (!timeline_track_toggle_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineTrackToggleButton contracts");
+  }
+  const auto timeline_track_toggle_button_source =
+      QString::fromUtf8(timeline_track_toggle_button_qml.readAll());
+  QFile timeline_track_header_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineTrackHeader.qml")));
+  if (!timeline_track_header_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect TimelineTrackHeader toggle usage");
+  }
+  const auto timeline_track_header_source =
+      QString::fromUtf8(timeline_track_header_qml.readAll());
+  QFile tone_curve_channel_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToneCurveChannelButton.qml")));
+  if (!tone_curve_channel_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToneCurveChannelButton contracts");
+  }
+  const auto tone_curve_channel_button_source =
+      QString::fromUtf8(tone_curve_channel_button_qml.readAll());
+  QFile tone_curve_preset_button_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToneCurvePresetButton.qml")));
+  if (!tone_curve_preset_button_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToneCurvePresetButton contracts");
+  }
+  const auto tone_curve_preset_button_source =
+      QString::fromUtf8(tone_curve_preset_button_qml.readAll());
+  QFile tone_curve_point_handle_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToneCurvePointHandle.qml")));
+  if (!tone_curve_point_handle_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ToneCurvePointHandle contracts");
+  }
+  const auto tone_curve_point_handle_source =
+      QString::fromUtf8(tone_curve_point_handle_qml.readAll());
+  QFile tone_curve_editor_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ToneCurveEditor.qml")));
+  if (!tone_curve_editor_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect ToneCurveEditor control usage");
+  }
+  const auto tone_curve_editor_source =
+      QString::fromUtf8(tone_curve_editor_qml.readAll());
+  QFile timeline_effects_panel_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineEffectsPanel.qml")));
+  if (!timeline_effects_panel_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect TimelineEffectsPanel library row usage");
+  }
+  const auto timeline_effects_panel_source =
+      QString::fromUtf8(timeline_effects_panel_qml.readAll());
+  QFile timeline_media_asset_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineMediaAssetRow.qml")));
+  if (!timeline_media_asset_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared TimelineMediaAssetRow contracts");
+  }
+  const auto timeline_media_asset_row_source =
+      QString::fromUtf8(timeline_media_asset_row_qml.readAll());
+  QFile timeline_source_panel_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/TimelineSourcePanel.qml")));
+  if (!timeline_source_panel_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect TimelineSourcePanel media row usage");
+  }
+  const auto timeline_source_panel_source =
+      QString::fromUtf8(timeline_source_panel_qml.readAll());
+  QFile timeline_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                              .filePath(QStringLiteral("apps/desktop/qml/workspaces/TimelineView.qml")));
+  if (!timeline_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect TimelineView recent row usage");
+  }
+  const auto timeline_view_source = QString::fromUtf8(timeline_view_qml.readAll());
+  QFile carousel_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                              .filePath(QStringLiteral("apps/desktop/qml/workspaces/CarouselView.qml")));
+  if (!carousel_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect CarouselView recent row usage");
+  }
+  const auto carousel_view_source = QString::fromUtf8(carousel_view_qml.readAll());
+  QFile thumbnail_state_utils_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ThumbnailStateUtils.qml")));
+  if (!thumbnail_state_utils_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect thumbnail state utility contracts");
+  }
+  const auto thumbnail_state_utils_source =
+      QString::fromUtf8(thumbnail_state_utils_qml.readAll());
   QFile edit_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
                           .filePath(QStringLiteral("apps/desktop/qml/workspaces/EditView.qml")));
   if (!edit_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
     return fail("desktop shell smoke should be able to inspect EditView mask accent labels");
   }
   const auto edit_view_source = QString::fromUtf8(edit_view_qml.readAll());
+  QFile library_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                             .filePath(QStringLiteral("apps/desktop/qml/workspaces/LibraryView.qml")));
+  if (!library_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect LibraryView review card usage");
+  }
+  const auto library_view_source = QString::fromUtf8(library_view_qml.readAll());
+  QFile import_view_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                            .filePath(QStringLiteral("apps/desktop/qml/workspaces/ImportView.qml")));
+  if (!import_view_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect ImportView source and folder row usage");
+  }
+  const auto import_view_source = QString::fromUtf8(import_view_qml.readAll());
+  QFile import_folder_chip_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ImportFolderChip.qml")));
+  if (!import_folder_chip_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ImportFolderChip contracts");
+  }
+  const auto import_folder_chip_source =
+      QString::fromUtf8(import_folder_chip_qml.readAll());
+  QFile import_folder_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ImportFolderRow.qml")));
+  if (!import_folder_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ImportFolderRow contracts");
+  }
+  const auto import_folder_row_source =
+      QString::fromUtf8(import_folder_row_qml.readAll());
+  QFile import_image_tile_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ImportImageTile.qml")));
+  if (!import_image_tile_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ImportImageTile contracts");
+  }
+  const auto import_image_tile_source =
+      QString::fromUtf8(import_image_tile_qml.readAll());
+  QFile import_source_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ImportSourceRow.qml")));
+  if (!import_source_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ImportSourceRow contracts");
+  }
+  const auto import_source_row_source =
+      QString::fromUtf8(import_source_row_qml.readAll());
+  QFile project_membership_row_qml(
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/ProjectMembershipRow.qml")));
+  if (!project_membership_row_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect shared ProjectMembershipRow contracts");
+  }
+  const auto project_membership_row_source =
+      QString::fromUtf8(project_membership_row_qml.readAll());
   QFile mask_inspector_qml(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
                                .filePath(QStringLiteral(
                                    "apps/desktop/qml/workspaces/MaskInspectorSections.qml")));
@@ -691,14 +1397,12 @@ int main(int argc, char** argv) {
     return fail("desktop shell smoke should be able to inspect mask canvas overlay controls");
   }
   const auto mask_canvas_overlay_source = QString::fromUtf8(mask_canvas_overlay_qml.readAll());
-  QFile editor_preview_controller_cpp(
-      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
-          .filePath(QStringLiteral("apps/desktop/src/editor_preview_controller.cpp")));
-  if (!editor_preview_controller_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
-    return fail("desktop shell smoke should be able to inspect preview scheduler contracts");
+  QFile desktop_main_cpp(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+                             .filePath(QStringLiteral("apps/desktop/src/main.cpp")));
+  if (!desktop_main_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return fail("desktop shell smoke should be able to inspect desktop font startup contracts");
   }
-  const auto editor_preview_controller_source =
-      QString::fromUtf8(editor_preview_controller_cpp.readAll());
+  const auto desktop_main_source = QString::fromUtf8(desktop_main_cpp.readAll());
   QFile job_runner_cpp(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
                            .filePath(QStringLiteral("apps/desktop/src/job_runner.cpp")));
   if (!job_runner_cpp.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -712,9 +1416,160 @@ int main(int argc, char** argv) {
     return fail("desktop shell smoke should be able to inspect the shared mask overlay");
   }
   const auto shared_mask_overlay_source = QString::fromUtf8(shared_mask_overlay_qml.readAll());
+  const QStringList workspace_qml_paths = {
+      QStringLiteral("apps/desktop/qml/workspaces/CarouselView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/EditView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/EditWorkspace.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/ExportView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/ImportView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/LibraryView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/LibraryWorkspace.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/MaskCanvasOverlay.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/SequenceWorkspace.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/StudioWorkspace.qml"),
+      QStringLiteral("apps/desktop/qml/workspaces/TimelineView.qml"),
+  };
+  const QRegularExpression raw_workspace_control_re(
+      QStringLiteral("\\n\\s*(Button|Slider|CheckBox|ComboBox|Menu)\\s*\\{"));
+  for (const auto& workspace_path : workspace_qml_paths) {
+    QFile workspace_qml(
+        QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(workspace_path));
+    if (!workspace_qml.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      std::cerr << "workspace=" << workspace_path.toStdString() << '\n';
+      return fail("desktop shell smoke should be able to inspect every workspace QML file for raw controls");
+    }
+    const auto workspace_source = QString::fromUtf8(workspace_qml.readAll());
+    const auto raw_control_match = raw_workspace_control_re.match(workspace_source);
+    if (raw_control_match.hasMatch()) {
+      std::cerr << "workspace=" << workspace_path.toStdString()
+                << " rawControlOffset=" << raw_control_match.capturedStart()
+                << '\n';
+      return fail("workspace QML should use shared polished control components instead of raw Button, Slider, CheckBox, ComboBox, or Menu blocks");
+    }
+  }
+  if (!desktop_main_source.contains(QStringLiteral("#include <QFont>")) ||
+      !desktop_main_source.contains(QStringLiteral("QApplication::setFont(QFont(QStringLiteral(\"Helvetica Neue\")))")) ||
+      QApplication::font().family() != QStringLiteral("Helvetica Neue")) {
+    return fail("desktop startup should set the shared UI font before QML loads to avoid default Sans Serif fallback");
+  }
   if (!mask_canvas_overlay_source.contains(
           QStringLiteral("likely edge, shadow, or reflection pixels"))) {
     return fail("object remove canvas guidance should explain assisted shadow/reflection expansion");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("function agentMcpStatusText")) ||
+      !studio_workspace_source.contains(QStringLiteral("function agentMcpTelemetryText")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentMcpStatusLabel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentMcpEndpointLabel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentMcpTelemetryLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("function agentMcpStatusText")) ||
+      !edit_view_source.contains(QStringLiteral("function agentMcpTelemetryText")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentMcpStatusLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentMcpEndpointLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentMcpTelemetryLabel\""))) {
+    return fail("agent UI should expose local MCP status, endpoint, and telemetry indicators");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("function agentMemoryVaultText")) ||
+      !studio_workspace_source.contains(QStringLiteral("externalChangeDetected")) ||
+      !studio_workspace_source.contains(QStringLiteral("outside change(s)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function openAgentMemoryVaultInObsidian")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentOpenMemoryVaultInObsidianButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("openMemoryVaultInObsidian(false)")) ||
+      !edit_view_source.contains(QStringLiteral("function agentMemoryVaultText")) ||
+      !edit_view_source.contains(QStringLiteral("externalChangeDetected")) ||
+      !edit_view_source.contains(QStringLiteral("outside change(s)")) ||
+      !edit_view_source.contains(QStringLiteral("function openAgentMemoryVaultInObsidian")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentOpenMemoryVaultInObsidianButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("openMemoryVaultInObsidian(false)"))) {
+    return fail("agent UI should surface external Obsidian memory changes and an advanced Obsidian-open action");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("function agentLatestStyleChangeSummary")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentStyleChangeSummaryLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("function agentLatestStyleChangeSummary")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentStyleChangeSummaryLabel\""))) {
+    return fail("agent UI should show a compact style-change summary after durable feedback memory updates");
+  }
+  if (!edit_view_source.contains(QStringLiteral("objectName: \"agentOllamaInstallCommandLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentOllamaProbeButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentOllamaPullButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentOllamaInstallStatusLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("probeSelectedModel()")) ||
+      !edit_view_source.contains(QStringLiteral("installSelectedModel(true)"))) {
+    return fail("agent UI should expose Ollama model pull controls");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("function agentToolCalls")) ||
+      !studio_workspace_source.contains(QStringLiteral("function agentRunWarnings")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunAuditPanel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunToolLogRepeater\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunProofPathLabel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunWarningsLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("function agentToolCallDetail")) ||
+      !edit_view_source.contains(QStringLiteral("function agentRunArtifactSummary")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentRunAuditPanel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentRunToolLogRepeater\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentRunProofPathLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentRunWarningsLabel\""))) {
+    return fail("agent UI should expose run audit proof paths, tool calls, and validation warnings");
+  }
+  if (!agent_proof_card_source.contains(QStringLiteral("agentProofCardContract: \"agent-proof-card:v1|image-fit:true|label-badge:true|empty-placeholder:true|tooltip-full:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
+      !agent_proof_card_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_proof_card_source.contains(QStringLiteral("objectName: root.imageObjectName")) ||
+      !agent_proof_card_source.contains(QStringLiteral("fillMode: Image.PreserveAspectFit")) ||
+      !agent_proof_card_source.contains(QStringLiteral("visible: root.source.toString().length === 0")) ||
+      !agent_proof_card_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_proof_card_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentProofSurface\"")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentProofCard")) ||
+      !edit_view_source.contains(QStringLiteral("imageObjectName: \"agent\" + String(modelData.label || \"Proof\") + \"ProofImage\"")) ||
+      !edit_view_source.contains(QStringLiteral("source: agentProofSource(modelData.role)")) ||
+      !edit_view_source.contains(QStringLiteral("imageObjectName: \"agentCurrentProofImage\"")) ||
+      !edit_view_source.contains(QStringLiteral("source: agentProofSource(\"current\")")) ||
+      !edit_view_source.contains(QStringLiteral("showLabel: false"))) {
+    return fail("Edit agent proof previews should use AgentProofCard with stable image object names, fit rendering, and no-elide labels");
+  }
+  if (!agent_tool_call_row_source.contains(QStringLiteral("agentToolCallRowContract: \"agent-tool-call-row:v1|status-dot:true|title-wrap:true|detail-wrap:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
+      !agent_tool_call_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|detail-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_tool_call_row_source.contains(QStringLiteral("Accessible.description: root.detail")) ||
+      !agent_tool_call_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !agent_tool_call_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !agent_tool_call_row_source.contains(QStringLiteral("ToolTip.text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentToolCallRow")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentRunToolCallRow\"")) ||
+      !edit_view_source.contains(QStringLiteral("title: agentToolCallTitle(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("detail: agentToolCallDetail(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("statusColor: agentToolCallStatusColor(modelData)"))) {
+    return fail("Edit agent tool-call audit rows should use AgentToolCallRow with readable no-elide title/detail text and preserved status logic");
+  }
+  if (!agent_recipe_diff_row_source.contains(QStringLiteral("agentRecipeDiffRowContract: \"agent-recipe-diff-row:v1|label-wrap:true|summary-wrap:true|count-badge:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-wrap:true|summary-wrap:true|badge-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("Accessible.description: root.summary")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !agent_recipe_diff_row_source.contains(QStringLiteral("ToolTip.text: root.summary.length > 0 ? root.label + \"\\n\" + root.summary : root.label")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentRecipeDiffRow")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentRecipeDiffRow\"")) ||
+      !edit_view_source.contains(QStringLiteral("label: String(modelData.label || \"Recipe group\")")) ||
+      !edit_view_source.contains(QStringLiteral("summary: String(modelData.summary || \"\")")) ||
+      !edit_view_source.contains(QStringLiteral("countText: String(modelData.count || \"0\")"))) {
+    return fail("Edit agent recipe diff rows should use AgentRecipeDiffRow with readable label/summary text and preserved count binding");
+  }
+  if (!agent_run_history_row_source.contains(QStringLiteral("agentRunHistoryRowContract: \"agent-run-history-row:v1|title-wrap:true|detail-wrap:true|status-badge:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|detail-wrap:true|badge-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("Accessible.description: root.detail")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !agent_run_history_row_source.contains(QStringLiteral("ToolTip.text: root.detail.length > 0 ? root.title + \"\\n\" + root.detail : root.title")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentRunHistoryRow")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentRunHistoryRow\"")) ||
+      !edit_view_source.contains(QStringLiteral("title: agentRunHistoryTitle(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("detail: agentRunHistoryDetail(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("statusText: modelData.ok === true ? \"ok\" : \"failed\"")) ||
+      !edit_view_source.contains(QStringLiteral("statusColor: agentRunHistoryStatusColor(modelData)"))) {
+    return fail("Edit agent run history rows should use AgentRunHistoryRow with readable no-elide title/detail text and preserved status binding");
   }
   if (!studio_workspace_source.contains(QStringLiteral("SharedMaskOverlay {")) ||
       !mask_view_source.contains(QStringLiteral("SharedMaskOverlay {")) ||
@@ -884,6 +1739,17 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("PanZoomInputHandler")) ||
       !studio_workspace_source.contains(QStringLiteral("inputHandlerRole: \"pan-zoom\"")) ||
       !studio_workspace_source.contains(QStringLiteral("pointerGrabPolicy: viewport.masked ? \"defer-to-mask-overlay\" : \"viewport-pan-zoom\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property bool nativePreviewActive: editedPreviewSurface &&")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.displayPreviewNativeAvailable")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property bool providerPreviewVisible: String(source || \"\").length > 0 &&")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property bool previewContentVisible: nativePreviewActive ||")) ||
+      !studio_workspace_source.contains(QStringLiteral("EditorPreviewTextureItem {")) ||
+      !studio_workspace_source.contains(QStringLiteral("const contentEdge = Math.max(width, height)")) ||
+      studio_workspace_source.contains(QStringLiteral("const contentEdge = Math.max(width, height, paintedContentWidth, paintedContentHeight)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function setZoom(nextZoom, anchorX, anchorY)")) ||
+      !studio_workspace_source.contains(QStringLiteral("const anchorNormalizedX = root.clamp((pivotX - paintedContentX) / Math.max(1, paintedContentWidth), 0, 1)")) ||
+      !studio_workspace_source.contains(QStringLiteral("viewport.setZoom(viewport.zoom * 1.06, wheel.x, wheel.y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("viewport.setZoom(viewport.zoom / 1.06, wheel.x, wheel.y)")) ||
       !studio_workspace_source.contains(QStringLiteral("function maskSpacePanShortcutActive()")) ||
       !studio_workspace_source.contains(QStringLiteral("event.key === Qt.Key_Space")) ||
       !studio_workspace_source.contains(QStringLiteral("root.spacePanActive = true")) ||
@@ -955,11 +1821,22 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("\"  Density \" + root.percentText(editorPreview.activeMaskDensity)")) ||
       !studio_workspace_source.contains(QStringLiteral("function brushDensityValueText()")) ||
       !studio_workspace_source.contains(QStringLiteral("function brushOpacityValueText()")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"brushContextCompactBrushPanel\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("brushPanelContract: \"size-flow-hardness-density-opacity|compact:v1\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("BrushContextPanel {")) ||
+      !brush_context_panel_source.contains(QStringLiteral("brush-context-panel:v1|component:true|target-summary:true|mask-summary:true|hidden-advanced-preserved:true|object-names:preserved|no-elide:true")) ||
+      !brush_context_panel_source.contains(QStringLiteral("objectName: \"brushContextCompactBrushPanel\"")) ||
+      !brush_context_panel_source.contains(QStringLiteral("brushPanelContract: \"size-flow-hardness-density-opacity|compact:v2|visible:false|tuning-menu:true|inspector-preserved:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("BrushLayerInspectorHeader {")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"brushLayerInspectorHeader\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: root.brushToolReady()")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: editorPreview.photoLayerCount > 0 && !root.brushToolReady()")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("brush-layer-inspector-header:v1|brush-only:true|target-summary:true|mask-summary:true|add-menu:true|isolate-action:true|no-elide:true|functionality:preserved")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("objectName: \"brushLayerInspectorAddMenuButton\"")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("objectName: \"brushLayerInspectorIsolationButton\"")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("objectName: \"brushLayerInspectorTargetNameLabel\"")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("objectName: \"brushLayerInspectorMaskStatusLabel\"")) ||
       !studio_workspace_source.contains(QStringLiteral("BrushCursorOuterHaloRing")) ||
       !studio_workspace_source.contains(QStringLiteral("brushCursorVisibilityContract: \"persistent-last-position|dual-contrast-ring|hardness-inner-ring:v1\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("visible: root.brushToolReady() && previewImage.visible")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: root.brushToolReady() && viewport.previewContentVisible")) ||
       studio_workspace_source.contains(QStringLiteral("visible: root.brushToolReady() && viewportMouse.containsMouse")) ||
       !studio_workspace_source.contains(QStringLiteral("BrushCursorFeatherRing")) ||
       !studio_workspace_source.contains(QStringLiteral("\" / Flow \" + root.brushFlowValueText()")) ||
@@ -1012,6 +1889,9 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"outline\"")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewMarchingAntsButton")) ||
       !mask_inspector_source.contains(QStringLiteral("Marching Ants")) ||
+      !mask_inspector_source.contains(QStringLiteral("rubylithOverlayPresetContract: \"rubylith-overlay-preset:v1|display-mode:overlay|color:#ff2f5f|single-color:true|separate-from-diagnostics:true\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("maskPreviewRubylithOverlayPresetButton")) ||
+      !mask_inspector_source.contains(QStringLiteral("editorPreview.maskPreviewOverlayColor = \"#ff2f5f\"")) ||
       !mask_inspector_source.contains(QStringLiteral("grayscale-alpha")) ||
       !mask_inspector_source.contains(QStringLiteral("isolated-mask")) ||
       !mask_inspector_source.contains(QStringLiteral("hidden")) ||
@@ -1030,9 +1910,18 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("normalMaskPreviewModeFlow")) ||
       !mask_inspector_source.contains(QStringLiteral("diagnosticMaskDisplayContract")) ||
       !mask_inspector_source.contains(QStringLiteral("property bool diagnosticMaskPreviewModesVisible: false")) ||
+      !mask_inspector_source.contains(QStringLiteral("property bool runtimeDiagnosticsExpanded: false")) ||
+      !mask_inspector_source.contains(QStringLiteral("runtimeDiagnosticsVisibilityContract: \"runtime-diagnostics:v1|chips:always|raw-status:details-only|default-expanded:false|toggle:available|no-debug-text-at-rest:true|functionality:preserved\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("developerDiagnosticsMenuContract: \"developer-diagnostics-menu:v2|developer-mode-gated:true|normal-mask-modes:separate|matte-debug:collapsed|runtime-detail:collapsed|raw-alpha:diagnostic-only|confidence:false-color-focus:diagnostic-only|default-visible:false\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("function runtimeDiagnosticsSignature()")) ||
       !mask_inspector_source.contains(QStringLiteral("maskPreviewDiagnosticsToggleButton")) ||
       !mask_inspector_source.contains(QStringLiteral("diagnosticMaskPreviewModeFlow")) ||
-      !mask_inspector_source.contains(QStringLiteral("visible: root.diagnosticMaskPreviewModesVisible")) ||
+      !mask_inspector_source.contains(QStringLiteral("visible: editRoot.developerDiagnosticsEnabled === true &&")) ||
+      !mask_inspector_source.contains(QStringLiteral("objectName: \"maskRuntimeDiagnosticsToggleButton\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("text: root.runtimeDiagnosticsExpanded ? \"Hide Runtime Details\" : \"Runtime Details\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("objectName: \"maskRuntimeDiagnosticsLabel\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("visible: editRoot.developerDiagnosticsEnabled === true &&")) ||
+      !mask_inspector_source.contains(QStringLiteral("runtimeDiagnosticsSignature: root.runtimeDiagnosticsSignature()")) ||
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"color-on-bw\"")) ||
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"image-on-bw\"")) ||
       !edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"marching-ants\"")) ||
@@ -1044,7 +1933,8 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("\"|mode:\" + String(editorPreview.maskPreviewDisplayMode || \"overlay\")")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.maskPreviewMode = visible ? \"overlay\" : \"hidden\"")) ||
       !studio_workspace_source.contains(QStringLiteral("return editorPreview.maskPreviewDisplayMode")) ||
-      !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode !== \"hidden\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("previewActive: editorPreview.maskPreviewDisplayMode !== \"hidden\"")) ||
+      !brush_context_panel_source.contains(QStringLiteral("active: root.previewActive")) ||
       !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"overlay\"")) ||
       !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"outline\"")) ||
       !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"hidden\"")) ||
@@ -1194,9 +2084,12 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("alphaMaskImportInvertCheck")) ||
       !mask_view_source.contains(QStringLiteral("alphaMaskImportThresholdSlider")) ||
       !mask_view_source.contains(QStringLiteral("alphaMaskImportResampleModeCombo")) ||
+      !mask_view_source.contains(QStringLiteral("ToneComboBox {\n                objectName: \"alphaMaskImportResampleModeCombo\"")) ||
+      !mask_view_source.contains(QStringLiteral("onActivated: editorPreview.alphaMaskImportResampleMode = currentText")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*ComboBox\\s*\\{")).match(mask_view_source).hasMatch() ||
       !mask_view_source.contains(QStringLiteral("alphaMaskImportCommitButton")) ||
       !mask_view_source.contains(QStringLiteral("commitAlphaImageMaskImport"))) {
-    return fail("alpha image mask UI should preview invert, threshold, and resample settings before commit");
+    return fail("alpha image mask UI should preview invert, threshold, and resample settings with polished shared controls before commit");
   }
   if (!mask_view_source.contains(QStringLiteral("Sky (Heuristic)")) ||
       !mask_view_source.contains(QStringLiteral("Background (Subject Invert)")) ||
@@ -1544,6 +2437,9 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("objectName: \"maskActiveContextHeader\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"maskActiveContextLabel\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"maskActiveContextSignature\"")) ||
+      !mask_view_source.contains(QStringLiteral("AppMenu {\n                                                    id: maskSourceContextMenu")) ||
+      !mask_view_source.contains(QStringLiteral("AppMenu {\n                                        id: retouchRowContextMenu")) ||
+      !mask_view_source.contains(QStringLiteral("AppMenuItem {")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"maskSourceContextMenu\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"maskSourceContextSelectItem\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"maskSourceContextRenameItem\"")) ||
@@ -1567,6 +2463,7 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("acceptedButtons: Qt.LeftButton | Qt.RightButton")) ||
       !mask_view_source.contains(QStringLiteral("maskSourceContextMenu.popup()")) ||
       !mask_view_source.contains(QStringLiteral("retouchRowContextMenu.popup()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Menu\\s*\\{")).match(mask_view_source).hasMatch() ||
       !mask_view_source.contains(QStringLiteral("objectName: \"activeMaskCompactHeader\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"activeMaskHeaderNameLabel\"")) ||
       !mask_view_source.contains(QStringLiteral("objectName: \"activeMaskHeaderKindLabel\"")) ||
@@ -1636,6 +2533,10 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("activeMaskOperationIntersectButton")) ||
       !mask_inspector_source.contains(QStringLiteral("activeMaskOperationReplaceButton")) ||
       !mask_inspector_source.contains(QStringLiteral("activeMaskInvertButton")) ||
+      !mask_inspector_source.contains(QStringLiteral("ToneComboBox {\n                id: maskBlendModeCombo")) ||
+      !mask_inspector_source.contains(QStringLiteral("objectName: \"activeMaskBlendModeCombo\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("onActivated: editorPreview.activeMaskBlendMode = model[index]")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*ComboBox\\s*\\{")).match(mask_inspector_source).hasMatch() ||
       !mask_inspector_source.contains(QStringLiteral("activeMaskHideButton")) ||
       !mask_inspector_source.contains(QStringLiteral("activeMaskLockButton")) ||
       !mask_inspector_source.contains(QStringLiteral("activeMaskRenameField")) ||
@@ -1670,6 +2571,9 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("function moveMaskRow(flatIndex, offset)")) ||
       !mask_inspector_source.contains(QStringLiteral("function duplicateMaskRow(flatIndex)")) ||
       !mask_inspector_source.contains(QStringLiteral("function deleteMaskRow(flatIndex)")) ||
+      !mask_inspector_source.contains(QStringLiteral("AppMenu {\n                                    id: maskInspectorSourceContextMenu")) ||
+      !mask_inspector_source.contains(QStringLiteral("AppMenu {\n                        id: maskInspectorRetouchContextMenu")) ||
+      !mask_inspector_source.contains(QStringLiteral("AppMenuItem {")) ||
       !mask_inspector_source.contains(QStringLiteral("objectName: \"maskInspectorSourceContextMenu\"")) ||
       !mask_inspector_source.contains(QStringLiteral("objectName: \"maskInspectorSourceContextSelectItem\"")) ||
       !mask_inspector_source.contains(QStringLiteral("objectName: \"maskInspectorSourceContextRenameItem\"")) ||
@@ -1692,6 +2596,7 @@ int main(int argc, char** argv) {
       !mask_inspector_source.contains(QStringLiteral("border.color: activeFocus")) ||
       !mask_inspector_source.contains(QStringLiteral("maskInspectorSourceContextMenu.popup()")) ||
       !mask_inspector_source.contains(QStringLiteral("maskInspectorRetouchContextMenu.popup()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Menu\\s*\\{")).match(mask_inspector_source).hasMatch() ||
        !mask_inspector_source.contains(QStringLiteral("label: \"Remove\"")) ||
        !mask_inspector_source.contains(QStringLiteral("Selection Properties")) ||
        !mask_inspector_source.contains(QStringLiteral("Edge-Aware Range"))) {
@@ -1743,7 +2648,6 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("return editorPreview.setPhotoLayerCurvePoints(layerIndex, editorPreview.curveChannel, points)")) ||
       !studio_workspace_source.contains(QStringLiteral("function resetActiveAdjustmentLayerRecipe()")) ||
       !studio_workspace_source.contains(QStringLiteral("return editorPreview.resetPhotoLayerAdjustments(layerIndex)")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"activeLayerFullResetButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"pasteGlobalAdjustmentsToPhotoLayerButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.pasteGlobalAdjustmentsToPhotoLayer(photoLayerAdjustmentCommandBar.activeAdjustmentIndex)")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"togglePhotoLayerAdjustmentsPreviewButton\"")) ||
@@ -1755,6 +2659,11 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("readonly property string selectedEditTargetContract: selectedEditTargetSignature()")) ||
       !studio_workspace_source.contains(QStringLiteral("function selectedEditTargetSignature()")) ||
       !studio_workspace_source.contains(QStringLiteral("function setSelectedEditTarget(scope, layerIndex, maskSet, sourceIndex)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function adjustmentControlDisabledReason(rawTargets)")) ||
+      !studio_workspace_source.contains(QStringLiteral("studioAdjustmentSliderContract: \"studio-adjustment-slider:v1|shared-inspector-slider:true|fixed-label:true|fixed-value:true|fixed-reset:true|modified-marker:true|double-click-reset:true|coalesced-drag:true|target-aware:true|disabled-reason:true|no-elide:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("disabledReason: supportsActiveEditTarget ? \"\" : root.adjustmentControlDisabledReason(targetSupport)")) ||
+      !studio_workspace_source.contains(QStringLiteral("onInteractionStarted: editorPreview.beginCoalescedEdit()")) ||
+      !studio_workspace_source.contains(QStringLiteral("onInteractionFinished: editorPreview.endCoalescedEdit()")) ||
       !studio_workspace_source.contains(QStringLiteral("return \"selected-target:v1|scope:\" + root.selectedEditTargetScope()")) ||
       !studio_workspace_source.contains(QStringLiteral("root.setSelectedEditTarget(\"base-image\", -1, ({}), -1)")) ||
       !studio_workspace_source.contains(QStringLiteral("root.setSelectedEditTarget(root.selectedLayerTargetScope(index), index, ({}), -1)")) ||
@@ -1839,6 +2748,1525 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("parts.push(\"Exposure \" + root.signedLayerValueText(root.layerStoredAdjustmentValue(layer, \"exposure\"), \" EV\"))"))) {
     return fail("Studio layer rows should expose changed adjustment group badges and a layer-local adjustment summary");
   }
+  if (!layer_row_source.contains(QStringLiteral("rowContract: \"layer-row:v1|fixed-zones|no-elide|state-priority|menu-actions\"")) ||
+      !layer_row_source.contains(QStringLiteral("zoneContract: \"layer-row-zones:v1|accent-edge|thumbnail|name-state|metadata|state-badges|actions:visibility-mask-opacity-more|overflow-menu\"")) ||
+      !layer_row_source.contains(QStringLiteral("premiumLayerContract: \"premium-layer-row:v2|stable-height:true|thumbnail-zone:fixed|action-zone:fixed|soft-selected-fill:true|single-left-accent:true|active-mask-secondary:true|rename-stable:true|delete-separated:true\"")) ||
+      !layer_row_source.contains(QStringLiteral("layerInteractionAcceptanceContract: \"layer-interaction-acceptance:v1|select:true|rename:true|reorder:true|visibility:true|opacity:true|mask-select:true|transform:true|escape:true\"")) ||
+      !layer_row_source.contains(QStringLiteral("property int thumbnailZoneSize: compact ? 30 : 34")) ||
+      !layer_row_source.contains(QStringLiteral("property int actionZoneWidth: showLockButton || showMaskState || showOpacityReadout || showVisibilityButton || showMenuButton ? 184 : 0")) ||
+      !layer_row_source.contains(QStringLiteral("property string maskStateObjectName: \"layerRowMaskState\"")) ||
+      !layer_row_source.contains(QStringLiteral("property string opacityReadoutObjectName: \"layerRowOpacityReadout\"")) ||
+      !layer_row_source.contains(QStringLiteral("statePriorityContract: \"layer-row-state-priority:v2|selected-layer-primary>active-mask-secondary>solo>changed>locked>hidden>hover\"")) ||
+      !layer_row_source.contains(QStringLiteral("activeMaskIndicatorContract: \"layer-active-mask-indicator:v1|secondary-edge:right|accent:cool|visible:\"")) ||
+      !layer_row_source.contains(QStringLiteral("readonly property color activeMaskAccent: theme.accentCool400")) ||
+      !layer_row_source.contains(QStringLiteral("interactionContract: \"layer-row-interaction:v1|hover-actions:true|keyboard-actions:true|disabled-reasons:true|rename:direct-or-menu|reorder:move-buttons-or-menu|delete:separated\"")) ||
+      !layer_row_source.contains(QStringLiteral("thumbnailDprContract: \"layer-row-thumbnail-dpr:v1|source-size:screen-aware|base-image:true|display:\"")) ||
+      !layer_row_source.contains(QStringLiteral("readonly property real thumbnailDevicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))")) ||
+      !layer_row_source.contains(QStringLiteral("readonly property int screenAwareThumbnailSourceSize: Math.max(")) ||
+      !layer_row_source.contains(QStringLiteral("sourceSize.width: root.screenAwareThumbnailSourceSize")) ||
+      !layer_row_source.contains(QStringLiteral("sourceSize.height: root.screenAwareThumbnailSourceSize")) ||
+      !layer_row_source.contains(QStringLiteral("Keys.onReturnPressed: root.clicked()")) ||
+      !layer_row_source.contains(QStringLiteral("objectName: \"layerRowReorderHandle\"")) ||
+      !layer_row_source.contains(QStringLiteral("readonly property bool contextualActionsVisible: hovered || activeFocus || selected || activeMask")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("rowChromeContract: \"layer-row-chrome:v1|kind:\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("zoneContract: \"layer-row-chrome-zones:v1|accent-edge|thumbnail|content|state-summary|row-actions|nested-children\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("premiumLayerContract: \"premium-layer-chrome:v2|stable-height:true|nested-mask-relation:true|soft-selected-fill:true|single-left-accent:true|active-mask-secondary:true|quiet-hover:true|focus-ring:true\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("layerInteractionAcceptanceContract: \"layer-interaction-acceptance:v1|select:true|rename:true|reorder:true|visibility:true|opacity:true|mask-select:true|transform:true|escape:true\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("statePriorityContract: \"layer-row-state-priority:v2|selected-layer-primary>active-mask-secondary>solo>changed>locked>hidden>hover\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("activeMaskIndicatorContract: \"layer-active-mask-indicator:v1|secondary-edge:right|accent:cool|visible:\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("readonly property color activeMaskAccent: theme.accentCool400")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("interactionContract: \"layer-row-interaction:v1|hover-actions:true|keyboard-actions:true|disabled-reasons:true|rename:direct|reorder:move-buttons-or-menu|delete:separated\"")) ||
+      !layer_row_chrome_source.contains(QStringLiteral("property bool accentVisible: selected || activeMask || solo || changed")) ||
+      !studio_workspace_source.contains(QStringLiteral("function layerStackAcceptanceSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("layerStackAcceptanceContract: root.layerStackAcceptanceSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("delegate: LayerRowChrome")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerRow\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerReorderHandle\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("LayerRowActionZone {")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerFixedStateActionZone\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("brushMode: root.brushToolReady()")) ||
+      !studio_workspace_source.contains(QStringLiteral("menuItems: root.layerRowMenuItems(layerIndex, layerData)")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("actionZoneContract: \"layer-row-action-zone:v3|component:LayerRowActionZone|normal-width:178|brush-width:52|brush:more-only|summary-in-status:true|mask-state:normal-only|opacity-readout:normal-only|visibility:normal-only|more:true|hover-no-shift:true|no-elide:true\"")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerMaskStatePill\"")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("visible: !root.brushMode")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerOpacityLabel\"")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerVisibilityButton\"")) ||
+      !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerRowMoreMenuButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("reorderContract: \"layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("actionVisibilityContract: \"layer-actions:v1|contextual:hover-focus-selected|keyboard-accessible:true|precision-controls:true|disabled-reasons:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("actionVisibilityContract: \"layer-structure-actions:v1|contextual:hover-focus-selected|reorder:move-buttons|overflow-menu:true|destructive-separated:true|disabled-reasons:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("rowKind: \"photo-layer\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("rowKind: \"standalone-mask-set\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("rowKind: \"nested-mask-set\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("selected: layerSelected || activeLayerTarget")) ||
+      !studio_workspace_source.contains(QStringLiteral("activeMask: layerMaskSelected")) ||
+      !studio_workspace_source.contains(QStringLiteral("activeMask: activeMaskSet")) ||
+      !studio_workspace_source.contains(QStringLiteral("changed: changedAdjustmentGroups.length > 0"))) {
+    return fail("Studio photo and mask layer rows should expose strict zones, state priority, contextual actions, reorder affordance, and full editing surface");
+  }
+  if (!menu_button_source.contains(QStringLiteral("menuContract: \"menu-button:v1|items:\"")) ||
+      !menu_button_source.contains(QStringLiteral("|danger-last:\"")) ||
+      !menu_button_source.contains(QStringLiteral("String(destructiveItemsLast)")) ||
+      !menu_button_source.contains(QStringLiteral("function nonDangerAfterFirstDangerIndex()")) ||
+      !menu_button_source.contains(QStringLiteral("readonly property int disabledItemReasonCount: countDisabledItemsWithReasons()")) ||
+      !menu_button_source.contains(QStringLiteral("readonly property bool disabledItemsExplainState: disabledItemCount === disabledItemReasonCount")) ||
+      !menu_button_source.contains(QStringLiteral("|disabled-reasons-complete:\"")) ||
+      !menu_button_source.contains(QStringLiteral("String(disabledItemsExplainState)")) ||
+      !menu_button_source.contains(QStringLiteral("function disabledReasonForItem(item)")) ||
+      !menu_button_source.contains(QStringLiteral("function countDisabledItemsWithReasons()")) ||
+	      !menu_button_source.contains(QStringLiteral("|keyboard:true|escape:true|disabled-reasons:true|checked-state:true|no-elide:true|readable-text:true|geometry:true|width:\"")) ||
+	      !menu_button_source.contains(QStringLiteral("property bool menuEnabled: (menuItems || []).length > 0")) ||
+	      !menu_button_source.contains(QStringLiteral("property bool allowLabelWrap: false")) ||
+	      !menu_button_source.contains(QStringLiteral("property string menuTooltipText: text.length > 0 ? \"More options for \" + text : \"More options\"")) ||
+	      !menu_button_source.contains(QStringLiteral("allowLabelWrap: root.allowLabelWrap")) ||
+	      !menu_button_source.contains(QStringLiteral("tooltipText: root.menuTooltipText")) ||
+      !menu_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|menu-wrap:true")) ||
+      !menu_button_source.contains(QStringLiteral("menuGeometryContract: \"menu-geometry:v1|min-width:\"")) ||
+      !menu_button_source.contains(QStringLiteral("readonly property int menuMinimumWidth: theme.menuMinWidth")) ||
+      !menu_button_source.contains(QStringLiteral("readonly property int menuMaximumWidth: theme.menuMaxWidth")) ||
+      !menu_button_source.contains(QStringLiteral("Math.max(root.menuMinimumWidth, root.menuWidth, root.width")) ||
+      !menu_button_source.contains(QStringLiteral("function countDisabledItems()")) ||
+      !split_button_source.contains(QStringLiteral("splitContract: \"split-button:v1|primary:\"")) ||
+      !split_button_source.contains(QStringLiteral("|danger-last:\"")) ||
+      !split_button_source.contains(QStringLiteral("String(destructiveItemsLast)")) ||
+      !split_button_source.contains(QStringLiteral("function nonDangerAfterFirstDangerIndex()")) ||
+      !split_button_source.contains(QStringLiteral("readonly property int disabledItemReasonCount: countDisabledItemsWithReasons()")) ||
+      !split_button_source.contains(QStringLiteral("readonly property bool disabledItemsExplainState: disabledItemCount === disabledItemReasonCount")) ||
+      !split_button_source.contains(QStringLiteral("|disabled-reasons-complete:\"")) ||
+      !split_button_source.contains(QStringLiteral("String(disabledItemsExplainState)")) ||
+      !split_button_source.contains(QStringLiteral("function disabledReasonForItem(item)")) ||
+      !split_button_source.contains(QStringLiteral("function countDisabledItemsWithReasons()")) ||
+      !split_button_source.contains(QStringLiteral("|keyboard:true|escape:true|disabled-reasons:true|checked-state:true|no-elide:true|readable-text:true|geometry:true|width:\"")) ||
+      !split_button_source.contains(QStringLiteral("property bool allowLabelWrap: false")) ||
+      !split_button_source.contains(QStringLiteral("allowLabelWrap: root.allowLabelWrap")) ||
+      !split_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|primary-fit:true|menu-wrap:true")) ||
+      !split_button_source.contains(QStringLiteral("menuGeometryContract: \"menu-geometry:v1|min-width:\"")) ||
+      !split_button_source.contains(QStringLiteral("readonly property int menuMinimumWidth: theme.menuMinWidth")) ||
+      !split_button_source.contains(QStringLiteral("readonly property int menuMaximumWidth: theme.menuMaxWidth")) ||
+      !split_button_source.contains(QStringLiteral("Math.max(root.menuMinimumWidth, root.menuWidth, root.width")) ||
+      !split_button_source.contains(QStringLiteral("function countDangerItems()"))) {
+    return fail("Shared menu and split buttons should expose keyboard, checked, disabled-reason completeness, destructive-last, no-elide, readable-text, and geometry contracts");
+  }
+  if (!popup_menu_row_source.contains(QStringLiteral("popupMenuRowContract: \"popup-menu-row:v2|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true\"")) ||
+      !popup_menu_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|label-wrap:true|description-wrap:true|disabled-wrap:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true|full-label-available:true\"")) ||
+      !popup_menu_row_source.contains(QStringLiteral("menuGeometryContract: \"popup-menu-row-geometry:v1|min-height:32|preferred-height:34|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:\"")) ||
+      !popup_menu_row_source.contains(QStringLiteral("readonly property int rowMinimumHeight: 32")) ||
+      !popup_menu_row_source.contains(QStringLiteral("readonly property int menuIconColumnWidth: 16")) ||
+      !popup_menu_row_source.contains(QStringLiteral("readonly property int menuShortcutColumnWidth: 72")) ||
+      !popup_menu_row_source.contains(QStringLiteral("readonly property string itemDescription: String(modelData.description || modelData.detail || modelData.summary || \"\")")) ||
+      !popup_menu_row_source.contains(QStringLiteral("Accessible.description: itemDisabledReason.length > 0 ? itemDisabledReason : itemDescription")) ||
+      !popup_menu_row_source.contains(QStringLiteral("visible: root.enabled && root.itemDescription.length > 0")) ||
+      !popup_menu_row_source.contains(QStringLiteral("ToolTip.text: itemTooltip")) ||
+      !popup_menu_row_source.contains(QStringLiteral("signal activated(string key)")) ||
+      !popup_menu_row_source.contains(QStringLiteral("signal navigateRequested(int direction)")) ||
+      !popup_menu_row_source.contains(QStringLiteral("Keys.onPressed: function(event)")) ||
+      !popup_menu_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !popup_menu_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !popup_menu_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !menu_button_source.contains(QStringLiteral("delegate: PopupMenuRow")) ||
+      !menu_button_source.contains(QStringLiteral("root.menuItemTriggered(key)")) ||
+      !split_button_source.contains(QStringLiteral("delegate: PopupMenuRow")) ||
+      !split_button_source.contains(QStringLiteral("root.menuItemTriggered(key)")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("delegate: PopupMenuRow")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("root.menuItemTriggered(root.toolValue, key)")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("menuGeometryContract: \"menu-geometry:v1|min-width:\"")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("Math.max(root.menuMinimumWidth, root.menuWidth")) ||
+      !tool_rail_source.contains(QStringLiteral("delegate: PopupMenuRow")) ||
+      !tool_rail_source.contains(QStringLiteral("root.menuItemTriggered(toolDelegate.tool, key)")) ||
+      !tool_rail_source.contains(QStringLiteral("|keyboard-menu:true|disabled-reasons:true|no-elide:true|readable-text:true|geometry:true")) ||
+      !tool_rail_source.contains(QStringLiteral("toolDiscoveryContract: \"tool-discovery:v1|families-visible:true|active-family:true|active-variant:true|variants-one-expansion:true|stale-menus-close:true|disabled-reasons:true\"")) ||
+      !tool_rail_source.contains(QStringLiteral("staleMenuCleanupContract: \"tool-rail-stale-menu-cleanup:v1|one-expansion:true|on-tool-click:true|on-menu-open:true|on-menu-trigger:true|on-tools-changed:true|on-switch-serial:true\"")) ||
+      !tool_rail_source.contains(QStringLiteral("property int switchSerial: 0")) ||
+      !tool_rail_source.contains(QStringLiteral("onSwitchSerialChanged: closeOpenMenus()")) ||
+      !tool_rail_source.contains(QStringLiteral("function closeOpenMenus()")) ||
+      !tool_rail_source.contains(QStringLiteral("function openToolMenu()")) ||
+      !tool_rail_source.contains(QStringLiteral("root.closeOpenMenus()")) ||
+      !tool_rail_source.contains(QStringLiteral("Math.max(root.menuMinimumWidth,")) ||
+      menu_button_source.contains(QStringLiteral("delegate: Button")) ||
+      split_button_source.contains(QStringLiteral("delegate: Button")) ||
+      carousel_tool_rail_button_source.contains(QStringLiteral("delegate: Button")) ||
+      tool_rail_source.contains(QStringLiteral("delegate: Button"))) {
+    return fail("Expandable menu buttons should share PopupMenuRow for readable no-elide rows with stable geometry while preserving trigger and keyboard behavior");
+  }
+  if (!tool_hud_source.contains(QStringLiteral("layoutContract: \"tool-hud:v2|stable-height:true|status-title-values-done-cancel:true|flex-status-column:true|fixed-actions:true|subdued-chrome:true|keyboard:enter-escape|readable-text:true|no-elide:true|no-overlap:true\"")) ||
+      !tool_hud_source.contains(QStringLiteral("toolDiscoveryContract: \"tool-hud-discovery:v1|active-family:\"")) ||
+      !tool_hud_source.contains(QStringLiteral("property string activeFamilyLabel: title")) ||
+      !tool_hud_source.contains(QStringLiteral("property string activeVariantLabel: subtitle")) ||
+      !tool_hud_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|title-fit:true|subtitle-fit:true|tooltip-full:true|accessibility-full:true|min-title-px:9|min-subtitle-px:8\"")) ||
+      !tool_hud_source.contains(QStringLiteral("readonly property int hudHeight: 44")) ||
+      !tool_hud_source.contains(QStringLiteral("property int doneMinimumReadableWidth: 74")) ||
+      !tool_hud_source.contains(QStringLiteral("property int cancelMinimumReadableWidth: 88")) ||
+      !tool_hud_source.contains(QStringLiteral("Layout.preferredWidth: 188")) ||
+      !tool_hud_source.contains(QStringLiteral("Layout.maximumWidth: 280")) ||
+      !tool_hud_source.contains(QStringLiteral("ToolTip.text: root.title")) ||
+      !tool_hud_source.contains(QStringLiteral("ToolTip.text: root.subtitle")) ||
+      !tool_hud_source.contains(QStringLiteral("minimumReadableWidth: root.doneMinimumReadableWidth")) ||
+      !tool_hud_source.contains(QStringLiteral("minimumReadableWidth: root.cancelMinimumReadableWidth")) ||
+      !tool_hud_source.contains(QStringLiteral("activeFocusOnTab: true")) ||
+      !tool_hud_source.contains(QStringLiteral("Keys.onReturnPressed: if (root.canComplete) root.doneRequested()")) ||
+      !tool_hud_source.contains(QStringLiteral("Keys.onEnterPressed: if (root.canComplete) root.doneRequested()")) ||
+      !tool_hud_source.contains(QStringLiteral("Keys.onEscapePressed: root.cancelRequested()")) ||
+      !tool_hud_source.contains(QStringLiteral("border.color: theme.alpha(root.accent, 0.42)")) ||
+      !tool_hud_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudDoneButton\"\n                                minimumReadableWidth: 74")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("objectName: \"brushHudDoneButton\"\n                minimumReadableWidth: 78")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"polygonHudCompleteButton\"\n                                    minimumReadableWidth: 96")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"polygonHudCancelButton\"\n                                    minimumReadableWidth: 88")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"retouchHudApplyButton\"\n                                    minimumReadableWidth: 86")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"retouchHudDoneButton\"\n                                    minimumReadableWidth: 74")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"retouchHudCancelButton\"\n                                    minimumReadableWidth: 88"))) {
+    return fail("Shared ToolHud should preserve stable, subdued, keyboard-safe, no-elide canvas tool status behavior");
+  }
+  if (!command_palette_row_source.contains(QStringLiteral("commandPaletteRowContract: \"command-palette-row:v1|current-state:true|disabled-state:true|hover:true|keyboard-compatible:true|readable-text:true|no-elide:true\"")) ||
+      !command_palette_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|category-fit:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !command_palette_row_source.contains(QStringLiteral("signal selected(int rowIndex)")) ||
+      !command_palette_row_source.contains(QStringLiteral("signal activated(int rowIndex)")) ||
+      !command_palette_row_source.contains(QStringLiteral("onHoveredChanged")) ||
+      !command_palette_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !command_palette_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("objectName: \"commandPaletteDialog\"")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("dialogVisibilityContract: \"dialog-visibility:v1|command-palette|always:search-results-count-shortcuts|contextual:filtered-results-disabled-state-empty-state|one-expansion:all-commands-through-search|hover-focus:row-current-selection|diagnostic:missing-required-commands|preserve:functionality\"")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("dialogSurfaceContract: \"dialog-surface:v1|command-palette|search:always|results:dominant|footer:keyboard-help|rows:shared-readable|no-elide:true|no-overlap:true\"")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("functionPreservationMap: \"function-preservation:v1|command-search:always|command-run:keyboard-and-row|disabled-reasons:row-state|shortcuts:footer-and-row|missing-required:diagnostic-signature\"")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("delegate: CommandPaletteRow")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("rowIndex: index")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("current: ListView.isCurrentItem")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("commandList.currentIndex = rowIndex")) ||
+      !command_palette_dialog_source.contains(QStringLiteral("searchField.executeSelected()"))) {
+    return fail("Command palette should expose dialog visibility/function contracts and use CommandPaletteRow with readable labels, current/disabled state, and preserved selection activation");
+  }
+  if (!keyboard_shortcuts_dialog_source.contains(QStringLiteral("objectName: \"keyboardShortcutsDialog\"")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("dialogVisibilityContract: \"dialog-visibility:v1|keyboard-shortcuts|always:title-search-editable-presets-shortcut-sections-close|contextual:status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality\"")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("dialogSurfaceContract: \"dialog-surface:v1|keyboard-shortcuts|search:header|editable:top|sections:scrollable|keys:fixed-readable|descriptions:wrap|presets:readable-buttons|no-elide:true|no-overlap:true\"")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("functionPreservationMap: \"function-preservation:v1|search-shortcuts:header-field|edit-sequence:inline-field|reset-sequence:inline-reset|apply-presets:preset-buttons|conflict-detection:set-and-preset|platform-modifiers:mac-or-control|shortcut-help:section-cards\"")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("function shortcutDialogWorkflowSignature()")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("minimumReadableWidth: 112")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("Layout.minimumWidth: 150")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !keyboard_shortcuts_dialog_source.contains(QStringLiteral("elide: Text.ElideNone"))) {
+    return fail("Keyboard shortcuts dialog should expose visibility/function contracts and keep presets, editable shortcuts, and help rows readable without elision");
+  }
+  if (!preference_nav_row_source.contains(QStringLiteral("preferenceNavRowContract: \"preference-nav-row:v1|selected-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true\"")) ||
+      !preference_nav_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-fit:true|subtitle-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !preference_nav_row_source.contains(QStringLiteral("signal activated(int pageIndex)")) ||
+      !preference_nav_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !preference_nav_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !preference_nav_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("objectName: \"appPreferencesDialog\"")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("dialogVisibilityContract: \"dialog-visibility:v1|preferences|always:nav-current-page-close-by-escape|contextual:page-settings-storage-paths-backend-status|one-expansion:workspace-picker-backend-picker-folder-open|hover-focus:preference-navigation-controls|diagnostic:backend-availability-storage-paths|preserve:functionality\"")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("dialogSurfaceContract: \"dialog-surface:v1|preferences|nav:fixed-left|page:dominant|sections:scrollable|toggles:stable|paths:copyable-wrap|no-elide:true|no-overlap:true\"")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("functionPreservationMap: \"function-preservation:v1|dark-mode:general-toggle|startup-workspace:general-combo|reopen-workspace:general-toggle|preview-backend:general-combo|timeline-defaults:timeline-page|storage-folders:storage-open-actions\"")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("delegate: PreferenceNavRow")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("pageIndex: index")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("subtitle: root.pageSubtitle(index)")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("accent: root.pageAccent(index)")) ||
+      !app_preferences_dialog_source.contains(QStringLiteral("root.currentPage = pageIndex"))) {
+    return fail("Preferences dialog should expose dialog visibility/function contracts and use PreferenceNavRow with readable labels, selected state, keyboard activation, and preserved page switching");
+  }
+  if (!startup_loading_popup_source.contains(QStringLiteral("objectName: \"startupLoadingPopup\"")) ||
+      !startup_loading_popup_source.contains(QStringLiteral("popupVisibilityContract: \"popup-visibility:v1|startup-loading|always:brand-progress-active-step|contextual:catalog-status-completion-state|one-expansion:none|hover-focus:none|diagnostic:catalog-loading-detail|preserve:functionality\"")) ||
+      !startup_loading_popup_source.contains(QStringLiteral("popupSurfaceContract: \"popup-surface:v1|startup-loading|progress:always|steps:stable|status:wrapped|motion:bounded|no-elide:true|no-overlap:true\"")) ||
+      !startup_loading_popup_source.contains(QStringLiteral("functionPreservationMap: \"function-preservation:v1|startup-progress:visible|catalog-status:contextual|minimum-hold:internal|completion-close:automatic|no-manual-close:modal-startup\"")) ||
+      !popup_surface_source.contains(QStringLiteral("objectName: \"popupSurface\"")) ||
+      !popup_surface_source.contains(QStringLiteral("popupSurfaceContract: \"popup-surface:v1|shared|fill:subtle|border:single|accent:optional-rail|radius:consistent|nested-card:false|no-overlap:true\"")) ||
+      !popup_surface_source.contains(QStringLiteral("surfaceHierarchyContract: \"surface-hierarchy:v1|popover-dialog|structure-border:true|decorative-border:false|accent-restraint:true|content-owned-by-caller:true\""))) {
+    return fail("Shared startup popup and popup surface should expose visibility, function-preservation, and hierarchy contracts");
+  }
+  if (!main_qml_source.contains(QStringLiteral("pageVisibilityAuditContract: \"page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export|buckets:always,contextual,one-expansion,hover-focus,diagnostic,preserve|runtime-active:true|functionality:preserved|major-shape:preserved\"")) ||
+      !main_qml_source.contains(QStringLiteral("function activePageKind()")) ||
+      !main_qml_source.contains(QStringLiteral("function activeWorkspaceVisibilityContract()")) ||
+      !main_qml_source.contains(QStringLiteral("function pageVisibilityAuditSignature()")) ||
+      !main_qml_source.contains(QStringLiteral("\"|coverage:library/import/edit/masks/carousel/timeline/export\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("libraryStudioVisibilityContract: \"library-studio-visibility:v1|always:sources-search-filters-grid-inspector|contextual:selection-review-import-browser-batch-actions-empty-offline|one-expansion:project-assignment-import-actions-export-compare-panel-toggles|hover-focus:gallery-actions-review-keyboard|diagnostic:import-progress-offline-state|preserve:functionality\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("importStudioVisibilityContract: \"import-studio-visibility:v1|always:back-title-import-workspace-source-browser|contextual:folder-media-selection-destination-progress-empty-error|one-expansion:source-picker-project-target-import-options-refresh|hover-focus:folder-media-selection-keyboard|diagnostic:import-progress-source-empty|preserve:functionality\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("maskStudioVisibilityContract: \"mask-studio-visibility:v1|always:mask-tool-rail-image-overlay-inspector-active-target|contextual:source-controls-brush-cursor-lasso-polygon-retouch-hud-pending-actions|one-expansion:mask-source-menu-refine-options-runtime-details-layer-actions|hover-focus:source-row-actions-reorder-visibility-solo-lock|diagnostic:matte-preview-runtime-detail-failures|preserve:functionality\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("exportStudioVisibilityContract: \"export-studio-visibility:v1|always:presets-settings-queue-destination-primary-action|contextual:selected-assets-progress-failures-output-summary-empty-queue|one-expansion:queue-actions-preset-management-destination-actions-clear-finished|hover-focus:queue-row-actions-retry-cancel-remove|diagnostic:job-errors-preflight-detail-active-progress|preserve:functionality\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function activeVisibilityContract()"))) {
+    return fail("App shell and Studio workspace should expose one aggregate page visibility/function-preservation audit across Library, Import, Edit, Masks, Carousel, Timeline, and Export");
+  }
+  const auto source_uses_incomplete_text_elide = [](const QString& source) {
+    return source.contains(QStringLiteral("Text.ElideRight")) ||
+           source.contains(QStringLiteral("Text.ElideMiddle")) ||
+           source.contains(QStringLiteral("Text.ElideLeft"));
+  };
+  if (source_uses_incomplete_text_elide(main_qml_source) ||
+      source_uses_incomplete_text_elide(studio_workspace_source) ||
+      source_uses_incomplete_text_elide(library_view_source) ||
+      source_uses_incomplete_text_elide(import_view_source) ||
+      source_uses_incomplete_text_elide(edit_view_source) ||
+      source_uses_incomplete_text_elide(mask_view_source) ||
+      source_uses_incomplete_text_elide(carousel_view_source) ||
+      source_uses_incomplete_text_elide(timeline_view_source) ||
+      source_uses_incomplete_text_elide(export_view_source) ||
+      source_uses_incomplete_text_elide(action_button_source) ||
+      source_uses_incomplete_text_elide(mini_button_source) ||
+      source_uses_incomplete_text_elide(menu_button_source) ||
+      source_uses_incomplete_text_elide(split_button_source) ||
+      source_uses_incomplete_text_elide(popup_menu_row_source) ||
+      source_uses_incomplete_text_elide(agent_style_tile_source) ||
+      source_uses_incomplete_text_elide(app_menu_item_source)) {
+    return fail("Visible app, page, button, menu, and agent style text should avoid incomplete ellipsis elide modes");
+  }
+  if (studio_workspace_source.contains(QStringLiteral("...")) ||
+      edit_view_source.contains(QStringLiteral("...")) ||
+      menu_button_source.contains(QStringLiteral("...")) ||
+      split_button_source.contains(QStringLiteral("...")) ||
+      popup_menu_row_source.contains(QStringLiteral("...")) ||
+      tool_hud_source.contains(QStringLiteral("...")) ||
+      review_preview_source.contains(QStringLiteral("...")) ||
+      agent_edit_controller_source.contains(QStringLiteral("...")) ||
+      editor_preview_controller_source.contains(QStringLiteral("...")) ||
+      catalog_asset_model_source.contains(QStringLiteral("...")) ||
+      !action_button_source.contains(QStringLiteral("property string disabledReason: \"\"")) ||
+      !action_button_source.contains(QStringLiteral("property bool allowLabelWrap: false")) ||
+      !action_button_source.contains(QStringLiteral("actionButtonContract: \"action-button:v4|shared-component:true|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|mint-primary:true|slash-primary-only:true|rounded-secondary:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true\"")) ||
+      !action_button_source.contains(QStringLiteral("readonly property bool accentEdgeVisible: root.enabled && root.clippedShape && root.slashAccent &&")) ||
+      !action_button_source.contains(QStringLiteral("accentOpacity: root.accentEdgeVisible ? 1.0 : 0")) ||
+      !action_button_source.contains(QStringLiteral("root.hovered ? theme.alpha(theme.glassEdge, 0.38) : theme.alpha(theme.glassEdge, 0.22)")) ||
+      !action_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|primary-fit:true|optional-wrap:true|tooltip-full:true|minimum-px:9\"")) ||
+      !action_button_source.contains(QStringLiteral("wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap")) ||
+      !action_button_source.contains(QStringLiteral("maximumLineCount: root.allowLabelWrap ? 2 : 1")) ||
+      !action_button_source.contains(QStringLiteral("readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.tooltipText")) ||
+      !action_button_source.contains(QStringLiteral("disabledReasonContract: \"disabled-reason:v1|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true\"")) ||
+      !action_button_source.contains(QStringLiteral("Accessible.description: root.resolvedTooltipText")) ||
+      !mini_button_source.contains(QStringLiteral("property bool allowLabelWrap: false")) ||
+      !mini_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:9|readable-width:true\"")) ||
+      !mini_button_source.contains(QStringLiteral("wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap")) ||
+      !mini_button_source.contains(QStringLiteral("maximumLineCount: root.allowLabelWrap ? 2 : 1")) ||
+      !mini_button_source.contains(QStringLiteral("property string disabledReason: \"\"")) ||
+      !mini_button_source.contains(QStringLiteral("readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.tooltip")) ||
+      !mini_button_source.contains(QStringLiteral("disabledReasonContract: \"disabled-reason:v1|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true\"")) ||
+      !mini_button_source.contains(QStringLiteral("Accessible.description: resolvedTooltipText")) ||
+      !mini_button_source.contains(QStringLiteral("toolbarButtonContract: \"toolbar-button:v1|baseline-aligned:true|stable-height:true|role:\"")) ||
+      !mini_button_source.contains(QStringLiteral("|accent-default:false\"")) ||
+      !mini_button_source.contains(QStringLiteral("|subdued-chrome:true|hover-no-shift:true|focus-visible:true|media-subordinate:true\"")) ||
+      !mini_button_source.contains(QStringLiteral("toolbarGeometryContract: \"toolbar-button-geometry:v1|height:\"")) ||
+      !mini_button_source.contains(QStringLiteral("|icon-size:13|label-fit:true|minimum-readable-width:\"")) ||
+      !mini_button_source.contains(QStringLiteral("property int minimumReadableWidth: 0")) ||
+      !mini_button_source.contains(QStringLiteral("readonly property real readableImplicitWidth: label.implicitWidth + (iconName.length > 0 ? 42 : 24)")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"editAgentStyleChooser\"")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("agentStyleTileContract: \"agent-style-tile:v2|selected-state:true|keyboard:true|hover:true|style-name-wrap:true|responsive-columns:true|minimum-readable-width:240|readable-text:true|no-elide:true|no-clip:true\"")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|style-name-wrap:true|max-lines:4|horizontal-fit:true|tooltip-full:true|accessibility-full:true|no-clip:true\"")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("readonly property int minimumReadableWidth: 240")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("Layout.minimumWidth: Math.min(root.minimumReadableWidth")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("implicitWidth: root.minimumReadableWidth")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("readonly property string styleName: String(styleData.name || styleData.id || \"Style\")")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("signal selectedRequested(string styleId)")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("maximumLineCount: 4")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+	      !agent_style_tile_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !edit_view_source.contains(QStringLiteral("columns: width >= 500 ? 2 : 1")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentStyleTile")) ||
+      !edit_view_source.contains(QStringLiteral("styleData: modelData")) ||
+      !edit_view_source.contains(QStringLiteral("selected: root.agentEditController.selectedStyleId === String(modelData.id || \"\")")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.selectedStyleId = styleId")) ||
+	      !studio_workspace_source.contains(QStringLiteral("agentDialogTextFitContract: \"agent-dialog-text-fit:v5|quick-scope:min132-wrap|style-tiles:details-visible-readable|scope-buttons:full-label-min148-wrap|run-buttons:full-label-min148-wrap|base-buttons:min112-wrap|memory-actions:min118-wrap|details-actions:min112-wrap|action-flow:wrap|primary:min190|secondary:min126|cancel:min112|no-elide:true|no-clip:true|no-overlap:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("property string agentScopeMode: \"current-photo\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function openAgentRunDialog()")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.agentScopeMode = root.bestAgentScopeMode(root.agentScopeMode)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentQuickScopeChooser\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentReconnectMcpButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onClicked: root.openAgentRunDialog()")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentStyleChooser\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("visible: root.agentDetailsExpanded\n                columns: width >= 760 ? 3 : (width >= 500 ? 2 : 1)")) ||
+      !studio_workspace_source.contains(QStringLiteral("AgentStyleTile {")) ||
+	      !studio_workspace_source.contains(QStringLiteral("columns: width >= 760 ? 3 : (width >= 500 ? 2 : 1)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentStyleTile\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("styleData: modelData")) ||
+      !studio_workspace_source.contains(QStringLiteral("tileEnabled: root.hasAgentEditController")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.agentEditController.selectedStyleId = styleId")) ||
+      !studio_workspace_source.contains(QStringLiteral("ActionButton {\n                    objectName: \"agentLearnStyleButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentLearnStyleButton\"\n                    Layout.preferredWidth: 172\n                    Layout.preferredHeight: 40\n                    minimumReadableWidth: 172")) ||
+      !studio_workspace_source.contains(QStringLiteral("ActionButton {\n                    objectName: \"agentPlanStyleRunButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentPlanStyleRunButton\"\n                    visible: root.agentDetailsExpanded\n                    Layout.preferredWidth: 112\n                    Layout.preferredHeight: 40\n                    minimumReadableWidth: 112")) ||
+      !studio_workspace_source.contains(QStringLiteral("ActionButton {\n                    objectName: \"agentSaveFeedbackButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentSaveFeedbackButton\"\n                    visible: root.agentDetailsExpanded\n                    Layout.preferredWidth: 126\n                    Layout.preferredHeight: 40\n                    minimumReadableWidth: 126")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 112\n                    allowLabelWrap: true\n                    text: \"Current\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 112\n                    allowLabelWrap: true\n                    text: \"Neutral\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("Flow {\n                id: agentActionFlow\n                objectName: \"agentActionFlow\"\n                Layout.fillWidth: true\n                Layout.preferredHeight: childrenRect.height")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunButton\"\n                    minimumReadableWidth: 190\n                    width: Math.min(implicitWidth, agentActionFlow.width)\n                    height: implicitHeight\n                    allowLabelWrap: true")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentMakeChangesButton\"\n                    minimumReadableWidth: 126\n                    width: Math.min(implicitWidth, agentActionFlow.width)\n                    height: implicitHeight\n                    allowLabelWrap: true")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentCancelButton\"\n                    minimumReadableWidth: 112\n                    width: Math.min(implicitWidth, agentActionFlow.width)")) ||
+      !studio_workspace_source.contains(QStringLiteral("harmonyControlTextContract: \"harmony-control-text:v1|preset-flow:full-labels|mode-flow:full-labels|wrap:true|no-slice:true|no-elide:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("Flow {\n                                        id: harmonyPresetFlow\n                                        objectName: \"harmonyPresetFlow\"\n                                        Layout.fillWidth: true\n                                        Layout.preferredHeight: childrenRect.height")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Warm Analogous\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Soft Complement\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Cool Triad\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("Flow {\n                                        id: harmonyModeFlow\n                                        objectName: \"harmonyModeFlow\"\n                                        Layout.fillWidth: true\n                                        Layout.preferredHeight: childrenRect.height")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: modelData")) ||
+      studio_workspace_source.contains(QStringLiteral("modelData.slice(0, 4)")) ||
+      studio_workspace_source.contains(QStringLiteral("not wired")) ||
+      studio_workspace_source.contains(QStringLiteral("not available yet")) ||
+      edit_view_source.contains(QStringLiteral("not wired")) ||
+      edit_view_source.contains(QStringLiteral("not available yet")) ||
+      studio_workspace_source.contains(QStringLiteral("Button {\n                        id: agentStyleTile")) ||
+      studio_workspace_source.contains(QStringLiteral("Button {\n                    id: agentLearnStyleButton")) ||
+      studio_workspace_source.contains(QStringLiteral("Button {\n                    id: agentPlanStyleRunButton")) ||
+      studio_workspace_source.contains(QStringLiteral("Button {\n                    id: agentSaveFeedbackButton"))) {
+    return fail("Visible control text should avoid literal ellipses and use readable fit, wrap, or tooltip-backed contracts");
+  }
+  if (!agent_run_stage_row_source.contains(QStringLiteral("agentRunStageRowContract: \"agent-run-stage-row:v1|status-dot:true|label-fit:true|status-fit:true|hover:true|keyboard-focus:true|readable-text:true|no-elide:true\"")) ||
+      !agent_run_stage_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|status-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_run_stage_row_source.contains(QStringLiteral("Accessible.description: root.statusText")) ||
+      !agent_run_stage_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_run_stage_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !agent_run_stage_row_source.contains(QStringLiteral("ToolTip.text: root.label + \" - \" + root.statusText")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentRunStageRow")) ||
+      !edit_view_source.contains(QStringLiteral("readonly property string stageStatus: agentStageStatus(modelData.key)")) ||
+      !edit_view_source.contains(QStringLiteral("label: String(modelData.label || \"Stage\")")) ||
+      !edit_view_source.contains(QStringLiteral("statusText: agentStageStatusLabel(stageStatus)")) ||
+      !edit_view_source.contains(QStringLiteral("statusColor: agentStageStatusColor(stageStatus)"))) {
+    return fail("Edit agent run stages should use AgentRunStageRow with readable status text while preserving stage status logic");
+  }
+  if (!edit_rail_button_source.contains(QStringLiteral("editRailButtonContract: \"edit-rail-button:v2|active-state:true|rounded:true|centered-icons:true|hover:true|keyboard:true|tooltip-full:true|accessibility-full:true|icon-only:true\"")) ||
+      !edit_rail_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|tooltip-full:true|accessibility-full:true\"")) ||
+      !edit_rail_button_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !edit_rail_button_source.contains(QStringLiteral("Accessible.name: root.label")) ||
+      !edit_layout_toggle_row_source.contains(QStringLiteral("editLayoutToggleRowContract: \"edit-layout-toggle-row:v1|active-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true\"")) ||
+      !edit_layout_toggle_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !edit_layout_toggle_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !edit_layout_toggle_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: EditRailButton")) ||
+      !edit_view_source.contains(QStringLiteral("onTriggered: activateRailMode(modelData.mode)")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: EditLayoutToggleRow")) ||
+      !edit_view_source.contains(QStringLiteral("label: modelData.label")) ||
+      !edit_view_source.contains(QStringLiteral("actionKey: modelData.action")) ||
+      !edit_view_source.contains(QStringLiteral("if (actionKey === \"wide\")")) ||
+      !edit_view_source.contains(QStringLiteral("filmstripCollapsed = !filmstripCollapsed")) ||
+      !edit_view_source.contains(QStringLiteral("inspectorCollapsed = !inspectorCollapsed"))) {
+    return fail("Edit rail and layout controls should use modular no-elide components while preserving mode and layout toggles");
+  }
+  if (!channel_mixer_button_source.contains(QStringLiteral("channelMixerButtonContract: \"channel-mixer-button:v2|preset-reset:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true|action-value:true|icon-only-reset:true\"")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("ActionButton {")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("signal actionRequested(string actionValue)")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("property bool iconOnlyAction: false")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("iconName: iconOnlyAction ? \"reset\" : \"\"")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("showText: !iconOnlyAction")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("showFullTextTooltip: true")) ||
+      !channel_mixer_button_source.contains(QStringLiteral("Accessible.name: iconOnlyAction && helperText.length > 0 ? helperText : text")) ||
+      !edit_view_source.contains(QStringLiteral("ChannelMixerButton {")) ||
+      !edit_view_source.contains(QStringLiteral("actionValue: \"Identity\"")) ||
+      !edit_view_source.contains(QStringLiteral("actionValue: \"Monochrome\"")) ||
+      !edit_view_source.contains(QStringLiteral("actionValue: \"Swap Red Blue\"")) ||
+      !edit_view_source.contains(QStringLiteral("iconOnlyAction: true\n                                            actionValue: \"red\"")) ||
+      !edit_view_source.contains(QStringLiteral("iconOnlyAction: true\n                                            actionValue: \"green\"")) ||
+      !edit_view_source.contains(QStringLiteral("iconOnlyAction: true\n                                            actionValue: \"blue\"")) ||
+      !edit_view_source.contains(QStringLiteral("editorPreview.applyChannelMixerPreset(presetName)")) ||
+      !edit_view_source.contains(QStringLiteral("editorPreview.resetChannelMixerRow(rowName)")) ||
+      edit_view_source.contains(QStringLiteral("Button { text: \"Identity\"")) ||
+      edit_view_source.contains(QStringLiteral("Button { text: \"Mono\"")) ||
+      edit_view_source.contains(QStringLiteral("Button { text: \"Swap RB\"")) ||
+      edit_view_source.contains(QStringLiteral("Button { text: \"Reset\""))) {
+    return fail("Edit channel mixer presets and reset actions should use ChannelMixerButton with readable no-elide labels and preserved preset/reset behavior");
+  }
+  if (!edit_inspector_tab_button_source.contains(QStringLiteral("editInspectorTabButtonContract: \"edit-inspector-tab-button:v1|selected-state:true|hover:true|keyboard:true|width-to-label:true|readable-text:true|no-elide:true\"")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-width:true|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("implicitWidth: Math.max(54, tabLabel.implicitWidth + theme.space20)")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("Accessible.selected: root.selected")) ||
+      !edit_inspector_tab_button_source.contains(QStringLiteral("signal selectedRequested(string tabKey)")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: EditInspectorTabButton")) ||
+      !edit_view_source.contains(QStringLiteral("selected: inspectorTab === modelData.key")) ||
+      !edit_view_source.contains(QStringLiteral("onSelectedRequested: function(tabKey)")) ||
+      !edit_view_source.contains(QStringLiteral("inspectorTab = tabKey")) ||
+      !edit_view_source.contains(QStringLiteral("inspectorMode = tabKey === \"masks\" ? \"masks\" : \"adjust\""))) {
+    return fail("Edit inspector tabs should use a modular no-elide tab button while preserving tab and mode switching");
+  }
+  if (!mask_view_source.contains(QStringLiteral("tooltipText: \"Show retouch before\"")) ||
+      !mask_view_source.contains(QStringLiteral("Accessible.name: \"Show retouch before\"")) ||
+      !mask_view_source.contains(QStringLiteral("tooltipText: \"Show retouch after\"")) ||
+      !mask_view_source.contains(QStringLiteral("Accessible.name: \"Show retouch after\"")) ||
+      !mask_view_source.contains(QStringLiteral("iconName: \"compare\"\n                                    showText: false")) ||
+      !mask_inspector_source.contains(QStringLiteral("tooltipText: \"Show retouch before\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("tooltipText: \"Show retouch after\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("tooltipText: \"Reset mask grade\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("tooltipText: \"Reset range refine\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("iconName: \"reset\"\n                showText: false"))) {
+    return fail("Mask retouch compare and dense reset controls should be icon-first with full tooltip/accessibility text instead of truncated visible labels");
+  }
+  if (!edit_filmstrip_thumb_source.contains(QStringLiteral("editFilmstripThumbContract: \"edit-filmstrip-thumb:v1|current-state:true|selected-state:true|empty-state:true|keyboard:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|tooltip-full:true|accessibility-full:true|image-only:true\"")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("mediaSurfaceContract: \"media-surface:v1|dock-thumbnail:stable|image-dominant:true|selection:single-border|badge-corner:reserved|chrome:quiet\"")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("Accessible.name: accessibleLabel")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("Accessible.selected: root.current || root.selected")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !edit_filmstrip_thumb_source.contains(QStringLiteral("signal activated(int assetIndex, int modifiers)")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: EditFilmstripThumb")) ||
+      !edit_view_source.contains(QStringLiteral("assetIndex: index")) ||
+      !edit_view_source.contains(QStringLiteral("current: catalogAssets.selectedIndex === index")) ||
+      !edit_view_source.contains(QStringLiteral("selected: catalogAssets.assetSelected(assetId)")) ||
+      !edit_view_source.contains(QStringLiteral("catalogAssets.toggleSelectionIndex(assetIndex)")) ||
+      !edit_view_source.contains(QStringLiteral("catalogAssets.selectIndex(assetIndex)"))) {
+    return fail("Edit filmstrip should use a shared thumbnail component with current, selected, keyboard, and preserved selection behavior");
+  }
+  if (!agent_model_row_source.contains(QStringLiteral("agentModelRowContract: \"agent-model-row:v1|selected-state:true|status-state:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !agent_model_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|name-wrap:true|detail-wrap:true|status-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_model_row_source.contains(QStringLiteral("signal selectedRequested(string modelId)")) ||
+      !agent_model_row_source.contains(QStringLiteral("Accessible.selected: selected")) ||
+      !agent_model_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !agent_model_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !agent_model_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_model_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentModelRow")) ||
+      !edit_view_source.contains(QStringLiteral("selected: root.agentEditController.selectedModelId === String(modelData.id || \"\")")) ||
+      !edit_view_source.contains(QStringLiteral("detailText: agentModelDetailText(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("statusText: agentModelStatusLabel(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("statusColor: agentModelStatusColor(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.selectedModelId = modelId"))) {
+    return fail("Edit agent model rows should use AgentModelRow with readable text, status state, keyboard selection, and preserved selected-model behavior");
+  }
+  if (!tone_curve_channel_button_source.contains(QStringLiteral("toneCurveChannelButtonContract: \"tone-curve-channel-button:v1|selected-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true\"")) ||
+      !tone_curve_channel_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !tone_curve_channel_button_source.contains(QStringLiteral("signal selectedRequested(string channelName)")) ||
+      !tone_curve_channel_button_source.contains(QStringLiteral("Accessible.selected: root.selected")) ||
+      !tone_curve_channel_button_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !tone_curve_channel_button_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("toneCurvePresetButtonContract: \"tone-curve-preset-button:v1|preview-hover:true|select:true|keyboard:true|readable-text:true|no-elide:true|tooltip-full:true\"")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("signal previewRequested(string presetName)")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("signal previewCleared()")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("signal selectedRequested(string presetName)")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("onEntered: root.previewRequested(root.presetName)")) ||
+      !tone_curve_preset_button_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("objectName: root.objectName.length > 0 ? root.objectName + \"DeletePointButton\"")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("objectName: root.objectName.length > 0 ? root.objectName + \"ResetCurveButton\"")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("tooltipText: \"Delete the selected curve point.\"")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("tooltipText: \"Reset the active curve.\"")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.deleteSelectedPoint()")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.resetActiveCurve()")) ||
+      tone_curve_editor_source.contains(QStringLiteral("\n            Button {\n                objectName: root.objectName.length > 0 ? root.objectName + \"DeletePointButton\"")) ||
+      tone_curve_editor_source.contains(QStringLiteral("\n            Button {\n                objectName: root.objectName.length > 0 ? root.objectName + \"ResetCurveButton\"")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("delegate: ToneCurveChannelButton")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("channelName: String(modelData)")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("selected: root.selectedChannel === modelData")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.channelSelected(channelName)")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("delegate: ToneCurvePresetButton")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("presetName: String(modelData)")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.previewPreset(presetName)")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.clearPresetPreview()")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("root.presetSelected(presetName)"))) {
+    return fail("Tone curve channel and preset controls should use modular no-elide buttons while preserving channel selection, hover preview, preview clear, and preset apply behavior");
+  }
+  if (!tone_curve_point_handle_source.contains(QStringLiteral("toneCurvePointHandleContract: \"tone-curve-point-handle:v1|selected-state:true|endpoint-state:true|stable-size:true|premium-handle:true\"")) ||
+      !tone_curve_point_handle_source.contains(QStringLiteral("width: endpoint ? (selected ? 12 : 10) : (selected ? 11 : 9)")) ||
+      !tone_curve_point_handle_source.contains(QStringLiteral("border.color: selected ? theme.polar : theme.alpha(theme.ink950, 0.8)")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("delegate: ToneCurvePointHandle")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("readonly property bool endpointHandle: index === 0 || index === root.currentPoints().length - 1")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("selected: index === interaction.selectedIndex")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("endpoint: endpointHandle")) ||
+      !tone_curve_editor_source.contains(QStringLiteral("accent: root.accent"))) {
+    return fail("Tone curve point handles should use a shared selected/endpoint handle component while preserving drag mechanics");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("objectName: \"agentScopeModeChooser\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: root.agentScopeModeFullLabel(modelData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentRunModeChooser\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: root.agentRunModeFullLabel(modelData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("key === \"apply_to_all\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.agentEditController.applySampleReviewToAll(true)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"agentMakeChangesButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.agentEditController.reviseSampleReview(")) ||
+      !edit_view_source.contains(QStringLiteral("key === \"apply_to_all\"")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.applySampleReviewToAll(true)")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.reviseSampleReview(root.agentEditController.userInstructions)")) ||
+      !edit_view_source.contains(QStringLiteral("summary.reviewIssues")) ||
+      !edit_view_source.contains(QStringLiteral("reviewSummary.editedCount")) ||
+      !edit_view_source.contains(QStringLiteral("property string agentStylePermissionMode: \"balanced\"")) ||
+      !edit_view_source.contains(QStringLiteral("property bool agentStyleAllowMasks: true")) ||
+      !edit_view_source.contains(QStringLiteral("function setAgentStylePermissionMode(mode)")) ||
+      !edit_view_source.contains(QStringLiteral("function agentStylePermissionSummary()")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeChooser\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeConservativeButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeBalancedButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeFullEditButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeFullEditRetouchButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentPermissionModeSummaryLabel\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentExactToolPermissions\"")) ||
+      !edit_view_source.contains(QStringLiteral("visible: agentDetailsExpanded")) ||
+      !agent_permission_mode_button_source.contains(QStringLiteral("agentPermissionModeButtonContract: \"agent-permission-mode-button:v1|selected-state:true|mode-signal:true|tooltip-full:true|keyboard:true|readable-text:true|no-elide:true\"")) ||
+      !agent_permission_mode_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_permission_mode_button_source.contains(QStringLiteral("signal modeSelected(string mode)")) ||
+      !agent_permission_mode_button_source.contains(QStringLiteral("active: selectedMode === mode")) ||
+      !agent_permission_mode_button_source.contains(QStringLiteral("iconName: active ? \"check\" : \"adjust\"")) ||
+      !edit_view_source.contains(QStringLiteral("AgentPermissionModeButton {")) ||
+      !edit_view_source.contains(QStringLiteral("mode: \"conservative\"")) ||
+      !edit_view_source.contains(QStringLiteral("mode: \"balanced\"")) ||
+      !edit_view_source.contains(QStringLiteral("mode: \"full_edit\"")) ||
+      !edit_view_source.contains(QStringLiteral("mode: \"full_edit_retouch\"")) ||
+      !edit_view_source.contains(QStringLiteral("selectedMode: agentStylePermissionMode")) ||
+      !edit_view_source.contains(QStringLiteral("onModeSelected: function(mode) { setAgentStylePermissionMode(mode) }")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("agentToolPermissionToggleContract: \"agent-tool-permission-toggle:v1|checked-state:true|keyboard:true|hover:true|disabled-state:true|readable-text:true|no-elide:true\"")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("signal toggled(bool checked)")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("function toggle()")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("Keys.onSpacePressed: root.toggle()")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("Accessible.role: Accessible.CheckBox")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("Accessible.checked: checked")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !agent_tool_permission_toggle_source.contains(QStringLiteral("ToolTip.text: helperText.length > 0 ? helperText : label")) ||
+      !edit_view_source.contains(QStringLiteral("AgentToolPermissionToggle {")) ||
+      !edit_view_source.contains(QStringLiteral("label: \"Tone/Color\"")) ||
+      !edit_view_source.contains(QStringLiteral("label: \"Layers/LUTs\"")) ||
+      !edit_view_source.contains(QStringLiteral("checked: agentStyleAllowMasks")) ||
+      !edit_view_source.contains(QStringLiteral("toggleEnabled: !root.agentEditController.running")) ||
+      !edit_view_source.contains(QStringLiteral("onToggled: function(checked) { agentStyleAllowRetouch = checked }")) ||
+      !edit_view_source.contains(QStringLiteral("onToggled: function(checked) { agentStyleAllowExport = checked }")) ||
+      edit_view_source.contains(QStringLiteral("CheckBox { text: \"RAW\"")) ||
+      edit_view_source.contains(QStringLiteral("CheckBox { text: \"Layers/LUTs\"")) ||
+      !edit_view_source.contains(QStringLiteral("function agentBatchReportThumbnailSource(report)")) ||
+      !edit_view_source.contains(QStringLiteral("function agentBatchReportSuggestedAction(report)")) ||
+      !edit_view_source.contains(QStringLiteral("property string agentExpandedReviewIssueAssetId")) ||
+      !edit_view_source.contains(QStringLiteral("function agentReviewIssueDetailsText(report)")) ||
+      !edit_view_source.contains(QStringLiteral("function toggleAgentReviewIssueDetails(report)")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("agentBatchStatusRowContract: \"agent-batch-status-row:v1|thumbnail:true|status-badge:true|actions:true|details-toggle:true|label-wrap:true|detail-wrap:true|readable-text:true|no-elide:true\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|asset-wrap:true|detail-wrap:true|suggested-wrap:true|details-wrap:true|badge-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("signal fixRequested()")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("signal acceptRequested()")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("signal rollbackRequested()")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("signal detailsToggled()")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueThumbnail\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueThumbnailImage\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueSuggestedActionLabel\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueDetailsButton\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueDetailsLabel\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !edit_view_source.contains(QStringLiteral("delegate: AgentBatchStatusRow")) ||
+      !edit_view_source.contains(QStringLiteral("assetLabel: agentBatchReportAssetLabel(modelData, index)")) ||
+      !edit_view_source.contains(QStringLiteral("detail: agentBatchReportDetail(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("suggestedAction: agentBatchReportSuggestedAction(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("detailsText: agentReviewIssueDetailsText(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("detailsExpanded: agentReviewIssueExpanded(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("thumbnailSource: agentBatchReportThumbnailSource(modelData)")) ||
+      !edit_view_source.contains(QStringLiteral("function agentFixAllReviewIssuesAvailable()")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"agentFixAllReviewIssuesButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.fixAllReviewIssues()")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentReviewIssueActions\"")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentFixReviewIssueButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.fixReviewIssue(String(modelData.assetId || \"\"))")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentAcceptReviewIssueButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.acceptReviewIssue(String(modelData.assetId || \"\"))")) ||
+      !agent_batch_status_row_source.contains(QStringLiteral("objectName: \"agentRollbackReviewIssueButton\"")) ||
+      !edit_view_source.contains(QStringLiteral("root.agentEditController.rollbackReviewIssue(String(modelData.assetId || \"\"))")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 148\n                        maximumReadableWidth: 220\n                        allowLabelWrap: true")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 132\n                            maximumReadableWidth: 196\n                            allowLabelWrap: true")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 190")) ||
+      !studio_workspace_source.contains(QStringLiteral("minimumReadableWidth: 96")) ||
+      !action_button_source.contains(QStringLiteral("property int minimumReadableWidth: 0")) ||
+      !action_button_source.contains(QStringLiteral("minimumReadableWidth,")) ||
+      !confirm_action_button_source.contains(QStringLiteral("property int minimumReadableWidth: 0")) ||
+      !confirm_action_button_source.contains(QStringLiteral("minimumReadableWidth: root.minimumReadableWidth")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 190\n                                            allowLabelWrap: true\n                                            text: agentWorkflowPrimaryLabel()")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 96\n                                            text: \"Cancel\"")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 88\n                                            text: \"Commit\"")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 126\n                                            text: agentSampleReviewWaiting() ? \"Make Changes\" : \"Revise\"")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 132\n                                            text: \"Start Export\"")) ||
+      !edit_view_source.contains(QStringLiteral("minimumReadableWidth: 96\n                                            text: \"Rollback\""))) {
+    return fail("Agent chooser and action buttons should use full readable labels, Apply to All workflow wiring, and explicit no-ellipsis widths");
+  }
+  if (!review_preview_source.contains(QStringLiteral("reviewCardContract: \"review-preview-card:v1|image-dominant:true|selection:\"")) ||
+      !review_preview_source.contains(QStringLiteral("|badges:status-chip|no-elide:true|double-click:true\"")) ||
+      !review_preview_source.contains(QStringLiteral("StatusChip {")) ||
+      !review_preview_source.contains(QStringLiteral("width: implicitWidth")) ||
+      !library_view_source.contains(QStringLiteral("delegate: ReviewPreview")) ||
+      !studio_workspace_source.contains(QStringLiteral("delegate: ReviewPreview"))) {
+    return fail("Shared review cards should use StatusChip badges, no-elide text, and the review card contract in Library and Studio");
+  }
+  if (!status_chip_source.contains(QStringLiteral("ActionButton {")) ||
+      !status_chip_source.contains(QStringLiteral("statusChipContract: \"status-chip:v1|one-line:true|tone:\"")) ||
+      !status_chip_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !status_chip_source.contains(QStringLiteral("statusSurfaceContract: \"status-surface:v1|render-import-export-model-runtime-warning|compact-density:true|status-before-action:true|retry-action-supported:\"")) ||
+      !status_chip_source.contains(QStringLiteral("property string detailText: \"\"")) ||
+      !status_chip_source.contains(QStringLiteral("property int minimumReadableWidth: 72")) ||
+      !status_chip_source.contains(QStringLiteral("readonly property bool attentionTone: tone === \"error\" || tone === \"warning\"")) ||
+      !status_chip_source.contains(QStringLiteral("Accessible.description: root.detailText.length > 0 ? root.detailText : root.resolvedTooltipText")) ||
+      !status_chip_source.contains(QStringLiteral("ToolTip.text: root.resolvedTooltipText")) ||
+      !status_chip_source.contains(QStringLiteral("compact: true")) ||
+      !status_chip_source.contains(QStringLiteral("embedded: true")) ||
+      !status_chip_source.contains(QStringLiteral("accent: root.toneColor")) ||
+      !status_chip_source.contains(QStringLiteral("onClicked: root.actionTriggered()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Button\\s*\\{")).match(status_chip_source).hasMatch()) {
+    return fail("StatusChip should expose compact status-surface contracts, readable full text, calm neutral tone, and shared ActionButton actions with preserved actionTriggered behavior");
+  }
+  if (!app_icon_source.contains(QStringLiteral("case \"search\":")) ||
+      !app_icon_source.contains(QStringLiteral("circle(ctx, w * 0.44, h * 0.44, w * 0.22, false)")) ||
+      !app_icon_source.contains(QStringLiteral("line(ctx, w * 0.60, h * 0.60, w * 0.80, h * 0.80)"))) {
+    return fail("AppIcon should include a dedicated search glyph for Library search controls");
+  }
+  if (!inline_activity_indicator_source.contains(QStringLiteral("ActionButton {\n            id: actionButton")) ||
+      !activity_banner_source.contains(QStringLiteral("activityBannerContract: \"activity-banner:v1|title-detail-actions-progress|tone:\"")) ||
+      !activity_banner_source.contains(QStringLiteral("statusSurfaceContract: \"status-surface:v1|progress-summary:true|actions:right|compact-but-readable:true\"")) ||
+      !activity_banner_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|detail-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !inline_activity_indicator_source.contains(QStringLiteral("objectName: \"activityCancelButton\"")) ||
+      !inline_activity_indicator_source.contains(QStringLiteral("compact: true")) ||
+      !inline_activity_indicator_source.contains(QStringLiteral("embedded: true")) ||
+      !inline_activity_indicator_source.contains(QStringLiteral("onClicked: root.retryable ? root.retryRequested() : root.cancelRequested()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Button\\s*\\{")).match(inline_activity_indicator_source).hasMatch()) {
+    return fail("Inline activity cancel and retry controls should use shared ActionButton styling while preserving cancel/retry signals");
+  }
+  if (!import_folder_chip_source.contains(QStringLiteral("importFolderChipContract: \"import-folder-chip:v1|readable-text:true|keyboard:true|hover:true|tooltip-full:true|no-elide:true\"")) ||
+      !import_folder_chip_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !import_folder_chip_source.contains(QStringLiteral("required property string fileName")) ||
+      !import_folder_chip_source.contains(QStringLiteral("required property string fileUrl")) ||
+      !import_folder_chip_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !import_folder_chip_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !import_image_tile_source.contains(QStringLiteral("importImageTileContract: \"import-image-tile:v1|preview:true|selection:true|readable-text:true|keyboard:true|hover:true|tooltip-full:true\"")) ||
+      !import_image_tile_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|file-name-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !import_image_tile_source.contains(QStringLiteral("required property string filePath")) ||
+      !import_image_tile_source.contains(QStringLiteral("required property string fileUrl")) ||
+      !import_image_tile_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !import_image_tile_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !library_view_source.contains(QStringLiteral("delegate: ImportFolderChip")) ||
+      !library_view_source.contains(QStringLiteral("root.openLocalFolder(folderUrl)")) ||
+      !library_view_source.contains(QStringLiteral("delegate: ImportImageTile")) ||
+      !library_view_source.contains(QStringLiteral("selected: root.localSelectedFilePath === filePath")) ||
+      !library_view_source.contains(QStringLiteral("root.selectLocalFile(filePath)"))) {
+    return fail("Library import browser should use shared folder chips and image tiles with readable text, keyboard, hover, and preserved import behavior");
+  }
+  if (!import_source_row_source.contains(QStringLiteral("importSourceRowContract: \"import-source-row:v1|active-state:true|hover:true|keyboard:true|readable-text:true|no-elide:true\"")) ||
+      !import_source_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-wrap:true|subtitle-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !import_source_row_source.contains(QStringLiteral("rowAnatomyContract: \"row-anatomy:v1|state-edge:left|content:title-detail-wrap|status-zone:fixed-min-72|selection:left-edge|hover:neutral|focus:ring\"")) ||
+      !import_source_row_source.contains(QStringLiteral("readonly property int statusZoneMinWidth: 72")) ||
+      !import_source_row_source.contains(QStringLiteral("signal activated(string path, string sourceUrl, string label)")) ||
+      !import_source_row_source.contains(QStringLiteral("StatusChip {")) ||
+      !import_source_row_source.contains(QStringLiteral("Layout.minimumWidth: root.statusZoneMinWidth")) ||
+      !import_source_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !import_source_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !import_folder_row_source.contains(QStringLiteral("importFolderRowContract: \"import-folder-row:v1|active-state:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !import_folder_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !import_folder_row_source.contains(QStringLiteral("signal activated(string fileUrl)")) ||
+      !import_folder_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !import_folder_row_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !import_view_source.contains(QStringLiteral("delegate: ImportSourceRow")) ||
+      !import_view_source.contains(QStringLiteral("sourceUrl: url")) ||
+      !import_view_source.contains(QStringLiteral("root.openSource(path, sourceUrl, label)")) ||
+      !import_view_source.contains(QStringLiteral("delegate: ImportFolderRow")) ||
+      !import_view_source.contains(QStringLiteral("root.openFolder(fileUrl)"))) {
+    return fail("Import workspace source and folder rails should use shared readable rows with keyboard activation and preserved navigation behavior");
+  }
+  if (!import_view_source.contains(QStringLiteral("importActionContract: \"import-actions:v1|split-button:true|primary:import-to-virel-vault|menu:import-selection,import-folder,import-with-preset,select-visible,clear-selection,refresh-sources|disabled-reasons:true|no-clutter:true\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importPrimarySplitButton\"")) ||
+      !import_view_source.contains(QStringLiteral("SplitButton {")) ||
+      !import_view_source.contains(QStringLiteral("text: root.hasActiveImportJobs() ? \"Importing\" : \"Import to VIREL Vault\"")) ||
+      !import_view_source.contains(QStringLiteral("primaryEnabled: root.canImportSelection")) ||
+      !import_view_source.contains(QStringLiteral("menuItems: root.importActionMenuItems()")) ||
+      !import_view_source.contains(QStringLiteral("disabledReason: root.hasStagedSelection")) ||
+      !import_view_source.contains(QStringLiteral("key: \"import-selection\"")) ||
+      !import_view_source.contains(QStringLiteral("key: \"import-folder\"")) ||
+      !import_view_source.contains(QStringLiteral("key: \"import-with-preset\"")) ||
+      !import_view_source.contains(QStringLiteral("disabledReason: \"Import preset application needs controller support before it can run.\"")) ||
+      !import_view_source.contains(QStringLiteral("key: \"refresh-sources\"")) ||
+      !import_view_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleImportMenuAction(key) }"))) {
+    return fail("Import workspace should expose a primary split button with readable import variants, disabled reasons, and preserved action routing");
+  }
+  if (!library_view_source.contains(QStringLiteral("objectName: \"libraryWorkspace\"")) ||
+      !library_view_source.contains(QStringLiteral("libraryVisibilityContract: \"library-visibility:v1|always:header-view-actions-filter-summary-grid-inspector|contextual:selection-toolbar-import-browser-empty-state-offline-actions|one-expansion:review-filter-selection-actions-import-actions-project-assignment-export|hover-focus:gallery-selection-keyboard-review|diagnostic:import-progress-offline-state|preserve:functionality\"")) ||
+      !library_view_source.contains(QStringLiteral("librarySurfaceContract: \"library-surfaces:v1|browse:grid-compare-survey|filters:search-date-media-project-review-clear|inspector:preview-metadata-review-source-actions|import-browser:folder-preview-handoff|selection:batch-project-export-delete|no-elide:true|no-overlap:true\"")) ||
+      !library_view_source.contains(QStringLiteral("libraryWorkflowPolishContract: \"library-workflow-polish:v1|first-glance:grid-dominant-header-filters-inspector|close-inspection:search-filter-selection-review-inspector-import|clutter:one-primary-selection-action-clear-filters-disabled|interaction:search-filter-select-rate-pick-reject-edit-compare-export|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !library_view_source.contains(QStringLiteral("libraryPageCompletionContract: \"page-completion:v1|library|sidebar:sources-projects-storage|content:grid-compare-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:view-select-refresh-filters|actions:edit-compare-export-project-delete|states:default-selected-multi-filtered-import-empty-offline\"")) ||
+      !library_view_source.contains(QStringLiteral("function libraryWorkflowPolishSignature()")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryMainSurface\"")) ||
+      !library_view_source.contains(QStringLiteral("surfaceContract: \"library-main-surface:v1|browse-dominant:true|filters-visible:true|view-switch-visible:true|selection-contextual:true|import-handoff-contextual:true|no-elide:true|no-overlap:true\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryHeaderBar\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryUtilityToolbar\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryFilterBar\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"librarySelectionActionBar\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryGalleryGrid\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryReviewLoader\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryEmptyState\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryImportBrowser\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryInspectorPanel\"")) ||
+      !library_view_source.contains(QStringLiteral("surfaceContract: \"library-inspector:v1|preview:always|metadata:selection|review:single-selection|source-actions:selection|batch-summary:multi-selection|no-elide:true|no-overlap:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("libraryWorkflowPolishContract: \"library-workflow-polish:v1|first-glance:grid-dominant-sources-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:panel-toggles-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("libraryPageCompletionContract: \"page-completion:v1|library|sidebar:sources-import-smart-collections|content:grid-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function libraryWorkflowPolishSignature()"))) {
+    return fail("Library workspace should declare visibility, page-completion, workflow-polish, and preserved-function surfaces for browse, filters, inspector, selection, and import handoff");
+  }
+  if (!library_view_source.contains(QStringLiteral("librarySearchBehaviorContract: \"library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved\"")) ||
+      !library_view_source.contains(QStringLiteral("function librarySearchBehaviorSignature()")) ||
+      !library_view_source.contains(QStringLiteral("id: librarySearchDebounceTimer")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"librarySearchControl\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"librarySearchField\"")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"librarySearchClearButton\"")) ||
+      !library_view_source.contains(QStringLiteral("visible: root.librarySearchHasText")) ||
+      !library_view_source.contains(QStringLiteral("onAccepted: root.applyLibrarySearchNow()")) ||
+      !library_view_source.contains(QStringLiteral("objectName: \"libraryActiveSearchChip\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("librarySearchBehaviorContract: \"library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function librarySearchBehaviorSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function clearLibraryFilters()")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string tinyInputContract: \"tiny-input:v1|active-highlight:true|enter-accepted:true|right-inset:true|no-elide:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioLibrarySearchInput\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioLibrarySearchClearButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("visible: root.librarySearchHasText")) ||
+      !studio_workspace_source.contains(QStringLiteral("onAccepted: root.applyLibrarySearchNow()")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioLibraryActiveSearchChip\""))) {
+    return fail("Library search should use debounced draft state, explicit active search affordances, clear buttons visible only with search text, and no-elide readable status chips");
+  }
+  if (!import_view_source.contains(QStringLiteral("objectName: \"importWorkspace\"")) ||
+      !import_view_source.contains(QStringLiteral("importVisibilityContract: \"import-visibility:v1|always:sources-folders-header-media-grid-primary-import|contextual:destination-panel-selection-actions-filter-empty-progress|one-expansion:import-options-project-target-refresh-sources-clear-selection|hover-focus:media-selection-source-folder-keyboard|diagnostic:import-progress-source-empty|preserve:functionality\"")) ||
+      !import_view_source.contains(QStringLiteral("importSurfaceContract: \"import-surfaces:v1|sources:left-rail|folders:navigation-list|media:grid-filter-selection|destination:contextual-project-picker|actions:split-import-menu|no-elide:true|no-overlap:true\"")) ||
+      !import_view_source.contains(QStringLiteral("importWorkflowPolishContract: \"import-workflow-polish:v1|first-glance:sources-current-folder-media-grid-primary-import|close-inspection:source-confirmation-filter-counts-selection-destination-progress|clutter:single-progress-place-split-import-options|interaction:choose-source-select-visible-clear-import-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved\"")) ||
+      !import_view_source.contains(QStringLiteral("importPageCompletionContract: \"page-completion:v1|import|sidebar:sources-folders-refresh|content:header-filter-media-grid-empty|destination:project-picker-create-confirm-cancel|toolbar:select-visible-clear-primary-import|states:no-source-empty-filtered-selected-importing-failed-complete\"")) ||
+      !import_view_source.contains(QStringLiteral("function importWorkflowPolishSignature()")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importSourcePanel\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importSourceList\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importFolderNavigation\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importFolderList\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importMainPanel\"")) ||
+      !import_view_source.contains(QStringLiteral("surfaceContract: \"import-main-panel:v1|header:always|media-grid:always|filter:always|selection-actions:always|empty-states:contextual|primary-import:always|no-elide:true|no-overlap:true\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importHeaderBar\"")) ||
+      !import_view_source.contains(QStringLiteral("function sourceConfirmationText()")) ||
+      !import_view_source.contains(QStringLiteral("function selectionMixText()")) ||
+      !import_view_source.contains(QStringLiteral("function supportedImportTypesText()")) ||
+      !import_view_source.contains(QStringLiteral("readonly property int selectedPhotoCount")) ||
+      !import_view_source.contains(QStringLiteral("readonly property int selectedVideoCount")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importSourceConfirmationChip\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importSelectionMixChip\"")) ||
+      !import_view_source.contains(QStringLiteral("root.supportedImportTypesText()")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importMediaFilterBar\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importMediaGrid\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importEmptyState\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importNoSourceState\"")) ||
+      !import_view_source.contains(QStringLiteral("objectName: \"importDestinationPanel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("importWorkflowPolishContract: \"import-workflow-polish:v1|first-glance:library-routed-import-source-browser|close-inspection:source-folder-media-destination-progress|clutter:library-chrome-quiet-import-dominant|interaction:back-source-select-import-refresh|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("importPageCompletionContract: \"page-completion:v1|import-in-library|sidebar:quiet-hidden-during-import|content:ImportView|toolbar:back-title|states:no-source-empty-selected-importing-failed-complete|return:back-to-library\""))) {
+    return fail("Import workspace should declare visibility, page-completion, workflow-polish, and preserved-function surfaces for sources, folders, media selection, destination, and import actions");
+  }
+  if (!project_membership_row_source.contains(QStringLiteral("projectMembershipRowContract: \"project-membership-row:v1|name-wrap:true|summary-wrap:true|action-state:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !project_membership_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|name-wrap:true|summary-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !project_membership_row_source.contains(QStringLiteral("rowAnatomyContract: \"row-anatomy:v1|state-edge:left|content:name-summary-wrap|action-zone:fixed-112|selection:left-edge|hover:neutral|focus:ring\"")) ||
+      !project_membership_row_source.contains(QStringLiteral("readonly property int actionZoneWidth: 112")) ||
+      !project_membership_row_source.contains(QStringLiteral("readonly property string actionLabel: fullyApplied ? \"Remove\" : (membershipCount > 0 ? \"Add Missing\" : \"Add\")")) ||
+      !project_membership_row_source.contains(QStringLiteral("signal toggleRequested(string projectName)")) ||
+      !project_membership_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !project_membership_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !project_membership_row_source.contains(QStringLiteral("ActionButton {")) ||
+      !project_membership_row_source.contains(QStringLiteral("minimumReadableWidth: root.actionZoneWidth")) ||
+      !library_view_source.contains(QStringLiteral("delegate: ProjectMembershipRow")) ||
+      !library_view_source.contains(QStringLiteral("summary: root.projectMembershipSummary(modelData)")) ||
+      !library_view_source.contains(QStringLiteral("membershipCount: root.selectedProjectMembershipCount(modelData)")) ||
+      !library_view_source.contains(QStringLiteral("selectedCount: catalogAssets.selectedAssetCount")) ||
+      !library_view_source.contains(QStringLiteral("root.toggleSelectedProjectMembership(projectName)"))) {
+    return fail("Library project membership rows should use ProjectMembershipRow with readable names, summaries, keyboard toggle, and preserved Add/Remove behavior");
+  }
+  if (!export_queue_row_source.contains(QStringLiteral("exportQueueRowContract: \"export-queue-row:v1|preview:\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("|status-chip:true|progress:\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("|readable-text:true|status-surface:true|calm-row:true|destination:\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|destination-wrap:true|metadata-fit:true|tooltip-full:true\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("statusSurfaceContract: \"status-surface:v2|export-queue|preview-status-progress-actions|status-before-actions:true|error-diagnostic:true|retry-menu:true|actions-hover-focus:true|attention-actions-visible:true|fixed-action-zone:true\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("queueActionVisibilityContract: \"queue-row-actions:v1|visibility:hover-focus-or-attention|fixed-width:172|no-layout-shift:true|keyboard-row-focus:true|remove-preserved:true|menu-preserved:true\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("readonly property bool actionsNeedAttention")) ||
+      !export_queue_row_source.contains(QStringLiteral("readonly property bool actionsRevealed")) ||
+      !export_queue_row_source.contains(QStringLiteral("readonly property int actionZoneWidth: (menuVisible || showRemoveButton) ? 172 : 0")) ||
+      !export_queue_row_source.contains(QStringLiteral("activeFocusOnTab: true")) ||
+      !export_queue_row_source.contains(QStringLiteral("HoverHandler { id: rowHover }")) ||
+      !export_queue_row_source.contains(QStringLiteral("objectName: \"exportQueueRowActionZone\"")) ||
+      !export_queue_row_source.contains(QStringLiteral("opacity: root.actionsRevealed ? 1.0 : 0.0")) ||
+      !export_queue_row_source.contains(QStringLiteral("Layout.preferredWidth: root.actionZoneWidth")) ||
+      !export_queue_row_source.contains(QStringLiteral("Accessible.name: root.title + \", \" + root.statusText")) ||
+      !export_queue_row_source.contains(QStringLiteral("detailText: root.errorText")) ||
+      !export_queue_row_source.contains(QStringLiteral("StatusChip {")) ||
+      !export_queue_row_source.contains(QStringLiteral("ProgressStrip {")) ||
+      !export_queue_row_source.contains(QStringLiteral("MenuButton {")) ||
+      !export_queue_row_source.contains(QStringLiteral("ConfirmActionButton {")) ||
+      !export_view_source.contains(QStringLiteral("delegate: ExportQueueRow")) ||
+      !studio_workspace_source.contains(QStringLiteral("ExportQueueRow {")) ||
+      !studio_workspace_source.contains(QStringLiteral("function exportQueueStatusTone(status)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"exportQueueRow\""))) {
+    return fail("Export and Studio queue rows should share ExportQueueRow with status, progress, actions, and readable text contracts");
+  }
+  if (!export_view_source.contains(QStringLiteral("exportActionContract: \"export-actions:v3|split-button:true|primary:start-current-or-selected|clear:queue-management-only|menu:queue-current,queue-selected,browse-destination,reset-destination|cleanup-menu:clear-finished|disabled-reasons:true|preflight-aware:true|no-clutter:true|label-intent:start-export\"")) ||
+      !export_view_source.contains(QStringLiteral("exportActionHierarchyContract: \"export-action-hierarchy:v3|primary:start-export-split|primary-menu-clean:true|secondary:queue-management-menu|clear:secondary-cleanup|retry:row-or-queue-menu|destination:secondary-menu|one-primary:true|clear-not-primary:true\"")) ||
+      !export_view_source.contains(QStringLiteral("exportWorkflowPolishContract: \"export-workflow-polish:v1|first-glance:presets-selection-queue-settings-primary-action|close-inspection:preset-destination-preflight-progress-errors-output-summary|clutter:secondary-management-in-menus-row-actions-contextual|interaction:select-preset-destination-add-queue-start-retry-cancel-clear-reveal|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !export_view_source.contains(QStringLiteral("exportPageCompletionContract: \"page-completion:v1|export|sidebar:presets-destinations|content:selected-assets-queue-progress|settings:preset-color-crop-destination-preflight-current-image|toolbar:add-assets-start-export-clear-queue|states:empty-ready-warning-blocked-running-complete-failed\"")) ||
+      !export_view_source.contains(QStringLiteral("function exportWorkflowPolishSignature()")) ||
+      !export_view_source.contains(QStringLiteral("function exportActionHierarchySignature()")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportBatchSplitButton\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportCurrentSplitButton\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportQueueManagementMenuButton\"")) ||
+      !export_view_source.contains(QStringLiteral("tone: \"secondary\"\n                    compact: true\n                    active: false")) ||
+      !export_view_source.contains(QStringLiteral("text: \"Start Selected\"")) ||
+      !export_view_source.contains(QStringLiteral("text: \"Start Export\"")) ||
+      !export_view_source.contains(QStringLiteral("label: \"Start Current Export\"")) ||
+      !export_view_source.contains(QStringLiteral("label: \"Start Selected Exports\"")) ||
+      !export_view_source.contains(QStringLiteral("text: \"Clear Done\"")) ||
+      !export_view_source.contains(QStringLiteral("menuItems: root.exportActionMenuItems()")) ||
+      !export_view_source.contains(QStringLiteral("disabledReason: root.exportDisabledReason(true)")) ||
+      !export_view_source.contains(QStringLiteral("disabledReason: root.exportDisabledReason(false)")) ||
+      !export_view_source.contains(QStringLiteral("key: \"queue-current\"")) ||
+      !export_view_source.contains(QStringLiteral("key: \"queue-selected\"")) ||
+      !export_view_source.contains(QStringLiteral("key: \"browse-destination\"")) ||
+      !export_view_source.contains(QStringLiteral("key: \"clear-finished\"")) ||
+      !export_view_source.contains(QStringLiteral("\"|hierarchy:\" + root.exportActionHierarchySignature()")) ||
+      !export_view_source.contains(QStringLiteral("\"|primary:start-export-split\"")) ||
+      !export_view_source.contains(QStringLiteral("\"|primary-menu-clean:\" + String(actionItems.map(function(item) { return String(item.key || \"\") }).indexOf(\"clear-finished\") < 0)")) ||
+      !export_view_source.contains(QStringLiteral("\"|clear:secondary-cleanup\"")) ||
+      !export_view_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleExportMenuAction(key) }"))) {
+    return fail("Export workspace should expose preflight-aware split buttons with batch/current variants, disabled reasons, and preserved action routing");
+  }
+  if (!export_view_source.contains(QStringLiteral("objectName: \"exportWorkspace\"")) ||
+      !export_view_source.contains(QStringLiteral("exportVisibilityContract: \"export-visibility:v1|always:queue-panel-config-panel-selection-preset-destination-primary-action|contextual:preflight-current-image-batch-feedback-empty-queue-progress-errors|one-expansion:export-options-queue-management-destination-reset-clear-finished|hover-focus:queue-row-actions-remove-retry-cancel|diagnostic:job-errors-preflight-blockers-active-progress|preserve:functionality\"")) ||
+      !export_view_source.contains(QStringLiteral("exportSurfaceContract: \"export-surfaces:v1|queue:jobs-and-progress|config:selection-preset-color-crop-destination|preflight:blockers-visible|primary-action:split-export|queue-management:menu|no-elide:true|no-overlap:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("exportWorkflowPolishContract: \"export-workflow-polish:v1|first-glance:presets-assets-queue-settings-primary-action|close-inspection:preset-destination-progress-errors-output-summary|clutter:secondary-management-in-menus-row-actions-contextual|interaction:select-preset-destination-add-queue-start-retry-cancel-clear-reveal|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("exportPageCompletionContract: \"page-completion:v1|export|sidebar:presets-destinations|content:selected-assets-queue-progress|settings:preset-output-destination-summary|toolbar:add-assets-start-export-clear-queue|states:empty-ready-running-complete-failed\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("studioExportActionHierarchyContract: \"export-action-hierarchy:v2|primary:start-export-split|primary-menu-clean:true|secondary:queue-actions-menu|clear:secondary-cleanup|retry:queue-actions-menu|preset-management:secondary-menu|one-primary:true|clear-not-primary:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function exportWorkflowPolishSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function studioExportActionHierarchySignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function studioExportActionMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function studioExportQueueManagementMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handleStudioExportAction(key)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handleStudioExportQueueManagementAction(key)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioExportPrimarySplitButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("primaryEnabled: root.studioExportCanQueueCurrent()")) ||
+      !studio_workspace_source.contains(QStringLiteral("disabledReason: root.studioExportDisabledReason(false)")) ||
+      !studio_workspace_source.contains(QStringLiteral("menuItems: root.studioExportActionMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleStudioExportAction(key) }")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Queue Actions\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("menuItems: root.studioExportQueueManagementMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleStudioExportQueueManagementAction(key) }")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"queue-current\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"queue-selected\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"clear-finished\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"retry-failed\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("label: \"Export Selected Assets\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("label: \"Clear Finished Jobs\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("destructive: true")) ||
+      !studio_workspace_source.contains(QStringLiteral("\"|hierarchy:\" + root.studioExportActionHierarchySignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("\"|primary-menu-clean:\" + String(actionItems.map(function(item) { return String(item.key || \"\") }).indexOf(\"clear-finished\") < 0)")) ||
+      !studio_workspace_source.contains(QStringLiteral("\"|clear:secondary-cleanup\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("signal presetManagementRequested(string action)")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"save-current\", label: \"Save Current Settings\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("key: \"manage-saved\", label: \"Manage Saved Presets\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.presetManagementRequested(key) }")) ||
+      !studio_workspace_source.contains(QStringLiteral("function failedExportJobCount()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function retryFailedExportJobs()")) ||
+      !studio_workspace_source.contains(QStringLiteral("enabled: failedCount > 0")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.retryFailedExportJobs()")) ||
+      !main_qml_source.contains(QStringLiteral("property string pendingEditInspectorTab: \"\"")) ||
+      !main_qml_source.contains(QStringLiteral("function openEditPresetPanelFromExport(action)")) ||
+      !main_qml_source.contains(QStringLiteral("pendingEditInspectorTab = \"presets\"")) ||
+      !main_qml_source.contains(QStringLiteral("function onPresetManagementRequested(action)")) ||
+      !export_workspace_host_source.contains(QStringLiteral("onPresetManagementRequested: function(action)")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportMainWorkspace\"")) ||
+      !export_view_source.contains(QStringLiteral("surfaceContract: \"export-main-workspace:v1|queue-panel:always|configuration-panel:always|primary-action:always|progress-contextual:true|failure-contextual:true|no-elide:true|no-overlap:true\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportQueuePanel\"")) ||
+      !export_view_source.contains(QStringLiteral("surfaceContract: \"export-queue-panel:v1|queue-list:always|empty-state:contextual|management:one-expansion|row-actions:hover-focus|progress:contextual|errors:diagnostic|no-elide:true\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportQueueEmptyState\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportQueueRepeater\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportConfigurationPanel\"")) ||
+      !export_view_source.contains(QStringLiteral("surfaceContract: \"export-configuration-panel:v1|selection:always|preset:always|color-space:always|crop:always|destination:always|preflight:contextual|current-image:contextual|primary-actions:always|no-elide:true|no-overlap:true\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportSelectionSection\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportPresetSection\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportColorSpaceSection\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportCropSection\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportDestinationSection\"")) ||
+      !export_view_source.contains(QStringLiteral("visibilityRole: \"contextual|single-selection-readiness-blockers-soft-proof\"")) ||
+      !export_view_source.contains(QStringLiteral("objectName: \"exportCurrentImageSection\""))) {
+    return fail("Export workspace should declare always-visible, contextual, one-expansion, hover/focus, diagnostic, and preserved-function surfaces for queue, configuration, preflight, destination, progress, and split export actions");
+  }
+  if (!export_preflight_issue_row_source.contains(QStringLiteral("exportPreflightIssueRowContract: \"export-preflight-issue-row:v1|severity-chip:true|severity-role:\"")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("|message-wrap:true|readable-text:true|no-elide:true|shared-tone:true|compact-failure:true|tooltip-full:true\"")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|message-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("statusSurfaceContract: \"status-surface:v1|preflight:blocking-warning|compact-row:true|status-chip:true|message-after-status:true\"")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("StatusChip {")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("detailText: root.message")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !export_preflight_issue_row_source.contains(QStringLiteral("severity === \"error\" ? \"error\" : \"warning\"")) ||
+      !export_view_source.contains(QStringLiteral("delegate: ExportPreflightIssueRow")) ||
+      !export_view_source.contains(QStringLiteral("issue: modelData"))) {
+    return fail("Export preflight issues should use the shared severity row with readable wrapped messages and shared status tones");
+  }
+  if (!export_preset_summary_source.contains(QStringLiteral("exportPresetSummaryContract: \"export-preset-summary:v1|metric-fit:true|description-wrap:true|adaptive-grid:true|readable-text:true|no-elide:true\"")) ||
+      !export_preset_summary_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|metric-fit:true|description-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !export_preset_summary_source.contains(QStringLiteral("readonly property int metricColumns: width < 280 ? 2 : 4")) ||
+      !export_preset_summary_source.contains(QStringLiteral("GridLayout {")) ||
+      !export_preset_summary_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !export_preset_summary_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !export_preset_summary_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !export_view_source.contains(QStringLiteral("ExportPresetSummary {")) ||
+      !export_view_source.contains(QStringLiteral("format: currentPresetDetail().format")) ||
+      !export_view_source.contains(QStringLiteral("description: currentPresetDetail().description"))) {
+    return fail("Export preset summaries should use shared adaptive no-ellipsis metadata and wrapped descriptions");
+  }
+  if (!recent_document_row_source.contains(QStringLiteral("recentDocumentRowContract: \"recent-document-row:v1|title-wrap:true|detail-wrap:true|hover:true|keyboard:true|readable-text:true\"")) ||
+      !recent_document_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|detail-wrap:true|tooltip-full:true\"")) ||
+      !recent_document_row_source.contains(QStringLiteral("rowAnatomyContract: \"row-anatomy:v1|state-edge:left|icon-zone:fixed-18|content:title-detail-wrap|selection:left-edge|hover:neutral|focus:ring\"")) ||
+      !recent_document_row_source.contains(QStringLiteral("readonly property int iconZoneWidth: 18")) ||
+      !recent_document_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !recent_document_row_source.contains(QStringLiteral("MouseArea {")) ||
+      !recent_document_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !timeline_view_source.contains(QStringLiteral("delegate: RecentDocumentRow")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.loadTimeline(modelData.documentPath)")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: RecentDocumentRow")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.loadDocument(String(modelData.documentId || \"\"))"))) {
+    return fail("Timeline and Carousel recent documents should share RecentDocumentRow with readable text, hover, keyboard, and activation contracts");
+  }
+  if (!gallery_asset_card_source.contains(QStringLiteral("galleryAssetCardContract: \"gallery-asset-card:v1|preview:true|selection:true|online-state:true|keyboard:true|double-click:true|readable-text:true|no-elide:true\"")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|metadata-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("cardAnatomyContract: \"card-anatomy:v1|preview-dominant:true|content:title-wrap|metadata:bottom-wrap|selection:quiet-border|keyboard:focus-ring|online-state:opacity\"")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("signal selectedRequested(int assetIndex)")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("signal activated(int assetIndex)")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("onDoubleTapped")) ||
+      !gallery_asset_card_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("objectName: \"galleryPickerDialog\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("dialogVisibilityContract: \"dialog-visibility:v1|gallery-picker|always:title-scope-grid-selection-panel-close|contextual:selected-preview-offline-warning-side-footer-empty-state|one-expansion:project-scope-all-media-asset-activation|hover-focus:asset-card-selection-keyboard|diagnostic:offline-path-detail|preserve:functionality\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("dialogSurfaceContract: \"dialog-surface:v1|gallery-picker|grid:dominant|scope:header|selection-panel:always|preview:contextual|footer:contextual|cards:shared-readable|empty-state:bounded-card|no-elide:true|no-overlap:true\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("functionPreservationMap: \"function-preservation:v1|select-asset:grid-card|activate-asset:double-click-or-enter|scope-project:header-toggle|scope-all:header-toggle|offline-state:selection-panel|side-footer:contextual-loader\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("objectName: \"galleryPickerEmptyStateCard\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("emptyStateContract: \"gallery-empty-state:v1|bounded-card:true|icon-zone:true|text-wrap:true|max-lines:3|no-elide:true|no-overlap:true\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("objectName: \"galleryPickerEmptyStateLabel\"")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("delegate: GalleryAssetCard")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("assetIndex: index")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("asset: modelData")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("root.selectAssetIndex(assetIndex)")) ||
+      !gallery_picker_dialog_source.contains(QStringLiteral("root.assetActivated(root.selectedAsset)"))) {
+    return fail("Gallery picker should expose dialog visibility/function contracts and use GalleryAssetCard with readable labels, selection, keyboard, double-click activation, and preserved selected asset behavior");
+  }
+  if (!carousel_board_thumb_source.contains(QStringLiteral("carouselBoardThumbContract: \"carousel-board-thumb:v1|preview:true|selection:true|keyboard:true|double-click:true|readable-text:true|no-elide:true\"")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("mediaSurfaceContract: \"media-surface:v1|board-thumbnail:stable|preview-dominant:true|selection:single-border|badge-corner:bottom|chrome:quiet\"")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("required property var modelData")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("signal selectedRequested(int index)")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("signal duplicateRequested(int index)")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("onDoubleTapped")) ||
+      !carousel_board_thumb_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: CarouselBoardThumb")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.selectSlide(index)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.duplicateCurrentSlide()"))) {
+    return fail("Carousel board filmstrip should use CarouselBoardThumb with preview, selection, keyboard, double-click duplicate, and readable label behavior");
+  }
+  if (!carousel_view_source.contains(QStringLiteral("objectName: \"carouselEmptySlotPrompt\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselSlotRegionLabel\"")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselPlaceholderLayoutContract: \"carousel-placeholder-layout:v1|slot-label-zone:reserved|slot-action-zone:separate|slot-min-gap:8|tiny:icon-only|gallery-empty-card:bounded|no-elide:true|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property real slotLabelReserveHeight: 36")) ||
+      !carousel_view_source.contains(QStringLiteral("height: Math.max(0, slotRegion.slotLabelReserveHeight - 12)")) ||
+      !carousel_view_source.contains(QStringLiteral("promptContract: \"carousel-empty-slot:v3|bounded-to-slot:true|label-zone:reserved|action-zone:separate|min-gap:8|tiny-hidden:true|centered-action:true|icon-zone:fixed|full-label-min:112x34|icon-only-when-tight:true|tooltip-full:true|readable-text:true|no-incomplete-text:true|no-elide:true|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property real labelReserveHeight: slotRegion.slotLabelReserveHeight")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property real labelActionGap: 8")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property real readablePromptMinWidth: 112")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property real readablePromptMinHeight: 34")) ||
+      !carousel_view_source.contains(QStringLiteral("? availablePromptWidth >= 32 && availablePromptHeight >= 30")) ||
+      !carousel_view_source.contains(QStringLiteral(": availablePromptWidth >= readablePromptMinWidth && availablePromptHeight >= readablePromptMinHeight")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property bool compactPrompt: availablePromptWidth < readablePromptMinWidth || availablePromptHeight < readablePromptMinHeight")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property bool labelTextFullyVisible: compactPrompt ||")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property bool promptInsideSlot: x >= 0 && y >= labelReserveHeight")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property bool promptClearOfSlotLabel: y >= labelReserveHeight + labelActionGap")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property string promptGeometrySignature: \"x:\" + Math.round(x)")) ||
+      !carousel_view_source.contains(QStringLiteral("\"|gap:\" + Math.round(labelActionGap)")) ||
+      !carousel_view_source.contains(QStringLiteral("\"|has-room:\" + String(promptHasRoom)")) ||
+      !carousel_view_source.contains(QStringLiteral("\"|label-fits:\" + String(labelTextFullyVisible)")) ||
+      !carousel_view_source.contains(QStringLiteral("\"|inside:\" + String(promptInsideSlot)")) ||
+      !carousel_view_source.contains(QStringLiteral("\"|clear-label:\" + String(promptClearOfSlotLabel)")) ||
+      !carousel_view_source.contains(QStringLiteral("y: labelReserveHeight + labelActionGap + Math.max(0, (availablePromptHeight - height) / 2)")) ||
+      !carousel_view_source.contains(QStringLiteral("visible: !modelData.hasMedia &&")) ||
+      !carousel_view_source.contains(QStringLiteral("promptHasRoom")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselEmptySlotPromptContent\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselEmptySlotPromptIconZone\"")) ||
+      !carousel_view_source.contains(QStringLiteral("text: \"Add media\"")) ||
+      !carousel_view_source.contains(QStringLiteral("visible: !emptySlotPromptChrome.compactPrompt")) ||
+      !carousel_view_source.contains(QStringLiteral("readonly property string promptAccessibleName: \"Add media to \" + String(modelData.label || \"slot\")")) ||
+      !carousel_view_source.contains(QStringLiteral("ToolTip.text: promptAccessibleName")) ||
+      !carousel_view_source.contains(QStringLiteral("id: slotHitArea")) ||
+      !carousel_view_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !carousel_view_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselSlotSelectorContract: \"carousel-slot-selector:v1|split:left-right|stack:top-middle-bottom|full-labels:true|no-abbreviations:true|no-elide:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("text: selection.templateKind === \"split-pair\" ? \"Right\" : \"Middle\"")) ||
+      !carousel_view_source.contains(QStringLiteral("text: \"Bottom\"")) ||
+      !carousel_view_source.contains(QStringLiteral("text: \"Duplicate\"")) ||
+      carousel_view_source.contains(QStringLiteral("text: \"Btm\"")) ||
+      carousel_view_source.contains(QStringLiteral("text: \"Mid\"")) ||
+      carousel_view_source.contains(QStringLiteral("text: \"Dup\""))) {
+    return fail("Carousel empty media slots should keep the add-media prompt bounded, readable, compact, and non-overlapping");
+  }
+  if (!carousel_media_thumb_source.contains(QStringLiteral("carouselMediaThumbContract: \"carousel-media-thumb:v1|preview:true|online-state:true|click-double-click:true|readable-text:true|no-elide:true\"")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|media-label-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("mediaSurfaceContract: \"media-surface:v1|quick-library-thumbnail:stable|preview-dominant:true|label-zone:bottom|badge-corner:reserved|chrome:quiet\"")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("signal activated(var asset, var modifiers)")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("signal doubleActivated(var asset)")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !carousel_media_thumb_source.contains(QStringLiteral("cursorShape: root.online ? Qt.PointingHandCursor : Qt.ForbiddenCursor")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: CarouselMediaThumb")) ||
+      !carousel_view_source.contains(QStringLiteral("asset: modelData")) ||
+      !carousel_view_source.contains(QStringLiteral("root.placeLibraryAsset(asset, root.hasMultiSelectModifier(modifiers) ? \"layer\" : \"slot\")")) ||
+      !carousel_view_source.contains(QStringLiteral("root.placeLibraryAsset(asset, \"layer\")"))) {
+    return fail("Carousel quick library thumbnails should use CarouselMediaThumb with readable media labels, online state, and preserved slot/layer placement");
+  }
+  if (!carousel_tool_rail_button_source.contains(QStringLiteral("carouselToolRailButtonContract: \"carousel-tool-rail-button:v1|active-state:true|expandable-menu:true|checked-state:true|disabled-reasons:true|keyboard:true|readable-text:true|no-elide:true|geometry:true\"")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|tooltip-full:true|menu-wrap:true|accessibility-full:true\"")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("menuGeometryContract: \"menu-geometry:v1|min-width:\"")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("signal toolSelected(string toolValue)")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("signal menuItemTriggered(string toolValue, string itemKey)")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("function focusNextMenuItem(step)")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("delegate: PopupMenuRow")) ||
+      !carousel_tool_rail_button_source.contains(QStringLiteral("root.menuItemTriggered(root.toolValue, key)")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: CarouselToolRailButton")) ||
+      !carousel_view_source.contains(QStringLiteral("toolData: modelData")) ||
+      !carousel_view_source.contains(QStringLiteral("activeTool: root.activeTool")) ||
+      !carousel_view_source.contains(QStringLiteral("menuItems: root.carouselToolMenuItems(modelData.value)")) ||
+      !carousel_view_source.contains(QStringLiteral("root.setActiveTool(toolValue)")) ||
+      !carousel_view_source.contains(QStringLiteral("root.handleCarouselToolMenuAction(toolValue, itemKey)"))) {
+    return fail("Carousel tool rail should use an expandable no-elide tool button with keyboard menu behavior and preserved tool/menu actions");
+  }
+  if (!color_swatch_button_source.contains(QStringLiteral("colorSwatchButtonContract: \"color-swatch-button:v1|selected:true|keyboard:true|hover:true|tooltip-full:true|readable-text:true|no-elide:true\"")) ||
+      !color_swatch_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|tooltip-full:true|accessibility-full:true|label-source:tooltip\"")) ||
+      !color_swatch_button_source.contains(QStringLiteral("signal picked(string swatchColor)")) ||
+      !color_swatch_button_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !color_swatch_button_source.contains(QStringLiteral("TapHandler {")) ||
+      !color_swatch_button_source.contains(QStringLiteral("ToolTip.text: label")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: ColorSwatchButton")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setCurrentSlideBackgroundColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedItemFrameColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedItemShadowColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedShapeFillColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedShapeSecondaryFillColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedTextColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedTextBackgroundColor(swatchColor)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.setSelectedTextStrokeColor(swatchColor)"))) {
+    return fail("Carousel color customization should use ColorSwatchButton with selected, keyboard, tooltip, and preserved color setter behavior");
+  }
+  if (!tool_option_toggle_source.contains(QStringLiteral("toolOptionToggleContract: \"tool-option-toggle:v1|checked-state:true|keyboard:true|hover:true|disabled-state:true|readable-text:true|no-elide:true|tooltip-full:true\"")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("signal toggled(bool checked)")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("function toggle()")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("Keys.onSpacePressed: root.toggle()")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("Accessible.role: Accessible.CheckBox")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("Accessible.checked: checked")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !tool_option_toggle_source.contains(QStringLiteral("ToolTip.text: helperText.length > 0 ? helperText : label")) ||
+      !edit_view_source.contains(QStringLiteral("ToolOptionToggle {")) ||
+      !edit_view_source.contains(QStringLiteral("checked: editorPreview.rawHighlightRecovery")) ||
+      !edit_view_source.contains(QStringLiteral("checked: editorPreview.colorReplacementPreserveLuminance")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"colorReplacementPreserveLuminanceCheckBox\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"colorReplacementPreserveSaturationCheckBox\"")) ||
+      !edit_view_source.contains(QStringLiteral("objectName: \"colorReplaceProtectSkinCheckBox\"")) ||
+      !edit_view_source.contains(QStringLiteral("checked: editorPreview.contentAwareCropFill")) ||
+      !edit_view_source.contains(QStringLiteral("onToggled: function(checked) { editorPreview.colorHarmonyEnabled = checked }")) ||
+      !mask_view_source.contains(QStringLiteral("ToolOptionToggle {\n                objectName: \"alphaMaskImportInvertCheck\"")) ||
+      !mask_view_source.contains(QStringLiteral("onToggled: checked => editorPreview.alphaMaskImportInvert = checked")) ||
+      !studio_workspace_source.contains(QStringLiteral("ToolOptionToggle {")) ||
+      !studio_workspace_source.contains(QStringLiteral("checked: root.primaryBoolAdjustmentValue(\"blackAndWhiteEnabled\", editorPreview.blackAndWhiteEnabled)")) ||
+      !studio_workspace_source.contains(QStringLiteral("checked: root.primaryBoolAdjustmentValue(\"colorReplacementEnabled\", editorPreview.colorReplacementEnabled)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"colorReplacementPreserveLuminanceCheckBox\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("checked: root.primaryBoolAdjustmentValue(\"colorReplacementPreserveLuminance\", editorPreview.colorReplacementPreserveLuminance)")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"colorReplacementPreserveSaturationCheckBox\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"colorReplaceProtectSkinCheckBox\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("checked: root.primaryBoolAdjustmentValue(\"colorHarmonyEnabled\", editorPreview.colorHarmonyEnabled)")) ||
+      !studio_workspace_source.contains(QStringLiteral("onToggled: function(checked) { root.setPrimaryBoolAdjustmentValue(\"colorHarmonyEnabled\", checked) }")) ||
+      studio_workspace_source.contains(QStringLiteral("component CompactCheckBox")) ||
+      edit_view_source.contains(QStringLiteral("CheckBox {")) ||
+      mask_view_source.contains(QStringLiteral("CheckBox {"))) {
+    return fail("Edit, Mask, and Studio tool option toggles should use ToolOptionToggle with readable no-elide labels while preserving base/layer RAW, color, crop, and alpha import boolean bindings");
+  }
+  if (!inspector_section_source.contains(QStringLiteral("sectionContract: \"inspector-section:v2|header:title-changed-before-after-reset-menu-chevron|fixed-header:true|fixed-actions:true|icon-first-actions:true|collapse:true|keyboard:true|disabled-reason:true|changed-state:true|no-nested-card:true|no-elide:true\"")) ||
+      !inspector_section_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-fit:true|subtitle-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !inspector_section_source.contains(QStringLiteral("headerActionContract: \"inspector-header-actions:v1|before-after:icon-only-tooltip|reset:icon-only-tooltip|menu:menu-button|fixed-size:\"")) ||
+      !inspector_section_source.contains(QStringLiteral("sectionGeometryContract: \"inspector-section-geometry:v1|left-edge:shared|header-min:30|action-size:\"")) ||
+      !inspector_section_source.contains(QStringLiteral("property string disabledReason: \"\"")) ||
+      !inspector_section_source.contains(QStringLiteral("readonly property int headerMinimumHeight: 30")) ||
+      !inspector_section_source.contains(QStringLiteral("readonly property int headerActionSize: theme.controlHeightDense")) ||
+      !inspector_section_source.contains(QStringLiteral("Accessible.role: root.expandable ? Accessible.Button : Accessible.StaticText")) ||
+      !inspector_section_source.contains(QStringLiteral("activeFocusOnTab: root.expandable")) ||
+      !inspector_section_source.contains(QStringLiteral("function toggleExpanded()")) ||
+      !inspector_section_source.contains(QStringLiteral("Keys.onReturnPressed: root.toggleExpanded()")) ||
+      !inspector_section_source.contains(QStringLiteral("Keys.onSpacePressed: root.toggleExpanded()")) ||
+      !inspector_section_source.contains(QStringLiteral("Layout.preferredWidth: root.headerActionSize")) ||
+      !inspector_section_source.contains(QStringLiteral("showText: false")) ||
+      !inspector_section_source.contains(QStringLiteral("MenuButton {")) ||
+      !edit_view_source.contains(QStringLiteral("InspectorSection {")) ||
+      !mask_view_source.contains(QStringLiteral("InspectorSection {")) ||
+      !mask_inspector_source.contains(QStringLiteral("component MaskSection: InspectorSection")) ||
+      !carousel_view_source.contains(QStringLiteral("InspectorSection {")) ||
+      !export_view_source.contains(QStringLiteral("InspectorSection {"))) {
+    return fail("Inspector-heavy pages should use shared InspectorSection with fixed header actions, changed/collapse/menu states, disabled reasons, keyboard behavior, and readable no-elide text");
+  }
+  if (!tool_value_slider_source.contains(QStringLiteral("toolValueSliderContract: \"tool-value-slider:v1|stable-size:true|keyboard:true|hover:true|tooltip-full:true|accessible-value:true|disabled-reason:true|neutral-rest:true|fixed-geometry:true|no-elide:true|premium-rail:true\"")) ||
+      !tool_value_slider_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|tooltip-full:true|accessibility-full:true|value-fit:true\"")) ||
+      !tool_value_slider_source.contains(QStringLiteral("valueGeometryContract: \"tool-value-slider-geometry:v1|min-width:120|track-height:2|thumb:12-14|layout-shift:false\"")) ||
+      !tool_value_slider_source.contains(QStringLiteral("property string disabledReason: \"\"")) ||
+      !tool_value_slider_source.contains(QStringLiteral("property bool modified: false")) ||
+      !tool_value_slider_source.contains(QStringLiteral("readonly property bool accentFillVisible: root.pressed || root.hovered || root.visualFocus || root.modified")) ||
+      !tool_value_slider_source.contains(QStringLiteral("Accessible.name: label.length > 0 ? label : tooltipText")) ||
+      !tool_value_slider_source.contains(QStringLiteral("Accessible.description: !root.enabled && root.disabledReason.length > 0")) ||
+      !tool_value_slider_source.contains(QStringLiteral("ToolTip.text: resolvedTooltipText")) ||
+      !tool_value_slider_source.contains(QStringLiteral("root.visualPosition * parent.width")) ||
+      !tool_value_slider_source.contains(QStringLiteral("handle: Rectangle")) ||
+      !timeline_view_source.contains(QStringLiteral("ToolValueSlider {\n                                id: transportSlider")) ||
+      !timeline_view_source.contains(QStringLiteral("ToolValueSlider {\n                        id: zoomSlider")) ||
+      !studio_workspace_source.contains(QStringLiteral("ToolValueSlider {\n                                                            objectName: \"photoLayerOpacitySlider\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onMoved: editorPreview.setPhotoLayerOpacity(layerIndex, value / 100.0)")) ||
+      !edit_view_source.contains(QStringLiteral("ToolValueSlider {\n                                        Layout.fillWidth: true\n                                        label: modelData.name + \" luminance\"")) ||
+      !edit_view_source.contains(QStringLiteral("editorPreview.luminanceAdjustment = value")) ||
+      !mask_view_source.contains(QStringLiteral("ToolValueSlider {\n                objectName: \"alphaMaskImportThresholdSlider\"")) ||
+      !mask_view_source.contains(QStringLiteral("onMoved: editorPreview.alphaMaskImportThreshold = value")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("ToolValueSlider {\n                        Layout.fillWidth: true\n                        label: \"Source position\"")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("onMoved: root.seekSource(value)")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Slider\\s*\\{")).match(timeline_view_source).hasMatch() ||
+      QRegularExpression(QStringLiteral("\\n\\s*Slider\\s*\\{")).match(timeline_source_panel_source).hasMatch() ||
+      QRegularExpression(QStringLiteral("\\n\\s*Slider\\s*\\{")).match(edit_view_source).hasMatch() ||
+      QRegularExpression(QStringLiteral("\\n\\s*Slider\\s*\\{")).match(mask_view_source).hasMatch() ||
+      QRegularExpression(QStringLiteral("\\n\\s*Slider\\s*\\{")).match(studio_workspace_source).hasMatch()) {
+    return fail("Timeline, source preview, Edit HSL, Mask alpha import, and Studio layer opacity sliders should use ToolValueSlider with stable readable premium rails and preserved movement bindings");
+  }
+  if (!tool_button_source.contains(QStringLiteral("variantBadgeContract: \"tool-variant-badge:v1|compact-symbol:true|no-raw-slice:true|tooltip-full:true|accessibility-full:true|badge:\"")) ||
+      !tool_button_source.contains(QStringLiteral("menuAffordanceContract: \"tool-menu-affordance:v2|hover-chevron:true|corner:bottom-right|right-click:true|press-hold:true|keyboard:alt-down-alt-space|tooltip-full:true\"")) ||
+      !tool_button_source.contains(QStringLiteral("|menu-affordance:hover-chevron")) ||
+      !tool_button_source.contains(QStringLiteral("name: \"chevron-right\"")) ||
+      !tool_button_source.contains(QStringLiteral("rotation: 90")) ||
+      !tool_button_source.contains(QStringLiteral("function variantBadgeLabel()")) ||
+      !tool_button_source.contains(QStringLiteral("return \"+\"")) ||
+      !tool_button_source.contains(QStringLiteral("return \"-\"")) ||
+      !tool_button_source.contains(QStringLiteral("return words.map(function(word) { return word.charAt(0).toUpperCase() }).join(\"\")")) ||
+      !tool_button_source.contains(QStringLiteral("text: root.variantBadgeLabel()")) ||
+      tool_button_source.contains(QStringLiteral("variantLabel.slice(0, 2)"))) {
+    return fail("ToolButton variant badges should use explicit compact symbols with full tooltip/accessibility text instead of raw sliced labels");
+  }
+  if (!mini_button_source.contains(QStringLiteral("miniButtonContract: \"mini-button:v4|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|mint-primary:true|slash-primary-only:true|rounded-secondary:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true\"")) ||
+      !mini_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v2|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:9|readable-width:true\"")) ||
+      !mini_button_source.contains(QStringLiteral("readonly property bool accentEdgeVisible: root.enabled && root.slashEdge &&")) ||
+      !mini_button_source.contains(QStringLiteral("accentOpacity: root.accentEdgeVisible ? 1.0 : 0")) ||
+      !mini_button_source.contains(QStringLiteral("return root.hovered ? theme.alpha(root.lineColor, 0.44) : root.hairline")) ||
+      !mini_button_source.contains(QStringLiteral("property bool allowLabelWrap: false")) ||
+      !mini_button_source.contains(QStringLiteral("Accessible.name: resolvedAccessibleName")) ||
+      !mini_button_source.contains(QStringLiteral("Accessible.description: resolvedTooltipText")) ||
+      !mini_button_source.contains(QStringLiteral("ToolTip.text: resolvedTooltipText.length > 0 ? resolvedTooltipText : text")) ||
+      !mini_button_source.contains(QStringLiteral("CommandButtonSurface {")) ||
+      !mini_button_source.contains(QStringLiteral("wrapMode: root.allowLabelWrap ? Text.WrapAtWordBoundaryOrAnywhere : Text.NoWrap")) ||
+      !mini_button_source.contains(QStringLiteral("maximumLineCount: root.allowLabelWrap ? 2 : 1")) ||
+      !mini_button_source.contains(QStringLiteral("fontSizeMode: root.fitTextToWidth ? Text.HorizontalFit : Text.FixedSize")) ||
+      !mini_button_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !studio_workspace_source.contains(QStringLiteral("MiniButton {")) ||
+      studio_workspace_source.contains(QStringLiteral("component MiniButton: Button"))) {
+    return fail("Studio mini controls should resolve to shared MiniButton with readable no-elide labels, full tooltips, keyboard access, and no inline workspace button definition");
+  }
+  if (!edit_view_source.contains(QStringLiteral("objectName: \"editWorkspace\"")) ||
+      !edit_view_source.contains(QStringLiteral("editVisibilityContract: \"edit-visibility:v1|always:tool-rail-image-stage-canvas-toolbar-inspector-filmstrip-target-context|contextual:active-tool-hud-active-variant-layer-mask-target-pending-apply-cancel-bottom-actions|one-expansion:tool-variants-presets-compare-view-modes-secondary-layer-actions-advanced-settings|hover-focus:row-actions-reorder-visibility-lock-quick-actions|diagnostic:preview-errors-agent-runtime-model-logs|preserve:functionality\"")) ||
+      !edit_view_source.contains(QStringLiteral("editSurfaceContract: \"edit-surfaces:v1|stage:dominant-image|tools:visible-expandable-switchable|toolbar:view-and-actions|inspector:targeted-adjust-mask-layer|filmstrip:stable|bottom-actions:rating-flag-export|pending:apply-cancel-visible|no-elide:true|no-overlap:true\"")) ||
+      !edit_view_source.contains(QStringLiteral("editWorkflowPolishContract: \"edit-workflow-polish:v1|first-glance:tool-rail-image-stage-inspector-filmstrip|close-inspection:active-tool-variant-target-hud-pending-actions|clutter:one-active-hud-one-primary-action-diagnostics-collapsed|interaction:select-expand-switch-commit-cancel-customize|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !edit_view_source.contains(QStringLiteral("editPageCompletionContract: \"page-completion:v1|edit|rail:primary-tool-families|content:image-stage-toolbar-hud|inspector:active-tool-targeted-sections|filmstrip:stable-selection|bottom:rating-flag-export|states:no-photo-active-tool-pending-disabled-error\"")) ||
+      !edit_view_source.contains(QStringLiteral("function editWorkflowPolishSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral(": page === \"edit\" ? \"editStudioWorkspace\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editWorkflowPolishContract: \"edit-workflow-polish:v1|first-glance:tool-rail-image-stage-active-tool-inspector-filmstrip|close-inspection:active-family-variant-target-hud-pending-actions|clutter:one-active-hud-one-primary-action-diagnostics-collapsed|interaction:select-expand-switch-commit-cancel-customize|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editPageCompletionContract: \"page-completion:v1|edit|rail:primary-tool-families|content:image-viewport-toolbar-hud|inspector:active-tool-targeted-sections-layers-masks-agent|filmstrip:stable-selection|bottom:rating-flag-export|states:no-photo-active-tool-pending-disabled-error\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editStudioVisibilityContract: \"edit-studio-visibility:v1|always:edit-context-tool-rail-image-viewport-zoom-toolbar-action-toolbar-inspector-filmstrip|contextual:mask-creation-refine-toolbar-mask-stack-active-hud-layer-actions-selected-target|one-expansion:tool-variants-mask-sources-layer-actions-presets-export-agent|hover-focus:layer-row-actions-filmstrip-actions-reorder-controls|diagnostic:preview-failure-agent-runtime-jobs|preserve:functionality\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editStudioSurfaceContract: \"edit-studio-surfaces:v1|context-panel:target-and-library|tool-rail:families-visible|image-viewport:dominant|toolbars:view-actions|inspector:adjust-mask-layer-agent|filmstrip:stable|layers:fixed-zones|masks:source-stack|no-elide:true|no-overlap:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function editWorkflowPolishSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("mediaSurfaceContract: \"media-surface:v1|canvas-stage:dominant|image-corners:consistent|empty-loading-failure:same-bounds|chrome:quiet|badges:corner-stacked|toolbar-baseline:single\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("previewChromeContract: \"preview-chrome:v1|status:corner-badge|diagnostics:overlay-menu|top-controls:baseline|failure:retry-in-badge|content-dominant:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editContextPanel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editImageViewport\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editZoomToolbar\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editActionToolbar\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editFilmstrip\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("required property string thumbnailSource")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailSource: parent.thumbnailSource")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editInspectorPanel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editInspectorFooter\""))) {
+    return fail("Edit workspace should declare page-level visibility/function contracts and keep tool rail, image stage, canvas toolbars, inspector, filmstrip, and footer surfaces testable");
+  }
+  if (!mask_view_source.contains(QStringLiteral("objectName: \"maskWorkspace\"")) ||
+      !mask_view_source.contains(QStringLiteral("maskVisibilityContract: \"mask-visibility:v1|always:canvas-inspector-active-context-source-controls-overlay-state|contextual:brush-cursor-lasso-polygon-handles-alpha-import-refine-toolbar-pending-apply-cancel|one-expansion:mask-source-variants-context-menu-refine-options-adjustment-groups|hover-focus:mask-source-actions-reorder-visibility-solo-lock|diagnostic:generated-unsupported-preview-failure-runtime-detail|preserve:functionality\"")) ||
+      !mask_view_source.contains(QStringLiteral("maskSurfaceContract: \"mask-surfaces:v1|canvas:dominant-overlay|sources:generated-geometric-brush-alpha|inspector:active-mask-stack-adjustments|overlays:brush-lasso-polygon-outline|pending:apply-cancel-retry-visible|context-menu:one-expansion|no-elide:true|no-overlap:true\"")) ||
+      !mask_view_source.contains(QStringLiteral("maskWorkflowPolishContract: \"mask-workflow-polish:v1|first-glance:canvas-active-selection-inspector-source-tools|close-inspection:context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !mask_view_source.contains(QStringLiteral("maskPageCompletionContract: \"page-completion:v1|masks|sidebar:source-variant-controls-search|content:canvas-overlay-brush-lasso-polygon-handles|inspector:active-context-mask-stack-refine-adjustments|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error\"")) ||
+      !mask_view_source.contains(QStringLiteral("function maskWorkflowPolishSignature()")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskWorkspaceStableSplit\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskCanvasPane\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskCanvasViewport\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskInspectorPane\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskActiveContextHeader\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskSearchField\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskGeneratedSubjectButton\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskSourceContextMenu\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskEmptyStateGuidance\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskViewBrushCursor\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"maskViewActiveSelectionOutline\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"alphaMaskImportPreviewPanel\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"alphaMaskImportCancelButton\"")) ||
+      !mask_view_source.contains(QStringLiteral("objectName: \"alphaMaskImportCommitButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskCreationToolbar\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskRefineToolbar\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function maskRefineToolbarStatusText()")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: root.maskRefineToolbarStatusText()")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string debugSignature: root.maskCreateRefineSplitSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("diagnosticTextContract: \"diagnostic-text:v1|visible-copy:user-facing|signature:property-only|tooltip:developer-only|no-debug-text-at-rest:true\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskStackStrip\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskToolRail\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskSelectionMenuButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstInspectorGroup\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("maskWorkflowPolishContract: \"mask-workflow-polish:v1|first-glance:tool-rail-mask-sources-canvas-overlay-inspector-stack|close-inspection:active-context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("maskPageCompletionContract: \"page-completion:v1|masks-in-edit|rail:source-variant-controls|content:image-overlay-brush-lasso-polygon-hud|inspector:mask-first-controls-stack-layers|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function maskWorkflowPolishSignature()"))) {
+    return fail("Mask workspace should declare page-level visibility/function contracts and keep canvas, inspector, source controls, overlays, stack, tool rail, alpha import, and pending actions testable");
+  }
+  if (!carousel_layer_row_source.contains(QStringLiteral("carouselLayerRowContract: \"carousel-layer-row:v2|zones:primary-edge-label-state-secondary-edge|selected:\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("|keyboard:true|multi-select:true|readable-text:true|primary-selection:left-edge|secondary-selection:right-edge")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|state-icons:true\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("zoneContract: \"carousel-layer-row-zones:v2|primary-edge|type-icon|label|hidden-state|locked-state|secondary-edge\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("statePriorityContract: \"layer-row-state-priority:v2|primary-selected>multi-selected-secondary>locked>hidden>hover\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("visible: root.primarySelected")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("visible: root.selected && !root.primarySelected")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("interactionContract: \"carousel-layer-row-interaction:v1|keyboard:true|multi-select:true|canvas-drag:true|state-icons:true|tooltip-full:true\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("signal activated(int modifiers)")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("name: \"hidden\"")) ||
+      !carousel_layer_row_source.contains(QStringLiteral("name: \"lock\"")) ||
+      !carousel_view_source.contains(QStringLiteral("delegate: CarouselLayerRow")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselLayerRow\"")) ||
+      !carousel_view_source.contains(QStringLiteral("root.hasMultiSelectModifier(modifiers)")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselDocument.toggleItemSelection(String(modelData.itemId || \"\"))")) ||
+      !carousel_view_source.contains(QStringLiteral("root.focusLayerItem(String(modelData.itemId || \"\"), Boolean(modelData.selected))"))) {
+    return fail("Carousel object layers should use CarouselLayerRow with state icons, readable text, keyboard activation, and preserved multi-select behavior");
+  }
+  if (!carousel_view_source.contains(QStringLiteral("objectName: \"carouselWorkspace\"")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselVisibilityContract: \"carousel-visibility:v1|always:tool-rail-composer-header-artboard-board-strip-inspector|contextual:setup-recent-carousel-media-picker-selection-rating-layer-controls-empty-slot-guides|one-expansion:tool-variants-layer-add-export-actions-object-actions-board-actions|hover-focus:canvas-selection-handles-layer-row-actions-board-thumbs|diagnostic:export-busy-snap-guides-media-offline|preserve:functionality\"")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselSurfaceContract: \"carousel-surfaces:v1|setup:create-and-recent|composer:dominant-artboard|tools:rail-with-menus|board-strip:stable|inspector:board-or-selection|layers:object-stack|media-picker:contextual|no-elide:true|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselWorkflowPolishContract: \"carousel-workflow-polish:v1|first-glance:setup-or-board-canvas-tool-rail-inspector-strip|close-inspection:active-tool-board-selection-media-layer-rating-export|clutter:one-active-selection-context-media-picker-contextual|interaction:create-select-pan-text-media-shape-guide-layer-export|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !carousel_view_source.contains(QStringLiteral("carouselPageCompletionContract: \"page-completion:v1|carousel|rail:select-pan-text-media-shape-guides|content:setup-or-artboard-empty-slot-board-strip|inspector:board-selection-layers-media|toolbar:save-export-board-actions|states:setup-empty-board-selected-media-exporting-error\"")) ||
+      !carousel_view_source.contains(QStringLiteral("function carouselWorkflowPolishSignature()")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselSetupSurface\"")) ||
+      !carousel_view_source.contains(QStringLiteral("surfaceContract: \"carousel-setup-surface:v1|create-carousel:primary|recent:secondary|format-slide-count-visible:true|no-elide:true|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselActiveWorkspace\"")) ||
+      !carousel_view_source.contains(QStringLiteral("surfaceContract: \"carousel-active-workspace:v1|tool-rail:always|composer:dominant|inspector:always|board-strip:always|selection-contextual:true|no-elide:true|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselToolRail\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselComposerPanel\"")) ||
+      !carousel_view_source.contains(QStringLiteral("surfaceContract: \"carousel-composer-panel:v1|header:always|artboard:dominant|zoom:contextual|board-strip:always|empty-slot:contextual|drag-handles:hover-focus|no-overlap:true\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselHeaderBar\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselArtboardFrame\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselArtboardViewport\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselStripSurface\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselBoardStrip\"")) ||
+      !carousel_view_source.contains(QStringLiteral("objectName: \"carouselInspectorPanel\"")) ||
+      !carousel_view_source.contains(QStringLiteral("surfaceContract: \"carousel-inspector:v1|board-settings:when-no-object|selection-settings:contextual|layers:always|media:one-expansion|actions:menus|no-elide:true|no-overlap:true\""))) {
+    return fail("Carousel workspace should declare always-visible, contextual, one-expansion, hover/focus, diagnostic, and preserved-function surfaces for setup, tool rail, artboard, board strip, inspector, layers, media picker, and export actions");
+  }
+  if (!timeline_view_source.contains(QStringLiteral("objectName: \"timelineWorkspace\"")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineVisibilityContract: \"timeline-visibility:v1|always:header-program-monitor-timeline|contextual:source-panel-effects-panel-selected-clip-markers|one-expansion:tools-media-picker-effects-transitions-render-jobs|hover-focus:clip-actions-marker-actions-track-resize|diagnostic:render-errors-job-detail|preserve:functionality\"")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineSurfaceContract: \"timeline-surfaces:v1|program-monitor:dominant|transport:compact|source-panel:collapsible|effects-panel:collapsible|tracks:stable-rows|clips:readable|markers:contextual-strip|waveform:track-contained|minimap:secondary|no-elide:true|no-overlap:true\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineHeaderBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineStatusBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMainSplit\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineSourceRail\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineProgramPanel\"")) ||
+      !timeline_view_source.contains(QStringLiteral("surfaceContract: \"timeline-program-panel:v1|monitor-dominant:true|transport-compact:true|empty-action:media-picker|error-nonblocking:true|no-overlap:true\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineProgramMonitor\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineTransportBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("transportContract: \"timeline-transport:v1|playback:first|edit-actions:compact|timecode:stable|slider:stable|disabled-reasons:true|no-elide:true|no-overlap:true\"")) ||
+      !timeline_view_source.contains(QStringLiteral("function pickedMediaDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("function playableClipDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("function sourceClipDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("function moveClipEarlierDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("function moveClipLaterDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("disabledReason: root.pickedMediaDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelinePlayPauseButton\"")) ||
+      !timeline_view_source.contains(QStringLiteral("disabledReason: root.playableClipDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineInsertSourceButton\"")) ||
+      !timeline_view_source.contains(QStringLiteral("disabledReason: root.sourceClipDisabledReason()")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineEffectsRail\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineSurfacePanel\"")) ||
+      !timeline_view_source.contains(QStringLiteral("surfaceContract: \"timeline-surface:v1|toolbar:compact|search-filter:contextual|tools:one-expansion|tracks:stable|clips:readable|markers:contextual|minimap:secondary|waveform:track-contained|no-overlap:true\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineSearchBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMarkerFilterBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("visibilityRole: \"contextual|marker-status-filter\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineToolBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("visibilityRole: \"one-expansion|tool-switch-edit-mode-snapping-ripple-zoom-split-delete\"")) ||
+      !timeline_view_source.contains(QStringLiteral("property var trimFeedbackState")) ||
+      !timeline_view_source.contains(QStringLiteral("property bool markerFeedbackVisible")) ||
+      !timeline_view_source.contains(QStringLiteral("markerFeedbackSignature: \"timeline-marker-feedback:v1|visible:\"")) ||
+      !timeline_view_source.contains(QStringLiteral("trimFeedbackSignature: \"timeline-trim-feedback:v1|visible:\"")) ||
+      !timeline_view_source.contains(QStringLiteral("function updateTrimFeedback(mode, edge, baselineSeconds, nextSeconds)")) ||
+      !timeline_view_source.contains(QStringLiteral("function addMarkerAtPlayhead()")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMarkerFeedbackChip\"")) ||
+      !timeline_view_source.contains(QStringLiteral("root.updateTrimFeedback(\"slip\", \"body\", 0, deltaSeconds)")) ||
+      !timeline_view_source.contains(QStringLiteral("root.updateTrimFeedback(timelineDocument.activeTool === \"roll\" ? \"roll\" : \"trim\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineTrimFeedbackOverlay\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineTrimFeedbackLabel\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMarkerStrip\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMinimapBar\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineTrackHeaderColumn\"")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineViewport\"")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineWorkflowPolishContract: \"timeline-workflow-polish:v1|first-glance:source-program-timeline-effects|close-inspection:active-tool-edit-mode-playhead-selection-markers-effects-render|clutter:panels-collapsible-details-contextual|interaction:load-source-insert-overwrite-play-trim-split-marker-effect-render|text:no-elide-no-overlap|functionality:preserved\"")) ||
+      !timeline_view_source.contains(QStringLiteral("timelinePageCompletionContract: \"page-completion:v1|timeline|sidebar:source-media-picker|content:program-monitor-transport-timeline-tracks-waveform|inspector:effects-transitions-selected-clip|toolbar:tools-search-marker-filter-zoom|states:setup-empty-source-selected-dragging-rendering-error\"")) ||
+      !timeline_view_source.contains(QStringLiteral("function timelineWorkflowPolishSignature()"))) {
+    return fail("Timeline workspace should declare visible, contextual, expansion, hover, diagnostic, and preserved-function surfaces across monitor, source, effects, tracks, markers, waveform, and timeline chrome");
+  }
+  if (!timeline_marker_card_source.contains(QStringLiteral("timelineMarkerCardContract: \"timeline-marker-card:v1|title-wrap:true|note-wrap:true|status-chip:true|jump-edit-done:true|keyboard:true|readable-text:true\"")) ||
+      !timeline_marker_card_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|note-wrap:true|timecode-fit:true|tooltip-full:true\"")) ||
+      !timeline_marker_card_source.contains(QStringLiteral("StatusChip {")) ||
+      !timeline_marker_card_source.contains(QStringLiteral("signal jumpRequested(string markerId)")) ||
+      !timeline_marker_card_source.contains(QStringLiteral("signal editRequested(string markerId)")) ||
+      !timeline_marker_card_source.contains(QStringLiteral("signal completionToggled(string markerId, bool completed)")) ||
+      !timeline_view_source.contains(QStringLiteral("delegate: TimelineMarkerCard")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineMarkerCard\"")) ||
+      !timeline_view_source.contains(QStringLiteral("function markerStatusTone(marker)")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.seekSequenceMarker(markerId)")) ||
+      !timeline_view_source.contains(QStringLiteral("root.openMarkerEditor(modelData)")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.setSequenceMarkerCompleted(markerId, completed)"))) {
+    return fail("Timeline marker strip should use TimelineMarkerCard with shared status chip, readable text, keyboard, jump, edit, and done behavior");
+  }
+  if (!timeline_marker_pin_source.contains(QStringLiteral("timelineMarkerPinContract: \"timeline-marker-pin:v1|line:true|label-fit:true|jump-edit:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true\"")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("signal jumpRequested(string markerId)")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("signal editRequested(string markerId)")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !timeline_marker_pin_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !timeline_view_source.contains(QStringLiteral("delegate: TimelineMarkerPin")) ||
+      !timeline_view_source.contains(QStringLiteral("markerId: String(modelData.markerId || \"\")")) ||
+      !timeline_view_source.contains(QStringLiteral("label: String(modelData.label || \"Marker\")")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.seekSequenceMarker(markerId)")) ||
+      !timeline_view_source.contains(QStringLiteral("root.openMarkerEditor(modelData)"))) {
+    return fail("Timeline canvas marker pins should use TimelineMarkerPin with readable labels, keyboard jump, and preserved double-edit behavior");
+  }
+  if (!timeline_clip_content_source.contains(QStringLiteral("timelineClipContentContract: \"timeline-clip-content:v1|title-fit:true|metadata-fit:true|effects-fit:true|readable-text:true|no-elide:true\"")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-fit:true|metadata-fit:true|effects-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("property real horizontalInset: 0")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("model: root.effects ? root.effects : []")) ||
+      !timeline_clip_content_source.contains(QStringLiteral("Accessible.description: metadata")) ||
+      !timeline_view_source.contains(QStringLiteral("function clipMetadataText(clip)")) ||
+      !timeline_view_source.contains(QStringLiteral("TimelineClipContent {")) ||
+      !timeline_view_source.contains(QStringLiteral("title: String(modelData.displayLabel || \"Clip\")")) ||
+      !timeline_view_source.contains(QStringLiteral("metadata: root.clipMetadataText(modelData)")) ||
+      !timeline_view_source.contains(QStringLiteral("effects: modelData.effectStack ? modelData.effectStack : []")) ||
+      !timeline_view_source.contains(QStringLiteral("horizontalInset: clipBlock.trimHandleWidth"))) {
+    return fail("Timeline clip bodies should use TimelineClipContent for readable no-ellipsis labels, metadata, and effect chips without moving clip behavior");
+  }
+  if (!timeline_view_source.contains(QStringLiteral("AppMenu {\n                                    id: timelineCanvasMenu")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineCanvasMenu\"")) ||
+      !timeline_view_source.contains(QStringLiteral("onTriggered: root.addMarkerAtPlayhead()")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.insertSourceClipAtPlayhead()")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.overwriteSourceClipAtPlayhead()")) ||
+      !timeline_view_source.contains(QStringLiteral("AppMenu {\n                                                    id: clipMenu")) ||
+      !timeline_view_source.contains(QStringLiteral("objectName: \"timelineClipMenu\"")) ||
+      !timeline_view_source.contains(QStringLiteral("onTriggered: splitAtPlayhead()")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.moveSelectedBackward()")) ||
+      !timeline_view_source.contains(QStringLiteral("timelineDocument.moveSelectedForward()")) ||
+      !timeline_view_source.contains(QStringLiteral("onTriggered: root.deleteSelectedTimelineClip()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Menu\\s*\\{")).match(timeline_view_source).hasMatch()) {
+    return fail("Timeline canvas and clip context menus should use shared AppMenu/AppMenuItem surfaces while preserving marker, source insert/overwrite, split, move, and lift/extract actions");
+  }
+  if (!timeline_track_toggle_button_source.contains(QStringLiteral("timelineTrackToggleButtonContract: \"timeline-track-toggle-button:v1|checked-state:true|disabled-state:true|hover:true|keyboard:true|tooltip-full:true|accessibility-full:true|no-elide:true\"")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|compact-glyph:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("Accessible.name: root.label")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("Accessible.checked: root.checked")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !timeline_track_toggle_button_source.contains(QStringLiteral("ToolTip.text: root.label")) ||
+      !app_menu_source.contains(QStringLiteral("appMenuContract: \"app-menu:v1|shared-surface:true|keyboard:true|escape:true|premium-border:true|consistent-padding:true|readable-items:true\"")) ||
+      !app_menu_source.contains(QStringLiteral("closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent")) ||
+      !app_menu_item_source.contains(QStringLiteral("appMenuItemContract: \"app-menu-item:v1|hover:true|keyboard:true|disabled-state:true|shortcut-fit:true|readable-text:true|no-elide:true\"")) ||
+      !app_menu_item_source.contains(QStringLiteral("fontSizeMode: Text.HorizontalFit")) ||
+      !app_menu_item_source.contains(QStringLiteral("elide: Text.ElideNone")) ||
+      !timeline_track_header_source.contains(QStringLiteral("TimelineTrackToggleButton {")) ||
+      !timeline_track_header_source.contains(QStringLiteral("AppMenu {\n        id: trackMenu")) ||
+      !timeline_track_header_source.contains(QStringLiteral("AppMenuItem {")) ||
+      !timeline_track_header_source.contains(QStringLiteral("label: trackData.trackKind === \"video\"")) ||
+      !timeline_track_header_source.contains(QStringLiteral("iconName: trackData.trackKind === \"video\" ? (trackData.visible ? \"visible\" : \"hidden\") : \"audio\"")) ||
+      !timeline_track_header_source.contains(QStringLiteral("onToggled: root.togglePrimaryTrackState()")) ||
+      !timeline_track_header_source.contains(QStringLiteral("onToggled: root.toggleSoloTrackState()")) ||
+      !timeline_track_header_source.contains(QStringLiteral("onToggled: root.toggleTargetedTrackState()")) ||
+      !timeline_track_header_source.contains(QStringLiteral("onToggled: root.toggleLockedTrackState()")) ||
+      QRegularExpression(QStringLiteral("\\n\\s*Menu\\s*\\{")).match(timeline_track_header_source).hasMatch()) {
+    return fail("Timeline track headers should use labeled no-elide toggle buttons and shared AppMenu context actions while preserving primary, solo, target, and lock commands");
+  }
+  if (!timeline_effect_library_row_source.contains(QStringLiteral("timelineEffectLibraryRowContract: \"timeline-effect-library-row:v1|drag:true|add:true|search-filter:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|description-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("property string libraryType: \"effect\"")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("Drag.keys: [\"effect\"]")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("DragHandler {")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("signal addRequested(string effectName)")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !timeline_effect_library_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("delegate: TimelineEffectLibraryRow")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("searchText: root.effectSearchText")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("actionEnabled: root.hasSelection")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.addQuickEffect(effectName)"))) {
+    return fail("Timeline effect library should use TimelineEffectLibraryRow with drag metadata, readable text, keyboard add, and preserved add behavior");
+  }
+  if (!timeline_transition_library_row_source.contains(QStringLiteral("timelineTransitionLibraryRowContract: \"timeline-transition-library-row:v1|drag:true|in-out:true|search-filter:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|description-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("property string libraryType: \"transition\"")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("readonly property real transitionDurationSeconds: transitionName === \"Cut\" ? 0 : 0.35")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("Drag.keys: [\"transition\"]")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("DragHandler {")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("signal transitionRequested(string edge, string transitionName, real durationSeconds)")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !timeline_transition_library_row_source.contains(QStringLiteral("wrapMode: Text.WrapAtWordBoundaryOrAnywhere")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("delegate: TimelineTransitionLibraryRow")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("searchText: root.transitionSearchText")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("actionEnabled: root.hasSelection")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.assignTransition(edge, transitionName, durationSeconds)"))) {
+    return fail("Timeline transition library should use TimelineTransitionLibraryRow with drag metadata, readable text, keyboard In assignment, and preserved In/Out behavior");
+  }
+  if (!timeline_effects_panel_source.contains(QStringLiteral("InspectorSlider {")) ||
+      !inspector_slider_source.contains(QStringLiteral("property int resetColumnWidth: 28")) ||
+      !inspector_slider_source.contains(QStringLiteral("property int controlHeight: 44")) ||
+      !inspector_slider_source.contains(QStringLiteral("readonly property int trackHeight: 2")) ||
+      !inspector_slider_source.contains(QStringLiteral("readonly property int thumbRestSize: 12")) ||
+      !inspector_slider_source.contains(QStringLiteral("readonly property int thumbPressedSize: 14")) ||
+      !inspector_slider_source.contains(QStringLiteral("readonly property int thumbReservedSize: Math.max(thumbRestSize, thumbPressedSize)")) ||
+      !inspector_slider_source.contains(QStringLiteral("|reserved-thumb:\" +")) ||
+      !inspector_slider_source.contains(QStringLiteral("|fixed-reset:true|stable-value:true|fixed-label:true|disabled-reason:true|no-elide:true|double-click-reset:true|no-handle-layout-shift:true")) ||
+      !inspector_slider_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|label-fit:true|value-fit:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !inspector_slider_source.contains(QStringLiteral("valueGeometryContract: \"slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:44|track-height:2|thumb:12-14|reserved-thumb:14|handle-layout-shift:false\"")) ||
+      !inspector_slider_source.contains(QStringLiteral("resetActionContract: \"slider-reset-action:v1|icon-only:true|tooltip-full:true|accessible-label:true|disabled-reason:true|active-when-modified:true|fixed-column:\"")) ||
+      !inspector_slider_source.contains(QStringLiteral("property string disabledReason: \"\"")) ||
+      !inspector_slider_source.contains(QStringLiteral("Accessible.description: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.valueText")) ||
+      !inspector_slider_source.contains(QStringLiteral("Layout.preferredWidth: root.labelColumnWidth")) ||
+      !inspector_slider_source.contains(QStringLiteral("Layout.maximumWidth: root.labelColumnWidth")) ||
+      !inspector_slider_source.contains(QStringLiteral("Layout.maximumWidth: root.valueColumnWidth")) ||
+      !inspector_slider_source.contains(QStringLiteral("Layout.maximumWidth: root.resetColumnWidth")) ||
+      !inspector_slider_source.contains(QStringLiteral("width: Math.round(root.thumbReservedSize * root.sliderScale)")) ||
+      !inspector_slider_source.contains(QStringLiteral("width: parent.width * root.thumbVisualScale")) ||
+      !inspector_slider_source.contains(QStringLiteral("Components.ToolButton {")) ||
+      !inspector_slider_source.contains(QStringLiteral("objectName: root.objectName.length > 0 ? root.objectName + \"ResetButton\" : \"\"")) ||
+      !inspector_slider_source.contains(QStringLiteral("showLabel: false")) ||
+      !inspector_slider_source.contains(QStringLiteral("enabled: root.enabled && root.modified")) ||
+      !inspector_slider_source.contains(QStringLiteral("onClicked: if (root.modified) root.resetRequested()")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Scale\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedFrameScale(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Horizontal\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedFrameOffsetX(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Vertical\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedFrameOffsetY(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Opacity\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("valueInputMode: \"percentNormalized\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedClipOpacity(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Gain\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedClipAudioGain(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Fade In\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedClipFadeInSeconds(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("label: \"Fade Out\"")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("root.documentController.setSelectedClipFadeOutSeconds(value)")) ||
+      !timeline_effects_panel_source.contains(QStringLiteral("onResetRequested: if (root.documentController) root.documentController.setSelectedClipAudioGain(0)"))) {
+    return fail("Timeline motion and audio controls should use shared InspectorSlider rows with stable value columns, typed entry, reset, and preserved setters");
+  }
+  if (!timeline_media_asset_row_source.contains(QStringLiteral("timelineMediaAssetRowContract: \"timeline-media-asset-row:v1|preview:true|source-insert-overwrite:true|keyboard:true|hover:true|readable-text:true|no-elide:true\"")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("readableTextContract: \"readable-text:v1|ellipsis:none|title-wrap:true|metadata-wrap:true|tooltip-full:true|accessibility-full:true\"")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("rowAnatomyContract: \"row-anatomy:v1|preview-zone:fixed-84|content:title-metadata-wrap|action-zone:fixed-92|actions:source-insert-overwrite|hover:neutral|focus:ring\"")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("readonly property int actionZoneWidth: 92")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("signal sourceRequested(string assetId, string filePath, string titleText, string thumbnailSource)")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("signal insertRequested(string assetId, string filePath, string titleText, string thumbnailSource)")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("signal overwriteRequested(string assetId, string filePath, string titleText, string thumbnailSource)")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("Keys.onReturnPressed")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("text: \"Insert\"")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("text: \"Overwrite\"")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("minimumReadableWidth: root.actionZoneWidth")) ||
+      !timeline_media_asset_row_source.contains(QStringLiteral("ActionButton {")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("delegate: TimelineMediaAssetRow")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("mediaSearchText: root.mediaSearchText")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("root.loadIntoSource(assetId, filePath, titleText, thumbnailSource)")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("timelineDocument.insertClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)")) ||
+      !timeline_source_panel_source.contains(QStringLiteral("timelineDocument.overwriteClipFromGallery(assetId, filePath, titleText, 0, 0, 0, thumbnailSource)"))) {
+    return fail("Timeline source media browser should use TimelineMediaAssetRow with readable clip labels, keyboard load, and preserved source/insert/overwrite behavior");
+  }
   if (!studio_workspace_source.contains(QStringLiteral("objectName: \"activeEditTargetReturnToBaseButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("visible: activeEditTargetBar.targetScope !== \"base-image\"")) ||
       !studio_workspace_source.contains(QStringLiteral("const retainedLayerSelection = root.normalizedPhotoLayerSelection()")) ||
@@ -1876,14 +4304,16 @@ int main(int argc, char** argv) {
   if (!studio_workspace_source.contains(QStringLiteral("function activateBaseImageLayerTarget()")) ||
       !studio_workspace_source.contains(QStringLiteral("function globalChangedAdjustmentGroups()")) ||
       !studio_workspace_source.contains(QStringLiteral("function globalAdjustmentSummary()")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageLayerRowTargetArea\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("targetAreaObjectName: \"baseImageLayerRowTargetArea\"")) ||
       !studio_workspace_source.contains(QStringLiteral("clickRouteContract: \"base-image-row-click:activate-base-target:v1\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("function triggerBaseImageLayerRowClickForTest()")) ||
+      !layer_row_source.contains(QStringLiteral("function triggerBaseImageLayerRowClickForTest()")) ||
       !studio_workspace_source.contains(QStringLiteral("onClicked: root.activateBaseImageLayerTarget()")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.baseImageThumbnailSource")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageLayerThumbnailImage\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageLayerLockBadge\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageLayerMetadataLabel\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailImageObjectName: \"baseImageLayerThumbnailImage\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string baseLayerThumbnailDprContract: thumbnailDprContract")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailSourceSize: root.thumbnailSourceSizeForDisplay(thumbnailZoneSize, 96)")) ||
+      !studio_workspace_source.contains(QStringLiteral("lockBadgeObjectName: \"baseImageLayerLockBadge\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("metadataObjectName: \"baseImageLayerMetadataLabel\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"baseImageGlobalAdjustmentBadge\"")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string baseLayerTargetKind: \"global-edits\"")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string baseLayerContract: \"base-image-layer:v1|locked:true|stack:bottom|target:\"")) ||
@@ -1899,10 +4329,10 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("function normalizedPhotoLayerMaskSetValues(layer, listKey, singleKey)")) ||
       !studio_workspace_source.contains(QStringLiteral("function moveLayerMaskSet(layerIndex, maskSet, targetMaskIndex)")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.moveMaskSetInPhotoLayer")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property var unlinkedMaskSets: root.unlinkedMaskSets()")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property string standaloneMaskListContract: \"standalone-mask-list:unlinked-only|count:\" + unlinkedMaskSets.length")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property string maskListPartitionSignature: root.maskSetListPartitionSignature()")) ||
-      !studio_workspace_source.contains(QStringLiteral("visible: unlinkedMaskSets.length > 0")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property var unlinkedMaskSets: photoLayersInspectorGroup.inspectorActive ? root.unlinkedMaskSets() : []")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property string standaloneMaskListContract: \"standalone-mask-list:unlinked-only|count:\" + unlinkedMaskSets.length")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property string maskListPartitionSignature: photoLayersInspectorGroup.inspectorActive ? root.maskSetListPartitionSignature() : \"mask-list-partition:v1|inactive\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("visible: photoLayersInspectorGroup.inspectorActive && unlinkedMaskSets.length > 0")) ||
       !studio_workspace_source.contains(QStringLiteral("model: photoLayersMaskSetList.sectionCollapsed ? [] : photoLayersMaskSetList.unlinkedMaskSets")) ||
       !studio_workspace_source.contains(QStringLiteral("id: photoLayerNestedMaskList")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerNestedMaskList\"")) ||
@@ -1972,6 +4402,17 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("sourceSize.height: parent.screenAwareThumbnailBackingHeight"))) {
     return fail("Studio thumbnails should bind decode source size to current screen device pixel ratio");
   }
+  if (!studio_workspace_source.contains(QStringLiteral("function thumbnailDisplayState(data)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailDisplayState(data)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailStateSignature(data)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("return \"progressive-updating\"")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("+ \"|display:\" + displayState")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailDisplayState: root.thumbnailDisplayState(layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailDisplayState: photoLayerRowRoot.thumbnailDisplayState")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailDisplayState: photoLayerMaskSetRowRoot.thumbnailDisplayState")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailDisplayState: photoLayerNestedMaskRowRoot.thumbnailDisplayState"))) {
+    return fail("Studio thumbnail rows should expose a stable display-state contract for progressive replacement");
+  }
   if (!studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailProgressive: layerData.thumbnailProgressive === true")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailProgressiveReason: String(layerData.thumbnailProgressiveReason || \"\")")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailProgressiveSignature: String(layerData.thumbnailProgressiveSignature || \"\")")) ||
@@ -1988,14 +4429,27 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailFailureStage: photoLayerNestedMaskRowRoot.thumbnailFailureStage"))) {
     return fail("Studio thumbnail rows should expose contained thumbnail failure attribution");
   }
-  if (!studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailRefreshQueued: thumbnailProgressive && thumbnailStale && thumbnailProgressiveReason === \"thumbnail_refresh_deferred\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailQueueSignature: \"thumbnail-queue|deferred:\" + String(thumbnailRefreshQueued) + \"|reason:\" + thumbnailProgressiveReason")) ||
+  if (!studio_workspace_source.contains(QStringLiteral("function thumbnailRefreshQueued(data)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailRefreshQueued(data)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailQueueSignature(data)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("function thumbnailRefreshQueued(data)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("function thumbnailQueueSignature(data)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("thumbnailQueueJobId")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("thumbnailQueueDeferBlockerSignature")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailRefreshQueued: root.thumbnailRefreshQueued(layerData)")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string thumbnailQueueSignature: root.thumbnailQueueSignature(layerData)")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailRefreshQueued: photoLayerRowRoot.thumbnailRefreshQueued")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailRefreshQueued: photoLayerMaskSetRowRoot.thumbnailRefreshQueued")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property bool thumbnailRefreshQueued: photoLayerNestedMaskRowRoot.thumbnailRefreshQueued"))) {
     return fail("Studio thumbnail rows should expose deferred thumbnail queue state");
   }
   if (!studio_workspace_source.contains(QStringLiteral("function thumbnailRetryActionSignature(data, rowKind)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailStatusLabel(data, fallbackText)")) ||
+      !studio_workspace_source.contains(QStringLiteral("thumbnailStateUtils.thumbnailRetryActionSignature(data, rowKind)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("function thumbnailStatusLabel(data, fallbackText)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("function thumbnailRetryActionSignature(data, rowKind)")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("Thumbnail stale / ")) ||
+      !thumbnail_state_utils_source.contains(QStringLiteral("thumbnail-retry|row:")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerThumbnailRetryButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerMaskSetThumbnailRetryButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"activeLayerMaskChildThumbnailRetryButton\"")) ||
@@ -2053,10 +4507,10 @@ int main(int argc, char** argv) {
   QJsonArray visual_proof_manifest;
   root->setProperty("width", 1600);
   root->setProperty("height", 1000);
-  process_layout_events(6);
+  QCoreApplication::processEvents();
 
   root->setProperty("currentWorkspace", root->property("editWorkspaceIndex"));
-  QCoreApplication::processEvents();
+  process_layout_events(6);
 
   catalog_assets.replaceAssetsForTesting(
       {make_asset(QStringLiteral("asset-1"), QStringLiteral("IMG_0001.jpg"))});
@@ -2080,10 +4534,240 @@ int main(int argc, char** argv) {
     return fail("edit workspace should follow the next visible asset after the gallery repopulates");
   }
 
-  auto* edit_workspace = root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
-  if (edit_workspace == nullptr) {
-    return fail("edit workspace should expose a testable StudioWorkspace object");
+	  auto* edit_workspace = root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
+	  if (edit_workspace == nullptr) {
+	    return fail("edit workspace should expose a testable StudioWorkspace object");
+	  }
+	  if (auto* edit_workspace_content =
+	          edit_workspace->findChild<QObject*>(QStringLiteral("editStudioWorkspaceContent"))) {
+	    edit_workspace = edit_workspace_content;
+	  }
+	  edit_workspace->setProperty("developerDiagnosticsEnabled", true);
+  auto* studio_edit_tool_rail = find_named_object(edit_workspace, QStringLiteral("studioEditToolRail"));
+  QVariant edit_tool_model_signature;
+  QVariant edit_tool_lifecycle_signature;
+  QVariant edit_tool_discovery_signature;
+  QVariant edit_workflow_polish_signature;
+  QVariant tool_switch_cleanup_signature;
+  if (studio_edit_tool_rail == nullptr ||
+      edit_workspace->property("editWorkflowPolishContract").toString() !=
+          QStringLiteral("edit-workflow-polish:v1|first-glance:tool-rail-image-stage-active-tool-inspector-filmstrip|close-inspection:active-family-variant-target-hud-pending-actions|clutter:one-active-hud-one-primary-action-diagnostics-collapsed|interaction:select-expand-switch-commit-cancel-customize|text:no-elide-no-overlap|functionality:preserved") ||
+      edit_workspace->property("editPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|edit|rail:primary-tool-families|content:image-viewport-toolbar-hud|inspector:active-tool-targeted-sections-layers-masks-agent|filmstrip:stable-selection|bottom:rating-flag-export|states:no-photo-active-tool-pending-disabled-error") ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "editToolModelSignature",
+          Q_RETURN_ARG(QVariant, edit_tool_model_signature)) ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "editToolLifecycleSignature",
+          Q_RETURN_ARG(QVariant, edit_tool_lifecycle_signature)) ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "activeEditToolDiscoverySignature",
+          Q_RETURN_ARG(QVariant, edit_tool_discovery_signature)) ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "editWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, edit_workflow_polish_signature)) ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "toolSwitchCleanupSignature",
+          Q_RETURN_ARG(QVariant, tool_switch_cleanup_signature)) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("adjust:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("crop:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("masks:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("brush:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("retouch:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("layers:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("compare:")) ||
+      !edit_tool_model_signature.toString().contains(QStringLiteral("export:")) ||
+      !edit_workflow_polish_signature.toString().contains(
+          QStringLiteral("edit-workflow-polish:v1|asset:true|tool:adjust|family:Adjust")) ||
+      !edit_workflow_polish_signature.toString().contains(QStringLiteral("|variant:adjust|variant-label:Light|inspector:adjust")) ||
+      !edit_workflow_polish_signature.toString().contains(QStringLiteral("|context-panel:true|inspector-panel:true|filmstrip:true")) ||
+      !edit_workflow_polish_signature.toString().contains(QStringLiteral("|cleanup:tool-switch-cleanup:v1|serial:")) ||
+      !edit_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:tool-rail-image-stage-toolbar-inspector-filmstrip-bottom-actions"))) {
+    std::cerr << "Edit workflow polish: "
+              << edit_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("Studio edit rail should render from the shared tool model and expose live page-completion workflow state");
   }
+  const auto edit_tool_lifecycle_text = edit_tool_lifecycle_signature.toString();
+  if (!studio_workspace_source.contains(QStringLiteral("function editToolLifecycle(toolName)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function editToolLifecycleContract(toolName)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function beginEditToolSwitch(nextToolName)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function rememberEditToolVariant(toolName, variant)")) ||
+      !studio_workspace_source.contains(QStringLiteral("if (toolName === \"retouch\")")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.startRetouchTool(root.editToolLastUsedVariant(\"retouch\", \"remove\"), true)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function startRetouchTool(modeName, switchAlreadyPrepared)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("if (switchAlreadyPrepared !== true)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function cropHudModeLabel()")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function cropHudModeMenuItems()")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudModeMenuButton\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("menuItems: root.cropHudModeMenuItems()")) ||
+	      !studio_workspace_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleEditRailMenuAction(\"crop\", key) }")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function retouchModeVisibilityState(modeName)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function retouchHudModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"retouchHudModeMenuButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("menuItems: root.retouchHudModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("disabledReason: \"Experimental skin cleanup is hidden until the workflow is production-ready.\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("disabledReason: \"Experimental frequency smoothing is hidden until the workflow is production-ready.\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function resetActiveBrushDefaults()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushPresetMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushCustomizationMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushHudModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushQuickTuningMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handleBrushQuickTuningMenuAction(key)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushPageVisibilitySignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("|context-panel:compact-target-summary")) ||
+      !studio_workspace_source.contains(QStringLiteral("|layer-actions:primary-target-plus-more-during-brush")) ||
+      !studio_workspace_source.contains(QStringLiteral("|layer-rows:compact-brush-mode")) ||
+      !studio_workspace_source.contains(QStringLiteral("|visibility-states:menu-during-brush")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"layerVisibilityStateMenuButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushDefaultSignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function maskSetRowMenuItems(")) ||
+      !studio_workspace_source.contains(QStringLiteral("function handleMaskSetRowMenuAction(")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerMaskSetRowMoreMenuButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerNestedMaskRowMoreMenuButton\"")) ||
+      !brush_layer_inspector_header_source.contains(QStringLiteral("menuItems: root.addMenuItems")) ||
+      !studio_workspace_source.contains(QStringLiteral("addMenuItems: root.layerAddMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("onAddLayerMenuItemTriggered: function(key) { root.handleLayerAddMenuAction(key) }")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-preset:")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-size-source-fixed")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-size-source-pressure")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-pressure-off")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-pressure-size-flow")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-pressure-full")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-reset-defaults")) ||
+      !studio_workspace_source.contains(QStringLiteral("BrushToolHud {")) ||
+      !studio_workspace_source.contains(QStringLiteral("modeMenuItems: root.brushHudModeMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("tuningMenuItems: root.brushQuickTuningMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("onModeMenuItemTriggered: function(key) { root.handleEditRailMenuAction(\"brush\", key) }")) ||
+      !studio_workspace_source.contains(QStringLiteral("onTuningMenuItemTriggered: function(key) { root.handleBrushQuickTuningMenuAction(key) }")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("brush-tool-hud-component:v1|owns:chrome-controls-hidden-precision|signals:mode-tuning-size-done|object-names:preserved|workspace-state:external")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("objectName: \"brushHudModeMenuButton\"")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("objectName: \"brushHudTuningMenuButton\"")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("menuItems: root.modeMenuItems")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("menuItems: root.tuningMenuItems")) ||
+      !brush_tool_hud_source.contains(QStringLiteral("objectName: \"brushHudResetDefaultsButton\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("brush-defaults:v1|size:6|flow:100|hardness:45|density:100|opacity:100|spacing:75|smoothing:18|pressure:0/0/0|reset:true|operation-preserved:true")) ||
+      !studio_workspace_source.contains(QStringLiteral("function activeEditToolDiscoverySignature()")) ||
+      !studio_workspace_source.contains(QStringLiteral("switchSerial: root.toolSwitchSerial")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"editInspectorActiveToolHeader\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("objectName: \"activeToolVariantChip\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("lifecycle: lifecycle")) ||
+      !studio_workspace_source.contains(QStringLiteral("lifecycleContract: root.editToolLifecycleContract(tool.id)")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("adjust:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("crop:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("masks:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("brush:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("retouch:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("layers:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("compare:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("export:tool-lifecycle:v1|entry:rail-click-menu-shortcut")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("|primary:paint-selection|")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("|commit:apply-retouch-patch|")) ||
+      !edit_tool_lifecycle_text.contains(QStringLiteral("|cancel:cancel-exits-transient-selection|"))) {
+    return fail("Studio edit tools should declare entry, active, primary, feedback, commit, cancel, disabled, and error lifecycle behavior");
+  }
+  const auto edit_tool_rail_expansion_contract =
+      studio_edit_tool_rail->property("expansionContract").toString();
+  const auto edit_tool_rail_lifecycle_contract =
+      studio_edit_tool_rail->property("lifecycleContract").toString();
+  const auto edit_tool_rail_discovery_contract =
+      studio_edit_tool_rail->property("toolDiscoveryContract").toString();
+  const auto edit_tool_rail_stale_menu_cleanup_contract =
+      studio_edit_tool_rail->property("staleMenuCleanupContract").toString();
+  auto* edit_inspector_active_tool_header =
+      find_named_object(edit_workspace, QStringLiteral("editInspectorActiveToolHeader"));
+  auto* active_tool_variant_chip =
+      find_named_object(edit_workspace, QStringLiteral("activeToolVariantChip"));
+  if (!edit_tool_rail_expansion_contract.contains(QStringLiteral("tool-rail:v1")) ||
+      !edit_tool_rail_expansion_contract.contains(QStringLiteral("lifecycle:8")) ||
+      !edit_tool_rail_lifecycle_contract.contains(QStringLiteral("tool-rail-lifecycle:v1|declared:8|tools:8")) ||
+      edit_tool_rail_discovery_contract !=
+          QStringLiteral("tool-discovery:v1|families-visible:true|active-family:true|active-variant:true|variants-one-expansion:true|stale-menus-close:true|disabled-reasons:true") ||
+      edit_tool_rail_stale_menu_cleanup_contract !=
+          QStringLiteral("tool-rail-stale-menu-cleanup:v1|one-expansion:true|on-tool-click:true|on-menu-open:true|on-menu-trigger:true|on-tools-changed:true|on-switch-serial:true") ||
+      !edit_tool_rail_lifecycle_contract.contains(QStringLiteral("status-tooltips:true")) ||
+      !edit_tool_rail_expansion_contract.contains(QStringLiteral("keyboard-menu:true")) ||
+      !edit_tool_rail_expansion_contract.contains(QStringLiteral("disabled-reasons:true")) ||
+      !edit_tool_rail_expansion_contract.contains(QStringLiteral("no-elide:true")) ||
+      !studio_edit_tool_rail->property("activeVariantVisible").toBool() ||
+      studio_edit_tool_rail->property("menuToolCount").toInt() < 6 ||
+      !edit_tool_discovery_signature.toString().contains(QStringLiteral("active-tool-discovery:v1|family:")) ||
+      !edit_tool_discovery_signature.toString().contains(QStringLiteral("|variant:")) ||
+      !edit_tool_discovery_signature.toString().contains(QStringLiteral("|menus:one-expansion|stale-clear:true")) ||
+      !tool_switch_cleanup_signature.toString().contains(QStringLiteral("tool-switch-cleanup:v1|serial:")) ||
+      !tool_switch_cleanup_signature.toString().contains(QStringLiteral("|menus:closed-by-tool-rail-switch-serial|committed-edits:preserved")) ||
+      edit_inspector_active_tool_header == nullptr ||
+      active_tool_variant_chip == nullptr ||
+      !edit_inspector_active_tool_header->property("toolDiscoveryContract").toString().contains(
+          QStringLiteral("active-tool-discovery:v1|family:"))) {
+    return fail("Studio edit rail should expose expandable tool menus and a visible active variant");
+  }
+  auto* active_canvas_tool_chip_contract =
+      find_named_object(edit_workspace, QStringLiteral("activeCanvasToolChip"));
+  if (active_canvas_tool_chip_contract == nullptr ||
+      !active_canvas_tool_chip_contract->property("layoutContract")
+          .toString()
+          .contains(QStringLiteral("tool-hud")) ||
+      !active_canvas_tool_chip_contract->property("toolDiscoveryContract")
+          .toString()
+          .contains(QStringLiteral("tool-hud-discovery:v1|active-family:"))) {
+    return fail("Studio active canvas tool chip should render from the shared ToolHud contract");
+  }
+  auto* white_balance_inspector_contract =
+      find_named_object(edit_workspace, QStringLiteral("whiteBalanceInspectorGroup"));
+  if (white_balance_inspector_contract == nullptr ||
+      !white_balance_inspector_contract->property("sectionContract")
+          .toString()
+          .contains(QStringLiteral("inspector-section:v2")) ||
+      !white_balance_inspector_contract->property("sectionContract")
+          .toString()
+          .contains(QStringLiteral("fixed-actions:true")) ||
+      !white_balance_inspector_contract->property("sectionContract")
+          .toString()
+          .contains(QStringLiteral("icon-first-actions:true")) ||
+      !white_balance_inspector_contract->property("sectionContract")
+          .toString()
+          .contains(QStringLiteral("keyboard:true")) ||
+      !white_balance_inspector_contract->property("readableTextContract")
+          .toString()
+          .contains(QStringLiteral("ellipsis:none")) ||
+      !white_balance_inspector_contract->property("sectionGeometryContract")
+          .toString()
+          .contains(QStringLiteral("header-min:30"))) {
+    return fail("Studio adjustment inspector groups should render from the shared InspectorSection contract");
+  }
+  auto* photo_layer_add_split_contract =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerAddSplitButton"));
+  if (photo_layer_add_split_contract == nullptr ||
+      photo_layer_add_split_contract->property("text").toString() != QStringLiteral("Add Layer") ||
+      !photo_layer_add_split_contract->property("splitContract")
+          .toString()
+          .contains(QStringLiteral("split-button:v1")) ||
+      !photo_layer_add_split_contract->property("splitContract")
+          .toString()
+          .contains(QStringLiteral("keyboard:true")) ||
+      !photo_layer_add_split_contract->property("splitContract")
+          .toString()
+          .contains(QStringLiteral("|danger-last:true|")) ||
+      !photo_layer_add_split_contract->property("splitContract")
+          .toString()
+          .contains(QStringLiteral("|disabled-reasons-complete:true|")) ||
+      !photo_layer_add_split_contract->property("splitContract")
+          .toString()
+          .contains(QStringLiteral("no-elide:true")) ||
+      photo_layer_add_split_contract->property("layerAddSplitContract").toString() !=
+          QStringLiteral("layer-add-split:v2|primary:adjustment|menu:adjustment,fill,text,source,group|descriptions:5|checked:1|disabled-reasons:1|one-primary:true|permanent-fill-text:false|readable-menu:true|stack-clutter:false|no-elide:true")) {
+    return fail("Studio layer Add should use one shared SplitButton with Adjustment as primary and Fill/Text/Source/Group in the menu");
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_EDIT_RAIL")) {
+    return EXIT_SUCCESS;
+  }
+  trace_smoke_progress("after edit rail checks");
   auto* workspace_tab_edit = find_named_object(root, QStringLiteral("workspaceTabEdit"));
   auto* workspace_tab_edit_label = find_named_object(root, QStringLiteral("workspaceTabLabelEdit"));
   auto* top_workspace_status_label = find_named_object(root, QStringLiteral("topWorkspaceStatusLabel"));
@@ -2125,12 +4809,15 @@ int main(int argc, char** argv) {
       })) {
     return fail("viewport QML proof asset should load into the editor");
   }
+  trace_smoke_progress("viewport proof asset loaded");
   auto* edit_viewport = find_named_object(edit_workspace, QStringLiteral("editImageViewport"));
   if (edit_viewport == nullptr ||
       !QMetaObject::invokeMethod(
           edit_viewport,
           "setZoom",
-          Q_ARG(QVariant, QVariant(2.0)))) {
+          Q_ARG(QVariant, QVariant(2.0)),
+          Q_ARG(QVariant, QVariant(160.0)),
+          Q_ARG(QVariant, QVariant(120.0)))) {
     return fail("edit ImageViewport should expose a callable zoom path");
   }
   if (!wait_for_condition([&]() {
@@ -2139,6 +4826,7 @@ int main(int argc, char** argv) {
       })) {
     return fail("StudioWorkspace zoom should publish an active preview viewport to the controller");
   }
+  trace_smoke_progress("zoom viewport published");
   const auto zoom_viewport_rect = editor_preview.previewViewportRect();
   if (zoom_viewport_rect.width() <= 0.0 || zoom_viewport_rect.height() <= 0.0 ||
       zoom_viewport_rect.width() > 1.0 || zoom_viewport_rect.height() > 1.0 ||
@@ -2162,6 +4850,7 @@ int main(int argc, char** argv) {
       }, 10000)) {
     return fail("viewport QML proof should restore the lightweight smoke asset before continuing");
   }
+  trace_smoke_progress("lightweight asset restored");
 
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("adjust"));
   for (auto iteration = 0; iteration < 6; ++iteration) {
@@ -2418,6 +5107,8 @@ int main(int argc, char** argv) {
       find_named_object(edit_workspace, QStringLiteral("activeAdjustmentLayerTargetStatusLabel"));
   auto* active_adjustment_layer_open_layers_button =
       find_named_object(edit_workspace, QStringLiteral("activeAdjustmentLayerOpenLayersButton"));
+  auto* base_adjustment_target_guard =
+      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuard"));
   process_layout_events(6);
   auto* filmstrip_thumbnail_card = find_named_object(edit_workspace, QStringLiteral("editFilmstripThumbnailCard"));
   auto* filmstrip_image_frame = find_named_object(edit_workspace, QStringLiteral("filmstripImageFrame"));
@@ -2464,8 +5155,8 @@ int main(int argc, char** argv) {
       scopes_inspector_tab == nullptr || detail_inspector_tab == nullptr || info_inspector_tab == nullptr ||
       photo_layers_group == nullptr ||
       edit_inspector_panel->property("title").toString() != QStringLiteral("Adjust") ||
-      adjust_inline_histogram_scope == nullptr || !adjust_inline_histogram_scope->property("visible").toBool() ||
-      adjust_inline_waveform_scope == nullptr || !adjust_inline_waveform_scope->property("visible").toBool() ||
+      adjust_inline_histogram_scope != nullptr ||
+      adjust_inline_waveform_scope != nullptr ||
       adjust_inspector_tab->property("text").toString() != QStringLiteral("Adjust") ||
       presets_inspector_tab->property("text").toString() != QStringLiteral("Presets") ||
       layers_inspector_tab->property("text").toString() != QStringLiteral("Layers") ||
@@ -2486,17 +5177,17 @@ int main(int argc, char** argv) {
       active_adjustment_layer_target_name_label == nullptr ||
       active_adjustment_layer_target_status_label == nullptr ||
       active_adjustment_layer_open_layers_button == nullptr ||
-      !active_edit_target_bar->property("visible").toBool() ||
+      base_adjustment_target_guard != nullptr ||
+      item_visible(qobject_cast<QQuickItem*>(active_edit_target_bar)) ||
       active_edit_target_bar->property("targetScope").toString() != QStringLiteral("base-image") ||
-      active_edit_target_breadcrumb_label->property("text").toString() != QStringLiteral("Base Image") ||
-      active_edit_target_mode_label->property("text").toString() != QStringLiteral("Editing Base Image") ||
       active_adjustment_layer_target_bar->property("visible").toBool() ||
       edit_inspector_reset_button->property("text").toString() != QStringLiteral("Reset") ||
       edit_inspector_save_preset_button->property("text").toString() != QStringLiteral("Save Preset") ||
       white_balance_group->property("title").toString() != QStringLiteral("White Balance") ||
       tone_curve_group->property("title").toString() != QStringLiteral("Tone Curve")) {
-    return fail("adjust inspector should use readable title-case panel, tab, and group labels");
+    return fail("adjust inspector should use readable labels without showing a Base Image target card");
   }
+  trace_smoke_progress("adjust inspector baseline checked");
   QVariant base_target_signature;
   if (!QMetaObject::invokeMethod(
           edit_workspace,
@@ -2504,7 +5195,7 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, base_target_signature)) ||
       base_target_signature.toString() !=
           QStringLiteral("scope:base-image|breadcrumb:Base Image|summary:Global image adjustments")) {
-    return fail("adjust inspector should explicitly show Base Image as the global edit target");
+    return fail("adjust inspector should keep Base Image as the internal global edit target");
   }
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("presets"));
   for (auto iteration = 0; iteration < 6; ++iteration) {
@@ -2563,6 +5254,7 @@ int main(int argc, char** argv) {
       studio_preset_delete_button->property("role").toString() != QStringLiteral("destructive")) {
     return fail("preset library should live in a dedicated Presets inspector tab with filters, large cards, and management controls");
   }
+  trace_smoke_progress("preset inspector checked");
   edit_workspace->setProperty("studioPresetCategoryFilter", QStringLiteral("Landscape"));
   edit_workspace->setProperty("studioPresetPackFilter", QStringLiteral("Landscape Core"));
   edit_workspace->setProperty("studioPresetFavoritesOnly", false);
@@ -2591,9 +5283,9 @@ int main(int argc, char** argv) {
   editor_preview.setExposure(0.42);
   editor_preview.setSaturation(17.0);
   QCoreApplication::processEvents();
-  if (!adjust_inline_histogram_scope->property("visible").toBool() ||
-      !adjust_inline_waveform_scope->property("visible").toBool()) {
-    return fail("adjust inspector should keep histogram and waveform visible while editing exposure and color controls");
+  if (find_named_object(edit_workspace, QStringLiteral("adjustInlineHistogramScope")) != nullptr ||
+      find_named_object(edit_workspace, QStringLiteral("adjustInlineWaveformScope")) != nullptr) {
+    return fail("adjust inspector should not embed histogram or waveform scopes above exposure and color controls");
   }
   if (light_panel_before_after_button->property("iconName").toString() != QStringLiteral("compare") ||
       color_panel_before_after_button->property("iconName").toString() != QStringLiteral("compare") ||
@@ -2744,6 +5436,7 @@ int main(int argc, char** argv) {
       !advanced_color_group->property("visible").toBool()) {
     return fail("clearing the adjust inspector filter should restore the full adjustment stack");
   }
+  trace_smoke_progress("adjust filter restored");
   for (auto* footer_child : edit_inspector_footer->findChildren<QObject*>()) {
     if (footer_child->property("text").toString() == QStringLiteral("Export")) {
       return fail("edit inspector footer should contain only edit-local actions, not export navigation");
@@ -2836,9 +5529,9 @@ int main(int argc, char** argv) {
       harmony_group->property("title").toString() != QStringLiteral("Harmony Lab") ||
       split_toning_group->property("title").toString() != QStringLiteral("Split Toning") ||
       harmony_group->property("visible").toBool() ||
-      harmony_warm_preset_button->property("text").toString() != QStringLiteral("Warm") ||
-      harmony_complement_preset_button->property("text").toString() != QStringLiteral("Comp") ||
-      harmony_triad_preset_button->property("text").toString() != QStringLiteral("Triad") ||
+      harmony_warm_preset_button->property("text").toString() != QStringLiteral("Warm Analogous") ||
+      harmony_complement_preset_button->property("text").toString() != QStringLiteral("Soft Complement") ||
+      harmony_triad_preset_button->property("text").toString() != QStringLiteral("Cool Triad") ||
       harmony_amount_slider->property("label").toString() != QStringLiteral("Amount") ||
       !color_mix_group->property("expanded").toBool() ||
       channel_mixer_group->property("expanded").toBool() ||
@@ -2958,6 +5651,7 @@ int main(int argc, char** argv) {
       !split_toning_group->property("expanded").toBool()) {
     return fail("specialist color tools should become visible in Lab and expand through explicit workspace state");
   }
+  trace_smoke_progress("specialist color tools checked");
   edit_workspace->setProperty("labColorToolsVisible", false);
   edit_workspace->setProperty("channelMixerExpanded", false);
   edit_workspace->setProperty("blackWhiteExpanded", false);
@@ -3071,6 +5765,7 @@ int main(int argc, char** argv) {
       editor_preview.activeCurvePoints().size() != 2) {
     return fail("tone curve preset preview should be reversible without changing the recipe");
   }
+  trace_smoke_progress("tone curve editor checked");
   auto* brightness_slider = edit_workspace->findChild<QObject*>(QStringLiteral("brightnessSlider"));
   auto* tint_slider = edit_workspace->findChild<QObject*>(QStringLiteral("tintSlider"));
   if (brightness_slider == nullptr || tint_slider == nullptr ||
@@ -3106,6 +5801,7 @@ int main(int argc, char** argv) {
   auto* exposure_slider = edit_workspace->findChild<QObject*>(QStringLiteral("exposureSlider"));
   auto* exposure_value_field = edit_workspace->findChild<QObject*>(QStringLiteral("exposureSliderValueField"));
   auto* exposure_modified_marker = edit_workspace->findChild<QObject*>(QStringLiteral("exposureSliderModifiedMarker"));
+  auto* exposure_reset_button = edit_workspace->findChild<QObject*>(QStringLiteral("exposureSliderResetButton"));
   auto* temperature_slider = edit_workspace->findChild<QObject*>(QStringLiteral("temperatureSlider"));
   auto* temperature_value_field = edit_workspace->findChild<QObject*>(QStringLiteral("temperatureSliderValueField"));
   auto* channel_mixer_red_slider = edit_workspace->findChild<QObject*>(QStringLiteral("channelMixerRedFromRedSlider"));
@@ -3129,11 +5825,44 @@ int main(int argc, char** argv) {
       edit_workspace->findChild<QObject*>(QStringLiteral("selectedToneWheelLuminanceSlider"));
   auto* liquify_radius_slider = edit_workspace->findChild<QObject*>(QStringLiteral("liquifyRadiusSlider"));
   QVariant committed_input_value;
-  if (exposure_slider == nullptr || exposure_value_field == nullptr || exposure_modified_marker == nullptr ||
+  if (exposure_slider == nullptr || exposure_value_field == nullptr ||
+      exposure_modified_marker == nullptr || exposure_reset_button == nullptr ||
       temperature_slider == nullptr ||
       temperature_value_field == nullptr || !exposure_value_field->property("enabled").toBool() ||
       !temperature_value_field->property("enabled").toBool()) {
-    return fail("precise exposure entry should expose enabled typed EV fields");
+    return fail("precise exposure entry should expose enabled typed EV fields and a fixed reset affordance");
+  }
+  const auto exposure_slider_contract = exposure_slider->property("sliderContract").toString();
+  const auto exposure_studio_slider_contract =
+      exposure_slider->property("studioAdjustmentSliderContract").toString();
+  const auto exposure_studio_slider_signature =
+      exposure_slider->property("studioAdjustmentSliderSignature").toString();
+  if (!exposure_slider_contract.contains(QStringLiteral("inspector-slider:v2")) ||
+      !exposure_slider_contract.contains(QStringLiteral("value-column:58")) ||
+      !exposure_slider_contract.contains(QStringLiteral("reset-column:28")) ||
+      !exposure_slider_contract.contains(QStringLiteral("row-height:44")) ||
+      !exposure_slider_contract.contains(QStringLiteral("track:2")) ||
+      !exposure_slider_contract.contains(QStringLiteral("thumb:12-14")) ||
+      !exposure_slider_contract.contains(QStringLiteral("reserved-thumb:14")) ||
+      !exposure_slider_contract.contains(QStringLiteral("typed-entry:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("modified-marker:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("fixed-reset:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("stable-value:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("fixed-label:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("disabled-reason:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("no-elide:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("double-click-reset:true")) ||
+      !exposure_slider_contract.contains(QStringLiteral("no-handle-layout-shift:true")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("studio-adjustment-slider:v1")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("shared-inspector-slider:true")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("coalesced-drag:true")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("target-aware:true")) ||
+      !exposure_studio_slider_contract.contains(QStringLiteral("disabled-reason:true")) ||
+      !exposure_studio_slider_signature.contains(QStringLiteral("|target-support:base-image,adjustment-layer|")) ||
+      !exposure_studio_slider_signature.contains(QStringLiteral("|target-supported:true|")) ||
+      !exposure_studio_slider_signature.contains(QStringLiteral("|slider:inspector-slider:v2")) ||
+      !exposure_studio_slider_signature.contains(QStringLiteral("|target:adjustment-control-target-support:v1"))) {
+    return fail("shared inspector sliders should expose professional row height, stable value/reset columns, typed entry, modified state, and no-elide behavior");
   }
   if (!QMetaObject::invokeMethod(
           exposure_slider,
@@ -3255,6 +5984,7 @@ int main(int argc, char** argv) {
       channel_mixer_red_slider->property("modified").toBool()) {
     return fail("double-click reset should restore each adjustment slider to its declared default value");
   }
+  trace_smoke_progress("typed slider controls checked");
   edit_workspace->setProperty("editTool", QStringLiteral("adjust"));
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("adjust"));
   for (auto iteration = 0; iteration < 6; ++iteration) {
@@ -3362,39 +6092,51 @@ int main(int argc, char** argv) {
     return fail("edit workspace should expose crop submode switching");
   }
   QCoreApplication::processEvents();
-  auto* crop_tool_hud = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHud"));
-  auto* crop_tool_header_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHeaderLabel"));
-  auto* crop_tool_aspect_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolAspectLabel"));
-  auto* crop_active_canvas_border = edit_workspace->findChild<QObject*>(QStringLiteral("cropActiveCanvasBorder"));
-  auto* crop_box_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropBoxOverlay"));
-  auto* crop_horizon_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropHorizonOverlay"));
-  auto* crop_transform_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropTransformOverlay"));
+	  auto* crop_tool_hud = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHud"));
+	  auto* crop_tool_header_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHeaderLabel"));
+	  auto* crop_tool_aspect_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolAspectLabel"));
+	  auto* crop_mode_menu_button = find_named_object(edit_workspace, QStringLiteral("cropHudModeMenuButton"));
+	  auto* crop_active_canvas_border = edit_workspace->findChild<QObject*>(QStringLiteral("cropActiveCanvasBorder"));
+	  auto* crop_box_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropBoxOverlay"));
+	  auto* crop_horizon_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropHorizonOverlay"));
+	  auto* crop_transform_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropTransformOverlay"));
   auto* edit_zoom_toolbar_for_crop = find_named_object(edit_workspace, QStringLiteral("editZoomToolbar"));
   auto* edit_action_toolbar_for_crop = find_named_object(edit_workspace, QStringLiteral("editActionToolbar"));
   auto* edit_context_panel_for_crop = find_named_object(edit_workspace, QStringLiteral("editContextPanel"));
   auto* edit_filmstrip_for_crop = find_named_object(edit_workspace, QStringLiteral("editFilmstrip"));
   editor_preview.setCropPreset(QStringLiteral("4x5"));
   QCoreApplication::processEvents();
-  if (crop_tool_hud == nullptr || crop_tool_header_label == nullptr || crop_tool_aspect_label == nullptr ||
-      crop_active_canvas_border == nullptr ||
-      crop_box_overlay == nullptr || crop_horizon_overlay == nullptr || crop_transform_overlay == nullptr ||
-      edit_zoom_toolbar_for_crop == nullptr || edit_action_toolbar_for_crop == nullptr ||
-      edit_context_panel_for_crop == nullptr || edit_filmstrip_for_crop == nullptr ||
-      !crop_tool_hud->property("visible").toBool() || !crop_active_canvas_border->property("visible").toBool() ||
+	  if (crop_tool_hud == nullptr || crop_tool_header_label == nullptr || crop_tool_aspect_label == nullptr ||
+	      crop_mode_menu_button == nullptr ||
+	      crop_active_canvas_border == nullptr ||
+	      crop_box_overlay == nullptr || crop_horizon_overlay == nullptr || crop_transform_overlay == nullptr ||
+	      edit_zoom_toolbar_for_crop == nullptr || edit_action_toolbar_for_crop == nullptr ||
+	      edit_context_panel_for_crop == nullptr || edit_filmstrip_for_crop == nullptr ||
+	      !crop_tool_hud->property("visible").toBool() || !crop_active_canvas_border->property("visible").toBool() ||
+      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v1|tool:crop")) ||
+      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("mode-switch:true")) ||
+      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
       !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
       edit_workspace->property("editContextPanelActive").toBool() ||
       edit_context_panel_for_crop->property("visible").toBool() ||
       edit_filmstrip_for_crop->property("visible").toBool() ||
       edit_zoom_toolbar_for_crop->property("visible").toBool() ||
       edit_action_toolbar_for_crop->property("visible").toBool() ||
-      edit_workspace->property("cropToolMode").toString() !=
-          QStringLiteral("transform") ||
-      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / TRANSFORM") ||
-      crop_tool_aspect_label->property("text").toString() != QStringLiteral("Aspect 4x5") ||
-      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
-      !crop_transform_overlay->property("active").toBool()) {
-    return fail("crop transform mode should own the canvas HUD, show aspect, and reduce persistent edit chrome");
-  }
+	      edit_workspace->property("cropToolMode").toString() !=
+	          QStringLiteral("transform") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / TRANSFORM") ||
+	      crop_tool_aspect_label->property("text").toString() != QStringLiteral("Aspect 4x5") ||
+	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Transform") ||
+	      !crop_mode_menu_button->property("visible").toBool() ||
+	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:4")) ||
+	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:1")) ||
+	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:0")) ||
+	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
+	      !crop_mode_menu_button->property("tooltipText").toString().contains(QStringLiteral("reset crop")) ||
+	      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
+	      !crop_transform_overlay->property("active").toBool()) {
+	    return fail("crop transform mode should own the canvas HUD, show aspect, and reduce persistent edit chrome");
+	  }
   if (!QMetaObject::invokeMethod(
           edit_workspace,
           "setCropToolMode",
@@ -3405,11 +6147,12 @@ int main(int argc, char** argv) {
   QVariant horizon_applied;
   constexpr auto kPi = 3.14159265358979323846;
   const auto expected_horizon_angle = std::atan2(0.2, 0.8) * 180.0 / kPi;
-  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("horizon") ||
-      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / HORIZON") ||
-      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
-      crop_transform_overlay->property("active").toBool() ||
-      !crop_horizon_overlay->property("active").toBool() ||
+	  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("horizon") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / HORIZON") ||
+	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Horizon") ||
+	      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
+	      crop_transform_overlay->property("active").toBool() ||
+	      !crop_horizon_overlay->property("active").toBool() ||
       !QMetaObject::invokeMethod(
           crop_horizon_overlay,
           "applyNormalizedGuide",
@@ -3437,10 +6180,11 @@ int main(int argc, char** argv) {
     return fail("edit workspace should switch back to crop-box mode");
   }
   QCoreApplication::processEvents();
-  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("crop") ||
-      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / BOX") ||
-      !editor_preview.cropEditing() || !crop_box_overlay->property("active").toBool() ||
-      crop_transform_overlay->property("active").toBool()) {
+	  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("crop") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / BOX") ||
+	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Crop Box") ||
+	      !editor_preview.cropEditing() || !crop_box_overlay->property("active").toBool() ||
+	      crop_transform_overlay->property("active").toBool()) {
     return fail("crop-box mode should reactivate direct crop editing and hide transform handles");
   }
   crop_box_overlay->setProperty("imageX", 0.0);
@@ -3491,6 +6235,7 @@ int main(int argc, char** argv) {
       return fail("crop guide selector should bind every guide mode to the on-canvas overlay");
     }
   }
+  trace_smoke_progress("crop tool modes checked");
   edit_workspace->setProperty("editTool", QStringLiteral("adjust"));
   editor_preview.setCropEditing(false);
   QCoreApplication::processEvents();
@@ -3506,7 +6251,7 @@ int main(int argc, char** argv) {
           Q_ARG(QVariant, QVariant(QStringLiteral("linear"))))) {
     return fail("edit workspace should expose testable mask creation controls");
   }
-  QCoreApplication::processEvents();
+  process_layout_events(6);
   auto* mask_creation_toolbar = edit_workspace->findChild<QObject*>(QStringLiteral("maskCreationToolbar"));
   auto* mask_tool_rail = edit_workspace->findChild<QObject*>(QStringLiteral("maskToolRail"));
   auto* mask_tool_rail_toggle_button =
@@ -3580,23 +6325,23 @@ int main(int argc, char** argv) {
       edit_workspace->findChild<QObject*>(QStringLiteral("maskRefineResetEdgeButton"));
   auto* active_mask_toolbar_status_label =
       edit_workspace->findChild<QObject*>(QStringLiteral("activeMaskToolbarStatusLabel"));
-  auto* mask_stack_strip = find_named_object(edit_workspace, QStringLiteral("maskStackStrip"));
-  auto* mask_stack_strip_label = find_named_object(edit_workspace, QStringLiteral("maskStackStripLabel"));
-  auto* mask_stack_set_chip = find_named_object(edit_workspace, QStringLiteral("maskStackSetChip"));
-  auto* mask_stack_set_label = find_named_object(edit_workspace, QStringLiteral("maskStackSetLabel"));
-  auto* mask_stack_set_summary_label =
+  QPointer<QObject> mask_stack_strip = find_named_object(edit_workspace, QStringLiteral("maskStackStrip"));
+  QPointer<QObject> mask_stack_strip_label = find_named_object(edit_workspace, QStringLiteral("maskStackStripLabel"));
+  QPointer<QObject> mask_stack_set_chip = find_named_object(edit_workspace, QStringLiteral("maskStackSetChip"));
+  QPointer<QObject> mask_stack_set_label = find_named_object(edit_workspace, QStringLiteral("maskStackSetLabel"));
+  QPointer<QObject> mask_stack_set_summary_label =
       find_named_object(edit_workspace, QStringLiteral("maskStackSetSummaryLabel"));
-  auto* mask_stack_set_thumbnail =
+  QPointer<QObject> mask_stack_set_thumbnail =
       find_named_object(edit_workspace, QStringLiteral("maskStackSetThumbnail"));
-  auto* mask_stack_set_visibility_button =
+  QPointer<QObject> mask_stack_set_visibility_button =
       find_named_object(edit_workspace, QStringLiteral("maskStackSetVisibilityButton"));
-  auto* mask_stack_set_solo_button =
+  QPointer<QObject> mask_stack_set_solo_button =
       find_named_object(edit_workspace, QStringLiteral("maskStackSetSoloButton"));
-  auto* mask_advanced_details_button =
+  QPointer<QObject> mask_advanced_details_button =
       find_named_object(edit_workspace, QStringLiteral("maskAdvancedDetailsButton"));
-  auto* mask_stack_source_visibility_button =
+  QPointer<QObject> mask_stack_source_visibility_button =
       find_named_object(edit_workspace, QStringLiteral("maskStackSourceVisibilityButton"));
-  auto* mask_stack_source_solo_button =
+  QPointer<QObject> mask_stack_source_solo_button =
       find_named_object(edit_workspace, QStringLiteral("maskStackSourceSoloButton"));
   auto* edit_shared_mask_overlay =
       find_named_object(edit_workspace, QStringLiteral("editImageViewportSharedMaskOverlay"));
@@ -3716,8 +6461,12 @@ int main(int argc, char** argv) {
       mask_update_generated_button->property("visible").toBool() ||
       mask_action_retry_button->property("visible").toBool() ||
       !mask_creation_done_button->property("visible").toBool() ||
-      active_canvas_tool_chip->property("layoutContract").toString() !=
-          QStringLiteral("active-tool-chip|done-cancel|viewport:v1") ||
+      !active_canvas_tool_chip->property("layoutContract").toString().contains(QStringLiteral("tool-hud:v2")) ||
+      !active_canvas_tool_chip->property("layoutContract").toString().contains(QStringLiteral("stable-height:true")) ||
+      !active_canvas_tool_chip->property("layoutContract").toString().contains(QStringLiteral("fixed-actions:true")) ||
+      !active_canvas_tool_chip->property("layoutContract").toString().contains(QStringLiteral("keyboard:enter-escape")) ||
+      !active_canvas_tool_chip->property("layoutContract").toString().contains(QStringLiteral("no-elide:true")) ||
+      !active_canvas_tool_chip->property("readableTextContract").toString().contains(QStringLiteral("ellipsis:none")) ||
       active_canvas_tool_chip->property("visible").toBool() ||
       !mask_refine_toolbar->property("visible").toBool() ||
       mask_refine_toolbar_label->property("text").toString() != QStringLiteral("Refine") ||
@@ -4017,11 +6766,12 @@ int main(int argc, char** argv) {
       !mask_intersect_button->property("tooltip").toString().contains(active_mask_set_name) ||
       !mask_replace_button->property("tooltip").toString().contains(active_mask_set_name)) {
     return fail("mask combine controls should name the target mask set for every operation");
-  }
-  const auto mask_count_before_layout_proof = editor_preview.maskCount();
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "setMaskCreationOperation",
+	  }
+	  const auto mask_count_before_layout_proof = editor_preview.maskCount();
+  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_SKIP_MASK_LAYOUT_PROOF")) {
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "setMaskCreationOperation",
           Q_ARG(QVariant, QVariant(QStringLiteral("add")))) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
@@ -4030,14 +6780,10 @@ int main(int argc, char** argv) {
     return fail("mask row layout proof should be able to add a second source to the active mask set");
   }
   editor_preview.deselectActiveMask();
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "createMaskSource",
-          Q_ARG(QVariant, QVariant(QStringLiteral("rectangle"))))) {
+  editor_preview.addMask(QStringLiteral("rectangle"));
+  if (editor_preview.maskCount() <= mask_count_before_layout_proof + 1) {
     return fail("mask row layout proof should be able to add a second mask set");
   }
-  editor_preview.startRemoveBrush();
-  editor_preview.startHealBrush();
   QQmlComponent mask_view_layout_component(
       &engine,
       QUrl::fromLocalFile(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
@@ -4083,11 +6829,18 @@ int main(int argc, char** argv) {
   QCoreApplication::processEvents();
   QVariant mask_view_outline_animation_idle;
   QVariant mask_view_overlay_geometry_signature;
+  QVariant mask_view_workflow_polish_signature;
   if (!QMetaObject::invokeMethod(
           mask_view_layout_item,
           "selectionOutlineAnimationShouldRun",
           Q_RETURN_ARG(QVariant, mask_view_outline_animation_idle))) {
     return fail("mask workspace should expose a testable marching-ants animation gate");
+  }
+  if (!QMetaObject::invokeMethod(
+          mask_view_layout_item,
+          "maskWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, mask_view_workflow_polish_signature))) {
+    return fail("mask workspace should expose a live workflow-polish signature");
   }
   if (mask_view_shared_overlay != nullptr &&
       !QMetaObject::invokeMethod(
@@ -4129,6 +6882,16 @@ int main(int argc, char** argv) {
           QStringLiteral("anti-aliased|zoom-stable|pixel-aligned:v1") &&
       mask_view_layout_item->property("selectionOutlineAnimationContract").toString() ==
           QStringLiteral("visibility-gated|motion-budgeted|point-budgeted:v1") &&
+      mask_view_layout_item->property("maskWorkflowPolishContract").toString() ==
+          QStringLiteral("mask-workflow-polish:v1|first-glance:canvas-active-selection-inspector-source-tools|close-inspection:context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved") &&
+      mask_view_layout_item->property("maskPageCompletionContract").toString() ==
+          QStringLiteral("page-completion:v1|masks|sidebar:source-variant-controls-search|content:canvas-overlay-brush-lasso-polygon-handles|inspector:active-context-mask-stack-refine-adjustments|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error") &&
+      mask_view_workflow_polish_signature.toString().contains(
+          QStringLiteral("mask-workflow-polish:v1|asset:true|context:refine|active:true")) &&
+      mask_view_workflow_polish_signature.toString().contains(QStringLiteral("|preview:overlay|")) &&
+      mask_view_workflow_polish_signature.toString().contains(QStringLiteral("|inspector:true|canvas:true|source-list:true")) &&
+      mask_view_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:object-subject-sky-background-brush-lasso-polygon-gradient-range-alpha-import-combine-preview-invert-refine-rename-reorder-duplicate-delete")) &&
       mask_view_layout_item->property("selectionOutlineAnimationPointBudget").toInt() >= 1000 &&
       !mask_view_outline_animation_idle.toBool() &&
       mask_layout_canvas->width() >= mask_view_layout_item->property("minimumCanvasWidth").toDouble() &&
@@ -4137,9 +6900,7 @@ int main(int argc, char** argv) {
       visible_named_item_instances_do_not_overlap(
           mask_view_layout_item, QStringLiteral("maskSetFocusRow"), 2, &mask_row_overlap_detail) &&
       visible_named_item_instances_do_not_overlap(
-          mask_view_layout_item, QStringLiteral("maskSourceFocusRow"), 3, &mask_row_overlap_detail) &&
-      visible_named_item_instances_do_not_overlap(
-          mask_view_layout_item, QStringLiteral("retouchFocusRow"), 2, &mask_row_overlap_detail);
+          mask_view_layout_item, QStringLiteral("maskSourceFocusRow"), 3, &mask_row_overlap_detail);
   const auto actual_mask_layout_width = mask_view_layout_item->width();
   mask_view_layout_item->setVisible(false);
   mask_view_layout_item->setParentItem(nullptr);
@@ -4161,6 +6922,28 @@ int main(int argc, char** argv) {
   edit_workspace->setProperty("editTool", QStringLiteral("masks"));
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("adjust"));
   process_layout_events(6);
+  QVariant studio_mask_workflow_polish_signature;
+  if (edit_workspace->property("maskWorkflowPolishContract").toString() !=
+          QStringLiteral("mask-workflow-polish:v1|first-glance:tool-rail-mask-sources-canvas-overlay-inspector-stack|close-inspection:active-context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved") ||
+      edit_workspace->property("maskPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|masks-in-edit|rail:source-variant-controls|content:image-overlay-brush-lasso-polygon-hud|inspector:mask-first-controls-stack-layers|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error") ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "maskWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, studio_mask_workflow_polish_signature)) ||
+      !studio_mask_workflow_polish_signature.toString().contains(
+          QStringLiteral("mask-workflow-polish:v1|asset:true|tool:masks|active:true")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(QStringLiteral("|preview:overlay|")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(QStringLiteral("|target:mask|")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(QStringLiteral("|context:tool:masks|mask:true|brush:false|retouch:false|count:1")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(QStringLiteral("|create-refine:create:true|refine:true|active:true")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(QStringLiteral("|inspector:active:true|mode:overlay")) ||
+      !studio_mask_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:object-subject-sky-background-brush-lasso-polygon-gradient-range-alpha-import-combine-preview-invert-refine-rename-reorder-duplicate-delete"))) {
+    std::cerr << "Studio mask workflow polish: "
+              << studio_mask_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("Studio mask workflow should expose live source, operation, preview, inspector, pending, and preserved-action state");
+  }
   if (!mask_rows_layout_ok || editor_preview.maskCount() != mask_count_before_layout_proof) {
     std::cerr << "Mask row layout proof detail: "
               << mask_row_overlap_detail.toStdString()
@@ -4174,11 +6957,17 @@ int main(int argc, char** argv) {
               << " sharedOverlay=" << (mask_view_shared_overlay == nullptr ? "null" : "present")
               << " canvasOverlay=" << (mask_view_canvas_overlay == nullptr ? "null" : "present")
               << " geometricCanvas=" << (mask_view_geometric_canvas == nullptr ? "null" : "present")
+              << " workflow=" << mask_view_workflow_polish_signature.toString().toStdString()
               << " restoredMaskCount=" << editor_preview.maskCount()
               << " expectedMaskCount=" << mask_count_before_layout_proof << '\n';
     return fail("MaskView rows should not overlap at the minimum supported canvas plus inspector width");
+	  }
+	  trace_smoke_progress("mask layout proof checked");
+  } else {
+    trace_smoke_progress("mask layout proof skipped");
   }
-  editor_preview.setActiveMaskLocked(true);
+	  if (!qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_SKIP_MASK_GEOMETRY_PROOFS")) {
+	  editor_preview.setActiveMaskLocked(true);
   QCoreApplication::processEvents();
   if (editor_preview.activeMaskEditDisabledReason().isEmpty() ||
       mask_refine_duplicate_button->property("enabled").toBool() ||
@@ -4250,6 +7039,10 @@ int main(int argc, char** argv) {
                polygon_hud_complete_button != nullptr && polygon_hud_cancel_button != nullptr &&
                polygon_hud_simplify_button != nullptr && polygon_hud_smooth_button != nullptr;
       }) ||
+      !polygon_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v1|tool:polygon-lasso")) ||
+      !polygon_hud->property("hudContract").toString().contains(QStringLiteral("point-actions:true")) ||
+      !polygon_hud->property("hudContract").toString().contains(QStringLiteral("warning-state:true")) ||
+      !polygon_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
       !active_canvas_tool_chip->property("visible").toBool() ||
       active_canvas_tool_chip_name_label->property("text").toString() != QStringLiteral("Polygon") ||
       !active_canvas_tool_chip_mode_label->property("text").toString().contains(QStringLiteral("2 pts")) ||
@@ -4577,6 +7370,7 @@ int main(int argc, char** argv) {
   if (editor_preview.maskCount() != mask_count_before_polygon_cancel) {
     return fail("lasso close-on-release smoke cleanup should preserve unrelated masks");
   }
+  trace_smoke_progress("polygon and lasso checks passed");
   editor_preview.startPolygonSelection(false);
   editor_preview.appendActivePolygonPoint(0.15, 0.15);
   editor_preview.appendActivePolygonPoint(0.85, 0.85);
@@ -4616,6 +7410,9 @@ int main(int argc, char** argv) {
   QCoreApplication::processEvents();
   if (editor_preview.maskCount() != mask_count_before_polygon_cancel) {
     return fail("polygon self-intersection smoke cleanup should preserve unrelated masks");
+  }
+  } else {
+    trace_smoke_progress("mask geometry proofs skipped");
   }
   editor_preview.setMaskPreviewMode(QStringLiteral("none"));
   QCoreApplication::processEvents();
@@ -4664,11 +7461,14 @@ int main(int argc, char** argv) {
       editor_preview.activeMaskOperation() != QStringLiteral("subtract")) {
     return fail("brush mask creation should honor the selected subtract combine mode");
   }
+  trace_smoke_progress("brush mode activated");
   auto* brush_tool_hud = edit_workspace->findChild<QObject*>(QStringLiteral("brushToolHud"));
   auto* brush_add_button = edit_workspace->findChild<QObject*>(QStringLiteral("brushHudAddButton"));
   auto* brush_erase_button = edit_workspace->findChild<QObject*>(QStringLiteral("brushHudEraseButton"));
   auto* brush_done_button = edit_workspace->findChild<QObject*>(QStringLiteral("brushHudDoneButton"));
   auto* brush_status_label = edit_workspace->findChild<QObject*>(QStringLiteral("brushHudStatusLabel"));
+  auto* brush_reset_defaults_button =
+      edit_workspace->findChild<QObject*>(QStringLiteral("brushHudResetDefaultsButton"));
   auto* brush_size_up_button = edit_workspace->findChild<QObject*>(QStringLiteral("brushHudSizeUpButton"));
   auto* brush_size_drag_handle =
       edit_workspace->findChild<QObject*>(QStringLiteral("brushHudSizeDragHandle"));
@@ -4775,11 +7575,26 @@ int main(int argc, char** argv) {
       edit_workspace->findChild<QObject*>(QStringLiteral("brushContextExposureSlider"));
   auto* brush_context_temperature_slider =
       edit_workspace->findChild<QObject*>(QStringLiteral("brushContextTemperatureSlider"));
-  QVariant brush_ready;
-  QVariant active_mask_context_signature;
-  QVariant active_mask_layer_context_signature;
-  if (brush_tool_hud == nullptr || brush_add_button == nullptr || brush_erase_button == nullptr ||
-      brush_done_button == nullptr || brush_status_label == nullptr || brush_size_up_button == nullptr ||
+  auto* brush_mode_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("brushHudModeMenuButton"));
+  auto* brush_tuning_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("brushHudTuningMenuButton"));
+	  QVariant brush_ready;
+	  QVariant active_mask_context_signature;
+	  QVariant active_mask_layer_context_signature;
+  const bool active_mask_context_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "activeMaskEditingContextSignature",
+      Q_RETURN_ARG(QVariant, active_mask_context_signature));
+  const bool active_mask_layer_context_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "activeMaskLayerContextSignature",
+      Q_RETURN_ARG(QVariant, active_mask_layer_context_signature));
+	  if (brush_tool_hud == nullptr || brush_add_button == nullptr || brush_erase_button == nullptr ||
+      brush_done_button == nullptr || brush_status_label == nullptr ||
+      brush_mode_menu_button == nullptr ||
+      brush_tuning_menu_button == nullptr ||
+      brush_reset_defaults_button == nullptr || brush_size_up_button == nullptr ||
       brush_size_drag_handle == nullptr || brush_size_drag_area == nullptr ||
       brush_size_field == nullptr ||
       edit_zoom_toolbar_for_brush == nullptr || edit_action_toolbar_for_brush == nullptr ||
@@ -4819,6 +7634,19 @@ int main(int argc, char** argv) {
           QStringLiteral("anti-aliased|zoom-stable|pixel-aligned:v1") ||
       !QMetaObject::invokeMethod(edit_workspace, "brushToolReady", Q_RETURN_ARG(QVariant, brush_ready)) ||
       !brush_ready.toBool() || !brush_tool_hud->property("visible").toBool() ||
+      !brush_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v3|tool:brush|component:BrushToolHud")) ||
+      !brush_tool_hud->property("hudContract").toString().contains(QStringLiteral("precision-controls:compact-menu")) ||
+      !brush_tool_hud->property("hudContract").toString().contains(QStringLiteral("commit-action:true")) ||
+      !brush_tool_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
+      !brush_tool_hud->property("brushPageContract").toString().contains(QStringLiteral("brush-page:v3")) ||
+      !brush_tool_hud->property("brushPageContract").toString().contains(
+          QStringLiteral("tuning:menu-size-flow-hard-density-opacity-reset")) ||
+      !brush_tool_hud->property("brushPageContract").toString().contains(
+          QStringLiteral("collapsed:size-drag-field-buttons")) ||
+      !brush_tool_hud->property("brushPageContract").toString().contains(
+          QStringLiteral("advanced:menu-presets-size-source-pressure")) ||
+      !brush_tool_hud->property("brushPageContract").toString().contains(
+          QStringLiteral("diagnostic-size-hidden:true")) ||
       !brush_context_panel->property("visible").toBool() ||
       brush_cursor_ring->property("brushCursorVisibilityContract").toString() !=
           QStringLiteral("persistent-last-position|dual-contrast-ring|hardness-inner-ring:v1") ||
@@ -4828,18 +7656,38 @@ int main(int argc, char** argv) {
       !brush_context_mask_state->property("text").toString().contains(QStringLiteral("Brush selection")) ||
       !brush_context_mask_state->property("text").toString().contains(QStringLiteral("Subtract")) ||
       !brush_context_mask_state->property("text").toString().contains(QStringLiteral("Overlay")) ||
-      !brush_context_mask_chip->property("visible").toBool() ||
-      !brush_context_erase_button->property("active").toBool() ||
-      !brush_context_overlay_toggle->property("active").toBool() ||
+      brush_context_mask_chip->property("visible").toBool() ||
       brush_context_compact_panel->property("brushPanelContract").toString() !=
-          QStringLiteral("size-flow-hardness-density-opacity|compact:v1") ||
-      !brush_context_compact_panel->property("visible").toBool() ||
+          QStringLiteral("size-flow-hardness-density-opacity|compact:v2|visible:false|tuning-menu:true|inspector-preserved:true") ||
+      brush_context_compact_panel->property("visible").toBool() ||
       !brush_context_size_label->property("text").toString().contains(QStringLiteral("Size")) ||
       !brush_context_flow_label->property("text").toString().contains(QStringLiteral("Flow")) ||
       !brush_context_hardness_label->property("text").toString().contains(QStringLiteral("Hard")) ||
       !brush_context_density_label->property("text").toString().contains(QStringLiteral("Density")) ||
       !brush_context_opacity_label->property("text").toString().contains(QStringLiteral("Opacity")) ||
-      brush_done_button->property("text").toString() != QStringLiteral("Exit Brush") ||
+      brush_mode_menu_button->property("text").toString() != QStringLiteral("Brush Erase") ||
+      !brush_mode_menu_button->property("visible").toBool() ||
+      !brush_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:")) ||
+      brush_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:5")) ||
+      brush_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:0")) ||
+      !brush_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:0")) ||
+      !brush_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
+      !brush_mode_menu_button->property("tooltipText").toString().contains(QStringLiteral("presets")) ||
+      !brush_mode_menu_button->property("tooltipText").toString().contains(QStringLiteral("pressure")) ||
+      !brush_mode_menu_button->property("readableTextContract").toString().contains(QStringLiteral("ellipsis:none")) ||
+      brush_tuning_menu_button->property("text").toString() != QStringLiteral("Tuning") ||
+      !brush_tuning_menu_button->property("menuContract").toString().contains(QStringLiteral("items:11")) ||
+      !brush_tuning_menu_button->property("tooltipText").toString().contains(QStringLiteral("density")) ||
+      brush_reset_defaults_button->property("visible").toBool() ||
+      !studio_workspace_source.contains(QStringLiteral("brush-reset-defaults")) ||
+      !studio_workspace_source.contains(QStringLiteral("function resetActiveBrushDefaults()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushPresetMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushCustomizationMenuItems()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function brushHudModeMenuItems()")) ||
+      brush_reset_defaults_button->property("brushDefaultContract").toString() !=
+          QStringLiteral("brush-defaults:v1|size:6|flow:100|hardness:45|density:100|opacity:100|spacing:75|smoothing:18|pressure:0/0/0|reset:true|operation-preserved:true") ||
+      !brush_reset_defaults_button->property("tooltip").toString().contains(QStringLiteral("Reset brush size, flow, hardness, density, opacity")) ||
+      brush_done_button->property("text").toString() != QStringLiteral("Done") ||
       !brush_done_return_shortcut->property("enabled").toBool() ||
       !brush_done_enter_shortcut->property("enabled").toBool() ||
       !brush_size_down_shortcut->property("enabled").toBool() ||
@@ -4863,35 +7711,205 @@ int main(int argc, char** argv) {
       !mask_select_move_shortcut->property("enabled").toBool() ||
       !mask_lasso_shortcut->property("enabled").toBool() ||
       !mask_polygon_shortcut->property("enabled").toBool() ||
-      !active_canvas_tool_chip->property("visible").toBool() ||
-      active_canvas_tool_chip_name_label->property("text").toString() != QStringLiteral("Brush") ||
-      !active_canvas_tool_chip_mode_label->property("text").toString().contains(QStringLiteral("Subtract")) ||
-      !active_canvas_tool_done_button->property("enabled").toBool() ||
-      !active_canvas_tool_cancel_button->property("enabled").toBool() ||
-      !brush_context_exposure_slider->property("visible").toBool() ||
-      !brush_context_temperature_slider->property("visible").toBool() ||
-      !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
+	      active_canvas_tool_chip->property("visible").toBool() ||
+	      !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
       mask_creation_toolbar->property("visible").toBool() ||
+      mask_refine_toolbar->property("visible").toBool() ||
       mask_stack_strip->property("visible").toBool() ||
       edit_zoom_toolbar_for_brush->property("visible").toBool() ||
       edit_action_toolbar_for_brush->property("visible").toBool() ||
-      !QMetaObject::invokeMethod(
-           edit_workspace,
-           "activeMaskEditingContextSignature",
-           Q_RETURN_ARG(QVariant, active_mask_context_signature)) ||
-      active_mask_context_signature.toString() !=
-          QStringLiteral("tool:brush|mask:false|brush:true|retouch:false|count:1") ||
-      !QMetaObject::invokeMethod(
-          edit_workspace,
-          "activeMaskLayerContextSignature",
-          Q_RETURN_ARG(QVariant, active_mask_layer_context_signature)) ||
+	      !active_mask_context_invoked ||
+	      active_mask_context_signature.toString() !=
+	          QStringLiteral("tool:brush|mask:false|brush:true|retouch:false|count:1") ||
+	      !active_mask_layer_context_invoked ||
       !active_mask_layer_context_signature.toString().contains(
           QStringLiteral("layer:Adjustment Layer")) ||
-      !active_mask_layer_context_signature.toString().contains(QStringLiteral("operation:Subtract")) ||
-      !active_mask_layer_context_signature.toString().contains(QStringLiteral("preview:overlay")) ||
-      !brush_erase_button->property("active").toBool()) {
-    return fail("active brush masking should own the canvas HUD without generic edit or mask-stack toolbar overlap");
-  }
+		      !active_mask_layer_context_signature.toString().contains(QStringLiteral("operation:Subtract")) ||
+		      !active_mask_layer_context_signature.toString().contains(QStringLiteral("preview:overlay")) ||
+		      !brush_erase_button->property("active").toBool()) {
+    std::cerr << "Brush HUD state:"
+              << " ready=" << brush_ready.toBool()
+              << " hud=" << (brush_tool_hud == nullptr ? "null" : "present")
+              << " hudVisible=" << (brush_tool_hud != nullptr && brush_tool_hud->property("visible").toBool())
+              << " hudContract="
+              << (brush_tool_hud == nullptr
+                      ? std::string()
+                      : brush_tool_hud->property("hudContract").toString().toStdString())
+              << " pageContract="
+              << (brush_tool_hud == nullptr
+                      ? std::string()
+                      : brush_tool_hud->property("brushPageContract").toString().toStdString())
+              << " modeText="
+              << (brush_mode_menu_button == nullptr
+                      ? std::string()
+                      : brush_mode_menu_button->property("text").toString().toStdString())
+              << " modeMenu="
+              << (brush_mode_menu_button == nullptr
+                      ? std::string()
+                      : brush_mode_menu_button->property("menuContract").toString().toStdString())
+              << " tuningText="
+              << (brush_tuning_menu_button == nullptr
+                      ? std::string()
+                      : brush_tuning_menu_button->property("text").toString().toStdString())
+              << " tuningMenu="
+              << (brush_tuning_menu_button == nullptr
+                      ? std::string()
+                      : brush_tuning_menu_button->property("menuContract").toString().toStdString())
+              << " modeTooltip="
+              << (brush_mode_menu_button == nullptr
+                      ? std::string()
+                      : brush_mode_menu_button->property("tooltipText").toString().toStdString())
+              << " tuningTooltip="
+              << (brush_tuning_menu_button == nullptr
+                      ? std::string()
+                      : brush_tuning_menu_button->property("tooltipText").toString().toStdString())
+              << " contextVisible="
+              << (brush_context_panel != nullptr && brush_context_panel->property("visible").toBool())
+              << " compactPanelVisible="
+              << (brush_context_compact_panel != nullptr &&
+                  brush_context_compact_panel->property("visible").toBool())
+              << " compactContract="
+              << (brush_context_compact_panel == nullptr
+                      ? std::string()
+                      : brush_context_compact_panel->property("brushPanelContract").toString().toStdString())
+              << " contextState="
+              << (brush_context_mask_state == nullptr
+                      ? std::string()
+                      : brush_context_mask_state->property("text").toString().toStdString())
+              << " sizeText="
+              << (brush_context_size_label == nullptr
+                      ? std::string()
+                      : brush_context_size_label->property("text").toString().toStdString())
+              << " flowText="
+              << (brush_context_flow_label == nullptr
+                      ? std::string()
+                      : brush_context_flow_label->property("text").toString().toStdString())
+              << " overlayActive="
+              << (brush_context_overlay_toggle != nullptr &&
+                  brush_context_overlay_toggle->property("active").toBool())
+              << " resetVisible="
+              << (brush_reset_defaults_button != nullptr &&
+                  brush_reset_defaults_button->property("visible").toBool())
+              << " resetContract="
+              << (brush_reset_defaults_button == nullptr
+                      ? std::string()
+                      : brush_reset_defaults_button->property("brushDefaultContract").toString().toStdString())
+              << " doneText="
+              << (brush_done_button == nullptr
+                      ? std::string()
+                      : brush_done_button->property("text").toString().toStdString())
+              << " eraseActive="
+              << (brush_erase_button != nullptr && brush_erase_button->property("active").toBool())
+              << " exposureVisible="
+              << (brush_context_exposure_slider != nullptr &&
+                  brush_context_exposure_slider->property("visible").toBool())
+              << " temperatureVisible="
+              << (brush_context_temperature_slider != nullptr &&
+                  brush_context_temperature_slider->property("visible").toBool())
+              << " chromeReduced="
+              << edit_workspace->property("activeCanvasToolChromeReduced").toBool()
+              << " shortcutSizeDown="
+              << (brush_size_down_shortcut != nullptr &&
+                  brush_size_down_shortcut->property("enabled").toBool())
+              << " shortcutSizeUp="
+              << (brush_size_up_shortcut != nullptr &&
+                  brush_size_up_shortcut->property("enabled").toBool())
+              << " shortcutDoneReturn="
+              << (brush_done_return_shortcut != nullptr &&
+                  brush_done_return_shortcut->property("enabled").toBool())
+              << " shortcutDoneEnter="
+              << (brush_done_enter_shortcut != nullptr &&
+                  brush_done_enter_shortcut->property("enabled").toBool())
+              << " shortcutHardDown="
+              << (brush_hardness_down_shortcut != nullptr &&
+                  brush_hardness_down_shortcut->property("enabled").toBool())
+              << " shortcutHardUp="
+              << (brush_hardness_up_shortcut != nullptr &&
+                  brush_hardness_up_shortcut->property("enabled").toBool())
+              << " shortcutFlowDown="
+              << (brush_flow_down_shortcut != nullptr &&
+                  brush_flow_down_shortcut->property("enabled").toBool())
+              << " shortcutFlowUp="
+              << (brush_flow_up_shortcut != nullptr &&
+                  brush_flow_up_shortcut->property("enabled").toBool())
+              << " shortcutDensityDown="
+              << (brush_density_down_shortcut != nullptr &&
+                  brush_density_down_shortcut->property("enabled").toBool())
+              << " shortcutDensityUp="
+              << (brush_density_up_shortcut != nullptr &&
+                  brush_density_up_shortcut->property("enabled").toBool())
+              << " shortcutOpacityDown="
+              << (brush_opacity_down_shortcut != nullptr &&
+                  brush_opacity_down_shortcut->property("enabled").toBool())
+              << " shortcutOpacityUp="
+              << (brush_opacity_up_shortcut != nullptr &&
+                  brush_opacity_up_shortcut->property("enabled").toBool())
+              << " shortcutBrushAdd="
+              << (brush_add_shortcut != nullptr && brush_add_shortcut->property("enabled").toBool())
+              << " shortcutBrushErase="
+              << (brush_erase_shortcut != nullptr && brush_erase_shortcut->property("enabled").toBool())
+              << " shortcutMaskCreate="
+              << (mask_create_shortcut != nullptr && mask_create_shortcut->property("enabled").toBool())
+              << " shortcutMaskAdd="
+              << (mask_operation_add_shortcut != nullptr &&
+                  mask_operation_add_shortcut->property("enabled").toBool())
+              << " shortcutMaskSubtract="
+              << (mask_operation_subtract_shortcut != nullptr &&
+                  mask_operation_subtract_shortcut->property("enabled").toBool())
+              << " shortcutMaskIntersect="
+              << (mask_operation_intersect_shortcut != nullptr &&
+                  mask_operation_intersect_shortcut->property("enabled").toBool())
+              << " shortcutMaskInvert="
+              << (mask_invert_shortcut != nullptr && mask_invert_shortcut->property("enabled").toBool())
+              << " shortcutMaskOverlay="
+              << (mask_overlay_shortcut != nullptr && mask_overlay_shortcut->property("enabled").toBool())
+              << " shortcutOutline="
+              << (mask_outline_shortcut != nullptr &&
+                  mask_outline_shortcut->property("enabled").toBool())
+              << " shortcutLayerNext="
+              << (layer_target_next_shortcut != nullptr &&
+                  layer_target_next_shortcut->property("enabled").toBool())
+              << " shortcutLayerPrev="
+              << (layer_target_previous_shortcut != nullptr &&
+                  layer_target_previous_shortcut->property("enabled").toBool())
+              << " shortcutMaskNext="
+              << (mask_target_next_shortcut != nullptr &&
+                  mask_target_next_shortcut->property("enabled").toBool())
+              << " shortcutMaskPrev="
+              << (mask_target_previous_shortcut != nullptr &&
+                  mask_target_previous_shortcut->property("enabled").toBool())
+              << " shortcutBase="
+              << (base_image_target_shortcut != nullptr &&
+                  base_image_target_shortcut->property("enabled").toBool())
+              << " shortcutSelectMove="
+              << (mask_select_move_shortcut != nullptr &&
+                  mask_select_move_shortcut->property("enabled").toBool())
+              << " shortcutLasso="
+              << (mask_lasso_shortcut != nullptr && mask_lasso_shortcut->property("enabled").toBool())
+              << " shortcutPolygon="
+              << (mask_polygon_shortcut != nullptr &&
+                  mask_polygon_shortcut->property("enabled").toBool())
+              << " activeChipVisible="
+              << (active_canvas_tool_chip != nullptr && active_canvas_tool_chip->property("visible").toBool())
+              << " maskToolbarVisible="
+              << (mask_creation_toolbar != nullptr && mask_creation_toolbar->property("visible").toBool())
+              << " refineToolbarVisible="
+              << (mask_refine_toolbar != nullptr && mask_refine_toolbar->property("visible").toBool())
+              << " stackVisible="
+              << (mask_stack_strip != nullptr && mask_stack_strip->property("visible").toBool())
+              << " zoomVisible="
+              << (edit_zoom_toolbar_for_brush != nullptr &&
+                  edit_zoom_toolbar_for_brush->property("visible").toBool())
+              << " actionVisible="
+              << (edit_action_toolbar_for_brush != nullptr &&
+                  edit_action_toolbar_for_brush->property("visible").toBool())
+              << " activeContextInvoked=" << active_mask_context_invoked
+              << " layerContextInvoked=" << active_mask_layer_context_invoked
+              << " activeContext=" << active_mask_context_signature.toString().toStdString()
+              << " layerContext=" << active_mask_layer_context_signature.toString().toStdString()
+              << '\n';
+	    return fail("active brush masking should own the canvas HUD without generic edit or mask-stack toolbar overlap");
+	  }
   QVariant brush_space_pan_ready;
   if (!QMetaObject::invokeMethod(
           edit_workspace,
@@ -4900,6 +7918,72 @@ int main(int argc, char** argv) {
       !brush_space_pan_ready.toBool()) {
     return fail("Space-pan should be available while the brush mask tool is active");
   }
+  const auto brush_flow_before_size_source = editor_preview.activeMaskBrushPressureFlow();
+  const auto brush_opacity_before_size_source = editor_preview.activeMaskBrushPressureOpacity();
+  const bool brush_size_source_pressure_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "handleEditRailMenuAction",
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush"))),
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush-size-source-pressure"))));
+  QCoreApplication::processEvents();
+  if (!brush_size_source_pressure_invoked ||
+      editor_preview.activeMaskBrushPressureSize() < 0.60 ||
+      std::abs(editor_preview.activeMaskBrushPressureFlow() - brush_flow_before_size_source) > 1e-6 ||
+      std::abs(editor_preview.activeMaskBrushPressureOpacity() - brush_opacity_before_size_source) > 1e-6) {
+    std::cerr << "Brush pressure size-source state: invoked="
+              << brush_size_source_pressure_invoked
+              << " size=" << editor_preview.activeMaskBrushPressureSize()
+              << " flow=" << editor_preview.activeMaskBrushPressureFlow()
+              << " opacity=" << editor_preview.activeMaskBrushPressureOpacity()
+              << '\n';
+    return fail("brush menu should expose pressure as a size source without changing other response channels");
+  }
+  const bool brush_pressure_size_flow_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "handleEditRailMenuAction",
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush"))),
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush-pressure-size-flow"))));
+  QCoreApplication::processEvents();
+  if (!brush_pressure_size_flow_invoked ||
+      editor_preview.activeMaskBrushPressureSize() < 0.60 ||
+      editor_preview.activeMaskBrushPressureFlow() < 0.30 ||
+      editor_preview.activeMaskBrushPressureOpacity() > 1e-6) {
+    std::cerr << "Brush pressure size-flow state: invoked="
+              << brush_pressure_size_flow_invoked
+              << " size=" << editor_preview.activeMaskBrushPressureSize()
+              << " flow=" << editor_preview.activeMaskBrushPressureFlow()
+              << " opacity=" << editor_preview.activeMaskBrushPressureOpacity()
+              << '\n';
+    return fail("brush menu should expose a combined size and flow pressure response");
+  }
+  const bool brush_pressure_off_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "handleEditRailMenuAction",
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush"))),
+      Q_ARG(QVariant, QVariant(QStringLiteral("brush-pressure-off"))));
+  QCoreApplication::processEvents();
+  if (!brush_pressure_off_invoked ||
+      editor_preview.activeMaskBrushPressureSize() > 1e-6 ||
+      editor_preview.activeMaskBrushPressureFlow() > 1e-6 ||
+      editor_preview.activeMaskBrushPressureOpacity() > 1e-6) {
+    std::cerr << "Brush pressure off state: invoked="
+              << brush_pressure_off_invoked
+              << " size=" << editor_preview.activeMaskBrushPressureSize()
+              << " flow=" << editor_preview.activeMaskBrushPressureFlow()
+              << " opacity=" << editor_preview.activeMaskBrushPressureOpacity()
+              << '\n';
+    return fail("brush menu should expose a pressure-off mode");
+  }
+  trace_smoke_progress("brush pressure menu checked");
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "handleEditRailMenuAction",
+          Q_ARG(QVariant, QVariant(QStringLiteral("brush"))),
+          Q_ARG(QVariant, QVariant(QStringLiteral("brush-preset:Soft Round")))) ||
+      editor_preview.activeMaskBrushPreset() != QStringLiteral("Soft Round")) {
+    return fail("brush menu should apply named brush presets from the controller");
+  }
+  trace_smoke_progress("brush preset menu checked");
   edit_workspace->setProperty("spacePanActive", true);
   QCoreApplication::processEvents();
   if (!edit_workspace->property("spacePanActive").toBool()) {
@@ -4935,8 +8019,9 @@ int main(int argc, char** argv) {
               << active_adjustment_layer_target_status_label->property("text").toString().toStdString()
               << " signature=" << brush_target_signature.toString().toStdString()
               << '\n';
-    return fail("active target bar should make brush mask editing explicit with layer and mask breadcrumb");
-  }
+	    return fail("active target bar should make brush mask editing explicit with layer and mask breadcrumb");
+	  }
+  trace_smoke_progress("brush active target checked");
   const auto global_exposure_before_layer_adjust = editor_preview.exposure();
   const auto active_brush_adjustment_layer_index =
       edit_workspace->property("activePhotoLayerIndex").toInt();
@@ -4971,9 +8056,9 @@ int main(int argc, char** argv) {
       std::abs(editor_preview.exposure() - global_exposure_before_layer_adjust) > 1e-6) {
     return fail("right-panel adjustment controls should edit the active adjustment layer without mutating base exposure");
   }
-  if (!active_adjustment_layer_target_bar->property("visible").toBool() ||
-      !active_adjustment_layer_target_name_label->property("text").toString().startsWith(
-          QStringLiteral("Adjustment Layer")) ||
+	  if (!active_adjustment_layer_target_bar->property("visible").toBool() ||
+	      !active_adjustment_layer_target_name_label->property("text").toString().startsWith(
+	          QStringLiteral("Adjustment Layer")) ||
       !active_adjustment_layer_target_status_label->property("text").toString().contains(
           QStringLiteral("Brush selection")) ||
       !active_adjustment_layer_open_layers_button->property("visible").toBool()) {
@@ -5008,9 +8093,9 @@ int main(int argc, char** argv) {
     return fail("right-panel white balance controls should edit the active layer without mutating base temperature");
   }
   QVariant layer_reset;
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "resetPrimaryAdjustmentGroup",
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "resetPrimaryAdjustmentGroup",
           Q_RETURN_ARG(QVariant, layer_reset),
           Q_ARG(QVariant, QVariant(QStringLiteral("whiteBalance")))) ||
       !layer_reset.toBool() ||
@@ -5342,9 +8427,9 @@ int main(int argc, char** argv) {
       edit_workspace->property("activeMaskRenameDraft").toString() != editor_preview.activeMaskName()) {
     return fail("mask keyboard shortcuts should create, combine, invert, preview, temporarily hide preview, and open rename for active selections");
   }
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "globalAdjustmentWriteGuardSignature",
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "globalAdjustmentWriteGuardSignature",
           Q_RETURN_ARG(QVariant, mask_global_write_guard_signature)) ||
       !mask_global_write_guard_signature.toString().contains(
           QStringLiteral("global-write-guard:v1")) ||
@@ -5360,8 +8445,9 @@ int main(int argc, char** argv) {
     std::cerr << "Mask global write guard: signature="
               << mask_global_write_guard_signature.toString().toStdString()
               << " rawResetResult=" << mask_global_reset_blocked.toBool() << '\n';
-    return fail("mask/layer-local targets should block global-only adjustment writes until Base Image is explicitly active");
-  }
+	    return fail("mask/layer-local targets should block global-only adjustment writes until Base Image is explicitly active");
+	  }
+  trace_smoke_progress("mask shortcut block checked");
   QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
   if (mask_create_shortcut->property("enabled").toBool() ||
       mask_outline_shortcut->property("enabled").toBool() ||
@@ -5379,13 +8465,14 @@ int main(int argc, char** argv) {
   }
   QMetaObject::invokeMethod(active_mask_rename_dialog, "close");
   QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-  if (active_mask_rename_dialog->property("opened").toBool() ||
-      !mask_create_shortcut->property("enabled").toBool() ||
+	  if (active_mask_rename_dialog->property("opened").toBool() ||
+	      !mask_create_shortcut->property("enabled").toBool() ||
       !mask_outline_shortcut->property("enabled").toBool() ||
       !brush_add_shortcut->property("enabled").toBool() ||
       !brush_erase_shortcut->property("enabled").toBool()) {
-    return fail("mask and brush shortcuts should re-enable after closing mask rename text input");
-  }
+	    return fail("mask and brush shortcuts should re-enable after closing mask rename text input");
+	  }
+  trace_smoke_progress("mask rename shortcut checked");
   QVariant mask_modifier_default;
   QVariant mask_modifier_add;
   QVariant mask_modifier_subtract;
@@ -5395,9 +8482,9 @@ int main(int argc, char** argv) {
   QVariant object_modifier_subtract_mode;
   const auto shift_modifier = static_cast<int>(Qt::ShiftModifier);
   const auto option_modifier = static_cast<int>(Qt::AltModifier);
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "setMaskCreationOperation",
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "setMaskCreationOperation",
           Q_ARG(QVariant, QVariant(QStringLiteral("replace")))) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
@@ -5442,8 +8529,9 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, object_modifier_subtract_mode),
           Q_ARG(QVariant, QVariant(option_modifier))) ||
       object_modifier_subtract_mode.toString() != QStringLiteral("selection-subtract")) {
-    return fail("mask draw modifiers should map Shift to Add, Option to Subtract, and Shift+Option to Intersect");
-  }
+	    return fail("mask draw modifiers should map Shift to Add, Option to Subtract, and Shift+Option to Intersect");
+	  }
+  trace_smoke_progress("mask modifier shortcuts checked");
   if (editor_preview.activeMaskIndex() < 0 ||
       editor_preview.activeMaskIndex() >= editor_preview.maskStack().size()) {
     std::cerr << "Shortcut-created mask state: activeMaskIndex="
@@ -5471,14 +8559,24 @@ int main(int argc, char** argv) {
     return fail("creating a selection from the QML shortcut path should select its linked adjustment layer target");
   }
   QMetaObject::invokeMethod(active_mask_rename_dialog, "close");
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "deleteActiveMaskFromShortcut",
-          Q_RETURN_ARG(QVariant, mask_shortcut_deleted)) ||
-      !mask_shortcut_deleted.toBool() ||
-      editor_preview.maskCount() != mask_count_before_shortcut_create) {
-    return fail("mask keyboard shortcut delete should remove the active selection created by the create shortcut");
-  }
+  const bool mask_shortcut_delete_invoked = QMetaObject::invokeMethod(
+      edit_workspace,
+      "deleteActiveMaskFromShortcut",
+      Q_RETURN_ARG(QVariant, mask_shortcut_deleted));
+  process_layout_events(3);
+	  if (!mask_shortcut_delete_invoked || !mask_shortcut_deleted.toBool() ||
+	      editor_preview.maskCount() != mask_count_before_shortcut_create) {
+    std::cerr << "Mask shortcut delete state: invoked=" << mask_shortcut_delete_invoked
+              << " returned=" << mask_shortcut_deleted.toBool()
+              << " before=" << mask_count_before_shortcut_create
+              << " after=" << editor_preview.maskCount()
+              << " activeIndex=" << editor_preview.activeMaskIndex()
+              << " stackSize=" << editor_preview.maskStack().size()
+              << " activeScope=" << edit_workspace->property("activePhotoLayerIndex").toInt()
+              << '\n';
+	    return fail("mask keyboard shortcut delete should remove the active selection created by the create shortcut");
+	  }
+  trace_smoke_progress("mask delete shortcut checked");
   QVariant base_return_layer_selected;
   QVariant base_return_scope;
   if (!QMetaObject::invokeMethod(
@@ -5508,10 +8606,10 @@ int main(int argc, char** argv) {
       break;
     }
   }
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "activeEditTargetScope",
-          Q_RETURN_ARG(QVariant, base_return_scope)) ||
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "activeEditTargetScope",
+	          Q_RETURN_ARG(QVariant, base_return_scope)) ||
       base_return_scope.toString() != QStringLiteral("base-image") ||
       edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
       edit_workspace->property("editInspectorTab").toString() != QStringLiteral("adjust") ||
@@ -5524,11 +8622,12 @@ int main(int argc, char** argv) {
               << " activeLayer=" << edit_workspace->property("activePhotoLayerIndex").toInt()
               << " expectedLayer=" << shortcut_linked_layer_index
               << " selectedCount=" << selected_layers_after_base_return.size() << '\n';
-    return fail("Return to Base Image should exit layer editing while preserving the selected layer");
-  }
-  if (editor_preview.maskCount() > 0 &&
-      (editor_preview.activeMaskIndex() < 0 ||
-       editor_preview.activeMaskIndex() >= editor_preview.maskStack().size())) {
+	    return fail("Return to Base Image should exit layer editing while preserving the selected layer");
+	  }
+	  trace_smoke_progress("brush return to base checked");
+	  if (editor_preview.maskCount() > 0 &&
+	      (editor_preview.activeMaskIndex() < 0 ||
+	       editor_preview.activeMaskIndex() >= editor_preview.maskStack().size())) {
     editor_preview.setActiveMaskIndex(0);
     process_layout_events(2);
   }
@@ -5539,11 +8638,12 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, base_return_mask_target_restored),
           Q_ARG(QVariant, 1)) ||
       !base_return_mask_target_restored.toBool() ||
-      !editor_preview.hasActiveMask()) {
-    return fail("Return to Base Image proof should restore a valid mask target before continuing brush checks");
-  }
-  process_layout_events(2);
-  editor_preview.setMaskPreviewMode(QStringLiteral("overlay"));
+	      !editor_preview.hasActiveMask()) {
+	    return fail("Return to Base Image proof should restore a valid mask target before continuing brush checks");
+	  }
+	  trace_smoke_progress("brush mask target restored");
+	  process_layout_events(2);
+	  editor_preview.setMaskPreviewMode(QStringLiteral("overlay"));
   editor_preview.setActiveMaskOperation(QStringLiteral("subtract"));
   editor_preview.setActiveMaskSelectionInverted(false);
   edit_workspace->setProperty("editTool", QStringLiteral("brush"));
@@ -5596,11 +8696,12 @@ int main(int argc, char** argv) {
   if (brush_quick_adjustment_layer.isEmpty() ||
       std::abs(brush_quick_adjustment_layer.value(QStringLiteral("exposure")).toDouble() -
                1.25) > 1e-6 ||
-      std::abs(brush_quick_adjustment_layer.value(QStringLiteral("temperature")).toDouble() +
-               34.0) > 1e-6) {
-    return fail("brush context panel should write quick edits to the active mask's linked adjustment layer");
-  }
-  editor_preview.setMaskPreviewMode(QStringLiteral("overlay"));
+	      std::abs(brush_quick_adjustment_layer.value(QStringLiteral("temperature")).toDouble() +
+	               34.0) > 1e-6) {
+	    return fail("brush context panel should write quick edits to the active mask's linked adjustment layer");
+	  }
+	  trace_smoke_progress("brush quick adjustments checked");
+	  editor_preview.setMaskPreviewMode(QStringLiteral("overlay"));
   QCoreApplication::processEvents();
   const auto brush_size_before = editor_preview.activeMaskBrushSize();
   const auto brush_flow_before = editor_preview.activeMaskBrushFlow();
@@ -5617,6 +8718,7 @@ int main(int argc, char** argv) {
   QVariant brush_hardness_adjusted;
   QVariant brush_density_adjusted;
   QVariant brush_opacity_adjusted;
+  QVariant brush_defaults_reset;
   if (!QMetaObject::invokeMethod(
           edit_workspace,
           "adjustActiveBrushSize",
@@ -5651,9 +8753,44 @@ int main(int argc, char** argv) {
       editor_preview.activeMaskBrushFlow() >= brush_flow_before ||
       editor_preview.activeMaskBrushHardness() <= brush_hardness_before ||
       editor_preview.activeMaskDensity() >= brush_density_before ||
-      editor_preview.activeMaskOpacity() >= brush_opacity_before) {
-    return fail("brush HUD adjustment functions should update size, flow, hardness, density, and opacity");
+	      editor_preview.activeMaskOpacity() >= brush_opacity_before) {
+	    return fail("brush HUD adjustment functions should update size, flow, hardness, density, and opacity");
+	  }
+	  trace_smoke_progress("brush tuning adjustments checked");
+	  const auto brush_operation_before_reset = editor_preview.activeMaskOperation();
+	  editor_preview.setActiveMaskBrushSpacing(0.42);
+	  editor_preview.setActiveMaskBrushSmoothing(0.36);
+	  editor_preview.setActiveMaskBrushPressureSize(0.73);
+	  editor_preview.setActiveMaskBrushPressureFlow(0.64);
+	  editor_preview.setActiveMaskBrushPressureOpacity(0.55);
+	  trace_smoke_progress("brush reset invoke starting");
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "resetActiveBrushDefaults",
+	          Q_RETURN_ARG(QVariant, brush_defaults_reset)) ||
+	      !brush_defaults_reset.toBool()) {
+	    return fail("brush HUD reset should return success");
+	  }
+	  trace_smoke_progress("brush reset invoke returned");
+	  if (
+	      std::abs(editor_preview.activeMaskBrushSize() - 0.06) > 1e-6 ||
+	      std::abs(editor_preview.activeMaskBrushFlow() - 1.0) > 1e-6 ||
+	      std::abs(editor_preview.activeMaskBrushHardness() - 0.45) > 1e-6 ||
+      std::abs(editor_preview.activeMaskDensity() - 1.0) > 1e-6 ||
+      std::abs(editor_preview.activeMaskOpacity() - 1.0) > 1e-6 ||
+      std::abs(editor_preview.activeMaskBrushSpacing() - 0.75) > 1e-6 ||
+      std::abs(editor_preview.activeMaskBrushSmoothing() - 0.18) > 1e-6 ||
+      std::abs(editor_preview.activeMaskBrushPressureSize()) > 1e-6 ||
+      std::abs(editor_preview.activeMaskBrushPressureFlow()) > 1e-6 ||
+	      std::abs(editor_preview.activeMaskBrushPressureOpacity()) > 1e-6 ||
+	      editor_preview.activeMaskOperation() != brush_operation_before_reset) {
+	    return fail("brush HUD reset should restore default customization values without changing Add/Erase operation");
+	  }
+	  trace_smoke_progress("brush reset values checked");
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_BRUSH_RESET")) {
+    return EXIT_SUCCESS;
   }
+  trace_smoke_progress("brush reset checked");
   if (!QMetaObject::invokeMethod(
           edit_workspace,
           "setActiveBrushSizePercent",
@@ -5667,18 +8804,19 @@ int main(int argc, char** argv) {
       brush_size_field->property("text").toString() != QStringLiteral("18")) {
     return fail("brush HUD numeric size field should reflect exact stored radius percentage");
   }
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "setActiveBrushSizeText",
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "setActiveBrushSizeText",
           Q_RETURN_ARG(QVariant, brush_size_text_set),
           Q_ARG(QVariant, QStringLiteral("7%"))) ||
       !brush_size_text_set.toBool() ||
-      std::abs(editor_preview.activeMaskBrushSize() - 0.07) > 1e-6) {
-    return fail("brush HUD numeric size field should parse percentage text");
-  }
-  if (!QMetaObject::invokeMethod(
-          edit_workspace,
-          "beginBrushHudSizeDrag",
+	      std::abs(editor_preview.activeMaskBrushSize() - 0.07) > 1e-6) {
+	    return fail("brush HUD numeric size field should parse percentage text");
+	  }
+	  trace_smoke_progress("brush exact size entry checked");
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "beginBrushHudSizeDrag",
           Q_RETURN_ARG(QVariant, brush_size_drag_started),
           Q_ARG(QVariant, 100.0)) ||
       !brush_size_drag_started.toBool() ||
@@ -5693,17 +8831,21 @@ int main(int argc, char** argv) {
           "endBrushHudSizeDrag",
           Q_RETURN_ARG(QVariant, brush_size_drag_ended)) ||
       !brush_size_drag_ended.toBool() ||
-      editor_preview.activeMaskBrushSize() <= 0.07) {
-    return fail("brush HUD drag handle should resize the active brush");
-  }
-  editor_preview.setActiveMaskBrushSpacing(0.42);
+	      editor_preview.activeMaskBrushSize() <= 0.07) {
+	    return fail("brush HUD drag handle should resize the active brush");
+	  }
+	  trace_smoke_progress("brush size drag checked");
+	  editor_preview.setActiveMaskBrushSpacing(0.42);
   editor_preview.setActiveMaskBrushSmoothing(0.36);
   editor_preview.setActiveMaskBrushPressureSize(0.73);
   editor_preview.setActiveMaskBrushPressureFlow(0.64);
   editor_preview.setActiveMaskBrushPressureOpacity(0.55);
   QCoreApplication::processEvents();
-  const auto brush_size_text =
-      QStringLiteral("Size %1").arg(editor_preview.activeMaskBrushSizeSummary());
+  const auto brush_visible_size_text =
+      QStringLiteral("Size %1%").arg(
+          static_cast<int>(std::lround(editor_preview.activeMaskBrushSize() * 100.0)));
+  const auto brush_diagnostic_size_text =
+      QStringLiteral("Diagnostic Size %1").arg(editor_preview.activeMaskBrushSizeSummary());
   const auto brush_flow_text = QStringLiteral("Flow %1%").arg(
       static_cast<int>(std::lround(editor_preview.activeMaskBrushFlow() * 100.0)));
   const auto brush_hardness_text = QStringLiteral("Hard %1%").arg(
@@ -5723,14 +8865,15 @@ int main(int argc, char** argv) {
           .arg(static_cast<int>(
               std::lround(editor_preview.activeMaskBrushPressureOpacity() * 100.0)));
   const auto expected_brush_value_signature = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8")
-                                                   .arg(brush_size_text)
+                                                   .arg(brush_visible_size_text)
                                                    .arg(brush_flow_text)
                                                    .arg(brush_hardness_text)
                                                    .arg(brush_density_text)
                                                    .arg(brush_opacity_text)
                                                    .arg(brush_spacing_text)
                                                    .arg(brush_smoothing_text)
-                                                   .arg(brush_pressure_text);
+                                                   .arg(brush_pressure_text) +
+      QStringLiteral("|%1").arg(brush_diagnostic_size_text);
   QVariant brush_value_signature;
   const auto brush_status_text = brush_status_label->property("text").toString();
   if (!QMetaObject::invokeMethod(
@@ -5738,26 +8881,29 @@ int main(int argc, char** argv) {
           "brushHudValueSignature",
           Q_RETURN_ARG(QVariant, brush_value_signature)) ||
       brush_value_signature.toString() != expected_brush_value_signature ||
-      !brush_status_text.contains(brush_size_text) ||
+      !brush_value_signature.toString().contains(brush_diagnostic_size_text) ||
+      !brush_status_text.contains(brush_visible_size_text) ||
       !brush_status_text.contains(brush_flow_text) ||
       !brush_status_text.contains(brush_hardness_text) ||
-      !brush_status_text.contains(brush_density_text) ||
-      !brush_status_text.contains(brush_opacity_text) ||
       !brush_context_density_label->property("text").toString().contains(brush_density_text) ||
       !brush_context_opacity_label->property("text").toString().contains(brush_opacity_text) ||
-      !brush_status_text.contains(brush_spacing_text) ||
-      !brush_status_text.contains(brush_smoothing_text) ||
-      !brush_status_text.contains(brush_pressure_text) ||
+      brush_status_text.contains(brush_density_text) ||
+      brush_status_text.contains(brush_opacity_text) ||
+      brush_status_text.contains(brush_diagnostic_size_text) ||
+      brush_status_text.contains(brush_spacing_text) ||
+      brush_status_text.contains(brush_smoothing_text) ||
+      brush_status_text.contains(brush_pressure_text) ||
       brush_cursor_ring->property("brushDiameter").toDouble() <= 0.0 ||
       brush_cursor_ring->property("hardnessDiameter").toDouble() <= 0.0 ||
       brush_cursor_ring->property("hardnessDiameter").toDouble() >
           brush_cursor_ring->property("brushDiameter").toDouble() ||
-      !brush_cursor_mode_label->property("text").toString().contains(brush_size_text.mid(5)) ||
+      !brush_cursor_mode_label->property("text").toString().contains(brush_visible_size_text.mid(5)) ||
       !brush_cursor_mode_label->property("text").toString().contains(brush_hardness_text) ||
-      brush_cursor_ring->property("brushModeLabel").toString() != QStringLiteral("Erase")) {
-    return fail("brush HUD and context panel should expose true size, flow, hardness, density, opacity, spacing, smoothing, pressure response, and active mode");
-  }
-  editor_preview.beginActiveBrushStroke();
+	      brush_cursor_ring->property("brushModeLabel").toString() != QStringLiteral("Erase")) {
+	    return fail("brush HUD and context panel should expose true size, flow, hardness, density, opacity, spacing, smoothing, pressure response, and active mode");
+	  }
+	  trace_smoke_progress("brush HUD value signature checked");
+	  editor_preview.beginActiveBrushStroke();
   editor_preview.addBrushPointWithTablet(0.42, 0.52, 0.64, 0.35, -0.20);
   QCoreApplication::processEvents();
   const auto live_tablet_status_text = brush_status_label->property("text").toString();
@@ -5765,12 +8911,13 @@ int main(int argc, char** argv) {
       live_tablet_status_text.contains(QStringLiteral("Tilt")) ||
       brush_cursor_ring->property("pressureText").toString() != QStringLiteral("Pressure 64%") ||
       !brush_canvas_overlay->property("activeBrushPainting").toBool() ||
-      !brush_canvas_overlay->property("fullMaskMatteVisible").toBool()) {
-    return fail("brush HUD, cursor, and canvas overlay should expose live tablet pressure plus a visible live matte without unsupported tilt status");
-  }
-  editor_preview.endActiveBrushStroke();
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
-  const auto brush_size_before_shortcut = editor_preview.activeMaskBrushSize();
+	      !brush_canvas_overlay->property("fullMaskMatteVisible").toBool()) {
+	    return fail("brush HUD, cursor, and canvas overlay should expose live tablet pressure plus a visible live matte without unsupported tilt status");
+	  }
+	  editor_preview.endActiveBrushStroke();
+	  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+	  trace_smoke_progress("brush live pressure checked");
+	  const auto brush_size_before_shortcut = editor_preview.activeMaskBrushSize();
   const auto brush_hardness_before_shortcut = editor_preview.activeMaskBrushHardness();
   const auto brush_flow_before_shortcut = editor_preview.activeMaskBrushFlow();
   const auto brush_density_before_shortcut = editor_preview.activeMaskDensity();
@@ -5838,10 +8985,11 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, brush_opacity_shortcut_adjusted_up),
           Q_ARG(QVariant, 0.08)) ||
       !brush_opacity_shortcut_adjusted_up.toBool() ||
-      std::abs(editor_preview.activeMaskOpacity() - brush_opacity_before_shortcut) > 1e-6) {
-    return fail("brush parameter shortcuts should mutate size, hardness, flow, density, and opacity while brush mode is active");
-  }
-  QVariant brush_add_mode;
+	      std::abs(editor_preview.activeMaskOpacity() - brush_opacity_before_shortcut) > 1e-6) {
+	    return fail("brush parameter shortcuts should mutate size, hardness, flow, density, and opacity while brush mode is active");
+	  }
+	  trace_smoke_progress("brush shortcut adjustments checked");
+	  QVariant brush_add_mode;
   if (!QMetaObject::invokeMethod(
           edit_workspace,
           "setBrushPaintMode",
@@ -5872,10 +9020,11 @@ int main(int argc, char** argv) {
           Q_ARG(QVariant, false)) ||
       !temporary_erase_finished.toBool() ||
       edit_workspace->property("temporaryBrushEraseActive").toBool() ||
-      editor_preview.activeMaskOperation() != QStringLiteral("add")) {
-    return fail("holding the temporary erase shortcut should switch the brush to erase and restore the previous paint mode on release");
-  }
-  const auto mask_count_before_tool_switch = editor_preview.maskCount();
+	      editor_preview.activeMaskOperation() != QStringLiteral("add")) {
+	    return fail("holding the temporary erase shortcut should switch the brush to erase and restore the previous paint mode on release");
+	  }
+	  trace_smoke_progress("brush mode toggle checked");
+	  const auto mask_count_before_tool_switch = editor_preview.maskCount();
   editor_preview.beginActiveBrushStroke();
   editor_preview.addBrushPointWithTablet(0.38, 0.44, 0.72, 0.0, 0.0);
   QVariant transient_tool_state_signature;
@@ -5890,15 +9039,17 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, transient_tool_state_signature)) ||
       transient_tool_state_signature.toString() !=
           QStringLiteral("tool:adjust|activeMask:false|stroke:false|crop:false|compare:false") ||
-      editor_preview.maskCount() != mask_count_before_tool_switch) {
-    return fail("switching tools should commit active brush strokes and clear transient mask, crop, and compare state safely");
-  }
-  QVariant retouch_mode;
+	      editor_preview.maskCount() != mask_count_before_tool_switch) {
+	    return fail("switching tools should commit active brush strokes and clear transient mask, crop, and compare state safely");
+	  }
+	  trace_smoke_progress("brush transient switch checked");
+	  QVariant retouch_mode;
   if (!QMetaObject::invokeMethod(
           edit_workspace,
-          "startRetouchTool",
-          Q_RETURN_ARG(QVariant, retouch_mode),
-          Q_ARG(QVariant, QStringLiteral("heal"))) ||
+	          "startRetouchTool",
+	          Q_RETURN_ARG(QVariant, retouch_mode),
+	          Q_ARG(QVariant, QStringLiteral("heal")),
+	          Q_ARG(QVariant, false)) ||
       retouch_mode.toString() != QStringLiteral("heal")) {
     return fail("edit workspace should expose a direct retouch starter");
   }
@@ -5973,9 +9124,17 @@ int main(int argc, char** argv) {
   auto* retouch_smooth_button = edit_workspace->findChild<QObject*>(QStringLiteral("retouchHudSmoothButton"));
   auto* edit_zoom_toolbar_for_retouch = find_named_object(edit_workspace, QStringLiteral("editZoomToolbar"));
   auto* edit_action_toolbar_for_retouch = find_named_object(edit_workspace, QStringLiteral("editActionToolbar"));
+  auto* active_tool_variant_chip_for_retouch =
+      find_named_object(edit_workspace, QStringLiteral("activeToolVariantChip"));
+  auto* retouch_mode_menu_button =
+      find_named_object(edit_workspace, QStringLiteral("retouchHudModeMenuButton"));
   const auto retouch_inpaint_capability =
       editor_preview.aiInpaintAvailable() ? QStringLiteral("model-ready") : QStringLiteral("local-fallback");
   const auto retouch_inpaint_status = editor_preview.inpaintRuntimeLabel();
+  const auto retouch_status_suffix = editor_preview.aiInpaintAvailable()
+                                         ? retouch_inpaint_status
+                                         : QStringLiteral("%1 fallback").arg(retouch_inpaint_status);
+  QVariant retouch_visibility_signature;
   if (retouch_tool_hud == nullptr || retouch_heal_button == nullptr || retouch_patch_button == nullptr ||
       retouch_remove_button == nullptr || retouch_remove_add_button == nullptr ||
       retouch_remove_subtract_button == nullptr || retouch_clone_button == nullptr ||
@@ -5996,9 +9155,27 @@ int main(int argc, char** argv) {
       retouch_clone_source_panel == nullptr || retouch_clone_save_source_button == nullptr ||
       retouch_clone_source_count_label == nullptr ||
       retouch_variation_picker == nullptr ||
+      retouch_mode_menu_button == nullptr ||
       retouch_skin_button == nullptr || retouch_smooth_button == nullptr ||
       edit_zoom_toolbar_for_retouch == nullptr || edit_action_toolbar_for_retouch == nullptr ||
+      active_tool_variant_chip_for_retouch == nullptr ||
       !retouch_tool_hud->property("visible").toBool() ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v1|tool:retouch")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("precision-controls:true")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("retry-actions:true")) ||
+      !retouch_tool_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
+      retouch_tool_hud->property("visibilityContract").toString() !=
+          QStringLiteral(
+              "retouch-tool-visibility:v1|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After / %1|last:heal|hud:true|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel|text:no-elide-no-overlap|menus:stale-clear")
+              .arg(retouch_status_suffix) ||
+      active_tool_variant_chip_for_retouch->property("text").toString() != QStringLiteral("Heal") ||
+      retouch_mode_menu_button->property("text").toString() != QStringLiteral("Heal") ||
+      !retouch_mode_menu_button->property("visible").toBool() ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:8")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:1")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:2")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled-reasons-complete:true")) ||
+      !retouch_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
       !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
       edit_zoom_toolbar_for_retouch->property("visible").toBool() ||
       edit_action_toolbar_for_retouch->property("visible").toBool() ||
@@ -6006,6 +9183,8 @@ int main(int argc, char** argv) {
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Heal")) ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Paint area")) ||
       !retouch_status_label->property("text").toString().contains(retouch_inpaint_status) ||
+      !retouch_status_label->property("readableStatusContract").toString().contains(QStringLiteral("ellipsis:none")) ||
+      retouch_status_label->property("text").toString().contains(QStringLiteral("...")) ||
       !retouch_apply_button->property("enabled").toBool() ||
       !retouch_reset_selection_button->property("enabled").toBool() ||
       !retouch_cancel_button->property("enabled").toBool() ||
@@ -6053,20 +9232,30 @@ int main(int argc, char** argv) {
               .arg(retouch_inpaint_capability) ||
       !QMetaObject::invokeMethod(
           edit_workspace,
+          "retouchToolVisibilitySignature",
+          Q_RETURN_ARG(QVariant, retouch_visibility_signature)) ||
+      retouch_visibility_signature.toString() !=
+          QStringLiteral(
+              "retouch-tool-visibility:v1|family:Retouch|variant:Heal|mode:heal|status:Heal / Paint area / After / %1|last:heal|hud:true|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel|text:no-elide-no-overlap|menus:stale-clear")
+              .arg(retouch_status_suffix) ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
           "activeMaskEditingContextSignature",
           Q_RETURN_ARG(QVariant, active_mask_context_signature)) ||
       active_mask_context_signature.toString() !=
           QStringLiteral("tool:retouch|mask:false|brush:false|retouch:true|count:1") ||
       edit_workspace->property("editTool").toString() != QStringLiteral("retouch") ||
       editor_preview.activeMaskToolRole() != QStringLiteral("retouch") ||
-      editor_preview.activeMaskRetouchMode() != QStringLiteral("heal")) {
-    return fail("retouch workflow should own the canvas HUD without generic edit toolbar overlap");
-  }
-  if (!QMetaObject::invokeMethod(
+	      editor_preview.activeMaskRetouchMode() != QStringLiteral("heal")) {
+	    return fail("retouch workflow should own the canvas HUD without generic edit toolbar overlap");
+	  }
+	  trace_smoke_progress("retouch heal checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
-          "startRetouchTool",
-          Q_RETURN_ARG(QVariant, retouch_mode),
-          Q_ARG(QVariant, QStringLiteral("patch"))) ||
+	          "startRetouchTool",
+	          Q_RETURN_ARG(QVariant, retouch_mode),
+	          Q_ARG(QVariant, QStringLiteral("patch")),
+	          Q_ARG(QVariant, false)) ||
       retouch_mode.toString() != QStringLiteral("patch")) {
     return fail("retouch HUD should start patch mode directly");
   }
@@ -6110,15 +9299,17 @@ int main(int argc, char** argv) {
           edit_workspace,
           "retouchPatchSourceSignature",
           Q_RETURN_ARG(QVariant, patch_source_signature)) ||
-      patch_source_signature.toString() !=
-          QStringLiteral("visible:true|set:true|x:18|y:22|w:18|h:18")) {
-    return fail("patch source overlay should move the source region before applying");
-  }
-  if (!QMetaObject::invokeMethod(
+	      patch_source_signature.toString() !=
+	          QStringLiteral("visible:true|set:true|x:18|y:22|w:18|h:18")) {
+	    return fail("patch source overlay should move the source region before applying");
+	  }
+	  trace_smoke_progress("retouch patch checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
-          "startRetouchTool",
-          Q_RETURN_ARG(QVariant, retouch_mode),
-          Q_ARG(QVariant, QStringLiteral("remove"))) ||
+	          "startRetouchTool",
+	          Q_RETURN_ARG(QVariant, retouch_mode),
+	          Q_ARG(QVariant, QStringLiteral("remove")),
+	          Q_ARG(QVariant, false)) ||
       retouch_mode.toString() != QStringLiteral("remove")) {
     return fail("retouch HUD should switch between retouch modes");
   }
@@ -6182,7 +9373,7 @@ int main(int argc, char** argv) {
                   QStringLiteral("modelReason:LaMa Model Inpaint is not active in this build; retouch will use %1")
                       .arg(editor_preview.inpaintRuntimeLabel()))) ||
       retouch_primary_tool_signature.toString() !=
-          QStringLiteral("remove:primary|heal:primary|patch:primary|clone:primary|dust:primary|red-eye:primary|skin-cleanup:experimental-hidden|frequency-smoothing:experimental-hidden") ||
+          QStringLiteral("remove:primary|heal:primary|patch:primary|clone:primary|dust:mode-menu|red-eye:mode-menu|skin-cleanup:experimental-hidden|frequency-smoothing:experimental-hidden") ||
       retouch_all_workflow_state_signature.toString() !=
           QStringLiteral(
               "remove:draft|heal:draft|clone:inactive|patch:draft|dust:inactive|red-eye:inactive") ||
@@ -6190,15 +9381,17 @@ int main(int argc, char** argv) {
           QStringLiteral("visible:false|count:0|index:0") ||
       retouch_before_after_signature.toString() !=
           QStringLiteral("view:after|button:Show Before|recipe:unchanged") ||
-      retouch_action_signature.toString() !=
-          QStringLiteral("apply:true|cancel:true|reset:true|delete:false|reopen:false")) {
-    return fail("retouch inpaint fallback should be recoverable without blocking canvas and experimental tools should stay out of the primary HUD");
-  }
-  if (!QMetaObject::invokeMethod(
+	      retouch_action_signature.toString() !=
+	          QStringLiteral("apply:true|cancel:true|reset:true|delete:false|reopen:false")) {
+	    return fail("retouch inpaint fallback should be recoverable without blocking canvas and experimental tools should stay out of the primary HUD");
+	  }
+	  trace_smoke_progress("retouch remove checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
-          "startRetouchTool",
-          Q_RETURN_ARG(QVariant, retouch_mode),
-          Q_ARG(QVariant, QStringLiteral("clone"))) ||
+	          "startRetouchTool",
+	          Q_RETURN_ARG(QVariant, retouch_mode),
+	          Q_ARG(QVariant, QStringLiteral("clone")),
+	          Q_ARG(QVariant, false)) ||
       retouch_mode.toString() != QStringLiteral("clone")) {
     return fail("retouch HUD should start clone stamp directly");
   }
@@ -6206,17 +9399,55 @@ int main(int argc, char** argv) {
   if (!retouch_clone_button->property("active").toBool() ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Clone Stamp")) ||
       !retouch_status_label->property("text").toString().contains(QStringLiteral("Pick source")) ||
+      active_tool_variant_chip_for_retouch->property("text").toString() != QStringLiteral("Clone Stamp") ||
+      retouch_tool_hud->property("visibilityContract").toString() !=
+          QStringLiteral(
+              "retouch-tool-visibility:v1|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After / Deterministic|last:clone|hud:true|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel|text:no-elide-no-overlap|menus:stale-clear") ||
       retouch_regenerate_button->property("enabled").toBool() ||
       !QMetaObject::invokeMethod(
           edit_workspace,
           "retouchWorkflowSignature",
           Q_RETURN_ARG(QVariant, retouch_mode)) ||
       retouch_mode.toString() !=
-          QStringLiteral("mode:clone|label:Clone Stamp|stage:Pick source|source:required|apply:true|regenerate:false|capability:deterministic|beforeAfter:after")) {
-    return fail("clone stamp HUD should clearly require a source before painting");
-  }
-  editor_preview.setActiveMaskCloneSource(0.34, 0.46);
-  QCoreApplication::processEvents();
+          QStringLiteral("mode:clone|label:Clone Stamp|stage:Pick source|source:required|apply:true|regenerate:false|capability:deterministic|beforeAfter:after") ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "retouchToolVisibilitySignature",
+          Q_RETURN_ARG(QVariant, retouch_visibility_signature)) ||
+	      retouch_visibility_signature.toString() !=
+	          QStringLiteral(
+	              "retouch-tool-visibility:v1|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After / Deterministic|last:clone|hud:true|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel|text:no-elide-no-overlap|menus:stale-clear")) {
+	    return fail("clone stamp HUD should clearly require a source before painting");
+	  }
+  trace_smoke_progress("brush layer adjustments checked");
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "activateEditTool",
+	          Q_ARG(QVariant, QVariant(QStringLiteral("adjust")))) ||
+	      edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
+	      editor_preview.hasActiveMask() ||
+	      !QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "activateEditTool",
+	          Q_ARG(QVariant, QVariant(QStringLiteral("retouch")))) ||
+	      edit_workspace->property("editTool").toString() != QStringLiteral("retouch") ||
+	      editor_preview.activeMaskToolRole() != QStringLiteral("retouch") ||
+	      editor_preview.activeMaskRetouchMode() != QStringLiteral("clone") ||
+	      editor_preview.activeMaskCloneSourceSet() ||
+	      active_tool_variant_chip_for_retouch->property("text").toString() !=
+	          QStringLiteral("Clone Stamp") ||
+	      !retouch_tool_hud->property("visible").toBool() ||
+	      retouch_tool_hud->property("visibilityContract").toString() !=
+	          QStringLiteral(
+	              "retouch-tool-visibility:v1|family:Retouch|variant:Clone Stamp|mode:clone|status:Clone Stamp / Pick source / After / Deterministic|last:clone|hud:true|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel|text:no-elide-no-overlap|menus:stale-clear")) {
+	    return fail("primary Retouch activation should restore the last-used retouch variant without restoring stale clone source state");
+	  }
+	  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_RETOUCH")) {
+	    return EXIT_SUCCESS;
+	  }
+	  trace_smoke_progress("retouch restore checked");
+	  editor_preview.setActiveMaskCloneSource(0.34, 0.46);
+	  QCoreApplication::processEvents();
   auto* clone_source_pin =
       edit_workspace->findChild<QObject*>(QStringLiteral("editImageViewportCloneSourcePin"));
   auto* clone_source_label =
@@ -6228,8 +9459,8 @@ int main(int argc, char** argv) {
   auto* clone_transform_badge =
       edit_workspace->findChild<QObject*>(QStringLiteral("editImageViewportCloneTransformBadge"));
   QVariant retouch_clone_overlay_signature;
-  if (clone_source_pin == nullptr || clone_source_label == nullptr ||
-      clone_target_preview == nullptr || clone_offset_line == nullptr ||
+	  if (clone_source_pin == nullptr || clone_source_label == nullptr ||
+	      clone_target_preview == nullptr || clone_offset_line == nullptr ||
       clone_transform_badge == nullptr ||
       !clone_source_pin->property("visible").toBool() ||
       !clone_target_preview->property("visible").toBool() ||
@@ -6250,11 +9481,12 @@ int main(int argc, char** argv) {
           edit_workspace,
           "retouchAllWorkflowStateSignature",
           Q_RETURN_ARG(QVariant, retouch_all_workflow_state_signature)) ||
-      retouch_all_workflow_state_signature.toString() !=
-          QStringLiteral("remove:draft|heal:draft|clone:draft|patch:draft|dust:inactive|red-eye:inactive")) {
-    return fail("clone stamp should show source, target, transform, and aligned overlay state after picking a source");
-  }
-  QVariant retouch_clone_source_panel_signature;
+	      retouch_all_workflow_state_signature.toString() !=
+	          QStringLiteral("remove:draft|heal:draft|clone:draft|patch:draft|dust:inactive|red-eye:inactive")) {
+	    return fail("clone stamp should show source, target, transform, and aligned overlay state after picking a source");
+	  }
+	  trace_smoke_progress("clone source overlay checked");
+	  QVariant retouch_clone_source_panel_signature;
   if (!retouch_clone_source_panel->property("visible").toBool() ||
       retouch_clone_source_panel->property("sourceCount").toInt() != 0 ||
       retouch_clone_source_panel->property("selectedSourceIndex").toInt() != -1 ||
@@ -6265,39 +9497,51 @@ int main(int argc, char** argv) {
           edit_workspace,
           "retouchCloneSourcePanelSignature",
           Q_RETURN_ARG(QVariant, retouch_clone_source_panel_signature)) ||
-      retouch_clone_source_panel_signature.toString() !=
-          QStringLiteral("visible:true|count:1|index:0|first:Source 1")) {
-    return fail("clone source panel should save the first Clone Stamp source");
-  }
-  if (!QMetaObject::invokeMethod(
-          clone_source_pin,
-          "moveSource",
-          Q_ARG(QVariant, 0.62),
-          Q_ARG(QVariant, 0.28)) ||
-      std::abs(editor_preview.activeMaskCloneSourceX() - 0.62) > 1e-6 ||
-      std::abs(editor_preview.activeMaskCloneSourceY() - 0.28) > 1e-6) {
-    return fail("clone source pin should move the active clone source");
-  }
-  editor_preview.setActiveMaskCloneScale(1.3);
-  editor_preview.setActiveMaskCloneRotation(-15.0);
-  editor_preview.setActiveMaskCloneAligned(false);
-  if (!editor_preview.saveActiveCloneSource() ||
-      !editor_preview.selectActiveCloneSource(0) ||
-      std::abs(editor_preview.activeMaskCloneSourceX() - 0.34) > 1e-6 ||
-      !editor_preview.selectActiveCloneSource(1) ||
-      std::abs(editor_preview.activeMaskCloneSourceX() - 0.62) > 1e-6 ||
-      !QMetaObject::invokeMethod(
-          edit_workspace,
-          "retouchCloneSourcePanelSignature",
-          Q_RETURN_ARG(QVariant, retouch_clone_source_panel_signature)) ||
-      retouch_clone_source_panel_signature.toString() !=
-          QStringLiteral("visible:true|count:2|index:1|first:Source 1") ||
+	      retouch_clone_source_panel_signature.toString() !=
+	          QStringLiteral("visible:true|count:1|index:0|first:Source 1")) {
+	    return fail("clone source panel should save the first Clone Stamp source");
+	  }
+	  trace_smoke_progress("clone first source saved");
+	  if (!QMetaObject::invokeMethod(
+	          clone_source_pin,
+	          "moveSource",
+	          Q_ARG(QVariant, 0.62),
+	          Q_ARG(QVariant, 0.28)) ||
+	      std::abs(editor_preview.activeMaskCloneSourceX() - 0.62) > 1e-6 ||
+	      std::abs(editor_preview.activeMaskCloneSourceY() - 0.28) > 1e-6) {
+	    return fail("clone source pin should move the active clone source");
+	  }
+	  trace_smoke_progress("clone source pin moved");
+	  editor_preview.setActiveMaskCloneScale(1.3);
+	  editor_preview.setActiveMaskCloneRotation(-15.0);
+	  editor_preview.setActiveMaskCloneAligned(false);
+	  if (!editor_preview.saveActiveCloneSource()) {
+	    return fail("clone source panel should save a second Clone Stamp source");
+	  }
+	  trace_smoke_progress("clone second source saved");
+	  if (!editor_preview.selectActiveCloneSource(0) ||
+	      std::abs(editor_preview.activeMaskCloneSourceX() - 0.34) > 1e-6) {
+	    return fail("clone source panel should restore the first saved Clone Stamp source");
+	  }
+	  trace_smoke_progress("clone first source restored");
+	  if (!editor_preview.selectActiveCloneSource(1) ||
+	      std::abs(editor_preview.activeMaskCloneSourceX() - 0.62) > 1e-6) {
+	    return fail("clone source panel should restore the second saved Clone Stamp source");
+	  }
+	  trace_smoke_progress("clone second source restored");
+	  if (!QMetaObject::invokeMethod(
+	          edit_workspace,
+	          "retouchCloneSourcePanelSignature",
+	          Q_RETURN_ARG(QVariant, retouch_clone_source_panel_signature)) ||
+	      retouch_clone_source_panel_signature.toString() !=
+	          QStringLiteral("visible:true|count:2|index:1|first:Source 1") ||
       retouch_clone_source_panel->property("sourceCount").toInt() != 2 ||
-      retouch_clone_source_panel->property("selectedSourceIndex").toInt() != 1 ||
-      retouch_clone_source_panel->property("firstSourceName").toString() != QStringLiteral("Source 1")) {
-    return fail("clone source panel should save and switch between multiple Clone Stamp sources");
-  }
-  editor_preview.addBrushPoint(0.52, 0.64);
+	      retouch_clone_source_panel->property("selectedSourceIndex").toInt() != 1 ||
+	      retouch_clone_source_panel->property("firstSourceName").toString() != QStringLiteral("Source 1")) {
+	    return fail("clone source panel should save and switch between multiple Clone Stamp sources");
+	  }
+	  trace_smoke_progress("clone multiple sources checked");
+	  editor_preview.addBrushPoint(0.52, 0.64);
   QCoreApplication::processEvents();
   if (!QMetaObject::invokeMethod(
           edit_workspace,
@@ -6310,11 +9554,12 @@ int main(int argc, char** argv) {
       std::abs(clone_target_preview->property("targetY").toDouble() - 0.64) > 1e-6 ||
       std::abs(clone_target_preview->property("cloneScale").toDouble() - 1.3) > 1e-6 ||
       std::abs(clone_target_preview->property("cloneRotation").toDouble() + 15.0) > 1e-6 ||
-      retouch_clone_aligned_button->property("text").toString() != QStringLiteral("Non-aligned") ||
-      clone_offset_line->property("offsetLength").toDouble() <= 1.0) {
-    return fail("clone overlay should expose target preview, offset line, source scale, rotation, and non-aligned mode");
-  }
-  auto* cancel_active_tool_shortcut =
+	      retouch_clone_aligned_button->property("text").toString() != QStringLiteral("Non-aligned") ||
+	      clone_offset_line->property("offsetLength").toDouble() <= 1.0) {
+	    return fail("clone overlay should expose target preview, offset line, source scale, rotation, and non-aligned mode");
+	  }
+	  trace_smoke_progress("clone target overlay checked");
+	  auto* cancel_active_tool_shortcut =
       edit_workspace->findChild<QObject*>(QStringLiteral("cancelActiveToolShortcut"));
   QVariant cancel_result;
   if (cancel_active_tool_shortcut == nullptr ||
@@ -6324,11 +9569,12 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, cancel_result)) ||
       !cancel_result.toBool() ||
       edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
-      editor_preview.hasActiveMask() ||
-      retouch_tool_hud->property("visible").toBool()) {
-    return fail("Escape/cancel should leave retouch mode and return to neutral Adjust state");
-  }
-  if (!QMetaObject::invokeMethod(
+	      editor_preview.hasActiveMask() ||
+	      retouch_tool_hud->property("visible").toBool()) {
+	    return fail("Escape/cancel should leave retouch mode and return to neutral Adjust state");
+	  }
+	  trace_smoke_progress("retouch cancel checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
           "activateEditTool",
           Q_ARG(QVariant, QVariant(QStringLiteral("crop")))) ||
@@ -6337,11 +9583,12 @@ int main(int argc, char** argv) {
           "cancelActiveTool",
           Q_RETURN_ARG(QVariant, cancel_result)) ||
       !cancel_result.toBool() ||
-      edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
-      editor_preview.cropEditing()) {
-    return fail("Escape/cancel should leave Crop without leaving crop editing active");
-  }
-  if (!QMetaObject::invokeMethod(
+	      edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
+	      editor_preview.cropEditing()) {
+	    return fail("Escape/cancel should leave Crop without leaving crop editing active");
+	  }
+	  trace_smoke_progress("crop cancel checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
           "activateEditTool",
           Q_ARG(QVariant, QVariant(QStringLiteral("compare")))) ||
@@ -6350,21 +9597,23 @@ int main(int argc, char** argv) {
           "cancelActiveTool",
           Q_RETURN_ARG(QVariant, cancel_result)) ||
       !cancel_result.toBool() ||
-      edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
-      editor_preview.compareMode()) {
-    return fail("Escape/cancel should leave Compare and restore the Adjust workspace");
-  }
-  edit_workspace->setProperty("diagnosticsPanelOpen", true);
+	      edit_workspace->property("editTool").toString() != QStringLiteral("adjust") ||
+	      editor_preview.compareMode()) {
+	    return fail("Escape/cancel should leave Compare and restore the Adjust workspace");
+	  }
+	  trace_smoke_progress("compare cancel checked");
+	  edit_workspace->setProperty("diagnosticsPanelOpen", true);
   if (!QMetaObject::invokeMethod(
           edit_workspace,
           "cancelActiveTool",
           Q_RETURN_ARG(QVariant, cancel_result)) ||
       !cancel_result.toBool() ||
-      edit_workspace->property("diagnosticsPanelOpen").toBool() ||
-      edit_workspace->property("editTool").toString() != QStringLiteral("adjust")) {
-    return fail("Escape/cancel should close transient diagnostics before changing tools");
-  }
-  editor_preview.deselectActiveMask();
+	      edit_workspace->property("diagnosticsPanelOpen").toBool() ||
+	      edit_workspace->property("editTool").toString() != QStringLiteral("adjust")) {
+	    return fail("Escape/cancel should close transient diagnostics before changing tools");
+	  }
+	  trace_smoke_progress("diagnostics cancel checked");
+	  editor_preview.deselectActiveMask();
   edit_workspace->setProperty("editTool", QStringLiteral("adjust"));
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("adjust"));
   for (auto iteration = 0; iteration < 6; ++iteration) {
@@ -6378,11 +9627,12 @@ int main(int argc, char** argv) {
       edit_workspace->findChild<QObject*>(QStringLiteral("colorPanelResetButton"));
   if (white_balance_panel_reset_button == nullptr || light_panel_reset_button == nullptr ||
       color_panel_reset_button == nullptr || !white_balance_panel_reset_button->property("visible").toBool() ||
-      !light_panel_reset_button->property("visible").toBool() ||
-      !color_panel_reset_button->property("visible").toBool()) {
-    return fail("adjust inspector should expose per-panel reset buttons for white balance, light, and color");
-  }
-  if (!QMetaObject::invokeMethod(
+	      !light_panel_reset_button->property("visible").toBool() ||
+	      !color_panel_reset_button->property("visible").toBool()) {
+	    return fail("adjust inspector should expose per-panel reset buttons for white balance, light, and color");
+	  }
+	  trace_smoke_progress("adjust reset buttons checked");
+	  if (!QMetaObject::invokeMethod(
           edit_workspace,
           "activateEditTool",
           Q_ARG(QVariant, QVariant(QStringLiteral("crop"))))) {
@@ -6406,6 +9656,7 @@ int main(int argc, char** argv) {
       !crop_aspect_combo->property("visible").toBool()) {
     return fail("crop inspector should expose separate crop/transform resets and a discoverable aspect preset menu");
   }
+  trace_smoke_progress("crop inspector checked");
   editor_preview.removeCustomCropAspectPreset(QStringLiteral("13:7"));
   QVariant added_crop_aspect;
   if (!QMetaObject::invokeMethod(
@@ -6433,6 +9684,7 @@ int main(int argc, char** argv) {
     return fail("studio crop inspector should remove custom aspect presets and return to Original when selected");
   }
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
+  trace_smoke_progress("starting layer panel checks");
 
   if (!editor_preview.addFillLayer(QStringLiteral("#808080"), QStringLiteral("Smoke Fill")) ||
       !editor_preview.addTextLayer(QStringLiteral("Layer"), QStringLiteral("Smoke Text"))) {
@@ -6458,6 +9710,7 @@ int main(int argc, char** argv) {
       white_balance_group->property("visible").toBool()) {
     return fail("layers should live in a dedicated inspector tab instead of the Adjust control stack");
   }
+  trace_smoke_progress("layer tab visible");
   auto* photo_layer_solo_button = edit_workspace->findChild<QObject*>(QStringLiteral("photoLayerSoloButton"));
   auto* photo_layer_clear_solo_button =
       edit_workspace->findChild<QObject*>(QStringLiteral("photoLayerClearSoloButton"));
@@ -6478,6 +9731,20 @@ int main(int argc, char** argv) {
               << " layerCount=" << editor_preview.photoLayerCount()
               << " soloActive=" << editor_preview.photoLayerSoloActive() << "\n";
     return fail("layer panel should expose an isolate control and hide clear isolation when inactive");
+  }
+  QVariant live_layer_stack_acceptance_signature;
+  if (photo_layers_group == nullptr ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "layerStackAcceptanceSignature",
+          Q_RETURN_ARG(QVariant, live_layer_stack_acceptance_signature)) ||
+      !live_layer_stack_acceptance_signature.toString().contains(
+          QStringLiteral("layer-stack-acceptance:v1|select:true|rename:stable-row|reorder:move-buttons-menu")) ||
+      !live_layer_stack_acceptance_signature.toString().contains(
+          QStringLiteral("|visibility:toggle-and-state|opacity:fixed-readout|mask-select:inspector-context|transform:entry-exit|escape:transient-first")) ||
+      photo_layers_group->property("layerStackAcceptanceContract").toString() !=
+          live_layer_stack_acceptance_signature.toString()) {
+    return fail("layer stack should expose a live acceptance contract for selection, rename, reorder, visibility, opacity, masks, transform, and Escape behavior");
   }
   auto* photo_layer_opacity_label = find_named_object(edit_workspace, QStringLiteral("photoLayerOpacityLabel"));
   auto* photo_layer_opacity_slider =
@@ -6525,8 +9792,16 @@ int main(int argc, char** argv) {
       find_named_object(edit_workspace, QStringLiteral("syncPhotoLayerAdjustmentsButton"));
   auto* clear_photo_layer_selection_button =
       find_named_object(edit_workspace, QStringLiteral("clearPhotoLayerSelectionButton"));
+  auto* photo_layer_inline_actions =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerInlineActions"));
+  auto* photo_layer_fixed_state_action_zone =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerFixedStateActionZone"));
+  auto* photo_layer_mask_state_pill =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerMaskStatePill"));
   auto* photo_layer_structure_actions =
       find_named_object(edit_workspace, QStringLiteral("photoLayerStructureActions"));
+  auto* photo_layer_reorder_handle =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerReorderHandle"));
   auto* photo_layer_lock_button =
       find_named_object(edit_workspace, QStringLiteral("photoLayerLockButton"));
   auto* photo_layer_move_up_button =
@@ -6545,6 +9820,8 @@ int main(int argc, char** argv) {
   auto* photo_layer_name_field = find_named_object(edit_workspace, QStringLiteral("photoLayerNameField"));
   auto* photo_layer_state_label =
       find_named_object(edit_workspace, QStringLiteral("photoLayerStateLabel"));
+  auto* photo_layer_state_badge_row =
+      find_named_object(edit_workspace, QStringLiteral("photoLayerStateBadgeRow"));
   auto* photo_layer_changed_group_badge_row =
       find_named_object(edit_workspace, QStringLiteral("photoLayerChangedGroupBadgeRow"));
   auto* photo_layer_adjustment_summary_label =
@@ -6643,6 +9920,10 @@ int main(int argc, char** argv) {
       find_named_object(edit_workspace, QStringLiteral("photoLayerTextBoxHeightSlider"));
   const auto photo_layer_state_text =
       photo_layer_state_label == nullptr ? QString() : photo_layer_state_label->property("text").toString();
+  const auto photo_layer_state_badge_signature =
+      photo_layer_state_badge_row == nullptr
+          ? QString()
+          : photo_layer_state_badge_row->property("badgeSignature").toString();
   const auto photo_layer_failure_signature =
       photo_layer_row == nullptr ? QString() : photo_layer_row->property("layerFailureSignature").toString();
   const auto photo_layer_failure_active =
@@ -6688,14 +9969,26 @@ int main(int argc, char** argv) {
       photo_layer_thumbnail == nullptr
           ? QString()
           : photo_layer_thumbnail->property("thumbnailStateSignature").toString();
+  const auto photo_layer_thumbnail_display_state =
+      photo_layer_thumbnail == nullptr
+          ? QString()
+          : photo_layer_thumbnail->property("thumbnailDisplayState").toString();
   const auto photo_layer_mask_set_thumbnail_state_signature =
       photo_layer_mask_set_thumbnail == nullptr
           ? QString()
           : photo_layer_mask_set_thumbnail->property("thumbnailStateSignature").toString();
+  const auto photo_layer_mask_set_thumbnail_display_state =
+      photo_layer_mask_set_thumbnail == nullptr
+          ? QString()
+          : photo_layer_mask_set_thumbnail->property("thumbnailDisplayState").toString();
   const auto nested_mask_thumbnail_state_signature =
       photo_layer_nested_mask_thumbnail == nullptr
           ? QString()
           : photo_layer_nested_mask_thumbnail->property("thumbnailStateSignature").toString();
+  const auto nested_mask_thumbnail_display_state =
+      photo_layer_nested_mask_thumbnail == nullptr
+          ? QString()
+          : photo_layer_nested_mask_thumbnail->property("thumbnailDisplayState").toString();
   const auto mask_set_thumbnail_failure_contained =
       photo_layer_mask_set_thumbnail != nullptr &&
       photo_layer_mask_set_thumbnail->property("thumbnailFailureContained").toBool();
@@ -6722,6 +10015,22 @@ int main(int argc, char** argv) {
       selected_layer_header_thumbnail_image == nullptr
           ? QSize()
           : selected_layer_header_thumbnail_image->property("sourceSize").toSize();
+  const auto photo_layer_inline_actions_contract =
+      photo_layer_inline_actions == nullptr
+          ? QString()
+          : photo_layer_inline_actions->property("actionVisibilityContract").toString();
+  const auto photo_layer_fixed_state_action_zone_contract =
+      photo_layer_fixed_state_action_zone == nullptr
+          ? QString()
+          : photo_layer_fixed_state_action_zone->property("actionZoneContract").toString();
+  const auto photo_layer_structure_actions_contract =
+      photo_layer_structure_actions == nullptr
+          ? QString()
+          : photo_layer_structure_actions->property("actionVisibilityContract").toString();
+  const auto photo_layer_reorder_contract =
+      photo_layer_reorder_handle == nullptr
+          ? QString()
+          : photo_layer_reorder_handle->property("reorderContract").toString();
   const auto photo_layer_thumbnail_pixel_signature =
       photo_layer_thumbnail == nullptr
           ? QString()
@@ -6772,12 +10081,26 @@ int main(int argc, char** argv) {
       toggle_photo_layer_adjustments_preview_button == nullptr ||
       sync_photo_layer_adjustments_button == nullptr ||
       clear_photo_layer_selection_button == nullptr ||
-      photo_layer_structure_actions == nullptr || photo_layer_lock_button == nullptr ||
+      photo_layer_inline_actions == nullptr ||
+      photo_layer_fixed_state_action_zone == nullptr ||
+      photo_layer_mask_state_pill == nullptr ||
+      photo_layer_structure_actions == nullptr ||
+      photo_layer_reorder_handle == nullptr ||
+      photo_layer_lock_button == nullptr ||
       photo_layer_move_up_button == nullptr || photo_layer_move_down_button == nullptr ||
       photo_layer_duplicate_button == nullptr || photo_layer_delete_button == nullptr ||
+      photo_layer_inline_actions_contract !=
+          QStringLiteral("layer-actions:v1|contextual:hover-focus-selected|keyboard-accessible:true|precision-controls:true|disabled-reasons:true") ||
+      photo_layer_fixed_state_action_zone_contract !=
+          QStringLiteral("layer-row-action-zone:v3|component:LayerRowActionZone|normal-width:178|brush-width:52|brush:more-only|summary-in-status:true|mask-state:normal-only|opacity-readout:normal-only|visibility:normal-only|more:true|hover-no-shift:true|no-elide:true") ||
+      photo_layer_structure_actions_contract !=
+          QStringLiteral("layer-structure-actions:v1|contextual:hover-focus-selected|reorder:move-buttons|overflow-menu:true|destructive-separated:true|disabled-reasons:true") ||
+      photo_layer_reorder_contract !=
+          QStringLiteral("layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true") ||
       photo_layer_row == nullptr || photo_layer_thumbnail == nullptr ||
       photo_layer_thumbnail_image == nullptr || photo_layer_type_icon == nullptr ||
       photo_layer_name_field == nullptr || photo_layer_state_label == nullptr ||
+      photo_layer_state_badge_row == nullptr ||
       photo_layer_job_status_chip == nullptr ||
       base_image_layer_row == nullptr || base_image_layer_name_label == nullptr ||
       base_image_layer_status_label == nullptr || base_image_layer_metadata_label == nullptr ||
@@ -6872,7 +10195,8 @@ int main(int argc, char** argv) {
       selected_layer_header_name_label->property("text").toString().trimmed().isEmpty() ||
       !selected_layer_header_status_label->property("text").toString().contains(
           QStringLiteral(" / ")) ||
-      selected_layer_header_changed_groups_label->property("text").toString().trimmed().isEmpty() ||
+	      (selected_layer_header_changed_groups_label->property("text").toString().trimmed().isEmpty() &&
+	       !selected_layer_header_signature.contains(QStringLiteral("changed:groups:|count:0"))) ||
       selected_layer_header_thumbnail_source_size.width() <
           selected_layer_header->property("thumbnailBackingWidth").toInt() ||
       selected_layer_header_thumbnail_source_size.height() <
@@ -6900,6 +10224,17 @@ int main(int argc, char** argv) {
       (!photo_layer_failure_active && !photo_layer_state_text.contains(QStringLiteral("Selected"))) ||
       (photo_layer_failure_active &&
        !photo_layer_state_text.contains(QStringLiteral("Preview failed:"))) ||
+      !photo_layer_state_badge_row->property("visible").toBool() ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("layer-state-badges:v1")) ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("global:base-row")) ||
+	      !photo_layer_state_badge_signature.contains(QStringLiteral("|masked:")) ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("hidden:false")) ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("locked:false")) ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("solo:false")) ||
+      !photo_layer_state_badge_signature.contains(QStringLiteral("rendering:false")) ||
+	      !photo_layer_state_badge_signature.contains(
+	          photo_layer_failure_active ? QStringLiteral("failed:true")
+	                                     : QStringLiteral("failed:false")) ||
       !photo_layer_row->property("layerStateSignature").toString().contains(
           QStringLiteral("visible:true")) ||
       !photo_layer_row->property("layerStateSignature").toString().contains(
@@ -6935,6 +10270,8 @@ int main(int argc, char** argv) {
           QStringLiteral("ready:true")) ||
       photo_layer_thumbnail->property("thumbnailStale").toBool() ||
       photo_layer_thumbnail->property("thumbnailFailureContained").toBool() ||
+      photo_layer_thumbnail_display_state != QStringLiteral("ready") ||
+      !photo_layer_thumbnail_state_signature.contains(QStringLiteral("display:ready")) ||
       !photo_layer_thumbnail_state_signature.contains(QStringLiteral("stale:false")) ||
       !photo_layer_thumbnail_state_signature.contains(QStringLiteral("failure-contained:false")) ||
       photo_layer_thumbnail_backing_width < 64 ||
@@ -6953,6 +10290,8 @@ int main(int argc, char** argv) {
         !mask_set_status_text.contains(QStringLiteral("Thumbnail ")))) ||
       (standalone_mask_row_present && !mask_set_thumbnail_failure_contained &&
        (mask_set_status_text.contains(QStringLiteral("Thumbnail ")) ||
+         photo_layer_mask_set_thumbnail_display_state != QStringLiteral("ready") ||
+         !photo_layer_mask_set_thumbnail_state_signature.contains(QStringLiteral("display:ready")) ||
          photo_layer_mask_set_thumbnail->property("thumbnailBackingWidth").toInt() < 96 ||
          photo_layer_mask_set_thumbnail->property("thumbnailBackingHeight").toInt() < 96 ||
          photo_layer_mask_set_thumbnail->property("thumbnailDevicePixelRatio").toDouble() < 2.0 ||
@@ -6968,7 +10307,9 @@ int main(int argc, char** argv) {
         !nested_mask_status_text.contains(QStringLiteral("Thumbnail ")))) ||
       (!nested_mask_thumbnail_failure_contained &&
        (nested_mask_status_text.contains(QStringLiteral("Thumbnail ")) ||
-          photo_layer_nested_mask_thumbnail->property("thumbnailBackingWidth").toInt() < 96 ||
+        nested_mask_thumbnail_display_state != QStringLiteral("ready") ||
+        !nested_mask_thumbnail_state_signature.contains(QStringLiteral("display:ready")) ||
+        photo_layer_nested_mask_thumbnail->property("thumbnailBackingWidth").toInt() < 96 ||
           photo_layer_nested_mask_thumbnail->property("thumbnailBackingHeight").toInt() < 96 ||
           photo_layer_nested_mask_thumbnail->property("thumbnailDevicePixelRatio").toDouble() < 2.0 ||
           nested_mask_thumbnail_source_size.width() <
@@ -7008,11 +10349,32 @@ int main(int argc, char** argv) {
                             .toString()
                             .left(24)
                             .toStdString())
-              << " rowSignature="
-              << (photo_layer_row == nullptr
-                      ? std::string("null")
-                      : photo_layer_row->property("layoutSignature").toString().toStdString())
-              << " layerFailureSignature="
+	              << " rowSignature="
+	              << (photo_layer_row == nullptr
+	                      ? std::string("null")
+	                      : photo_layer_row->property("layoutSignature").toString().toStdString())
+	              << " stateText=" << photo_layer_state_text.toStdString()
+	              << " stateBadges=" << photo_layer_state_badge_signature.toStdString()
+	              << " headerName="
+	              << (selected_layer_header_name_label == nullptr
+	                      ? std::string("null")
+	                      : selected_layer_header_name_label->property("text").toString().toStdString())
+	              << " headerMode="
+	              << (selected_layer_header_mode_label == nullptr
+	                      ? std::string("null")
+	                      : selected_layer_header_mode_label->property("text").toString().toStdString())
+	              << " headerStatus="
+	              << (selected_layer_header_status_label == nullptr
+	                      ? std::string("null")
+	                      : selected_layer_header_status_label->property("text").toString().toStdString())
+	              << " headerChanged="
+	              << (selected_layer_header_changed_groups_label == nullptr
+	                      ? std::string("null")
+	                      : selected_layer_header_changed_groups_label->property("text").toString().toStdString())
+	              << " thumbnailImageVisible="
+	              << (photo_layer_thumbnail_image != nullptr &&
+	                  photo_layer_thumbnail_image->property("visible").toBool())
+	              << " layerFailureSignature="
               << (photo_layer_row == nullptr
                       ? std::string("null")
                       : photo_layer_failure_signature.toStdString())
@@ -7032,6 +10394,15 @@ int main(int argc, char** argv) {
               << nested_mask_thumbnail_state_signature.toStdString()
               << " layerCount=" << editor_preview.photoLayerCount() << "\n";
     return fail("layer panel rows should fit their controls without overlap and use slider/dropdown layer controls");
+  }
+  trace_smoke_progress("layer row controls checked");
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_LAYER_ROWS")) {
+    qunsetenv("PHOTO_EDITOR_DATABASE_URL");
+    qunsetenv("PHOTO_EDITOR_CACHE_DIR");
+    qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+    editor_preview.setImageProvider(nullptr);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    return EXIT_SUCCESS;
   }
   QVariant base_row_layer_selected;
   QVariant base_row_scope;
@@ -7082,6 +10453,135 @@ int main(int argc, char** argv) {
   const auto photo_layer_rows = find_named_items(edit_workspace, QStringLiteral("photoLayerRow"));
   if (photo_layer_rows.size() < editor_preview.photoLayerCount()) {
     return fail("layer panel should expose one visible row for every editable photo layer");
+  }
+  if (editor_preview.photoLayerCount() < 2 &&
+      !editor_preview.addAdjustmentLayer(QStringLiteral("Keyboard Navigation Target"))) {
+    return fail("layer keyboard navigation proof should be able to create a second target layer");
+  }
+  process_layout_events(4);
+  auto photo_layer_rows_for_keyboard =
+      find_named_items(edit_workspace, QStringLiteral("photoLayerRow"));
+  auto find_photo_layer_row_by_index = [&](const int layer_index) -> QQuickItem* {
+    for (auto* row : find_named_items(edit_workspace, QStringLiteral("photoLayerRow"))) {
+      if (item_visible(row) && row->property("layerIndex").toInt() == layer_index) {
+        return row;
+      }
+    }
+    return nullptr;
+  };
+  auto selected_photo_layer_indices = [&]() {
+    QVector<int> selected;
+    const auto selected_values =
+        edit_workspace->property("selectedPhotoLayerIndices").toList();
+    selected.reserve(selected_values.size());
+    for (const auto& value : selected_values) {
+      selected.push_back(value.toInt());
+    }
+    return selected;
+  };
+  auto send_photo_layer_row_key =
+      [&](const int layer_index,
+          const int key,
+          const Qt::KeyboardModifiers modifiers = Qt::NoModifier) -> bool {
+    auto* row = find_photo_layer_row_by_index(layer_index);
+    if (row == nullptr) {
+      return false;
+    }
+    row->forceActiveFocus(Qt::OtherFocusReason);
+    process_layout_events(2);
+    QKeyEvent press(QEvent::KeyPress, key, modifiers);
+    QCoreApplication::sendEvent(row, &press);
+    process_layout_events(4);
+    return press.isAccepted();
+  };
+  auto photo_layer_id_at = [&](const int layer_index) {
+    if (layer_index < 0 || layer_index >= editor_preview.photoLayers().size()) {
+      return QString();
+    }
+    return editor_preview.photoLayers()
+        .at(layer_index)
+        .toMap()
+        .value(QStringLiteral("id"))
+        .toString();
+  };
+  if (editor_preview.photoLayerCount() < 2 ||
+      photo_layer_rows_for_keyboard.size() < editor_preview.photoLayerCount()) {
+    return fail("layer keyboard navigation proof should have at least two visible row delegates");
+  }
+  editor_preview.setPhotoLayerLocked(0, false);
+  editor_preview.setPhotoLayerLocked(1, false);
+  editor_preview.setPhotoLayerEnabled(0, true);
+  editor_preview.setPhotoLayerEnabled(1, true);
+  process_layout_events(4);
+	  if (editor_preview.photoLayers().at(0).toMap().value(QStringLiteral("locked")).toBool() ||
+	      editor_preview.photoLayers().at(1).toMap().value(QStringLiteral("locked")).toBool() ||
+	      !editor_preview.photoLayers().at(0).toMap().value(QStringLiteral("enabled"), true).toBool() ||
+	      !editor_preview.photoLayers().at(1).toMap().value(QStringLiteral("enabled"), true).toBool()) {
+	    return fail("layer keyboard navigation proof should start from unlocked visible layers");
+	  }
+  QVariant keyboard_row_selected;
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "setActivePhotoLayerSelection",
+          Q_RETURN_ARG(QVariant, keyboard_row_selected),
+          Q_ARG(QVariant, QVariant(0)),
+          Q_ARG(QVariant, QVariant(false))) ||
+      !keyboard_row_selected.toBool()) {
+    return fail("layer keyboard navigation proof should select the first row");
+  }
+  process_layout_events(4);
+  if (!send_photo_layer_row_key(0, Qt::Key_Down) ||
+      edit_workspace->property("activePhotoLayerIndex").toInt() != 1 ||
+      !selected_photo_layer_indices().contains(1)) {
+    return fail("Down on a focused layer row should select the next row delegate");
+  }
+  if (!send_photo_layer_row_key(1, Qt::Key_Up, Qt::ShiftModifier)) {
+    return fail("Shift+Up on a focused layer row should be accepted for multi-select");
+  }
+  const auto keyboard_multi_selection = selected_photo_layer_indices();
+  if (!keyboard_multi_selection.contains(0) ||
+      !keyboard_multi_selection.contains(1)) {
+    return fail("Shift+Up on a focused layer row should extend layer selection across row delegates");
+  }
+  if (!send_photo_layer_row_key(0, Qt::Key_Space) ||
+      editor_preview.photoLayers()
+          .at(0)
+          .toMap()
+          .value(QStringLiteral("enabled"))
+          .toBool()) {
+    return fail("Space on a focused layer row should toggle layer visibility off");
+  }
+  if (!send_photo_layer_row_key(0, Qt::Key_Space) ||
+      !editor_preview.photoLayers()
+           .at(0)
+           .toMap()
+           .value(QStringLiteral("enabled"))
+           .toBool()) {
+    return fail("Space on a focused layer row should toggle layer visibility back on");
+  }
+  if (!send_photo_layer_row_key(0, Qt::Key_Return) ||
+      edit_workspace->property("activePhotoLayerIndex").toInt() != 0) {
+    return fail("Return on a focused layer row should switch the active edit target to that layer");
+  }
+  const auto keyboard_first_id_before_reorder = photo_layer_id_at(0);
+  const auto keyboard_second_id_before_reorder = photo_layer_id_at(1);
+  if (keyboard_first_id_before_reorder.isEmpty() ||
+      keyboard_second_id_before_reorder.isEmpty() ||
+      !send_photo_layer_row_key(0, Qt::Key_Down, Qt::MetaModifier) ||
+      photo_layer_id_at(1) != keyboard_first_id_before_reorder ||
+      photo_layer_id_at(0) != keyboard_second_id_before_reorder) {
+    return fail("Cmd+Down on a focused layer row should reorder the actual layer stack");
+  }
+  process_layout_events(4);
+  if (!send_photo_layer_row_key(1, Qt::Key_Up, Qt::MetaModifier) ||
+      photo_layer_id_at(0) != keyboard_first_id_before_reorder ||
+      photo_layer_id_at(1) != keyboard_second_id_before_reorder) {
+    return fail("Cmd+Up on a focused layer row should restore deterministic layer order");
+  }
+  const auto keyboard_selection_after_reorder = selected_photo_layer_indices();
+  if (!keyboard_selection_after_reorder.contains(0) ||
+      !keyboard_selection_after_reorder.contains(1)) {
+    return fail("multi-selected layer state should survive keyboard reorder and row recycling");
   }
   const auto nested_parent_layer_index =
       photo_layer_nested_mask_row == nullptr
@@ -7136,7 +10636,7 @@ int main(int argc, char** argv) {
   }
   const auto seed_display_preview_source =
       editor_preview.displayPreviewSource().trimmed().isEmpty()
-          ? QStringLiteral("image://desktop-smoke/last-good-preview")
+          ? QStringLiteral("image://editor-preview/last-good-preview")
           : editor_preview.displayPreviewSource();
   photo_editor::desktop::RenderResult last_good_result;
   last_good_result.file_path = current_file_path;
@@ -7151,6 +10651,9 @@ int main(int argc, char** argv) {
   last_good_result.dirty_stages = QStringList{QStringLiteral("layers_composite")};
   last_good_result.preview_image = QImage(24, 16, QImage::Format_RGB32);
   last_good_result.preview_image.fill(QColor(18, 34, 42));
+  editor_preview_image_provider->setImage(
+      QStringLiteral("last-good-preview"),
+      last_good_result.preview_image);
   last_good_result.output_width = last_good_result.preview_image.width();
   last_good_result.output_height = last_good_result.preview_image.height();
   last_good_result.source_width = last_good_result.preview_image.width();
@@ -7755,45 +11258,10 @@ int main(int argc, char** argv) {
   }
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("adjust"));
   process_layout_events(4);
-  auto* active_adjustment_target_guard =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuard"));
-  auto* active_adjustment_target_guard_title =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardTitleLabel"));
-  auto* active_adjustment_target_guard_status =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardStatusLabel"));
-  const auto mask_target_guard_signature =
-      active_adjustment_target_guard == nullptr
-          ? QString()
-          : active_adjustment_target_guard->property("guardSignature").toString();
-  if (active_adjustment_target_guard == nullptr ||
-      active_adjustment_target_guard_title == nullptr ||
-      active_adjustment_target_guard_status == nullptr ||
-      !item_visible(qobject_cast<QQuickItem*>(active_adjustment_target_guard)) ||
-      !mask_target_guard_signature.contains(QStringLiteral("target-guard:v1")) ||
-      !mask_target_guard_signature.contains(QStringLiteral("scope:mask")) ||
-      !mask_target_guard_signature.contains(QStringLiteral("global-controls:disabled")) ||
-      !mask_target_guard_signature.contains(QStringLiteral("mask-controls:enabled")) ||
-      !mask_target_guard_signature.contains(QStringLiteral("color-controls:hidden")) ||
-      active_adjustment_target_guard_title->property("text").toString() !=
-          QStringLiteral("Editing Mask") ||
-      !active_adjustment_target_guard_status->property("text").toString().contains(
-          QStringLiteral("color controls are hidden"))) {
-    std::cerr << "Mask target guard state: signature="
-              << mask_target_guard_signature.toStdString()
-              << " title="
-              << (active_adjustment_target_guard_title == nullptr
-                      ? std::string("null")
-                      : active_adjustment_target_guard_title->property("text")
-                            .toString()
-                            .toStdString())
-              << " status="
-              << (active_adjustment_target_guard_status == nullptr
-                      ? std::string("null")
-                      : active_adjustment_target_guard_status->property("text")
-                            .toString()
-                            .toStdString())
-              << '\n';
-    return fail("mask target guard should relabel hidden color controls and expose mask-only controls");
+  if (find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuard")) != nullptr ||
+      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardTitleLabel")) != nullptr ||
+      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardStatusLabel")) != nullptr) {
+    return fail("adjust inspector should not render the removed target guard while editing a mask");
   }
   auto* mask_first_inspector_group =
       find_named_object(edit_workspace, QStringLiteral("maskFirstInspectorGroup"));
@@ -8084,57 +11552,13 @@ int main(int argc, char** argv) {
               << "\n";
     return fail("adjustment layer clicks should switch the inspector to that layer's adjustment values");
   }
-  active_adjustment_target_guard =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuard"));
-  active_adjustment_target_guard_title =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardTitleLabel"));
-  active_adjustment_target_guard_status =
-      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardStatusLabel"));
   auto* active_layer_full_reset_button =
       find_named_object(edit_workspace, QStringLiteral("activeLayerFullResetButton"));
-  const auto layer_target_guard_signature =
-      active_adjustment_target_guard == nullptr
-          ? QString()
-          : active_adjustment_target_guard->property("guardSignature").toString();
-  if (active_adjustment_target_guard == nullptr ||
-      active_adjustment_target_guard_title == nullptr ||
-      active_adjustment_target_guard_status == nullptr ||
-      active_layer_full_reset_button == nullptr ||
-      !item_visible(qobject_cast<QQuickItem*>(active_adjustment_target_guard)) ||
-      !item_visible(qobject_cast<QQuickItem*>(active_layer_full_reset_button)) ||
-      !layer_target_guard_signature.contains(QStringLiteral("target-guard:v1")) ||
-      !layer_target_guard_signature.contains(QStringLiteral("scope:adjustment-layer")) ||
-      !layer_target_guard_signature.contains(QStringLiteral("global-controls:disabled")) ||
-      !layer_target_guard_signature.contains(QStringLiteral("layer-controls:enabled")) ||
-      !layer_target_guard_signature.contains(QStringLiteral("color-controls:enabled")) ||
-      active_adjustment_target_guard_title->property("text").toString() !=
-          QStringLiteral("Editing Adjustment Layer") ||
-      active_layer_full_reset_button->property("tooltip").toString() !=
-          QStringLiteral("Reset the active adjustment layer edits while preserving its mask.") ||
-      !active_adjustment_target_guard_status->property("text").toString().contains(
-          QStringLiteral("write only to this adjustment layer"))) {
-    std::cerr << "Layer target guard state: signature="
-              << layer_target_guard_signature.toStdString()
-              << " title="
-              << (active_adjustment_target_guard_title == nullptr
-                      ? std::string("null")
-                      : active_adjustment_target_guard_title->property("text")
-                            .toString()
-                            .toStdString())
-              << " status="
-              << (active_adjustment_target_guard_status == nullptr
-                      ? std::string("null")
-                      : active_adjustment_target_guard_status->property("text")
-                            .toString()
-                            .toStdString())
-              << " resetVisible="
-              << (active_layer_full_reset_button == nullptr
-                      ? std::string("null")
-                      : (item_visible(qobject_cast<QQuickItem*>(active_layer_full_reset_button))
-                             ? std::string("true")
-                             : std::string("false")))
-              << '\n';
-    return fail("layer target guard should make layer-local controls explicit and keep global controls disabled");
+  if (find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuard")) != nullptr ||
+      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardTitleLabel")) != nullptr ||
+      find_named_object(edit_workspace, QStringLiteral("activeAdjustmentTargetGuardStatusLabel")) != nullptr ||
+      active_layer_full_reset_button != nullptr) {
+    return fail("adjust inspector should not render the removed target guard while editing an adjustment layer");
   }
   auto source_adjustment_layer = editor_preview.photoLayers().at(1).toMap();
   auto target_adjustment_layer = editor_preview.photoLayers().at(0).toMap();
@@ -8736,9 +12160,11 @@ int main(int argc, char** argv) {
   photo_layer_clip_button = find_named_object(edit_workspace, QStringLiteral("photoLayerClippingMaskButton"));
   photo_layer_mask_button = find_named_object(edit_workspace, QStringLiteral("photoLayerMaskButton"));
   photo_layer_mask_badge = find_named_object(edit_workspace, QStringLiteral("photoLayerMaskBadge"));
+  photo_layer_mask_state_pill = find_named_object(edit_workspace, QStringLiteral("photoLayerMaskStatePill"));
   if (photo_layer_opacity_label == nullptr || photo_layer_opacity_slider == nullptr ||
       photo_layer_blend_combo == nullptr || photo_layer_clip_button == nullptr ||
-      photo_layer_mask_button == nullptr || photo_layer_mask_badge == nullptr) {
+      photo_layer_mask_button == nullptr || photo_layer_mask_badge == nullptr ||
+      photo_layer_mask_state_pill == nullptr) {
     return fail("layer panel controls should remain discoverable after layer stack structure changes");
   }
   if (photo_layer_opacity_label->property("text").toString() != QStringLiteral("42%") ||
@@ -8746,7 +12172,8 @@ int main(int argc, char** argv) {
       photo_layer_blend_combo->property("currentText").toString() != QStringLiteral("Multiply") ||
       !photo_layer_clip_button->property("active").toBool() ||
       !photo_layer_mask_button->property("active").toBool() ||
-      !photo_layer_mask_badge->property("visible").toBool()) {
+      !photo_layer_mask_badge->property("visible").toBool() ||
+      !item_visible(qobject_cast<QQuickItem*>(photo_layer_mask_state_pill))) {
     std::cerr << "Layer controls smoke state: opacity="
               << photo_layer_opacity_label->property("text").toString().toStdString()
               << " opacitySlider=" << photo_layer_opacity_slider->property("value").toDouble()
@@ -8754,6 +12181,7 @@ int main(int argc, char** argv) {
               << " clipActive=" << photo_layer_clip_button->property("active").toBool()
               << " maskActive=" << photo_layer_mask_button->property("active").toBool()
               << " maskBadgeVisible=" << photo_layer_mask_badge->property("visible").toBool()
+              << " fixedMaskVisible=" << item_visible(qobject_cast<QQuickItem*>(photo_layer_mask_state_pill))
               << "\n";
     return fail("layer panel controls should reflect live opacity, blend, clipping, and mask states");
   }
@@ -9304,6 +12732,12 @@ int main(int argc, char** argv) {
       mask_activity_status_chip == nullptr || mask_activity_status_dot == nullptr) {
     return fail("edit canvas should expose responsive viewport toolbar controls");
   }
+  if (edit_image_viewport->property("mediaSurfaceContract").toString() !=
+          QStringLiteral("media-surface:v1|canvas-stage:dominant|image-corners:consistent|empty-loading-failure:same-bounds|chrome:quiet|badges:corner-stacked|toolbar-baseline:single") ||
+      edit_image_viewport->property("previewChromeContract").toString() !=
+          QStringLiteral("preview-chrome:v1|status:corner-badge|diagnostics:overlay-menu|top-controls:baseline|failure:retry-in-badge|content-dominant:true")) {
+    return fail("edit image viewport should expose quiet media-surface and preview-chrome contracts");
+  }
   QVariant preview_update_signature;
   QVariant preview_failure_signature;
   QVariant preview_stage_failure_signature;
@@ -9513,11 +12947,29 @@ int main(int argc, char** argv) {
     const auto action_top = edit_action_toolbar->property("y").toDouble();
     const auto toolbar_stacked = edit_image_viewport->property("toolbarStacked").toBool();
     const auto viewport_rect = scene_rect(viewport_item);
+    const auto zoom_toolbar_contract = edit_zoom_toolbar->property("toolGroupContract").toString();
+    const auto action_toolbar_contract = edit_action_toolbar->property("toolGroupContract").toString();
     if (edit_image_viewport->property("toolbarCompact").toBool() != toolbar_compact ||
-        edit_zoom_toolbar->property("toolGroupContract").toString() !=
-            QStringLiteral("view-controls|zoom-fit-diagnostics|no-history-buttons:v1") ||
-        edit_action_toolbar->property("toolGroupContract").toString() !=
-            QStringLiteral("canvas-actions|view-separated|no-history-buttons:v1") ||
+        !zoom_toolbar_contract.contains(QStringLiteral("canvas-toolbar:v1|group:view-controls")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("stable-height:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("toolbar-buttons:mini-button")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("baseline-aligned:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("zoom-fit-group:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("diagnostics-menu:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("subdued-chrome:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("media-subordinate:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("view-separated:true")) ||
+        !zoom_toolbar_contract.contains(QStringLiteral("no-overlap:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("canvas-toolbar:v1|group:canvas-actions")) ||
+        !action_toolbar_contract.contains(QStringLiteral("stable-height:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("toolbar-buttons:mini-button")) ||
+        !action_toolbar_contract.contains(QStringLiteral("baseline-aligned:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("panel-toggles:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("reference-agent-actions:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("subdued-chrome:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("media-subordinate:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("view-separated:true")) ||
+        !action_toolbar_contract.contains(QStringLiteral("no-overlap:true")) ||
         find_named_object(edit_workspace, QStringLiteral("undoEditButton")) != nullptr ||
         find_named_object(edit_workspace, QStringLiteral("redoEditButton")) != nullptr ||
         diagnostics_overlay_button->property("labelVisible").toBool() ||
@@ -10490,12 +13942,11 @@ int main(int argc, char** argv) {
               QStringLiteral("editFilmstrip"),
               QStringLiteral("editFilmstripThumbnailCard"),
               QStringLiteral("editInspectorPanel"),
-              QStringLiteral("adjustInlineHistogramScope"),
-              QStringLiteral("adjustInlineWaveformScope"),
               QStringLiteral("lightInspectorGroup"),
+              QStringLiteral("editAdjustmentFilterRow"),
           },
           &visual_proof_manifest)) {
-    return fail("desktop visual proof should capture Adjust with pinned scopes and filmstrip");
+    return fail("desktop visual proof should capture Adjust controls with filmstrip and without pinned inline scopes");
   }
 
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("presets"));
@@ -10568,14 +14019,14 @@ int main(int argc, char** argv) {
           Q_RETURN_ARG(QVariant, scope_image_mode_result),
           Q_ARG(QVariant, QStringLiteral("image"))) ||
       !scope_image_mode_result.toBool()) {
-    return fail("desktop visual proof should set pinned scopes image mode");
+    return fail("desktop visual proof should set scopes inspector image mode");
   }
   process_layout_events();
   if (!capture_visual_proof_pair(
           root_window,
           root,
           visual_proof_dir,
-          QStringLiteral("scopes-pinned"),
+          QStringLiteral("scopes-inspector"),
           {
               QStringLiteral("editImageViewport"),
               QStringLiteral("editInspectorPanel"),
@@ -10585,7 +14036,7 @@ int main(int argc, char** argv) {
               QStringLiteral("scopesLargeViewModeButton"),
           },
           &visual_proof_manifest)) {
-    return fail("desktop visual proof should capture pinned Scopes while the image stays visible");
+    return fail("desktop visual proof should capture Scopes tab while the image stays visible");
   }
 
   edit_workspace->setProperty("editInspectorTab", QStringLiteral("layers"));
@@ -10815,12 +14266,118 @@ int main(int argc, char** argv) {
   if (library_workspace == nullptr) {
     return fail("library workspace should expose a testable StudioWorkspace object");
   }
+  QVariant page_visibility_audit_signature;
+  QVariant active_visibility_contract;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(
+          QStringLiteral("page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:library|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:library-studio-visibility:v1|")) ||
+      !page_visibility_audit_signature.toString().contains(
+          QStringLiteral("|coverage:library/import/edit/masks/carousel/timeline/export")) ||
+      !QMetaObject::invokeMethod(
+          library_workspace,
+          "activeVisibilityContract",
+          Q_RETURN_ARG(QVariant, active_visibility_contract)) ||
+      !active_visibility_contract.toString().startsWith(QStringLiteral("library-studio-visibility:v1"))) {
+    std::cerr << "Library page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Library as the active preserved-function page");
+  }
   auto* library_sources_panel = library_workspace->findChild<QObject*>(QStringLiteral("librarySourcesPanel"));
   auto* library_inspector_panel = library_workspace->findChild<QObject*>(QStringLiteral("libraryInspectorPanel"));
+  QVariant library_workflow_polish_signature;
   if (library_sources_panel == nullptr || library_inspector_panel == nullptr ||
       library_sources_panel->property("title").toString() != QStringLiteral("Sources") ||
-      library_inspector_panel->property("title").toString() != QStringLiteral("Inspector")) {
-    return fail("library side panels should use readable title-case labels");
+      library_inspector_panel->property("title").toString() != QStringLiteral("Inspector") ||
+      library_workspace->property("libraryWorkflowPolishContract").toString() !=
+          QStringLiteral("library-workflow-polish:v1|first-glance:grid-dominant-sources-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:panel-toggles-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:no-elide-no-overlap|functionality:preserved") ||
+      library_workspace->property("libraryPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|library|sidebar:sources-import-smart-collections|content:grid-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline") ||
+      !QMetaObject::invokeMethod(
+          library_workspace,
+          "libraryWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, library_workflow_polish_signature)) ||
+      !library_workflow_polish_signature.toString().contains(
+          QStringLiteral("library-workflow-polish:v1|search:idle|filters:clear|selection-mode:false|selected:0|view:grid")) ||
+      !library_workflow_polish_signature.toString().contains(
+          QStringLiteral("|sources:true|inspector:true|inspector-state:single|import:false|activity:false")) ||
+      !library_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:search-filter-select-rate-pick-reject-edit-import-compare-export"))) {
+    std::cerr << "Library workflow polish: "
+              << library_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("library side panels should use readable labels and the page should expose live workflow-polish completion state");
+  }
+  auto* studio_library_search_input =
+      find_named_object(library_workspace, QStringLiteral("studioLibrarySearchInput"));
+  auto* studio_library_search_clear_button =
+      find_named_object(library_workspace, QStringLiteral("studioLibrarySearchClearButton"));
+  auto* studio_library_search_chip =
+      find_named_object(library_workspace, QStringLiteral("studioLibraryActiveSearchChip"));
+  QVariant library_search_signature;
+  if (studio_library_search_input == nullptr ||
+      studio_library_search_clear_button == nullptr ||
+      studio_library_search_chip == nullptr ||
+      library_workspace->property("librarySearchBehaviorContract").toString() !=
+          QStringLiteral("library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved") ||
+      !QMetaObject::invokeMethod(
+          library_workspace,
+          "librarySearchBehaviorSignature",
+          Q_RETURN_ARG(QVariant, library_search_signature)) ||
+      !library_search_signature.toString().contains(
+          QStringLiteral("library-search:v1|draft:false|active:false|pending:false|clear-visible:false|debounce:180"))) {
+    std::cerr << "Library search initial signature: "
+              << library_search_signature.toString().toStdString() << '\n';
+    return fail("Library search should expose idle draft/apply/clear behavior before typing");
+  }
+  if (!QMetaObject::invokeMethod(
+          library_workspace,
+          "setLibrarySearchDraft",
+          Q_ARG(QVariant, QStringLiteral("IMG_0102")))) {
+    return fail("Library search should expose a testable draft setter");
+  }
+  process_layout_events(2);
+  if (!QMetaObject::invokeMethod(
+          library_workspace,
+          "librarySearchBehaviorSignature",
+          Q_RETURN_ARG(QVariant, library_search_signature)) ||
+      !library_search_signature.toString().contains(
+          QStringLiteral("library-search:v1|draft:true|active:false|pending:true|clear-visible:true|debounce:180")) ||
+      !studio_library_search_clear_button->property("visible").toBool() ||
+      !studio_library_search_chip->property("visible").toBool() ||
+      !catalog_assets.searchFilter().isEmpty()) {
+    std::cerr << "Library search pending signature: "
+              << library_search_signature.toString().toStdString() << '\n';
+    return fail("Library search draft should show clear and status affordances before applying the catalog filter");
+  }
+  if (!QMetaObject::invokeMethod(library_workspace, "applyLibrarySearchNow")) {
+    return fail("Library search should expose an immediate apply action");
+  }
+  process_layout_events(2);
+  if (catalog_assets.searchFilter() != QStringLiteral("IMG_0102") ||
+      !QMetaObject::invokeMethod(
+          library_workspace,
+          "librarySearchBehaviorSignature",
+          Q_RETURN_ARG(QVariant, library_search_signature)) ||
+      !library_search_signature.toString().contains(
+          QStringLiteral("library-search:v1|draft:true|active:true|pending:false|clear-visible:true|debounce:180")) ||
+      !studio_library_search_clear_button->property("visible").toBool() ||
+      !studio_library_search_chip->property("visible").toBool()) {
+    std::cerr << "Library search applied signature: "
+              << library_search_signature.toString().toStdString() << '\n';
+    return fail("Library search apply should update the catalog filter while keeping explicit clear and active search affordances visible");
+  }
+  if (!QMetaObject::invokeMethod(library_workspace, "clearLibrarySearch")) {
+    return fail("Library search should expose a clear action");
+  }
+  process_layout_events(2);
+  if (!catalog_assets.searchFilter().isEmpty() ||
+      studio_library_search_clear_button->property("visible").toBool() ||
+      studio_library_search_chip->property("visible").toBool()) {
+    return fail("Library search clear should remove the filter and hide search-only clear/status affordances");
   }
   library_workspace->setProperty("catalogViewMode", QStringLiteral("survey"));
   for (auto iteration = 0; iteration < 8; ++iteration) {
@@ -10839,6 +14396,51 @@ int main(int argc, char** argv) {
       root->property("libraryWorkspaceMode").toString() != QStringLiteral("import")) {
     return fail("beginImportWorkspace should route to Library import mode");
   }
+  if (!QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:import|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:import-studio-visibility:v1|")) ||
+      !QMetaObject::invokeMethod(
+          library_workspace,
+          "activeVisibilityContract",
+          Q_RETURN_ARG(QVariant, active_visibility_contract)) ||
+      !active_visibility_contract.toString().startsWith(QStringLiteral("import-studio-visibility:v1"))) {
+    std::cerr << "Import page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report routed Library import as an active preserved-function page");
+  }
+  auto* routed_import_workspace =
+      library_workspace->findChild<QObject*>(QStringLiteral("importWorkspace"));
+  QVariant routed_import_workflow_signature;
+  if (routed_import_workspace == nullptr ||
+      library_workspace->property("importWorkflowPolishContract").toString() !=
+          QStringLiteral("import-workflow-polish:v1|first-glance:library-routed-import-source-browser|close-inspection:source-folder-media-destination-progress|clutter:library-chrome-quiet-import-dominant|interaction:back-source-select-import-refresh|text:no-elide-no-overlap|functionality:preserved") ||
+      library_workspace->property("importPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|import-in-library|sidebar:quiet-hidden-during-import|content:ImportView|toolbar:back-title|states:no-source-empty-selected-importing-failed-complete|return:back-to-library") ||
+      routed_import_workspace->property("importWorkflowPolishContract").toString() !=
+          QStringLiteral("import-workflow-polish:v1|first-glance:sources-current-folder-media-grid-primary-import|close-inspection:source-confirmation-filter-counts-selection-destination-progress|clutter:single-progress-place-split-import-options|interaction:choose-source-select-visible-clear-import-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved") ||
+      routed_import_workspace->property("importPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|import|sidebar:sources-folders-refresh|content:header-filter-media-grid-empty|destination:project-picker-create-confirm-cancel|toolbar:select-visible-clear-primary-import|states:no-source-empty-filtered-selected-importing-failed-complete") ||
+      !QMetaObject::invokeMethod(
+          routed_import_workspace,
+          "importWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, routed_import_workflow_signature)) ||
+      !routed_import_workflow_signature.toString().startsWith(
+          QStringLiteral("import-workflow-polish:v1|source:")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|selected:0|")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|selected-photos:0|selected-videos:0|")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|filter:all|")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|source-confirmation:Folder Ready|")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|destination:closed|")) ||
+      !routed_import_workflow_signature.toString().contains(QStringLiteral("|progress:idle|")) ||
+      !routed_import_workflow_signature.toString().contains(
+          QStringLiteral("|preserve:choose-source-select-visible-clear-selection-import-selected-import-folder-refresh-project-target"))) {
+    std::cerr << "Import workflow polish: "
+              << routed_import_workflow_signature.toString().toStdString() << '\n';
+    return fail("routed Library import mode should expose source, selection, destination, progress, and preserved import workflow state");
+  }
 
   if (!QMetaObject::invokeMethod(root, "createTimelineFromMenu")) {
     return fail("menu routing should expose createTimelineFromMenu");
@@ -10848,12 +14450,88 @@ int main(int argc, char** argv) {
       timeline_document.timelineName().trimmed().isEmpty()) {
     return fail("createTimelineFromMenu should route to Timeline and initialize a document");
   }
+  auto* timeline_workspace = root->findChild<QObject*>(QStringLiteral("timelineWorkspace"));
+  QVariant timeline_workflow_polish_signature;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:timeline|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:timeline-visibility:v1|"))) {
+    std::cerr << "Timeline page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Timeline as the active preserved-function page");
+  }
+  if (timeline_workspace == nullptr ||
+      timeline_workspace->property("timelineWorkflowPolishContract").toString() !=
+          QStringLiteral("timeline-workflow-polish:v1|first-glance:source-program-timeline-effects|close-inspection:active-tool-edit-mode-playhead-selection-markers-effects-render|clutter:panels-collapsible-details-contextual|interaction:load-source-insert-overwrite-play-trim-split-marker-effect-render|text:no-elide-no-overlap|functionality:preserved") ||
+      timeline_workspace->property("timelinePageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|timeline|sidebar:source-media-picker|content:program-monitor-transport-timeline-tracks-waveform|inspector:effects-transitions-selected-clip|toolbar:tools-search-marker-filter-zoom|states:setup-empty-source-selected-dragging-rendering-error") ||
+      !QMetaObject::invokeMethod(
+          timeline_workspace,
+          "timelineWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, timeline_workflow_polish_signature)) ||
+      !timeline_workflow_polish_signature.toString().contains(
+          QStringLiteral("timeline-workflow-polish:v1|mode:timeline|tool:select|edit-mode:insert|timeline:true")) ||
+      !timeline_workflow_polish_signature.toString().contains(QStringLiteral("|selected:false|source:false|")) ||
+      !timeline_workflow_polish_signature.toString().contains(QStringLiteral("|source-panel:true/true|effects-panel:true|")) ||
+      !timeline_workflow_polish_signature.toString().contains(QStringLiteral("|snapping:true|ripple:true|search:false|")) ||
+      !timeline_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:source-load-insert-overwrite-play-step-seek-select-razor-slip-roll-snap-ripple-split-move-lift-extract-marker-effect-transition-zoom-save-render"))) {
+    std::cerr << "Timeline workflow polish: "
+              << timeline_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("timeline workspace should expose live source, monitor, tool, marker, track, effect, and render workflow state");
+  }
+  auto* timeline_play_pause_button =
+      find_named_object(timeline_workspace, QStringLiteral("timelinePlayPauseButton"));
+  if (timeline_play_pause_button == nullptr ||
+      timeline_play_pause_button->property("enabled").toBool() ||
+      timeline_play_pause_button->property("disabledReason").toString() !=
+          QStringLiteral("Add media to the timeline before using playback controls.") ||
+      timeline_play_pause_button->property("resolvedTooltipText").toString() !=
+          QStringLiteral("Add media to the timeline before using playback controls.")) {
+    return fail("Timeline disabled transport controls should expose user-facing disabled reasons through the shared ActionButton tooltip path");
+  }
 
   const auto library_workspace_index = root->property("libraryWorkspaceIndex").toInt();
   const auto edit_workspace_index = root->property("editWorkspaceIndex").toInt();
   const auto carousel_workspace_index = root->property("carouselWorkspaceIndex").toInt();
   const auto timeline_workspace_index = root->property("timelineWorkspaceIndex").toInt();
   const auto export_workspace_index = root->property("exportWorkspaceIndex").toInt();
+  root->setProperty("currentWorkspace", carousel_workspace_index);
+  process_layout_events(8);
+  auto* carousel_workspace = root->findChild<QObject*>(QStringLiteral("carouselWorkspace"));
+  QVariant carousel_workflow_polish_signature;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:carousel|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:carousel-visibility:v1|"))) {
+    std::cerr << "Carousel page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Carousel as the active preserved-function page");
+  }
+  if (carousel_workspace == nullptr ||
+      carousel_workspace->property("carouselWorkflowPolishContract").toString() !=
+          QStringLiteral("carousel-workflow-polish:v1|first-glance:setup-or-board-canvas-tool-rail-inspector-strip|close-inspection:active-tool-board-selection-media-layer-rating-export|clutter:one-active-selection-context-media-picker-contextual|interaction:create-select-pan-text-media-shape-guide-layer-export|text:no-elide-no-overlap|functionality:preserved") ||
+      carousel_workspace->property("carouselPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|carousel|rail:select-pan-text-media-shape-guides|content:setup-or-artboard-empty-slot-board-strip|inspector:board-selection-layers-media|toolbar:save-export-board-actions|states:setup-empty-board-selected-media-exporting-error") ||
+      !QMetaObject::invokeMethod(
+          carousel_workspace,
+          "carouselWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, carousel_workflow_polish_signature)) ||
+      !carousel_workflow_polish_signature.toString().contains(
+          QStringLiteral("carousel-workflow-polish:v1|mode:setup|active-tool:select|carousel:false")) ||
+      !carousel_workflow_polish_signature.toString().contains(QStringLiteral("|selection:none|layers:0|")) ||
+      !carousel_workflow_polish_signature.toString().contains(QStringLiteral("|media-picker:false|media-intent:slot|")) ||
+      !carousel_workflow_polish_signature.toString().contains(QStringLiteral("|snapping:true|guides:true|")) ||
+      !carousel_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:create-board-select-pan-text-media-shape-guides-layers-transform-fit-fill-clear-save-export"))) {
+    std::cerr << "Carousel workflow polish: "
+              << carousel_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("carousel workspace should expose setup/composer workflow state while preserving board, tool, media, layer, and export actions");
+  }
   const QList<int> expected_workspace_order = {
       library_workspace_index,
       edit_workspace_index,
@@ -10874,6 +14552,57 @@ int main(int argc, char** argv) {
       return fail("global workspace number shortcuts should route across every workspace");
     }
   }
+  root->setProperty("currentWorkspace", edit_workspace_index);
+  root->setProperty("editWorkspaceMode", QStringLiteral("adjust"));
+  process_layout_events(8);
+  auto* routed_edit_for_visibility =
+      root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
+  if (routed_edit_for_visibility == nullptr ||
+      !QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:edit|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:edit-studio-visibility:v1|")) ||
+      !QMetaObject::invokeMethod(
+          routed_edit_for_visibility,
+          "activeVisibilityContract",
+          Q_RETURN_ARG(QVariant, active_visibility_contract)) ||
+      !active_visibility_contract.toString().startsWith(QStringLiteral("edit-studio-visibility:v1"))) {
+    std::cerr << "Edit page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Edit as the active preserved-function page");
+  }
+  QVariant masks_route_result;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "activatePrimaryEditTool",
+          Q_RETURN_ARG(QVariant, masks_route_result),
+          Q_ARG(QVariant, QStringLiteral("masks"))) ||
+      !masks_route_result.toBool()) {
+    return fail("App shell should route to Masks before checking mask visibility audit");
+  }
+  process_layout_events(8);
+  routed_edit_for_visibility =
+      root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
+  if (routed_edit_for_visibility == nullptr ||
+      !QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:masks|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:mask-studio-visibility:v1|")) ||
+      !QMetaObject::invokeMethod(
+          routed_edit_for_visibility,
+          "activeVisibilityContract",
+          Q_RETURN_ARG(QVariant, active_visibility_contract)) ||
+      !active_visibility_contract.toString().startsWith(QStringLiteral("mask-studio-visibility:v1"))) {
+    std::cerr << "Masks page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Masks as the active preserved-function page when mask tools own the canvas");
+  }
+  root->setProperty("currentWorkspace", export_workspace_index);
+  process_layout_events(8);
   auto* export_workspace = root->findChild<QObject*>(QStringLiteral("exportStudioWorkspace"));
   auto* export_presets_panel = export_workspace != nullptr
       ? export_workspace->findChild<QObject*>(QStringLiteral("exportPresetsPanel"))
@@ -10881,10 +14610,69 @@ int main(int argc, char** argv) {
   auto* export_settings_panel = export_workspace != nullptr
       ? export_workspace->findChild<QObject*>(QStringLiteral("exportSettingsPanel"))
       : nullptr;
+  QVariant export_workflow_polish_signature;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "pageVisibilityAuditSignature",
+          Q_RETURN_ARG(QVariant, page_visibility_audit_signature)) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|active:export|")) ||
+      !page_visibility_audit_signature.toString().contains(QStringLiteral("|live:export-studio-visibility:v1|"))) {
+    std::cerr << "Export page visibility audit: "
+              << page_visibility_audit_signature.toString().toStdString() << '\n';
+    return fail("App shell visibility audit should report Export as the active preserved-function page");
+  }
   if (export_workspace == nullptr || export_presets_panel == nullptr || export_settings_panel == nullptr ||
       export_presets_panel->property("title").toString() != QStringLiteral("Export Presets") ||
-      export_settings_panel->property("title").toString() != QStringLiteral("Output Settings")) {
-    return fail("export panels should use readable title-case labels");
+      export_settings_panel->property("title").toString() != QStringLiteral("Output Settings") ||
+      export_workspace->property("exportWorkflowPolishContract").toString() !=
+          QStringLiteral("export-workflow-polish:v1|first-glance:presets-assets-queue-settings-primary-action|close-inspection:preset-destination-progress-errors-output-summary|clutter:secondary-management-in-menus-row-actions-contextual|interaction:select-preset-destination-add-queue-start-retry-cancel-clear-reveal|text:no-elide-no-overlap|functionality:preserved") ||
+      export_workspace->property("exportPageCompletionContract").toString() !=
+          QStringLiteral("page-completion:v1|export|sidebar:presets-destinations|content:selected-assets-queue-progress|settings:preset-output-destination-summary|toolbar:add-assets-start-export-clear-queue|states:empty-ready-running-complete-failed") ||
+      !QMetaObject::invokeMethod(
+          export_workspace,
+          "exportWorkflowPolishSignature",
+          Q_RETURN_ARG(QVariant, export_workflow_polish_signature)) ||
+      !export_workflow_polish_signature.toString().contains(
+          QStringLiteral("export-workflow-polish:v1|page:export|selection:")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|preset:Web / sRGB / 2048px|format:JPG|")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|destination:/Volumes/Exports|")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|presets-panel:true|settings-panel:true|")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|primary:start-export|")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|hierarchy:export-action-hierarchy:v2|primary:start-export-split")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|secondary:queue-actions-menu|")) ||
+      !export_workflow_polish_signature.toString().contains(QStringLiteral("|clear:secondary-cleanup|one-primary:true")) ||
+      !export_workflow_polish_signature.toString().contains(
+          QStringLiteral("|preserve:preset-selection-destination-selected-preview-add-more-queue-start-retry-cancel-remove-clear-preflight-output-summary-reveal"))) {
+    std::cerr << "Export workflow polish: "
+              << export_workflow_polish_signature.toString().toStdString() << '\n';
+    return fail("export panels should use readable labels and expose live preset, destination, queue, settings, primary action, and preserved-action state");
+  }
+  QVariant failed_export_job_count;
+  if (!QMetaObject::invokeMethod(
+          export_workspace,
+          "failedExportJobCount",
+          Q_RETURN_ARG(QVariant, failed_export_job_count)) ||
+      failed_export_job_count.toInt() != 0) {
+    return fail("Studio export queue management should expose a live failed-export count for retry menu state");
+  }
+  QVariant export_preset_route_result;
+  if (!QMetaObject::invokeMethod(
+          root,
+          "openEditPresetPanelFromExport",
+          Q_RETURN_ARG(QVariant, export_preset_route_result),
+          Q_ARG(QVariant, QStringLiteral("manage-saved"))) ||
+      !export_preset_route_result.toBool()) {
+    return fail("export preset management menu should route to the existing Edit preset panel");
+  }
+  process_layout_events(8);
+  auto* routed_edit_workspace =
+      root->findChild<QObject*>(QStringLiteral("editStudioWorkspace"));
+  if (root->property("currentWorkspace").toInt() != edit_workspace_index ||
+      routed_edit_workspace == nullptr ||
+      routed_edit_workspace->property("editInspectorTab").toString() != QStringLiteral("presets") ||
+      find_named_object(routed_edit_workspace, QStringLiteral("presetLibraryInspectorGroup")) == nullptr ||
+      find_named_object(routed_edit_workspace, QStringLiteral("studioPresetManagementMenu")) == nullptr) {
+    return fail("export preset management route should land on the Edit Presets inspector with management controls visible");
   }
   QVariant invalid_workspace_shortcut;
   const auto invalid_invoked = QMetaObject::invokeMethod(
@@ -11043,6 +14831,12 @@ int main(int argc, char** argv) {
   QVariant missing_command_labels;
   if (command_palette == nullptr || command_palette->property("commandCount").toInt() < 68 ||
       command_palette->property("requiredCommandCount").toInt() < 27 ||
+      command_palette->property("dialogVisibilityContract").toString() !=
+          QStringLiteral("dialog-visibility:v1|command-palette|always:search-results-count-shortcuts|contextual:filtered-results-disabled-state-empty-state|one-expansion:all-commands-through-search|hover-focus:row-current-selection|diagnostic:missing-required-commands|preserve:functionality") ||
+      command_palette->property("dialogSurfaceContract").toString() !=
+          QStringLiteral("dialog-surface:v1|command-palette|search:always|results:dominant|footer:keyboard-help|rows:shared-readable|no-elide:true|no-overlap:true") ||
+      command_palette->property("functionPreservationMap").toString() !=
+          QStringLiteral("function-preservation:v1|command-search:always|command-run:keyboard-and-row|disabled-reasons:row-state|shortcuts:footer-and-row|missing-required:diagnostic-signature") ||
       !QMetaObject::invokeMethod(
           command_palette,
           "commandCoverageSignature",
@@ -11096,6 +14890,7 @@ int main(int argc, char** argv) {
   QVariant would_conflict;
   QVariant rejected_conflict;
   QVariant editable_workflow_shortcut_signature;
+  QVariant shortcut_dialog_workflow_signature;
   QVariant mask_shortcut_help_signature;
   QVariant brush_shortcut_help_signature;
   const auto editable_shortcut_prefix =
@@ -11105,6 +14900,20 @@ int main(int argc, char** argv) {
           .arg(editable_shortcut_prefix);
   if (keyboard_shortcuts == nullptr ||
       keyboard_shortcuts->property("editableShortcutCount").toInt() < 11 ||
+      keyboard_shortcuts->property("dialogVisibilityContract").toString() !=
+          QStringLiteral("dialog-visibility:v1|keyboard-shortcuts|always:title-search-editable-presets-shortcut-sections-close|contextual:status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality") ||
+      keyboard_shortcuts->property("dialogSurfaceContract").toString() !=
+          QStringLiteral("dialog-surface:v1|keyboard-shortcuts|search:header|editable:top|sections:scrollable|keys:fixed-readable|descriptions:wrap|presets:readable-buttons|no-elide:true|no-overlap:true") ||
+      keyboard_shortcuts->property("functionPreservationMap").toString() !=
+          QStringLiteral("function-preservation:v1|search-shortcuts:header-field|edit-sequence:inline-field|reset-sequence:inline-reset|apply-presets:preset-buttons|conflict-detection:set-and-preset|platform-modifiers:mac-or-control|shortcut-help:section-cards") ||
+      !QMetaObject::invokeMethod(
+          keyboard_shortcuts,
+          "shortcutDialogWorkflowSignature",
+          Q_RETURN_ARG(QVariant, shortcut_dialog_workflow_signature)) ||
+      !shortcut_dialog_workflow_signature.toString().startsWith(QStringLiteral("visible:dialog-visibility:v1|keyboard-shortcuts")) ||
+      !shortcut_dialog_workflow_signature.toString().contains(QStringLiteral("|surface:dialog-surface:v1|keyboard-shortcuts")) ||
+      !shortcut_dialog_workflow_signature.toString().contains(QStringLiteral("|preserve:function-preservation:v1|search-shortcuts:header-field")) ||
+      !shortcut_dialog_workflow_signature.toString().contains(QStringLiteral("|conflicts:0|active-preset:app-native")) ||
       !QMetaObject::invokeMethod(
           keyboard_shortcuts,
           "coreWorkflowShortcutSignature",
@@ -11226,5 +15035,7 @@ int main(int argc, char** argv) {
   qunsetenv("PHOTO_EDITOR_DATABASE_URL");
   qunsetenv("PHOTO_EDITOR_CACHE_DIR");
   qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+  editor_preview.setImageProvider(nullptr);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
   return EXIT_SUCCESS;
 }

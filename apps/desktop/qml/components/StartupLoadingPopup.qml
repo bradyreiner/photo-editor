@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 Popup {
     id: root
+    objectName: "startupLoadingPopup"
 
     property bool catalogLoading: false
     property string catalogStatus: ""
@@ -14,6 +15,9 @@ Popup {
     property bool completing: false
     property real progressValue: 0
     property int activeStep: 0
+    readonly property string popupVisibilityContract: "popup-visibility:v1|startup-loading|always:brand-progress-active-step|contextual:catalog-status-completion-state|one-expansion:none|hover-focus:none|diagnostic:catalog-loading-detail|preserve:functionality"
+    readonly property string popupSurfaceContract: "popup-surface:v1|startup-loading|progress:always|steps:stable|status:wrapped|motion:bounded|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v1|startup-progress:visible|catalog-status:contextual|minimum-hold:internal|completion-close:automatic|no-manual-close:modal-startup"
 
     readonly property var loadingItems: [
         { title: "Shell", detail: "Opening workspace", threshold: 0.14 },
@@ -222,7 +226,9 @@ Popup {
                                 font.family: theme.fontUi
                                 font.pixelSize: 11
                                 font.weight: stepRow.active ? Font.DemiBold : Font.Normal
-                                elide: Text.ElideRight
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                maximumLineCount: 2
+                                elide: Text.ElideNone
                             }
 
                             Label {
@@ -231,7 +237,9 @@ Popup {
                                 color: theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: 10
-                                elide: Text.ElideRight
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                maximumLineCount: 2
+                                elide: Text.ElideNone
                             }
                         }
                     }

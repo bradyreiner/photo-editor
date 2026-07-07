@@ -7,11 +7,81 @@ import "../components"
 
 Rectangle {
     id: root
+    objectName: "editWorkspace"
 
     color: "transparent"
     focus: true
 
     Theme { id: theme }
+
+    property var catalogAssets: null
+    property string editTool: "adjust"
+    readonly property var fallbackAgentEditController: ({
+        availableModels: [],
+        availableModelNames: [],
+        availableStyles: [],
+        selectedModelId: "",
+        selectedStyleId: "",
+        userInstructions: "",
+        recipeBaseMode: "current",
+        running: false,
+        modelInstallRunning: false,
+        modelInstallStatus: "",
+        draftActive: false,
+        awaitingUserInput: false,
+        pendingUserQuestions: [],
+        safeStopReason: "",
+        status: "Agent editing unavailable.",
+        errorMessage: "",
+        lastRunReport: ({}),
+        runHistory: [],
+        mcpEndpoint: "",
+        mcpStatus: "",
+        mcpEndpointKind: "local",
+        mcpAvailable: false,
+        mcpToolCount: 0,
+        mcpTotalClientCount: 0,
+        mcpConnectedClientCount: 0,
+        mcpLastToolCallName: "",
+        mcpLastToolCallStatus: "",
+        aiEditWorkflowState: function() { return ({}) },
+        analyzeSelected: function() {},
+        answerPendingUserInput: function() {},
+        applyEditForScope: function() {},
+        applyEditForSelected: function() {},
+        applySampleReviewToAll: function() {},
+        acceptReviewIssue: function() {},
+        cancelRun: function() {},
+        commitDraft: function() {},
+        createLearnedStyleProfileFromSelection: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        createStyle: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        dismissPendingAgentInput: function() {},
+        exportMemoryVault: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        exportPreflightForSelected: function() {},
+        fixAllReviewIssues: function() {},
+        fixReviewIssue: function() {},
+        installSelectedModel: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        memoryVaultStatus: function() { return ({}) },
+        openMemoryVault: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        openMemoryVaultInObsidian: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        prepareSelectedModelInstall: function() { return ({}) },
+        probeSelectedModel: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        queueExportForSelected: function() {},
+        resetMemoryVault: function() { return ({ ok: false, errors: ["Agent unavailable"] }) },
+        reviseSampleReview: function() {},
+        rollbackDraft: function() {},
+        rollbackReviewIssue: function() {},
+        runDraftForScope: function() {},
+        runDraftOnSelected: function() {},
+        setupLocalAi: function() {},
+        validateBatchForSelected: function() {}
+    })
+    readonly property var agentEditController: typeof agentEdit !== "undefined" ? agentEdit : fallbackAgentEditController
+    readonly property bool hasAgentEditController: agentEditController !== fallbackAgentEditController
+    readonly property string editVisibilityContract: "edit-visibility:v1|always:tool-rail-image-stage-canvas-toolbar-inspector-filmstrip-target-context|contextual:active-tool-hud-active-variant-layer-mask-target-pending-apply-cancel-bottom-actions|one-expansion:tool-variants-presets-compare-view-modes-secondary-layer-actions-advanced-settings|hover-focus:row-actions-reorder-visibility-lock-quick-actions|diagnostic:preview-errors-agent-runtime-model-logs|preserve:functionality"
+    readonly property string editSurfaceContract: "edit-surfaces:v1|stage:dominant-image|tools:visible-expandable-switchable|toolbar:view-and-actions|inspector:targeted-adjust-mask-layer|filmstrip:stable|bottom-actions:rating-flag-export|pending:apply-cancel-visible|no-elide:true|no-overlap:true"
+    readonly property string editWorkflowPolishContract: "edit-workflow-polish:v1|first-glance:tool-rail-image-stage-inspector-filmstrip|close-inspection:active-tool-variant-target-hud-pending-actions|clutter:one-active-hud-one-primary-action-diagnostics-collapsed|interaction:select-expand-switch-commit-cancel-customize|text:no-elide-no-overlap|functionality:preserved"
+    readonly property string editPageCompletionContract: "page-completion:v1|edit|rail:primary-tool-families|content:image-stage-toolbar-hud|inspector:active-tool-targeted-sections|filmstrip:stable-selection|bottom:rating-flag-export|states:no-photo-active-tool-pending-disabled-error"
 
     property real manualZoom: 1.0
     property bool fitToView: true
@@ -23,6 +93,9 @@ Rectangle {
     property bool optionModifierActive: false
     property bool controlModifierActive: false
     property bool spacePanActive: false
+    property bool maskColorRangeSampling: false
+    property bool maskLuminanceRangeSampling: false
+    property bool maskDepthRangeSampling: false
     property bool selectionBrushRestorePending: false
     property bool selectionBrushRestoreSubtract: false
     readonly property bool objectPickArmed: transientMaskTool === "smart" ||
@@ -64,6 +137,9 @@ Rectangle {
     property string presetDraftName: ""
     property string presetDraftPack: "User Presets"
     property string selectedPresetName: ""
+    property string agentModelSetupMessage: ""
+    property string agentMemoryVaultMessage: ""
+    property bool agentMemoryVaultResetArmed: false
     property bool histogramShowLuminance: true
     property bool histogramShowRgb: true
     property bool histogramLogScale: true
@@ -113,11 +189,27 @@ Rectangle {
     property var selectedAdjustmentGroups: ["raw", "tone", "color", "crop", "masks", "detail"]
     property string inspectorMode: "adjust"
     property string inspectorTab: "adjust"
+    property bool workspaceActive: true
+    property alias editInspectorTab: root.inspectorTab
+    property alias studioPresetDraftName: root.presetDraftName
+    property alias studioPresetSearchText: root.presetDraftName
+    readonly property bool editingChromeVisible: true
+    readonly property bool editInspectorPanelVisible: !inspectorCollapsed
+    readonly property int editInspectorPanelWidth: inspectorWide ? 420 : 356
     property bool batchToolsExpanded: false
     property bool agentStyleBuilderExpanded: false
+    property bool agentDetailsExpanded: false
+    property string agentExpandedReviewIssueAssetId: ""
     property string agentRunMode: "draft"
     property string agentStyleDraftName: ""
     property string agentStyleDraftGoal: ""
+    property string agentStylePermissionMode: "balanced"
+    property var agentStylePermissionModeOptions: [
+        { "mode": "conservative", "label": "Conservative" },
+        { "mode": "balanced", "label": "Balanced" },
+        { "mode": "full_edit", "label": "Full edit" },
+        { "mode": "full_edit_retouch", "label": "Full edit + retouch" }
+    ]
     property bool agentStyleAllowRaw: true
     property bool agentStyleAllowGlobalColor: true
     property bool agentStyleAllowCurves: true
@@ -125,7 +217,7 @@ Rectangle {
     property bool agentStyleAllowColorGrading: true
     property bool agentStyleAllowDetail: true
     property bool agentStyleAllowCrop: true
-    property bool agentStyleAllowMasks: false
+    property bool agentStyleAllowMasks: true
     property bool agentStyleAllowRetouch: false
     property bool agentStyleAllowLayersLuts: false
     property bool agentStyleAllowExport: false
@@ -136,13 +228,24 @@ Rectangle {
     property string agentStyleShadowClipLimit: "1.0"
     property string agentStyleSaveMessage: ""
 
-    FileDialog {
-        id: referenceImageDialog
-        title: "Choose Reference Image"
-        nameFilters: ["Images (*.jpg *.jpeg *.png *.tif *.tiff *.heic *.heif *.webp *.dng *.raw)", "All files (*)"]
-        onAccepted: {
-            if (editorPreview.setReferenceImage(selectedFile))
-                editorPreview.compareMode = true
+    signal assetActivated(string destination)
+
+    Loader {
+        id: referenceImageDialogLoader
+        active: false
+        sourceComponent: referenceImageDialogComponent
+    }
+
+    Component {
+        id: referenceImageDialogComponent
+
+        FileDialog {
+            title: "Choose Reference Image"
+            nameFilters: ["Images (*.jpg *.jpeg *.png *.tif *.tiff *.heic *.heif *.webp *.dng *.raw)", "All files (*)"]
+            onAccepted: {
+                if (editorPreview.setReferenceImage(selectedFile))
+                    editorPreview.compareMode = true
+            }
         }
     }
     onInspectorModeChanged: {
@@ -172,19 +275,25 @@ Rectangle {
     }
 
     function agentSelectedModelIndex() {
-        for (let index = 0; index < agentEdit.availableModels.length; ++index) {
-            const modelInfo = agentEdit.availableModels[index]
-            if (modelInfo.id === agentEdit.selectedModelId)
+        for (let index = 0; index < root.agentEditController.availableModels.length; ++index) {
+            const modelInfo = root.agentEditController.availableModels[index]
+            if (modelInfo.id === root.agentEditController.selectedModelId)
                 return index
         }
-        return agentEdit.availableModels.length > 0 ? 0 : -1
+        return root.agentEditController.availableModels.length > 0 ? 0 : -1
     }
 
     function activeAgentModel() {
         const selectedIndex = agentSelectedModelIndex()
-        if (selectedIndex >= 0 && selectedIndex < agentEdit.availableModels.length)
-            return agentEdit.availableModels[selectedIndex]
+        if (selectedIndex >= 0 && selectedIndex < root.agentEditController.availableModels.length)
+            return root.agentEditController.availableModels[selectedIndex]
         return null
+    }
+
+    function openReferenceImageDialog() {
+        referenceImageDialogLoader.active = true
+        if (referenceImageDialogLoader.item)
+            referenceImageDialogLoader.item.open()
     }
 
     function agentModelStatusText() {
@@ -195,6 +304,38 @@ Rectangle {
         const status = modelInfo.status || (modelInfo.available ? "available" : "unavailable")
         const backend = modelInfo.backend || "local"
         return name + " · " + status + " · " + backend
+    }
+
+    function agentMcpStatusText() {
+        if (!root.hasAgentEditController || String(root.agentEditController.mcpEndpoint || "").length === 0)
+            return "MCP · unavailable"
+        const status = String(root.agentEditController.mcpStatus || "Ready")
+        const count = Number(root.agentEditController.mcpToolCount || 0)
+        const kind = String(root.agentEditController.mcpEndpointKind || "local")
+        return "MCP · " + status + " · " + Math.round(count).toLocaleString(Qt.locale(), "f", 0) + (count === 1 ? " tool" : " tools") + " · " + kind
+    }
+
+    function agentMcpStatusColor() {
+        if (!root.hasAgentEditController || !root.agentEditController.mcpAvailable)
+            return theme.error
+        const status = String(root.agentEditController.mcpStatus || "").toLowerCase()
+        return status === "failed" || status === "unavailable" ? theme.error : theme.success
+    }
+
+    function agentMcpTelemetryText() {
+        if (!root.hasAgentEditController || !root.agentEditController.mcpAvailable)
+            return ""
+        const total = Number(root.agentEditController.mcpTotalClientCount || 0)
+        const active = Number(root.agentEditController.mcpConnectedClientCount || 0)
+        const lastName = String(root.agentEditController.mcpLastToolCallName || "")
+        const lastStatus = String(root.agentEditController.mcpLastToolCallStatus || "")
+        const parts = []
+        if (total > 0)
+            parts.push("clients " + Math.round(active).toLocaleString(Qt.locale(), "f", 0) + "/" +
+                       Math.round(total).toLocaleString(Qt.locale(), "f", 0))
+        if (lastName.length > 0)
+            parts.push("last " + lastName + (lastStatus.length > 0 ? " · " + lastStatus : ""))
+        return parts.join(" · ")
     }
 
     function agentModelStatusColor(modelInfo) {
@@ -225,8 +366,40 @@ Rectangle {
         return reason.length > 0 ? (backend + " · " + configured + " · " + reason) : (backend + " · " + configured)
     }
 
+    function activeAgentModelIsOllama() {
+        const modelInfo = activeAgentModel()
+        return modelInfo && String(modelInfo.backend || "") === "ollama"
+    }
+
+    function agentModelInstallCommandText() {
+        if (!activeAgentModelIsOllama())
+            return ""
+        const setup = root.agentEditController.prepareSelectedModelInstall()
+        return String(setup.command || "")
+    }
+
+    function updateAgentModelSetupMessage(result) {
+        if (!result) {
+            agentModelSetupMessage = ""
+            return
+        }
+        const errors = result.errors || []
+        if (errors.length > 0) {
+            agentModelSetupMessage = String(errors[0])
+            return
+        }
+        if (result.started)
+            agentModelSetupMessage = String(root.agentEditController.modelInstallStatus || "Pulling model")
+        else if (result.mode === "model-probe")
+            agentModelSetupMessage = result.ok ? "Model available" : String(result.statusReason || "Model unavailable")
+        else if (result.command)
+            agentModelSetupMessage = String(result.command)
+        else
+            agentModelSetupMessage = String(result.reason || root.agentEditController.modelInstallStatus || "")
+    }
+
     function agentRunArtifactPath(key) {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         if (report[key] !== undefined && String(report[key]).length > 0)
             return String(report[key])
         const artifacts = report.artifacts || ({})
@@ -269,7 +442,7 @@ Rectangle {
     }
 
     function agentRecipeDiff() {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         if (report.recipeDiff !== undefined && report.recipeDiff !== null)
             return report.recipeDiff
         const validation = report.validationReport || ({})
@@ -356,7 +529,12 @@ Rectangle {
     }
 
     function agentAssetReports() {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
+        const summary = report.batchSummary || ({})
+        if (summary.reviewIssues !== undefined &&
+                summary.reviewIssues !== null &&
+                summary.reviewIssues.length > 0)
+            return summary.reviewIssues
         if (report.assetReports !== undefined && report.assetReports !== null)
             return report.assetReports
         if (String(report.mode || "") === "commit" &&
@@ -386,6 +564,8 @@ Rectangle {
         const rawStatus = String((report && report.status) || "").toLowerCase()
         if (agentBatchReportErrorCount(report) > 0 || rawStatus === "failed" || (report && report.ok === false))
             return "failed"
+        if (rawStatus === "needs_review")
+            return "review"
         if (agentBatchReportWarningCount(report) > 0 && rawStatus !== "failed")
             return "warning"
         if (rawStatus.length > 0)
@@ -397,6 +577,8 @@ Rectangle {
         const value = String(status || "").toLowerCase()
         if (value === "drafted" || value === "validated" || value === "committed")
             return theme.success
+        if (value === "review")
+            return theme.warning
         if (value === "warning")
             return theme.warning
         if (value === "failed")
@@ -405,8 +587,15 @@ Rectangle {
     }
 
     function agentBatchStatusSummaryText() {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         const summary = report.batchSummary || ({})
+        const reviewSummary = summary.reviewSummary || ({})
+        if (reviewSummary.editedCount !== undefined) {
+            return Number(reviewSummary.editedCount || 0) + " edited · " +
+                   Number(reviewSummary.passedCount || 0) + " passed · " +
+                   Number(reviewSummary.needsReviewCount || 0) + " review · " +
+                   Number(reviewSummary.failedCount || 0) + " failed"
+        }
         if (summary.statusCounts !== undefined && summary.statusCounts !== null) {
             const summaryParts = []
             const summaryOrder = ["pending", "drafted", "validated", "warning", "failed", "committed"]
@@ -446,14 +635,21 @@ Rectangle {
         }
         if (parts.length > 0)
             return parts.join(" · ")
-        if (agentEdit.running && catalogAssets.selectedAssetCount > 1)
+        if (root.agentEditController.running && catalogAssets.selectedAssetCount > 1)
             return catalogAssets.selectedAssetCount + " pending"
         return ""
     }
 
+    function agentFixAllReviewIssuesAvailable() {
+        const report = root.agentEditController.lastRunReport || ({})
+        const summary = report.batchSummary || ({})
+        const reviewSummary = summary.reviewSummary || ({})
+        return Boolean(reviewSummary.fixAllOutliersAvailable)
+    }
+
     function agentHasBatchStatus() {
         return agentAssetReports().length > 0 ||
-               (agentEdit.running && catalogAssets.selectedAssetCount > 1)
+               (root.agentEditController.running && catalogAssets.selectedAssetCount > 1)
     }
 
     function agentBatchReportAssetLabel(report, index) {
@@ -462,6 +658,8 @@ Rectangle {
     }
 
     function agentBatchReportDetail(report) {
+        if (report && report.reason !== undefined && String(report.reason || "").length > 0)
+            return String(report.reason || "")
         const parts = []
         const warningCount = agentBatchReportWarningCount(report)
         const errorCount = agentBatchReportErrorCount(report)
@@ -474,6 +672,47 @@ Rectangle {
         if (parts.length > 0)
             return parts.join(" · ")
         return agentBatchReportStatus(report) === "pending" ? "waiting for agent" : "ready"
+    }
+
+    function agentBatchReportSuggestedAction(report) {
+        return String((report && report.suggestedAction) || "")
+    }
+
+    function agentBatchReportThumbnailSource(report) {
+        if (!report)
+            return ""
+        const path = String(report.thumbnailPath || report.afterProofPath || report.currentProofPath || "")
+        return localImageUrl(path)
+    }
+
+    function agentReviewIssueExpanded(report) {
+        const assetId = String((report && report.assetId) || "")
+        return assetId.length > 0 && agentExpandedReviewIssueAssetId === assetId
+    }
+
+    function toggleAgentReviewIssueDetails(report) {
+        const assetId = String((report && report.assetId) || "")
+        agentExpandedReviewIssueAssetId = agentExpandedReviewIssueAssetId === assetId ? "" : assetId
+    }
+
+    function agentReviewIssueDetailsText(report) {
+        const issue = report || ({})
+        const parts = []
+        if (issue.styleMatchScorePercent !== undefined && issue.styleMatchScorePercent !== null &&
+                String(issue.styleMatchScorePercent).length > 0)
+            parts.push("style " + Number(issue.styleMatchScorePercent).toLocaleString(Qt.locale(), "f", 0) + "%")
+        if (Number(issue.warningCount || 0) > 0)
+            parts.push(Number(issue.warningCount || 0) + " warning" + (Number(issue.warningCount || 0) === 1 ? "" : "s"))
+        if (Number(issue.errorCount || 0) > 0)
+            parts.push(Number(issue.errorCount || 0) + " error" + (Number(issue.errorCount || 0) === 1 ? "" : "s"))
+        if (String(issue.clusterId || "").length > 0)
+            parts.push("cluster " + String(issue.clusterId || ""))
+        if (Boolean(issue.outlierCorrected))
+            parts.push("outlier corrected")
+        const proofPath = String(issue.afterProofPath || issue.thumbnailPath || "")
+        if (proofPath.length > 0)
+            parts.push(proofPath)
+        return parts.join(" · ")
     }
 
     function agentRunStages() {
@@ -492,12 +731,267 @@ Rectangle {
     }
 
     function agentToolCalls() {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         return report.toolCalls !== undefined && report.toolCalls !== null ? report.toolCalls : []
     }
 
+    function agentEditLoops() {
+        const report = root.agentEditController.lastRunReport || ({})
+        if (report.editLoops !== undefined && report.editLoops !== null)
+            return report.editLoops
+        const loops = []
+        const reports = report.assetReports || []
+        for (let index = 0; index < reports.length; ++index) {
+            const loop = reports[index] && reports[index].editLoop !== undefined ? reports[index].editLoop : null
+            if (loop)
+                loops.push(loop)
+        }
+        return loops
+    }
+
+    function agentLoopAttemptRows() {
+        const loops = agentEditLoops()
+        const rows = []
+        for (let loopIndex = 0; loopIndex < loops.length; ++loopIndex) {
+            const loop = loops[loopIndex] || ({})
+            const attempts = loop.attempts || []
+            for (let attemptIndex = 0; attemptIndex < attempts.length && rows.length < 6; ++attemptIndex) {
+                const attempt = attempts[attemptIndex] || ({})
+                rows.push({
+                    "label": "Attempt " + (Number(attempt.attemptIndex || attemptIndex) + 1),
+                    "status": String(attempt.stopReasonCandidate || loop.finalStopReason || "checked"),
+                    "score": Number(attempt.qualityScorePercent || Math.round(Number(attempt.qualityScore || 0) * 100)),
+                    "warningCount": attempt.warnings !== undefined && attempt.warnings !== null ? attempt.warnings.length : 0,
+                    "needsUserReview": Boolean(attempt.needsUserReview),
+                    "assetId": String(loop.assetId || "")
+                })
+            }
+        }
+        return rows
+    }
+
+    function agentLoopSummaryText() {
+        const loops = agentEditLoops()
+        if (loops.length === 0)
+            return ""
+        const first = loops[0] || ({})
+        const score = Number(first.finalScorePercent || Math.round(Number(first.finalScore || 0) * 100))
+        const attemptCount = Number(first.attemptCount || (first.attempts ? first.attempts.length : 0))
+        const review = first.needsUserReview ? "review" : "ready"
+        return attemptCount + (attemptCount === 1 ? " attempt" : " attempts") +
+               " · score " + score + "% · " +
+               String(first.finalStopReason || review)
+    }
+
+    function agentLoopStatusColor(row) {
+        const status = String((row && row.status) || "").toLowerCase()
+        if (status.indexOf("failed") >= 0 || status.indexOf("invalid") >= 0)
+            return theme.error
+        if ((row && row.needsUserReview) || status.indexOf("warning") >= 0 ||
+                status.indexOf("limit") >= 0 || status.indexOf("review") >= 0)
+            return theme.warning
+        if (status.indexOf("clean") >= 0 || status.indexOf("validated") >= 0)
+            return theme.success
+        return theme.textMuted
+    }
+
+    function agentToolCallStatusColor(call) {
+        const status = String((call && call.status) || "").toLowerCase()
+        if (status === "failed" || status === "error")
+            return theme.error
+        if (status === "warning")
+            return theme.warning
+        if (status === "ok" || status === "complete" || status === "completed" || status === "success")
+            return theme.success
+        return theme.textMuted
+    }
+
+    function agentToolCallTitle(call) {
+        const name = String((call && call.name) || "tool")
+        const status = String((call && call.status) || "recorded")
+        return name + " · " + status
+    }
+
+    function agentToolCallDetail(call) {
+        const outcome = call && call.outcome !== undefined ? call.outcome : ({})
+        const parts = []
+        const durationMs = Number((call && call.durationMs) || outcome.durationMs || 0)
+        const warningCount = Number(outcome.warningCount || 0)
+        const errorCount = Number(outcome.errorCount || 0)
+        if (durationMs > 0)
+            parts.push(durationMs + " ms")
+        if (warningCount > 0)
+            parts.push(warningCount + (warningCount === 1 ? " warning" : " warnings"))
+        if (errorCount > 0)
+            parts.push(errorCount + (errorCount === 1 ? " error" : " errors"))
+        if (outcome.proofPath !== undefined && String(outcome.proofPath).length > 0)
+            parts.push(String(outcome.proofPath))
+        return parts.length > 0 ? parts.join(" · ") : "completed"
+    }
+
+    function agentRunWarnings() {
+        const report = root.agentEditController.lastRunReport || ({})
+        const validation = report.validationReport || ({})
+        const warnings = []
+        const addWarnings = function(items) {
+            if (!items)
+                return
+            for (let index = 0; index < items.length; ++index) {
+                const text = String(items[index] || "")
+                if (text.length > 0 && warnings.indexOf(text) < 0)
+                    warnings.push(text)
+            }
+        }
+        addWarnings(report.warnings)
+        addWarnings(validation.warnings)
+        return warnings
+    }
+
+    function agentPendingQuestionText() {
+        const questions = root.agentEditController.pendingUserQuestions || []
+        const parts = []
+        for (let index = 0; index < questions.length; ++index) {
+            const question = questions[index]
+            if (typeof question === "string") {
+                if (question.length > 0)
+                    parts.push(question)
+            } else {
+                const text = String((question && (question.question || question.text || question.prompt)) || "")
+                if (text.length > 0)
+                    parts.push(text)
+            }
+        }
+        const report = root.agentEditController.lastRunReport || ({})
+        if (parts.length === 0 && String(report.planSummary || "").length > 0)
+            parts.push(String(report.planSummary || ""))
+        return parts.join("\n")
+    }
+
+    function agentHasPendingInputSurface() {
+        return root.agentEditController.awaitingUserInput ||
+               String(root.agentEditController.safeStopReason || "").length > 0 ||
+               String((root.agentEditController.lastRunReport || ({})).safeStopReason || "").length > 0
+    }
+
+    function agentRunArtifactSummary() {
+        const parts = []
+        const current = agentProofPath("current")
+        const before = agentProofPath("before")
+        const after = agentProofPath("after")
+        const manifest = agentRunArtifactPath("manifestPath")
+        const shareable = agentRunArtifactPath("shareableManifestPath")
+        if (current.length > 0)
+            parts.push("proof " + current)
+        if (before.length > 0)
+            parts.push("before " + before)
+        if (after.length > 0)
+            parts.push("after " + after)
+        if (manifest.length > 0)
+            parts.push("manifest " + manifest)
+        if (shareable.length > 0)
+            parts.push("shareable " + shareable)
+        return parts.join(" · ")
+    }
+
+    function agentStyleCitationCount() {
+        const report = root.agentEditController.lastRunReport || ({})
+        const citations = report.styleConstraintCitations || []
+        return citations.length || 0
+    }
+
+    function agentRunEvidenceSummary() {
+        const report = root.agentEditController.lastRunReport || ({})
+        const validation = report.validationReport || ({})
+        const parts = []
+        const toolCount = agentToolCalls().length
+        const diffCount = agentRecipeDiffGroups().length
+        const citationCount = agentStyleCitationCount()
+        const warningCount = agentRunWarnings().length
+        if (toolCount > 0)
+            parts.push(toolCount + " tool call" + (toolCount === 1 ? "" : "s"))
+        if (diffCount > 0)
+            parts.push(diffCount + " recipe group" + (diffCount === 1 ? "" : "s"))
+        if (validation.ok !== undefined)
+            parts.push(validation.ok ? "validation passed" : "validation failed")
+        if (warningCount > 0)
+            parts.push(warningCount + " warning" + (warningCount === 1 ? "" : "s"))
+        if (citationCount > 0)
+            parts.push(citationCount + " style citation" + (citationCount === 1 ? "" : "s"))
+        if (agentLoopSummaryText().length > 0)
+            parts.push(agentLoopSummaryText())
+        if (String(report.shareableManifestPath || "").length > 0)
+            parts.push("shareable report ready")
+        return parts.join(" · ")
+    }
+
+    function agentThinkingLines() {
+        const report = root.agentEditController.lastRunReport || ({})
+        const draftReport = report.draftReport || ({})
+        const state = agentWorkflowState()
+        const lines = []
+        const addLine = function(text) {
+            const value = String(text || "").trim()
+            if (value.length > 0 && lines.indexOf(value) < 0)
+                lines.push(value)
+        }
+
+        if (root.agentEditController.running)
+            addLine("Working: " + String(root.agentEditController.status || state.statusLine || "planning the edit"))
+        if (root.agentEditController.awaitingUserInput)
+            addLine("Waiting on you: " + agentPendingQuestionText())
+
+        addLine(report.planSummary)
+        addLine(draftReport.planSummary)
+        addLine(report.analysisSummary)
+
+        const goals = report.editGoals || draftReport.editGoals || []
+        for (let index = 0; index < goals.length && lines.length < 6; ++index) {
+            const goal = goals[index]
+            if (typeof goal === "string")
+                addLine(goal)
+            else
+                addLine(goal.label || goal.goal || goal.summary || goal.reason)
+        }
+
+        const risk = report.riskAssessment || draftReport.riskAssessment || ({})
+        const approvalTypes = risk.approvalTypes || []
+        if (approvalTypes.length > 0)
+            addLine("Needs care around " + approvalTypes.join(", ") + ".")
+        addLine(report.reviewRequiredReason || draftReport.reviewRequiredReason)
+
+        const evidence = agentRunEvidenceSummary()
+        if (evidence.length > 0)
+            addLine("Evidence: " + evidence)
+
+        const calls = agentToolCalls()
+        if (calls.length > 0) {
+            const latest = calls[Math.min(calls.length - 1, 2)] || ({})
+            addLine("Last checked: " + agentToolCallTitle(latest))
+        }
+
+        if (lines.length === 0) {
+            const style = String((state.style || ({})).name || "")
+            const scope = String(state.scopeLabel || "")
+            addLine("Ready to reason from " + (style.length > 0 ? style : "the selected inspiration") +
+                    (scope.length > 0 ? " across " + scope + "." : "."))
+        }
+        return lines.slice(0, 6)
+    }
+
+    function agentThinkingVisible() {
+        return root.hasAgentEditController && agentThinkingLines().length > 0
+    }
+
+    function agentHasRunAudit() {
+        return agentToolCalls().length > 0 ||
+               agentEditLoops().length > 0 ||
+               agentRunWarnings().length > 0 ||
+               agentRunArtifactSummary().length > 0 ||
+               agentRunEvidenceSummary().length > 0
+    }
+
     function agentReportMode() {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         return String(report.mode || agentRunMode || "")
     }
 
@@ -528,7 +1022,7 @@ Rectangle {
     }
 
     function agentStageActiveKey() {
-        const status = String(agentEdit.status || "").toLowerCase()
+        const status = String(root.agentEditController.status || "").toLowerCase()
         if (status.indexOf("analyz") >= 0)
             return "analyze"
         if (status.indexOf("planning") >= 0)
@@ -578,7 +1072,7 @@ Rectangle {
     }
 
     function agentStageCompletedFromReport(stageKey) {
-        const report = agentEdit.lastRunReport || ({})
+        const report = root.agentEditController.lastRunReport || ({})
         const mode = agentReportMode()
         if (agentStageHasToolCall(stageKey))
             return true
@@ -598,12 +1092,12 @@ Rectangle {
         if (stageKey === "export-preflight")
             return mode === "export-preflight" || mode === "queue-export"
         if (stageKey === "ready-review")
-            return report.ok === true && !agentEdit.running
+            return report.ok === true && !root.agentEditController.running
         return false
     }
 
     function agentStageStatus(stageKey) {
-        if (agentEdit.running && agentStageActiveKey() === stageKey)
+        if (root.agentEditController.running && agentStageActiveKey() === stageKey)
             return "active"
         if (agentStageHasFailedToolCall(stageKey))
             return "failed"
@@ -634,8 +1128,8 @@ Rectangle {
     }
 
     function agentHasStageProgress() {
-        const report = agentEdit.lastRunReport || ({})
-        return agentEdit.running ||
+        const report = root.agentEditController.lastRunReport || ({})
+        return root.agentEditController.running ||
                String(report.mode || "").length > 0 ||
                agentToolCalls().length > 0
     }
@@ -650,7 +1144,7 @@ Rectangle {
     }
 
     function agentRunHistory() {
-        return agentEdit.runHistory || []
+        return root.agentEditController.runHistory || []
     }
 
     function agentRunHistoryStatusColor(entry) {
@@ -718,29 +1212,302 @@ Rectangle {
     }
 
     function agentCanRunMode(mode) {
-        if (!editorPreview.hasAsset || agentEdit.running)
+        if (!editorPreview.hasAsset || root.agentEditController.running)
             return false
         if (mode === "analyze")
             return catalogAssets.selectedAssetCount === 1
         return catalogAssets.selectedAssetCount >= 1
     }
 
+    function agentWorkflowState() {
+        return root.hasAgentEditController ? root.agentEditController.aiEditWorkflowState("") || ({}) : ({})
+    }
+
+    function agentWorkflowPrimaryAction() {
+        const state = agentWorkflowState()
+        return state.primaryAction || ({})
+    }
+
+    function agentWorkflowPrimaryKey() {
+        const action = agentWorkflowPrimaryAction()
+        return String(action.key || "")
+    }
+
+    function agentSampleReviewWaiting() {
+        const state = agentWorkflowState()
+        return Boolean(state.sampleReviewWaiting)
+    }
+
+    function agentWorkflowPrimaryLabel() {
+        const action = agentWorkflowPrimaryAction()
+        return String(action.label || "AI Edit")
+    }
+
+    function agentWorkflowPrimaryIcon() {
+        const key = agentWorkflowPrimaryKey()
+        if (key === "set_up_local_ai")
+            return "download"
+        if (key === "learn_style")
+            return "select"
+        if (key === "apply_to_all")
+            return "check"
+        if (key === "commit")
+            return "check"
+        if (key === "cancel")
+            return "close"
+        if (key === "answer_question" || key === "review_issue")
+            return "select"
+        if (key === "choose_style")
+            return "menu"
+        return "adjust"
+    }
+
+    function agentWorkflowPrimaryEnabled() {
+        if (!root.hasAgentEditController)
+            return false
+        const action = agentWorkflowPrimaryAction()
+        const key = String(action.key || "")
+        if (key === "create_draft" || key === "create_samples")
+            return agentCanRunMode("draft")
+        if (key === "apply_to_all")
+            return root.agentEditController.draftActive && !root.agentEditController.running
+        if (key === "commit")
+            return root.agentEditController.draftActive && !root.agentEditController.running
+        if (key === "cancel")
+            return root.agentEditController.running
+        if (key === "set_up_local_ai")
+            return !root.agentEditController.running && !root.agentEditController.modelInstallRunning
+        if (key === "learn_style")
+            return !root.agentEditController.running
+        return Boolean(action.enabled)
+    }
+
+    function agentWorkflowDetailText() {
+        const state = agentWorkflowState()
+        const reasons = state.blockingReasons || []
+        if (reasons.length > 0)
+            return String(reasons[0] || "")
+        const style = state.style || ({})
+        const styleName = String(style.name || "")
+        const scope = String(state.scopeLabel || "")
+        return [scope, styleName].filter(function(part) { return part.length > 0 }).join(" · ")
+    }
+
+    function agentWorkflowTasteCard() {
+        const state = agentWorkflowState()
+        return state.tasteCard || (state.style ? state.style.tasteCard || ({}) : ({}))
+    }
+
+    function agentWorkflowStyleLearning() {
+        const state = agentWorkflowState()
+        return state.styleLearning || ({})
+    }
+
+    function agentTasteCardVisible() {
+        const card = agentWorkflowTasteCard()
+        const learning = agentWorkflowStyleLearning()
+        return Boolean(card.available) || Boolean(learning.available)
+    }
+
+    function agentTasteCardTitle() {
+        const card = agentWorkflowTasteCard()
+        if (Boolean(card.available))
+            return String(card.name || "Active style")
+        const learning = agentWorkflowStyleLearning()
+        if (Boolean(learning.available))
+            return "Ready to learn from selection"
+        return ""
+    }
+
+    function agentTasteCardText() {
+        const card = agentWorkflowTasteCard()
+        if (Boolean(card.available)) {
+            const confidence = String(card.confidence || "")
+            const references = Number(card.referenceCount || 0)
+            const summary = String(card.summary || "")
+            const parts = []
+            if (references > 0)
+                parts.push(references + " reference" + (references === 1 ? "" : "s"))
+            if (confidence.length > 0)
+                parts.push(confidence + " confidence")
+            if (summary.length > 0)
+                parts.push(summary)
+            return parts.join(" · ")
+        }
+        const learning = agentWorkflowStyleLearning()
+        if (Boolean(learning.available)) {
+            const usable = Number(learning.usableRecipeCount || 0)
+            return usable + " usable edited reference" + (usable === 1 ? "" : "s")
+        }
+        return ""
+    }
+
+    function agentMemoryVaultStatus() {
+        return root.hasAgentEditController ? root.agentEditController.memoryVaultStatus() || ({}) : ({})
+    }
+
+    function agentMemoryVaultText() {
+        const status = agentMemoryVaultStatus()
+        const total = Number(status.totalNoteCount || 0)
+        const rootPath = String(status.rootPath || "")
+        const activeStylePath = String(status.activeStyleNotePath || "")
+        const parts = ["Memory", "local Markdown", "packets only", total + " notes"]
+        if (activeStylePath.length > 0)
+            parts.push("style note ready")
+        if (Boolean(status.externalChangeDetected))
+            parts.push(Number(status.externalChangeCount || 0) + " outside change(s)")
+        if (rootPath.length > 0)
+            parts.push(rootPath)
+        return parts.join(" · ")
+    }
+
+    function agentLatestStyleChangeSummary() {
+        const report = root.hasAgentEditController ? root.agentEditController.lastRunReport || ({}) : ({})
+        const directSummary = String(report.styleChangeSummary || "")
+        if (directSummary.length > 0)
+            return directSummary
+        const events = report.userVisibleMemoryEvents || []
+        for (let index = events.length - 1; index >= 0; --index) {
+            const event = events[index] || ({})
+            const summary = String(event.styleChangeSummary || event.summary || "")
+            if (summary.length > 0)
+                return summary
+        }
+        return ""
+    }
+
+    function agentMemoryResultText(result, successText) {
+        const report = result || ({})
+        const errors = report.errors || []
+        if (!Boolean(report.ok) && errors.length > 0)
+            return String(errors[0])
+        const path = String(report.exportPath || report.rootPath || "")
+        if (Boolean(report.ok))
+            return path.length > 0 ? successText + ": " + path : successText
+        const warnings = report.warnings || []
+        if (warnings.length > 0)
+            return String(warnings[0])
+        return "Memory action failed."
+    }
+
+    function openAgentMemoryVault() {
+        if (!root.hasAgentEditController)
+            return
+        agentMemoryVaultResetArmed = false
+        agentMemoryVaultMessage = agentMemoryResultText(root.agentEditController.openMemoryVault(), "Vault opened")
+    }
+
+    function openAgentMemoryVaultInObsidian() {
+        if (!root.hasAgentEditController)
+            return
+        agentMemoryVaultResetArmed = false
+        agentMemoryVaultMessage = agentMemoryResultText(
+                    root.agentEditController.openMemoryVaultInObsidian(false), "Obsidian opened")
+    }
+
+    function exportAgentMemoryVault() {
+        if (!root.hasAgentEditController)
+            return
+        agentMemoryVaultResetArmed = false
+        agentMemoryVaultMessage = agentMemoryResultText(
+                    root.agentEditController.exportMemoryVault("", true), "Redacted vault exported")
+    }
+
+    function resetAgentMemoryVaultFromDetails() {
+        if (!root.hasAgentEditController)
+            return
+        if (!agentMemoryVaultResetArmed) {
+            agentMemoryVaultResetArmed = true
+            agentMemoryVaultMessage = "Click Confirm Reset to clear local agent memory."
+            return
+        }
+        const result = root.agentEditController.resetMemoryVault(true)
+        agentMemoryVaultResetArmed = false
+        agentMemoryVaultMessage = agentMemoryResultText(result, "Memory vault reset")
+    }
+
+    function learnAgentStyleFromSelection() {
+        if (!root.hasAgentEditController)
+            return
+        const learning = agentWorkflowStyleLearning()
+        const count = Number(learning.selectedCount || 0)
+        const label = count > 1 ? "Learned Project Style" : "Learned Photo Style"
+        const result = root.agentEditController.createLearnedStyleProfileFromSelection(
+                    label,
+                    "Edit selected photos consistently in my demonstrated style.",
+                    String(root.agentEditController.userInstructions || ""))
+        if (Boolean(result.ok)) {
+            agentStyleSaveMessage = "Learned style from " + count + " photo" + (count === 1 ? "" : "s")
+            agentDetailsExpanded = false
+        } else {
+            const errors = result.errors || []
+            agentStyleSaveMessage = errors.length > 0 ? errors.join("\n") : "Unable to learn this style"
+            agentDetailsExpanded = true
+        }
+    }
+
+    function runAgentWorkflowPrimaryAction() {
+        if (!root.hasAgentEditController || !agentWorkflowPrimaryEnabled())
+            return
+        const key = agentWorkflowPrimaryKey()
+        if (key === "create_draft" || key === "create_samples") {
+            root.agentEditController.applyEditForScope("", root.agentEditController.userInstructions)
+        } else if (key === "learn_style") {
+            learnAgentStyleFromSelection()
+        } else if (key === "choose_style") {
+            agentDetailsExpanded = true
+        } else if (key === "apply_to_all") {
+            root.agentEditController.applySampleReviewToAll(true)
+        } else if (key === "commit") {
+            root.agentEditController.commitDraft(true)
+        } else if (key === "cancel") {
+            root.agentEditController.cancelRun("user_cancelled")
+        } else if (key === "set_up_local_ai") {
+            updateAgentModelSetupMessage(root.agentEditController.setupLocalAi(true))
+        }
+    }
+
     function runSelectedAgentMode() {
         if (!agentCanRunMode(agentRunMode))
             return
         if (agentRunMode === "analyze") {
-            agentEdit.analyzeSelected()
+            root.agentEditController.analyzeSelected()
         } else if (agentRunMode === "validate-batch") {
-            agentEdit.validateBatchForSelected()
+            root.agentEditController.validateBatchForSelected()
         } else if (agentRunMode === "export-preflight") {
-            agentEdit.exportPreflightForSelected()
+            root.agentEditController.exportPreflightForSelected()
         } else {
-            agentEdit.runDraftOnSelected(agentEdit.userInstructions)
+            root.agentEditController.applyEditForSelected(root.agentEditController.userInstructions)
         }
     }
 
+    function setAgentStylePermissionMode(mode) {
+        agentStylePermissionMode = mode
+        agentStyleAllowRaw = true
+        agentStyleAllowGlobalColor = true
+        agentStyleAllowCurves = true
+        agentStyleAllowHsl = true
+        agentStyleAllowDetail = true
+        agentStyleAllowCrop = true
+        agentStyleAllowColorGrading = mode !== "conservative"
+        agentStyleAllowMasks = mode !== "conservative"
+        agentStyleAllowLayersLuts = mode === "full_edit" || mode === "full_edit_retouch"
+        agentStyleAllowRetouch = mode === "full_edit_retouch"
+        agentStyleAllowExport = false
+    }
+
+    function agentStylePermissionSummary() {
+        if (agentStylePermissionMode === "conservative")
+            return "Can adjust tone, color, detail, and conservative crop. Masks and retouch stay off."
+        if (agentStylePermissionMode === "full_edit")
+            return "Can adjust color, tone, crop, local masks, layers, and LUTs. Retouch still requires approval."
+        if (agentStylePermissionMode === "full_edit_retouch")
+            return "Can use the full edit toolset including local masks, layers, LUTs, and minor retouch."
+        return "Can adjust color, tone, crop, and local masks. Retouch requires approval."
+    }
+
     function createAgentStyleFromDraft() {
-        const result = agentEdit.createStyle(
+        const result = root.agentEditController.createStyle(
                     agentStyleDraftName,
                     agentStyleDraftGoal,
                     {
@@ -785,7 +1552,31 @@ Rectangle {
 
     function clearTransientTools() {
         transientMaskTool = ""
+        maskColorRangeSampling = false
+        maskLuminanceRangeSampling = false
+        maskDepthRangeSampling = false
         editorPreview.clearSmartSelectPreview()
+    }
+
+    function setMaskColorRangeSampler(enabled) {
+        maskColorRangeSampling = Boolean(enabled)
+        maskLuminanceRangeSampling = false
+        maskDepthRangeSampling = false
+        return maskColorRangeSampling
+    }
+
+    function setMaskLuminanceRangeSampler(enabled) {
+        maskLuminanceRangeSampling = Boolean(enabled)
+        maskColorRangeSampling = false
+        maskDepthRangeSampling = false
+        return maskLuminanceRangeSampling
+    }
+
+    function setMaskDepthRangeSampler(enabled) {
+        maskDepthRangeSampling = Boolean(enabled) && editorPreview.activeMaskDepthSamplingAvailable
+        maskColorRangeSampling = false
+        maskLuminanceRangeSampling = false
+        return maskDepthRangeSampling
     }
 
     function resetInspectorScroll() {
@@ -920,6 +1711,51 @@ Rectangle {
         }
     }
 
+    function activeVisibilityContract() {
+        return inspectorMode === "masks" ? editVisibilityContract + "|mode:masks" : editVisibilityContract
+    }
+
+    function activateEditTool(toolName) {
+        const tool = String(toolName || "adjust")
+        if (tool === "masks") {
+            activateRailMode("masks")
+            return
+        }
+        if (tool === "brush") {
+            startMaskBrushSource("add")
+            return
+        }
+        if (tool === "retouch") {
+            activateRailMode("retouch")
+            return
+        }
+        if (tool === "crop") {
+            activateRailMode("crop")
+            return
+        }
+        if (tool === "compare") {
+            inspectorMode = "adjust"
+            inspectorTab = "adjust"
+            editorPreview.compareMode = true
+            return
+        }
+        activateRailMode("adjust")
+    }
+
+    function startMaskBrushSource(operationName) {
+        selectionBrushRestorePending = false
+        clearTransientTools()
+        inspectorTab = "masks"
+        inspectorMode = "masks"
+        editorPreview.startSelectionBrush(String(operationName || "add") === "subtract")
+    }
+
+    function brushToolReady() {
+        return inspectorMode === "masks" &&
+               editorPreview.activeMaskKind === "brush" &&
+               editorPreview.activeMaskRetouchMode.length === 0
+    }
+
     function activeToolLabel() {
         if (transientMaskTool === "lasso")
             return "Lasso"
@@ -982,6 +1818,25 @@ Rectangle {
         if (editorPreview.activeMaskKind === "brush")
             return "Brush Add"
         return "Adjust"
+    }
+
+    function editWorkflowPolishSignature() {
+        const pendingTool = transientMaskTool.length > 0 ||
+                            editorPreview.brushStrokeActive ||
+                            editorPreview.cropEditing ||
+                            editorPreview.compareMode
+        return "edit-workflow-polish:v1" +
+               "|asset:" + String(editorPreview.hasAsset) +
+               "|tool-label:" + root.activeToolLabel() +
+               "|inspector-tab:" + inspectorTab +
+               "|inspector-mode:" + inspectorMode +
+               "|left-panel-collapsed:" + String(leftPanelCollapsed) +
+               "|inspector-collapsed:" + String(inspectorCollapsed) +
+               "|filmstrip-collapsed:" + String(filmstripCollapsed) +
+               "|pending:" + String(pendingTool) +
+               "|transient:" + (transientMaskTool.length > 0 ? transientMaskTool : "none") +
+               "|target:" + (editorPreview.hasActiveMask ? "mask" : "base") +
+               "|preserve:tool-rail-image-stage-toolbar-inspector-filmstrip-bottom-actions"
     }
 
     function resetActiveMaskColorGrade() {
@@ -1284,6 +2139,73 @@ Rectangle {
         zoomPreviewFlick.contentY = Math.max(0, Math.min(maxPanY(), zoomPreviewFlick.contentY));
     }
 
+    function rectContainsPoint(rect, x, y) {
+        return rect.width > 0 && rect.height > 0 &&
+               x >= rect.x && x <= rect.x + rect.width &&
+               y >= rect.y && y <= rect.y + rect.height
+    }
+
+    function imagePaintedRectInZoomViewport(image) {
+        const paintedWidth = Math.max(0, image.paintedWidth)
+        const paintedHeight = Math.max(0, image.paintedHeight)
+        const origin = image.mapToItem(zoomPreviewFlick,
+                                       (image.width - paintedWidth) / 2,
+                                       (image.height - paintedHeight) / 2)
+        return Qt.rect(origin.x, origin.y, paintedWidth, paintedHeight)
+    }
+
+    function itemRectInZoomViewport(item) {
+        const origin = item.mapToItem(zoomPreviewFlick, 0, 0)
+        return Qt.rect(origin.x, origin.y, Math.max(0, item.width), Math.max(0, item.height))
+    }
+
+    function editedFitImageRectInZoomViewport() {
+        if (editorPreview.displayPreviewNativeAvailable)
+            return itemRectInZoomViewport(editedPreviewFitNative)
+        if (wipeCompareEnabled())
+            return imagePaintedRectInZoomViewport(editedPreviewFitWipe)
+        return imagePaintedRectInZoomViewport(editedPreviewFit)
+    }
+
+    function referenceFitImageRectInZoomViewport() {
+        if (wipeCompareEnabled())
+            return imagePaintedRectInZoomViewport(referencePreviewFitWipe)
+        return imagePaintedRectInZoomViewport(referencePreviewFit)
+    }
+
+    function editedZoomImageRectForZoom(zoomLevel) {
+        const editedWidth = editedPreviewPixelWidth(editedPreviewZoom) * zoomLevel
+        const editedHeight = editedPreviewPixelHeight(editedPreviewZoom) * zoomLevel
+        const referenceWidth = sideBySideCompareEnabled()
+                               ? imagePixelWidth(referencePreviewZoom) * zoomLevel
+                               : 0
+        const contentWidth = contentWidthForZoom(zoomLevel)
+        const contentHeight = contentHeightForZoom(zoomLevel)
+        const x = sideBySideCompareEnabled()
+                  ? Math.max(0, (contentWidth - (editedWidth + referenceWidth + 16)) / 2)
+                  : Math.max(0, (contentWidth - editedWidth) / 2)
+        const y = Math.max(0, (contentHeight - editedHeight) / 2)
+        return Qt.rect(x, y, editedWidth, editedHeight)
+    }
+
+    function referenceZoomImageRectForZoom(zoomLevel) {
+        const referenceWidth = imagePixelWidth(referencePreviewZoom) * zoomLevel
+        const referenceHeight = imagePixelHeight(referencePreviewZoom) * zoomLevel
+        const contentWidth = contentWidthForZoom(zoomLevel)
+        const contentHeight = contentHeightForZoom(zoomLevel)
+        if (sideBySideCompareEnabled()) {
+            const editedRect = editedZoomImageRectForZoom(zoomLevel)
+            return Qt.rect(editedRect.x + editedRect.width + 16,
+                           Math.max(0, (contentHeight - referenceHeight) / 2),
+                           referenceWidth,
+                           referenceHeight)
+        }
+        return Qt.rect(Math.max(0, (contentWidth - referenceWidth) / 2),
+                       Math.max(0, (contentHeight - referenceHeight) / 2),
+                       referenceWidth,
+                       referenceHeight)
+    }
+
     function centerZoomPreview() {
         zoomPreviewFlick.contentX = maxPanX() / 2;
         zoomPreviewFlick.contentY = maxPanY() / 2;
@@ -1342,16 +2264,30 @@ Rectangle {
         return Math.max(1, image.implicitHeight > 0 ? image.implicitHeight : image.sourceSize.height);
     }
 
+    function editedOutputPixelWidth() {
+        const sourceWidth = Number(editorPreview.sourceImageWidth || 0)
+        if (sourceWidth <= 0)
+            return 0
+        const cropWidth = editorPreview.cropEditing ? 1.0 : clamp(Number(editorPreview.cropRectWidth || 1.0), 0.0, 1.0)
+        return Math.max(1, Math.round(sourceWidth * Math.max(0.01, cropWidth)))
+    }
+
+    function editedOutputPixelHeight() {
+        const sourceHeight = Number(editorPreview.sourceImageHeight || 0)
+        if (sourceHeight <= 0)
+            return 0
+        const cropHeight = editorPreview.cropEditing ? 1.0 : clamp(Number(editorPreview.cropRectHeight || 1.0), 0.0, 1.0)
+        return Math.max(1, Math.round(sourceHeight * Math.max(0.01, cropHeight)))
+    }
+
     function editedPreviewPixelWidth(image) {
-        return editorPreview.displayPreviewNativeAvailable
-               ? Math.max(1, editorPreview.displayPreviewNativeSize.width)
-               : imagePixelWidth(image)
+        const outputWidth = editedOutputPixelWidth()
+        return outputWidth > 0 ? outputWidth : imagePixelWidth(image)
     }
 
     function editedPreviewPixelHeight(image) {
-        return editorPreview.displayPreviewNativeAvailable
-               ? Math.max(1, editorPreview.displayPreviewNativeSize.height)
-               : imagePixelHeight(image)
+        const outputHeight = editedOutputPixelHeight()
+        return outputHeight > 0 ? outputHeight : imagePixelHeight(image)
     }
 
     function preserveAspectFitSize(sourceWidth, sourceHeight, targetWidth, targetHeight) {
@@ -1431,6 +2367,27 @@ Rectangle {
         return fitToView ? fitZoomLevel() : manualZoom;
     }
 
+    function publishPreviewViewportForCurrentView() {
+        updatePreviewTargetEdge()
+        updatePreviewViewport()
+    }
+
+    Timer {
+        id: previewViewportSettleTimer
+        interval: 160
+        repeat: false
+        onTriggered: root.publishPreviewViewportForCurrentView()
+    }
+
+    function schedulePreviewViewportUpdate(immediate) {
+        if (immediate === true) {
+            previewViewportSettleTimer.stop()
+            Qt.callLater(root.publishPreviewViewportForCurrentView)
+            return
+        }
+        previewViewportSettleTimer.restart()
+    }
+
     NumberAnimation on selectionOutlinePhase {
         from: 0
         to: 24
@@ -1440,17 +2397,14 @@ Rectangle {
     }
 
     onManualZoomChanged: {
-        updatePreviewTargetEdge()
-        updatePreviewViewport()
+        schedulePreviewViewportUpdate(false)
     }
     onFitToViewChanged: {
-        updatePreviewTargetEdge()
-        updatePreviewViewport()
+        schedulePreviewViewportUpdate(false)
     }
     onCompareViewModeChanged: {
         compareWipePosition = 0.5
-        updatePreviewTargetEdge()
-        updatePreviewViewport()
+        schedulePreviewViewportUpdate(true)
     }
 
     Connections {
@@ -1458,8 +2412,7 @@ Rectangle {
         function onCompareModeChanged() {
             if (editorPreview.compareMode && editorPreview.whiteBalanceSampling)
                 editorPreview.whiteBalanceSampling = false;
-            updatePreviewTargetEdge();
-            updatePreviewViewport();
+            schedulePreviewViewportUpdate(true);
         }
     }
 
@@ -1496,22 +2449,39 @@ Rectangle {
             return;
         }
 
-        const viewportPivotX = pivotX === undefined ? zoomPreviewFlick.width / 2 : pivotX;
-        const viewportPivotY = pivotY === undefined ? zoomPreviewFlick.height / 2 : pivotY;
-        const oldContentWidth = fitToView ? zoomPreviewFlick.width : contentWidthForZoom(currentZoom);
-        const oldContentHeight = fitToView ? zoomPreviewFlick.height : contentHeightForZoom(currentZoom);
-        const oldFocusX = (fitToView ? 0 : zoomPreviewFlick.contentX) + viewportPivotX;
-        const oldFocusY = (fitToView ? 0 : zoomPreviewFlick.contentY) + viewportPivotY;
-        const widthRatio = oldFocusX / Math.max(1, oldContentWidth);
-        const heightRatio = oldFocusY / Math.max(1, oldContentHeight);
+        const viewportPivotX = clamp(pivotX === undefined ? zoomPreviewFlick.width / 2 : pivotX,
+                                     0,
+                                     Math.max(0, zoomPreviewFlick.width));
+        const viewportPivotY = clamp(pivotY === undefined ? zoomPreviewFlick.height / 2 : pivotY,
+                                     0,
+                                     Math.max(0, zoomPreviewFlick.height));
+        const oldEditedRect = fitToView ? editedFitImageRectInZoomViewport()
+                                        : editedZoomImageRectForZoom(currentZoom)
+        const oldReferenceRect = (editorPreview.compareMode && referenceDisplaySource.length > 0)
+                                 ? (fitToView ? referenceFitImageRectInZoomViewport()
+                                              : referenceZoomImageRectForZoom(currentZoom))
+                                 : oldEditedRect
+        const oldFocusX = (fitToView ? 0 : zoomPreviewFlick.contentX) + viewportPivotX
+        const oldFocusY = (fitToView ? 0 : zoomPreviewFlick.contentY) + viewportPivotY
+        const useReferenceAnchor = editorPreview.compareMode &&
+                                   referenceDisplaySource.length > 0 &&
+                                   rectContainsPoint(oldReferenceRect, oldFocusX, oldFocusY) &&
+                                   !rectContainsPoint(oldEditedRect, oldFocusX, oldFocusY)
+        const oldAnchorRect = useReferenceAnchor ? oldReferenceRect : oldEditedRect
+        const normalizedAnchorX = oldAnchorRect.width > 0
+                                  ? clamp((oldFocusX - oldAnchorRect.x) / oldAnchorRect.width, 0, 1)
+                                  : 0.5
+        const normalizedAnchorY = oldAnchorRect.height > 0
+                                  ? clamp((oldFocusY - oldAnchorRect.y) / oldAnchorRect.height, 0, 1)
+                                  : 0.5
 
         fitToView = false;
         manualZoom = nextZoom;
 
-        const newContentWidth = contentWidthForZoom(nextZoom);
-        const newContentHeight = contentHeightForZoom(nextZoom);
-        zoomPreviewFlick.contentX = widthRatio * newContentWidth - viewportPivotX;
-        zoomPreviewFlick.contentY = heightRatio * newContentHeight - viewportPivotY;
+        const newAnchorRect = useReferenceAnchor ? referenceZoomImageRectForZoom(nextZoom)
+                                                 : editedZoomImageRectForZoom(nextZoom)
+        zoomPreviewFlick.contentX = newAnchorRect.x + normalizedAnchorX * newAnchorRect.width - viewportPivotX;
+        zoomPreviewFlick.contentY = newAnchorRect.y + normalizedAnchorY * newAnchorRect.height - viewportPivotY;
         clampPanPosition();
     }
 
@@ -1659,7 +2629,7 @@ Rectangle {
         function onPreviewChanged() {
             editedDisplaySource = editorPreview.displayPreviewSource;
             referenceDisplaySource = editorPreview.displayReferencePreviewSource;
-            updatePreviewViewport();
+            schedulePreviewViewportUpdate(true);
         }
 
         function onActiveBrushStrokeChanged() {
@@ -1925,53 +2895,20 @@ Rectangle {
                             { "mode": "crop", "icon": "crop", "label": "Crop / Frame" }
                         ]
 
-                        delegate: Rectangle {
-                            id: railTool
-
+                        delegate: EditRailButton {
                             required property var modelData
 
-                            readonly property bool active: (modelData.mode === "adjust" && inspectorMode === "adjust" && inspectorTab === "adjust")
-                                                           || (modelData.mode === "crop" && inspectorMode === "crop")
+                            readonly property bool railActive: (modelData.mode === "adjust" && inspectorMode === "adjust" && inspectorTab === "adjust")
+                                                               || (modelData.mode === "crop" && inspectorMode === "crop")
 
                             Layout.alignment: Qt.AlignHCenter
                             Layout.preferredWidth: 30
                             Layout.preferredHeight: 30
-                            radius: 0
-                            color: railTool.active
-                                   ? theme.alpha(theme.polar, 0.055)
-                                   : (mouseArea.containsMouse ? theme.alpha(theme.polar, 0.04) : "transparent")
-                            border.width: 0
-                            border.color: "transparent"
-
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 2
-                                height: 0
-                                visible: false
-                                color: theme.polar
-                            }
-
-                            AppIcon {
-                                anchors.centerIn: parent
-                                name: railTool.modelData.icon
-                                color: railTool.active ? theme.textStrong : (mouseArea.containsMouse ? theme.textMain : theme.textMuted)
-                                implicitWidth: 14
-                                implicitHeight: 14
-                            }
-
-                            MouseArea {
-                                id: mouseArea
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: activateRailMode(railTool.modelData.mode)
-                            }
-
-                            ToolTip.visible: mouseArea.containsMouse
-                            ToolTip.delay: 350
-                            ToolTip.timeout: 2200
-                            ToolTip.text: railTool.modelData.label
+                            label: modelData.label
+                            iconName: modelData.icon
+                            active: railActive
+                            accent: theme.polar
+                            onTriggered: activateRailMode(modelData.mode)
                         }
                     }
 
@@ -2058,7 +2995,9 @@ Rectangle {
                                 color: theme.textFaint
                                 font.family: theme.fontMono
                                 font.pixelSize: 8
-                                elide: Text.ElideRight
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 6
+                                elide: Text.ElideNone
                             }
                         }
                     }
@@ -2089,53 +3028,22 @@ Rectangle {
                                 { "label": inspectorCollapsed ? "SHOW INSPECTOR" : "HIDE INSPECTOR", "icon": "adjust", "action": "inspector", "active": !inspectorCollapsed }
                             ]
 
-                            delegate: Rectangle {
+                            delegate: EditLayoutToggleRow {
                                 required property var modelData
 
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 26
-                                radius: 0
-                                color: layoutMouse.containsMouse ? theme.alpha(theme.polar, 0.045) : "transparent"
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, layoutMouse.containsMouse ? 0.30 : 0.16)
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.leftMargin: 8
-                                    anchors.rightMargin: 8
-                                    spacing: 8
-
-                                    AppIcon {
-                                        name: modelData.icon
-                                        color: modelData.active ? theme.textMain : theme.textMuted
-                                        Layout.preferredWidth: 12
-                                        Layout.preferredHeight: 12
-                                    }
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: modelData.label
-                                        color: modelData.active ? theme.textStrong : theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
-                                        font.letterSpacing: 0.55
-                                        elide: Text.ElideRight
-                                    }
-                                }
-
-                                MouseArea {
-                                    id: layoutMouse
-                                    anchors.fill: parent
-                                    hoverEnabled: true
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: {
-                                        if (modelData.action === "wide")
-                                            inspectorWide = !inspectorWide
-                                        else if (modelData.action === "filmstrip")
-                                            filmstripCollapsed = !filmstripCollapsed
-                                        else if (modelData.action === "inspector")
-                                            inspectorCollapsed = !inspectorCollapsed
-                                    }
+                                Layout.preferredHeight: 28
+                                label: modelData.label
+                                iconName: modelData.icon
+                                actionKey: modelData.action
+                                active: modelData.active
+                                onTriggered: function(actionKey) {
+                                    if (actionKey === "wide")
+                                        inspectorWide = !inspectorWide
+                                    else if (actionKey === "filmstrip")
+                                        filmstripCollapsed = !filmstripCollapsed
+                                    else if (actionKey === "inspector")
+                                        inspectorCollapsed = !inspectorCollapsed
                                 }
                             }
                         }
@@ -2192,7 +3100,9 @@ Rectangle {
                                         font.family: theme.fontMono
                                         font.pixelSize: 9
                                         font.letterSpacing: 0.35
-                                        elide: Text.ElideRight
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 7
+                                        elide: Text.ElideNone
                                     }
 
                                     Label {
@@ -2262,7 +3172,9 @@ Rectangle {
                                     color: theme.textMain
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
-                                    elide: Text.ElideRight
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 8
+                                    elide: Text.ElideNone
                                 }
 
                                 Label {
@@ -2353,7 +3265,9 @@ Rectangle {
                                         color: modelData.active ? theme.textStrong : theme.textMain
                                         font.family: theme.fontUi
                                         font.pixelSize: 11
-                                        elide: Text.ElideRight
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 8
+                                        elide: Text.ElideNone
                                     }
 
                                     AppIcon {
@@ -2415,6 +3329,7 @@ Rectangle {
 
                 Rectangle {
                     id: previewSurface
+                    objectName: "editImageViewport"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: 0
@@ -2423,16 +3338,15 @@ Rectangle {
                     border.color: theme.alpha(theme.lineSoft, 0.34)
                     clip: true
                     onWidthChanged: {
-                        updatePreviewTargetEdge()
-                        updatePreviewViewport()
+                        schedulePreviewViewportUpdate(true)
                     }
                     onHeightChanged: {
-                        updatePreviewTargetEdge()
-                        updatePreviewViewport()
+                        schedulePreviewViewportUpdate(true)
                     }
 
                     Flickable {
                         id: canvasToolbar
+                        objectName: "maskToolRail"
                         anchors.top: parent.top
                         anchors.left: parent.left
                         anchors.right: parent.right
@@ -2529,6 +3443,7 @@ Rectangle {
                         }
 
                         Rectangle {
+                            objectName: "brushToolHud"
                             width: brushToolColumn.implicitWidth + 16
                             height: brushToolColumn.implicitHeight + 10
                             radius: theme.radius8
@@ -2556,6 +3471,7 @@ Rectangle {
                                     spacing: 4
 
                                     ActionButton {
+                                        objectName: "maskSourceBrushAddButton"
                                         compact: true
                                         text: "Add"
                                         iconName: "brush-tool"
@@ -2622,6 +3538,13 @@ Rectangle {
                                     }
                                 }
                             }
+                        }
+
+                        Item {
+                            objectName: "brushContextPanel"
+                            width: 1
+                            height: 1
+                            visible: root.brushToolReady()
                         }
 
                         Rectangle {
@@ -3041,6 +3964,7 @@ Rectangle {
                     }
 
                     MaskCanvasOverlay {
+                        objectName: "editImageViewportMaskCanvasOverlay"
                         anchors.fill: parent
                         visible: fitToView &&
                                  (inspectorMode === "masks" || objectPickArmed || polygonDrawArmed || lassoDrawArmed || cloneSourcePickArmed) &&
@@ -3098,10 +4022,10 @@ Rectangle {
                     contentHeight: zoomPreviewContent.height
                     onContentWidthChanged: clampPanPosition()
                     onContentHeightChanged: clampPanPosition()
-                    onContentXChanged: updatePreviewViewport()
-                    onContentYChanged: updatePreviewViewport()
-                    onWidthChanged: updatePreviewViewport()
-                    onHeightChanged: updatePreviewViewport()
+                    onContentXChanged: schedulePreviewViewportUpdate(false)
+                    onContentYChanged: schedulePreviewViewportUpdate(false)
+                    onWidthChanged: schedulePreviewViewportUpdate(false)
+                    onHeightChanged: schedulePreviewViewportUpdate(false)
 
                     Item {
                         id: zoomPreviewContent
@@ -3277,6 +4201,7 @@ Rectangle {
                         }
 
                         MaskCanvasOverlay {
+                            objectName: "editImageViewportMaskCanvasOverlay"
                             anchors.fill: parent
                             visible: !fitToView &&
                                      (inspectorMode === "masks" || objectPickArmed || polygonDrawArmed || lassoDrawArmed || cloneSourcePickArmed) &&
@@ -3306,8 +4231,9 @@ Rectangle {
                             return;
 
                         const zoomFactor = delta > 0 ? 1.05 : (1 / 1.05);
-                        const pivot = event.position || Qt.point(previewSurface.width / 2, previewSurface.height / 2);
-                        setZoomLevel(currentZoomLevel() * zoomFactor, pivot.x, pivot.y);
+                        const surfacePivot = event.position || Qt.point(previewSurface.width / 2, previewSurface.height / 2);
+                        const viewportPivot = previewSurface.mapToItem(zoomPreviewFlick, surfacePivot.x, surfacePivot.y);
+                        setZoomLevel(currentZoomLevel() * zoomFactor, viewportPivot.x, viewportPivot.y);
                         event.accepted = true;
                     }
                 }
@@ -3430,7 +4356,9 @@ Rectangle {
                             font.family: theme.fontMono
                             font.pixelSize: 12
                             font.letterSpacing: 0.3
-                            elide: Text.ElideRight
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 8
+                            elide: Text.ElideNone
                         }
 
                         ActionButton {
@@ -3506,7 +4434,7 @@ Rectangle {
                                     tooltipText: editorPreview.hasReferenceImage
                                                  ? ("Reference: " + editorPreview.referenceImageName)
                                                  : "Choose reference image"
-                                    onClicked: referenceImageDialog.open()
+                                    onClicked: openReferenceImageDialog()
                                 }
 
                                 ActionButton {
@@ -3599,76 +4527,23 @@ Rectangle {
                             onCountChanged: updateVisibleAssetRange()
                             onVisibleChanged: updateVisibleAssetRange()
 
-                            delegate: Rectangle {
+                            delegate: EditFilmstripThumb {
                                 required property int index
                                 required property string assetId
                                 required property string thumbnailSource
 
-                                readonly property bool isCurrent: catalogAssets.selectedIndex === index
-                                readonly property bool isInSelection: catalogAssets.assetSelected(assetId)
-
                                 width: filmstripHolder.thumbOuterWidth
                                 height: filmstripView.height
-                                radius: 0
-                                color: isCurrent
-                                       ? theme.alpha(theme.ink750, 0.7)
-                                       : "transparent"
-                                border.width: isCurrent ? 1 : 0
-                                border.color: isCurrent ? theme.alpha(theme.polar, 0.50) : "transparent"
-
-                                Rectangle {
-                                    anchors.fill: parent
-                                    anchors.margins: 1
-                                    radius: 0
-                                    visible: isCurrent
-                                    color: theme.alpha(theme.polar, 0.045)
-                                }
-
-                                Rectangle {
-                                    width: filmstripHolder.thumbWidth
-                                    height: filmstripHolder.thumbHeight
-                                    anchors.centerIn: parent
-                                    radius: 0
-                                    color: theme.ink950
-                                    clip: true
-
-                                    Image {
-                                        anchors.fill: parent
-                                        source: thumbnailSource
-                                        fillMode: Image.PreserveAspectCrop
-                                        asynchronous: true
-                                        cache: true
-                                        visible: thumbnailSource.length > 0
-                                    }
-
-                                    Rectangle {
-                                        anchors.fill: parent
-                                        color: theme.ink800
-                                        visible: thumbnailSource.length === 0
-                                    }
-                                }
-
-                                Rectangle {
-                                    anchors.left: parent.left
-                                    anchors.right: parent.right
-                                    anchors.bottom: parent.bottom
-                                    anchors.leftMargin: 6
-                                    anchors.rightMargin: 6
-                                    anchors.bottomMargin: 2
-                                    height: 1
-                                    radius: 1
-                                    visible: isCurrent
-                                    color: theme.alpha(theme.polar, 0.78)
-                                }
-
-                                MouseArea {
-                                    anchors.fill: parent
-                                    onClicked: function(mouse) {
-                                        if (mouse.modifiers & (Qt.ControlModifier | Qt.MetaModifier))
-                                            catalogAssets.toggleSelectionIndex(index)
-                                        else
-                                            catalogAssets.selectIndex(index)
-                                    }
+                                assetIndex: index
+                                thumbnailWidth: filmstripHolder.thumbWidth
+                                thumbnailHeight: filmstripHolder.thumbHeight
+                                current: catalogAssets.selectedIndex === index
+                                selected: catalogAssets.assetSelected(assetId)
+                                onActivated: function(assetIndex, modifiers) {
+                                    if (modifiers & (Qt.ControlModifier | Qt.MetaModifier))
+                                        catalogAssets.toggleSelectionIndex(assetIndex)
+                                    else
+                                        catalogAssets.selectIndex(assetIndex)
                                 }
                             }
 
@@ -3869,8 +4744,11 @@ Rectangle {
                                         color: modelData.color
                                     }
 
-                                    Slider {
+                                    ToolValueSlider {
                                         Layout.fillWidth: true
+                                        label: modelData.name + " luminance"
+                                        valueText: modelData.name === editorPreview.hslChannel ? (editorPreview.luminanceAdjustment / 100).toFixed(2) : "0.00"
+                                        tooltipText: modelData.name + " luminance adjustment"
                                         from: -100
                                         to: 100
                                         value: modelData.name === editorPreview.hslChannel ? editorPreview.luminanceAdjustment : 0
@@ -3979,47 +4857,18 @@ Rectangle {
                                     { "key": "info", "label": "INFO" }
                                 ]
 
-                                delegate: Rectangle {
-                                    id: inspectorTabButton
-
+                                delegate: EditInspectorTabButton {
                                     required property var modelData
-                                    readonly property bool active: inspectorTab === modelData.key
 
-                                    Layout.preferredWidth: Math.max(54, tabText.implicitWidth + 18)
+                                    Layout.preferredWidth: implicitWidth
                                     Layout.preferredHeight: 26
-                                    color: mouseArea.containsMouse || active ? theme.alpha(theme.polar, active ? 0.055 : 0.035) : "transparent"
-                                    border.width: 0
-                                    border.color: "transparent"
-
-                                    Label {
-                                        id: tabText
-                                        anchors.centerIn: parent
-                                        text: inspectorTabButton.modelData.label
-                                        color: inspectorTabButton.active ? theme.textStrong : (mouseArea.containsMouse ? theme.textMain : theme.textMuted)
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 10
-                                        font.weight: inspectorTabButton.active ? Font.DemiBold : Font.Normal
-                                        font.letterSpacing: 1.0
-                                    }
-
-                                    Rectangle {
-                                        anchors.left: parent.left
-                                        anchors.right: parent.right
-                                        anchors.bottom: parent.bottom
-                                        height: 2
-                                        visible: inspectorTabButton.active
-                                        color: theme.polar
-                                    }
-
-                                    MouseArea {
-                                        id: mouseArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            inspectorTab = inspectorTabButton.modelData.key
-                                            inspectorMode = inspectorTabButton.modelData.key === "masks" ? "masks" : "adjust"
-                                        }
+                                    label: modelData.label
+                                    tabKey: modelData.key
+                                    selected: inspectorTab === modelData.key
+                                    accent: theme.polar
+                                    onSelectedRequested: function(tabKey) {
+                                        inspectorTab = tabKey
+                                        inspectorMode = tabKey === "masks" ? "masks" : "adjust"
                                     }
                                 }
                             }
@@ -4084,7 +4933,7 @@ Rectangle {
                                              : "Choose reference image"
                                 font.pixelSize: 10
                                 implicitHeight: 24
-                                onClicked: referenceImageDialog.open()
+                                onClicked: openReferenceImageDialog()
                             }
 
                             ActionButton {
@@ -4334,6 +5183,60 @@ Rectangle {
                                         }
                                     }
 
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 5
+                                        visible: activeAgentModelIsOllama()
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 6
+
+                                            Label {
+                                                objectName: "agentOllamaInstallCommandLabel"
+                                                Layout.fillWidth: true
+                                                text: agentModelInstallCommandText()
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WrapAnywhere
+                                                maximumLineCount: 2
+                                                elide: Text.ElideNone
+                                            }
+
+                                            ActionButton {
+                                                objectName: "agentOllamaProbeButton"
+                                                text: "Test"
+                                                iconName: "check"
+                                                tone: "secondary"
+                                                enabled: activeAgentModelIsOllama() && !root.agentEditController.running && !root.agentEditController.modelInstallRunning
+                                                onClicked: updateAgentModelSetupMessage(root.agentEditController.probeSelectedModel())
+                                            }
+
+                                            ActionButton {
+                                                objectName: "agentOllamaPullButton"
+                                                text: root.agentEditController.modelInstallRunning ? "Pulling" : "Pull"
+                                                iconName: "download"
+                                                tone: "secondary"
+                                                enabled: activeAgentModelIsOllama() && !root.agentEditController.running && !root.agentEditController.modelInstallRunning
+                                                onClicked: updateAgentModelSetupMessage(root.agentEditController.installSelectedModel(true))
+                                            }
+                                        }
+
+                                        Label {
+                                            objectName: "agentOllamaInstallStatusLabel"
+                                            Layout.fillWidth: true
+                                            visible: agentModelSetupMessage.length > 0 || root.agentEditController.modelInstallStatus !== "Idle"
+                                            text: agentModelSetupMessage.length > 0 ? agentModelSetupMessage : root.agentEditController.modelInstallStatus
+                                            color: root.agentEditController.modelInstallStatus === "Install failed" ? theme.error : theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 9
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
@@ -4394,9 +5297,19 @@ Rectangle {
                         width: inspectorScroll.availableWidth
                         spacing: 10
 
+                        Loader {
+                            width: parent.width
+                            active: inspectorMode === "adjust" && inspectorTab === "agent"
+                            visible: active
+                            sourceComponent: agentPanelComponent
+                        }
+
+                        Component {
+                            id: agentPanelComponent
+
                         Rectangle {
                             width: parent.width
-                            visible: inspectorMode === "adjust" && inspectorTab === "agent"
+                            visible: true
                             radius: 0
                             color: theme.alpha(theme.ink950, 0.34)
                             border.width: 1
@@ -4412,32 +5325,39 @@ Rectangle {
                                 InspectorSection {
                                     Layout.fillWidth: true
                                     title: "Agent Run"
-                                    subtitle: agentEdit.status
+                                    subtitle: root.agentEditController.status
 
-                                    Flow {
+                                    GridLayout {
+                                        objectName: "editAgentStyleChooser"
                                         Layout.fillWidth: true
-                                        spacing: 5
+                                        visible: agentDetailsExpanded
+                                        columns: width >= 500 ? 2 : 1
+                                        columnSpacing: 6
+                                        rowSpacing: 6
 
                                         Repeater {
-                                            model: agentEdit.availableStyles
+                                            model: root.agentEditController.availableStyles
 
-                                            delegate: ActionButton {
+                                            delegate: AgentStyleTile {
                                                 required property var modelData
 
-                                                text: modelData.name || modelData.id
-                                                compact: true
-                                                active: agentEdit.selectedStyleId === modelData.id
-                                                onClicked: agentEdit.selectedStyleId = modelData.id
+                                                styleData: modelData
+                                                selected: root.agentEditController.selectedStyleId === String(modelData.id || "")
+                                                tileEnabled: !root.agentEditController.running
+                                                onSelectedRequested: function(styleId) {
+                                                    root.agentEditController.selectedStyleId = styleId
+                                                }
                                             }
                                         }
                                     }
 
                                     Label {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         text: {
-                                            for (let index = 0; index < agentEdit.availableStyles.length; ++index) {
-                                                const style = agentEdit.availableStyles[index]
-                                                if (style.id === agentEdit.selectedStyleId)
+                                            for (let index = 0; index < root.agentEditController.availableStyles.length; ++index) {
+                                                const style = root.agentEditController.availableStyles[index]
+                                                if (style.id === root.agentEditController.selectedStyleId)
                                                     return style.goal || ""
                                             }
                                             return ""
@@ -4448,12 +5368,26 @@ Rectangle {
                                         wrapMode: Text.WordWrap
                                     }
 
+                                    Label {
+                                        objectName: "editAgentStyleChangeSummaryLabel"
+                                        Layout.fillWidth: true
+                                        visible: agentLatestStyleChangeSummary().length > 0
+                                        text: agentLatestStyleChangeSummary()
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 10
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        maximumLineCount: 3
+                                        elide: Text.ElideNone
+                                    }
+
                                     ActionButton {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         text: agentStyleBuilderExpanded ? "Hide Style Builder" : "Create Style"
                                         iconName: "plus"
                                         compact: true
-                                        enabled: !agentEdit.running
+                                        enabled: !root.agentEditController.running
                                         onClicked: agentStyleBuilderExpanded = !agentStyleBuilderExpanded
                                     }
 
@@ -4466,7 +5400,7 @@ Rectangle {
                                             Layout.fillWidth: true
                                             text: agentStyleDraftName
                                             placeholderText: "Style name"
-                                            enabled: !agentEdit.running
+                                            enabled: !root.agentEditController.running
                                             onTextEdited: agentStyleDraftName = text
                                         }
 
@@ -4476,7 +5410,7 @@ Rectangle {
                                             text: agentStyleDraftGoal
                                             placeholderText: "Editing outcome, taste rules, and constraints"
                                             wrapMode: TextEdit.WordWrap
-                                            enabled: !agentEdit.running
+                                            enabled: !root.agentEditController.running
                                             color: theme.textStrong
                                             selectedTextColor: theme.ink950
                                             selectionColor: theme.focusRing
@@ -4496,27 +5430,171 @@ Rectangle {
 
                                         Label {
                                             Layout.fillWidth: true
-                                            text: "Allowed tools"
+                                            objectName: "agentPermissionModeLabel"
+                                            text: "Permission mode"
                                             color: theme.textMuted
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
                                         }
 
                                         Flow {
+                                            objectName: "agentPermissionModeChooser"
                                             Layout.fillWidth: true
                                             spacing: 6
 
-                                            CheckBox { text: "RAW"; checked: agentStyleAllowRaw; enabled: !agentEdit.running; onToggled: agentStyleAllowRaw = checked }
-                                            CheckBox { text: "Tone/Color"; checked: agentStyleAllowGlobalColor; enabled: !agentEdit.running; onToggled: agentStyleAllowGlobalColor = checked }
-                                            CheckBox { text: "Curves"; checked: agentStyleAllowCurves; enabled: !agentEdit.running; onToggled: agentStyleAllowCurves = checked }
-                                            CheckBox { text: "HSL"; checked: agentStyleAllowHsl; enabled: !agentEdit.running; onToggled: agentStyleAllowHsl = checked }
-                                            CheckBox { text: "Grading"; checked: agentStyleAllowColorGrading; enabled: !agentEdit.running; onToggled: agentStyleAllowColorGrading = checked }
-                                            CheckBox { text: "Detail"; checked: agentStyleAllowDetail; enabled: !agentEdit.running; onToggled: agentStyleAllowDetail = checked }
-                                            CheckBox { text: "Crop"; checked: agentStyleAllowCrop; enabled: !agentEdit.running; onToggled: agentStyleAllowCrop = checked }
-                                            CheckBox { text: "Masks"; checked: agentStyleAllowMasks; enabled: !agentEdit.running; onToggled: agentStyleAllowMasks = checked }
-                                            CheckBox { text: "Retouch"; checked: agentStyleAllowRetouch; enabled: !agentEdit.running; onToggled: agentStyleAllowRetouch = checked }
-                                            CheckBox { text: "Layers/LUTs"; checked: agentStyleAllowLayersLuts; enabled: !agentEdit.running; onToggled: agentStyleAllowLayersLuts = checked }
-                                            CheckBox { text: "Export"; checked: agentStyleAllowExport; enabled: !agentEdit.running; onToggled: agentStyleAllowExport = checked }
+                                            AgentPermissionModeButton {
+                                                objectName: "agentPermissionModeConservativeButton"
+                                                mode: "conservative"
+                                                selectedMode: agentStylePermissionMode
+                                                text: "Conservative"
+                                                helperText: "Use global tone, color, detail, and conservative crop permissions."
+                                                enabled: !root.agentEditController.running
+                                                onModeSelected: function(mode) { setAgentStylePermissionMode(mode) }
+                                            }
+
+                                            AgentPermissionModeButton {
+                                                objectName: "agentPermissionModeBalancedButton"
+                                                mode: "balanced"
+                                                selectedMode: agentStylePermissionMode
+                                                text: "Balanced"
+                                                helperText: "Allow global edits, crop, and local masks while keeping retouch off."
+                                                enabled: !root.agentEditController.running
+                                                onModeSelected: function(mode) { setAgentStylePermissionMode(mode) }
+                                            }
+
+                                            AgentPermissionModeButton {
+                                                objectName: "agentPermissionModeFullEditButton"
+                                                mode: "full_edit"
+                                                selectedMode: agentStylePermissionMode
+                                                text: "Full edit"
+                                                helperText: "Allow global edits, masks, layers, and LUTs while keeping retouch off."
+                                                enabled: !root.agentEditController.running
+                                                onModeSelected: function(mode) { setAgentStylePermissionMode(mode) }
+                                            }
+
+                                            AgentPermissionModeButton {
+                                                objectName: "agentPermissionModeFullEditRetouchButton"
+                                                mode: "full_edit_retouch"
+                                                selectedMode: agentStylePermissionMode
+                                                text: "Full edit + retouch"
+                                                helperText: "Allow the full edit toolset, including local masks and minor retouch."
+                                                enabled: !root.agentEditController.running
+                                                onModeSelected: function(mode) { setAgentStylePermissionMode(mode) }
+                                            }
+                                        }
+
+                                        Label {
+                                            objectName: "agentPermissionModeSummaryLabel"
+                                            Layout.fillWidth: true
+                                            text: agentStylePermissionSummary()
+                                            color: theme.textMuted
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            visible: agentDetailsExpanded
+                                            text: "Exact tool permissions"
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+
+                                        Flow {
+                                            objectName: "agentExactToolPermissions"
+                                            Layout.fillWidth: true
+                                            visible: agentDetailsExpanded
+                                            spacing: 6
+
+                                            AgentToolPermissionToggle {
+                                                label: "RAW"
+                                                checked: agentStyleAllowRaw
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow RAW-aware decode and camera-profile decisions."
+                                                onToggled: function(checked) { agentStyleAllowRaw = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Tone/Color"
+                                                checked: agentStyleAllowGlobalColor
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow global exposure, contrast, white balance, and color edits."
+                                                onToggled: function(checked) { agentStyleAllowGlobalColor = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Curves"
+                                                checked: agentStyleAllowCurves
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow tone-curve shaping."
+                                                onToggled: function(checked) { agentStyleAllowCurves = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "HSL"
+                                                checked: agentStyleAllowHsl
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow hue, saturation, and luminance channel edits."
+                                                onToggled: function(checked) { agentStyleAllowHsl = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Grading"
+                                                checked: agentStyleAllowColorGrading
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow shadows, midtones, and highlights color grading."
+                                                onToggled: function(checked) { agentStyleAllowColorGrading = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Detail"
+                                                checked: agentStyleAllowDetail
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow sharpening, noise, clarity, and texture decisions."
+                                                onToggled: function(checked) { agentStyleAllowDetail = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Crop"
+                                                checked: agentStyleAllowCrop
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow conservative crop and straighten changes."
+                                                onToggled: function(checked) { agentStyleAllowCrop = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Masks"
+                                                checked: agentStyleAllowMasks
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow local masks and targeted adjustments."
+                                                onToggled: function(checked) { agentStyleAllowMasks = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Retouch"
+                                                checked: agentStyleAllowRetouch
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow minor cleanup and retouch actions."
+                                                onToggled: function(checked) { agentStyleAllowRetouch = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Layers/LUTs"
+                                                checked: agentStyleAllowLayersLuts
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow layer and LUT-based look construction."
+                                                onToggled: function(checked) { agentStyleAllowLayersLuts = checked }
+                                            }
+
+                                            AgentToolPermissionToggle {
+                                                label: "Export"
+                                                checked: agentStyleAllowExport
+                                                toggleEnabled: !root.agentEditController.running
+                                                helperText: "Allow export setting decisions."
+                                                onToggled: function(checked) { agentStyleAllowExport = checked }
+                                            }
                                         }
 
                                         GridLayout {
@@ -4529,35 +5607,35 @@ Rectangle {
                                                 Layout.fillWidth: true
                                                 text: agentStyleMaxExposureShift
                                                 placeholderText: "Max exposure shift"
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onTextEdited: agentStyleMaxExposureShift = text
                                             }
                                             ToneTextField {
                                                 Layout.fillWidth: true
                                                 text: agentStyleMaxSaturationShift
                                                 placeholderText: "Max saturation shift"
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onTextEdited: agentStyleMaxSaturationShift = text
                                             }
                                             ToneTextField {
                                                 Layout.fillWidth: true
                                                 text: agentStyleMaxTemperatureShift
                                                 placeholderText: "Max temperature shift"
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onTextEdited: agentStyleMaxTemperatureShift = text
                                             }
                                             ToneTextField {
                                                 Layout.fillWidth: true
                                                 text: agentStyleHighlightClipLimit
                                                 placeholderText: "Highlight clip %"
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onTextEdited: agentStyleHighlightClipLimit = text
                                             }
                                             ToneTextField {
                                                 Layout.fillWidth: true
                                                 text: agentStyleShadowClipLimit
                                                 placeholderText: "Shadow clip %"
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onTextEdited: agentStyleShadowClipLimit = text
                                             }
                                             ActionButton {
@@ -4565,7 +5643,7 @@ Rectangle {
                                                 text: "Save Style"
                                                 iconName: "save"
                                                 tone: "primary"
-                                                enabled: !agentEdit.running &&
+                                                enabled: !root.agentEditController.running &&
                                                          agentStyleDraftName.trim().length > 0 &&
                                                          agentStyleDraftGoal.trim().length > 0
                                                 onClicked: createAgentStyleFromDraft()
@@ -4585,90 +5663,37 @@ Rectangle {
 
                                     ToneComboBox {
                                         Layout.fillWidth: true
-                                        model: agentEdit.availableModelNames
-                                        enabled: agentEdit.availableModelNames.length > 0 && !agentEdit.running
+                                        visible: agentDetailsExpanded
+                                        model: root.agentEditController.availableModelNames
+                                        enabled: root.agentEditController.availableModelNames.length > 0 && !root.agentEditController.running
                                         currentIndex: agentSelectedModelIndex()
                                         onActivated: function(index) {
-                                            const modelInfo = agentEdit.availableModels[index]
+                                            const modelInfo = root.agentEditController.availableModels[index]
                                             if (modelInfo && modelInfo.id !== undefined)
-                                                agentEdit.selectedModelId = modelInfo.id
+                                                root.agentEditController.selectedModelId = modelInfo.id
                                         }
                                     }
 
                                     ColumnLayout {
                                         Layout.fillWidth: true
                                         spacing: 5
-                                        visible: agentEdit.availableModels.length > 0
+                                        visible: agentDetailsExpanded && root.agentEditController.availableModels.length > 0
 
                                         Repeater {
-                                            model: agentEdit.availableModels
+                                            model: root.agentEditController.availableModels
 
-                                            delegate: Rectangle {
+                                            delegate: AgentModelRow {
                                                 required property int index
                                                 required property var modelData
 
                                                 Layout.fillWidth: true
-                                                implicitHeight: modelRowLayout.implicitHeight + 8
-                                                radius: theme.radiusControl
-                                                color: agentEdit.selectedModelId === String(modelData.id || "")
-                                                       ? theme.alpha(theme.focusRing, 0.12)
-                                                       : theme.alpha(theme.ink800, 0.20)
-                                                border.width: 1
-                                                border.color: agentEdit.selectedModelId === String(modelData.id || "")
-                                                              ? theme.alpha(theme.focusRing, 0.36)
-                                                              : theme.alpha(theme.lineSoft, 0.20)
-
-                                                RowLayout {
-                                                    id: modelRowLayout
-                                                    anchors.fill: parent
-                                                    anchors.margins: 4
-                                                    spacing: 6
-
-                                                    Rectangle {
-                                                        Layout.preferredWidth: 7
-                                                        Layout.preferredHeight: 7
-                                                        radius: 4
-                                                        color: agentModelStatusColor(modelData)
-                                                    }
-
-                                                    ColumnLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 1
-
-                                                        Label {
-                                                            Layout.fillWidth: true
-                                                            text: String(modelData.name || modelData.id || "Local model")
-                                                            color: theme.textStrong
-                                                            font.family: theme.fontUi
-                                                            font.pixelSize: 11
-                                                            elide: Text.ElideRight
-                                                        }
-
-                                                        Label {
-                                                            Layout.fillWidth: true
-                                                            text: agentModelDetailText(modelData)
-                                                            color: theme.textMuted
-                                                            font.family: theme.fontMono
-                                                            font.pixelSize: 9
-                                                            elide: Text.ElideRight
-                                                        }
-                                                    }
-
-                                                    Label {
-                                                        Layout.preferredWidth: 82
-                                                        text: agentModelStatusLabel(modelData)
-                                                        color: agentModelStatusColor(modelData)
-                                                        font.family: theme.fontMono
-                                                        font.pixelSize: 9
-                                                        horizontalAlignment: Text.AlignRight
-                                                        elide: Text.ElideRight
-                                                    }
-                                                }
-
-                                                MouseArea {
-                                                    anchors.fill: parent
-                                                    enabled: !agentEdit.running && String(modelData.id || "").length > 0
-                                                    onClicked: agentEdit.selectedModelId = String(modelData.id || "")
+                                                selected: root.agentEditController.selectedModelId === String(modelData.id || "")
+                                                commandEnabled: !root.agentEditController.running
+                                                detailText: agentModelDetailText(modelData)
+                                                statusText: agentModelStatusLabel(modelData)
+                                                statusColor: agentModelStatusColor(modelData)
+                                                onSelectedRequested: function(modelId) {
+                                                    root.agentEditController.selectedModelId = modelId
                                                 }
                                             }
                                         }
@@ -4676,6 +5701,7 @@ Rectangle {
 
                                     RowLayout {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         spacing: 6
 
                                         Label {
@@ -4684,7 +5710,9 @@ Rectangle {
                                             color: theme.textMuted
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
-                                            elide: Text.ElideMiddle
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
                                         }
 
                                         Label {
@@ -4702,17 +5730,269 @@ Rectangle {
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
                                             horizontalAlignment: Text.AlignRight
-                                            elide: Text.ElideRight
+                                            fontSizeMode: Text.HorizontalFit
+                                            minimumPixelSize: 7
+                                            elide: Text.ElideNone
                                         }
+                                    }
+
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
+                                        spacing: 6
+
+                                        Label {
+                                            objectName: "editAgentMcpStatusLabel"
+                                            Layout.fillWidth: true
+                                            text: agentMcpStatusText()
+                                            color: agentMcpStatusColor()
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
+                                        }
+
+                                        Label {
+                                            objectName: "editAgentMcpEndpointLabel"
+                                            Layout.fillWidth: true
+                                            text: String(root.agentEditController.mcpEndpoint || "")
+                                            color: theme.textMuted
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                            horizontalAlignment: Text.AlignRight
+                                            wrapMode: Text.WrapAnywhere
+                                            maximumLineCount: 2
+                                            elide: Text.ElideNone
+                                        }
+                                    }
+
+                                    Label {
+                                        objectName: "editAgentMcpTelemetryLabel"
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded && agentMcpTelemetryText().length > 0
+                                        text: agentMcpTelemetryText()
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAnywhere
+                                        maximumLineCount: 2
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Label {
+                                        objectName: "editAgentMemoryVaultLabel"
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
+                                        text: agentMemoryVaultText()
+                                        color: theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAnywhere
+                                        maximumLineCount: 3
+                                        elide: Text.ElideNone
+                                    }
+
+                                    GridLayout {
+                                        objectName: "editAgentMemoryVaultActions"
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
+                                        columns: width >= 520 ? 4 : (width >= 300 ? 2 : 1)
+                                        columnSpacing: 6
+                                        rowSpacing: 6
+
+                                        ActionButton {
+                                            objectName: "editAgentOpenMemoryVaultButton"
+                                            Layout.fillWidth: true
+                                            text: "Open Vault"
+                                            iconName: "folder"
+                                            compact: true
+                                            enabled: root.hasAgentEditController
+                                            tooltipText: "Open the local Markdown agent memory vault."
+                                            onClicked: openAgentMemoryVault()
+                                        }
+
+                                        ActionButton {
+                                            objectName: "editAgentOpenMemoryVaultInObsidianButton"
+                                            Layout.fillWidth: true
+                                            text: "Open Obsidian"
+                                            iconName: "external-link"
+                                            compact: true
+                                            enabled: root.hasAgentEditController
+                                            tooltipText: "Open the local Markdown vault in Obsidian, falling back to the folder if needed."
+                                            onClicked: openAgentMemoryVaultInObsidian()
+                                        }
+
+                                        ActionButton {
+                                            objectName: "editAgentExportMemoryVaultButton"
+                                            Layout.fillWidth: true
+                                            text: "Export Copy"
+                                            iconName: "export"
+                                            compact: true
+                                            enabled: root.hasAgentEditController
+                                            tooltipText: "Create a redacted copy of the local agent memory vault."
+                                            onClicked: exportAgentMemoryVault()
+                                        }
+
+                                        ActionButton {
+                                            objectName: "editAgentResetMemoryVaultButton"
+                                            Layout.fillWidth: true
+                                            text: agentMemoryVaultResetArmed ? "Confirm Reset" : "Reset Vault"
+                                            iconName: "reset"
+                                            compact: true
+                                            tone: agentMemoryVaultResetArmed ? "danger" : "secondary"
+                                            enabled: root.hasAgentEditController
+                                            tooltipText: "Clear the local agent memory vault after a second confirmation click."
+                                            onClicked: resetAgentMemoryVaultFromDetails()
+                                        }
+                                    }
+
+                                    Label {
+                                        objectName: "editAgentMemoryVaultActionLabel"
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded && agentMemoryVaultMessage.length > 0
+                                        text: agentMemoryVaultMessage
+                                        color: agentMemoryVaultResetArmed ? theme.warning : theme.textMuted
+                                        font.family: theme.fontMono
+                                        font.pixelSize: 9
+                                        wrapMode: Text.WrapAnywhere
+                                        maximumLineCount: 3
+                                        elide: Text.ElideNone
+                                    }
+
+                                    Rectangle {
+                                        objectName: "agentWorkflowStatePanel"
+                                        Layout.fillWidth: true
+                                        implicitHeight: agentWorkflowStateColumn.implicitHeight + 16
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.glassBase, 0.44)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.glassEdge, 0.28)
+
+                                        ColumnLayout {
+                                            id: agentWorkflowStateColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 5
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    objectName: "agentWorkflowStatusLabel"
+                                                    Layout.fillWidth: true
+                                                    text: String(agentWorkflowState().statusLine || "AI Edit")
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 12
+                                                    font.weight: Font.DemiBold
+                                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideNone
+                                                }
+
+                                                Label {
+                                                    objectName: "agentWorkflowScopeLabel"
+                                                    Layout.preferredWidth: 118
+                                                    text: String(agentWorkflowState().scopeLabel || "")
+                                                    color: theme.focusRing
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    horizontalAlignment: Text.AlignRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
+                                                }
+                                            }
+
+                                            Label {
+                                                objectName: "agentWorkflowDetailLabel"
+                                                Layout.fillWidth: true
+                                                text: agentWorkflowDetailText()
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                maximumLineCount: 2
+                                                elide: Text.ElideNone
+                                            }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        objectName: "agentTasteCard"
+                                        Layout.fillWidth: true
+                                        visible: agentTasteCardVisible()
+                                        implicitHeight: agentTasteCardColumn.implicitHeight + 16
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.28)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.focusRing, 0.30)
+
+                                        ColumnLayout {
+                                            id: agentTasteCardColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 8
+                                            spacing: 4
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 7
+
+                                                AppIcon {
+                                                    Layout.preferredWidth: 14
+                                                    Layout.preferredHeight: 14
+                                                    name: "star"
+                                                    color: theme.focusRing
+                                                }
+
+                                                Label {
+                                                    objectName: "agentTasteCardTitle"
+                                                    Layout.fillWidth: true
+                                                    text: agentTasteCardTitle()
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideNone
+                                                    clip: true
+                                                }
+                                            }
+
+                                            Label {
+                                                objectName: "agentTasteCardSummary"
+                                                Layout.fillWidth: true
+                                                text: agentTasteCardText()
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                maximumLineCount: 3
+                                                elide: Text.ElideNone
+                                            }
+                                        }
+                                    }
+
+                                    ActionButton {
+                                        objectName: "agentDetailsToggleButton"
+                                        Layout.fillWidth: true
+                                        text: agentDetailsExpanded ? "Hide Details" : "Show Details"
+                                        iconName: agentDetailsExpanded ? "chevron-right" : "menu"
+                                        compact: true
+                                        enabled: !root.agentEditController.running
+                                        onClicked: agentDetailsExpanded = !agentDetailsExpanded
                                     }
 
                                     TextArea {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 86
-                                        text: agentEdit.userInstructions
+                                        text: root.agentEditController.userInstructions
                                         placeholderText: "Style notes"
                                         wrapMode: TextEdit.WordWrap
-                                        enabled: !agentEdit.running
+                                        enabled: !root.agentEditController.running
                                         color: theme.textStrong
                                         selectedTextColor: theme.ink950
                                         selectionColor: theme.focusRing
@@ -4720,7 +6000,7 @@ Rectangle {
                                         font.pixelSize: 11
                                         onTextChanged: {
                                             if (activeFocus)
-                                                agentEdit.userInstructions = text
+                                                root.agentEditController.userInstructions = text
                                         }
                                         background: Rectangle {
                                             radius: theme.radiusControl
@@ -4730,8 +6010,101 @@ Rectangle {
                                         }
                                     }
 
+                                    Rectangle {
+                                        objectName: "agentPendingInputPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentHasPendingInputSurface()
+                                        implicitHeight: visible ? agentPendingInputColumn.implicitHeight + 14 : 0
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.warning, 0.10)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.warning, 0.34)
+
+                                        ColumnLayout {
+                                            id: agentPendingInputColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 7
+                                            spacing: 7
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: root.agentEditController.awaitingUserInput ? "Agent needs an answer" : "Agent stopped safely"
+                                                color: theme.textStrong
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 11
+                                                font.weight: Font.DemiBold
+                                                wrapMode: Text.WordWrap
+                                            }
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: root.agentEditController.awaitingUserInput
+                                                      ? agentPendingQuestionText()
+                                                      : String(root.agentEditController.safeStopReason || root.agentEditController.lastRunReport.safeStopReason || root.agentEditController.lastRunReport.planSummary || "")
+                                                color: theme.textMain
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WordWrap
+                                            }
+
+                                            TextArea {
+                                                id: agentPendingAnswerText
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 64
+                                                visible: root.agentEditController.awaitingUserInput
+                                                placeholderText: "Answer the agent"
+                                                wrapMode: TextEdit.WordWrap
+                                                enabled: !root.agentEditController.running
+                                                color: theme.textStrong
+                                                selectedTextColor: theme.ink950
+                                                selectionColor: theme.focusRing
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 11
+                                                background: Rectangle {
+                                                    radius: theme.radiusControl
+                                                    color: theme.alpha(theme.glassBase, 0.38)
+                                                    border.width: 1
+                                                    border.color: theme.alpha(theme.glassEdge, 0.24)
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 6
+
+                                                ActionButton {
+                                                    Layout.fillWidth: true
+                                                    text: "Continue"
+                                                    iconName: "check"
+                                                    compact: true
+                                                    tone: "primary"
+                                                    visible: root.agentEditController.awaitingUserInput
+                                                    enabled: !root.agentEditController.running &&
+                                                             agentPendingAnswerText.text.trim().length > 0
+                                                    onClicked: {
+                                                        root.agentEditController.answerPendingUserInput(agentPendingAnswerText.text)
+                                                        agentPendingAnswerText.text = ""
+                                                    }
+                                                }
+
+                                                ActionButton {
+                                                    Layout.fillWidth: true
+                                                    text: "Dismiss"
+                                                    iconName: "close"
+                                                    compact: true
+                                                    enabled: !root.agentEditController.running
+                                                    onClicked: {
+                                                        root.agentEditController.dismissPendingAgentInput()
+                                                        agentPendingAnswerText.text = ""
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     Label {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         text: "Base"
                                         color: theme.textMuted
                                         font.family: theme.fontMono
@@ -4740,6 +6113,7 @@ Rectangle {
 
                                     Flow {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         spacing: 5
 
                                         Repeater {
@@ -4751,15 +6125,16 @@ Rectangle {
                                                 text: agentRecipeBaseModeLabel(modelData)
                                                 iconName: agentRecipeBaseModeIcon(modelData)
                                                 compact: true
-                                                active: agentEdit.recipeBaseMode === modelData
-                                                enabled: !agentEdit.running
-                                                onClicked: agentEdit.recipeBaseMode = modelData
+                                                active: root.agentEditController.recipeBaseMode === modelData
+                                                enabled: !root.agentEditController.running
+                                                onClicked: root.agentEditController.recipeBaseMode = modelData
                                             }
                                         }
                                     }
 
                                     Label {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         text: "Run mode"
                                         color: theme.textMuted
                                         font.family: theme.fontMono
@@ -4768,6 +6143,7 @@ Rectangle {
 
                                     Flow {
                                         Layout.fillWidth: true
+                                        visible: agentDetailsExpanded
                                         spacing: 5
 
                                         Repeater {
@@ -4780,7 +6156,7 @@ Rectangle {
                                                 iconName: agentRunModeIcon(modelData)
                                                 compact: true
                                                 active: agentRunMode === modelData
-                                                enabled: !agentEdit.running
+                                                enabled: !root.agentEditController.running
                                                 onClicked: agentRunMode = modelData
                                             }
                                         }
@@ -4792,19 +6168,77 @@ Rectangle {
 
                                         ActionButton {
                                             Layout.fillWidth: true
-                                            text: "Run " + agentRunModeLabel(agentRunMode)
-                                            iconName: agentRunModeIcon(agentRunMode)
+                                            minimumReadableWidth: 190
+                                            allowLabelWrap: true
+                                            text: agentWorkflowPrimaryLabel()
+                                            iconName: agentWorkflowPrimaryIcon()
                                             tone: "primary"
-                                            enabled: agentCanRunMode(agentRunMode)
-                                            onClicked: runSelectedAgentMode()
+                                            enabled: agentWorkflowPrimaryEnabled()
+                                            onClicked: runAgentWorkflowPrimaryAction()
                                         }
 
                                         ActionButton {
+                                            minimumReadableWidth: 96
                                             text: "Cancel"
                                             iconName: "close"
                                             compact: true
-                                            enabled: agentEdit.running
-                                            onClicked: agentEdit.cancelRun("user_cancelled")
+                                            enabled: root.agentEditController.running
+                                            onClicked: root.agentEditController.cancelRun("user_cancelled")
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        objectName: "editAgentThinkingPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentThinkingVisible()
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.accentWarm400, 0.08)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.accentWarm400, 0.24)
+                                        implicitHeight: editAgentThinkingColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: editAgentThinkingColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 5
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 6
+
+                                                AppIcon {
+                                                    Layout.preferredWidth: 13
+                                                    Layout.preferredHeight: 13
+                                                    name: "info"
+                                                    color: theme.accentWarm400
+                                                }
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Thinking"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 11
+                                                    font.weight: Font.DemiBold
+                                                }
+                                            }
+
+                                            Repeater {
+                                                model: agentThinkingLines()
+
+                                                Label {
+                                                    required property var modelData
+                                                    Layout.fillWidth: true
+                                                    text: modelData
+                                                    color: theme.textMain
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 10
+                                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                    maximumLineCount: 2
+                                                    elide: Text.ElideNone
+                                                }
+                                            }
                                         }
                                     }
 
@@ -4834,15 +6268,19 @@ Rectangle {
                                                     color: theme.textStrong
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 10
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
 
                                                 Label {
-                                                    text: agentEdit.running ? agentEdit.status : "Last run"
-                                                    color: agentEdit.running ? theme.accentCool500 : theme.textMuted
+                                                    text: root.agentEditController.running ? root.agentEditController.status : "Last run"
+                                                    color: root.agentEditController.running ? theme.accentCool500 : theme.textMuted
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 9
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
                                             }
 
@@ -4856,47 +6294,15 @@ Rectangle {
                                                 Repeater {
                                                     model: agentRunStages()
 
-                                                    delegate: Rectangle {
+                                                    delegate: AgentRunStageRow {
                                                         objectName: "agentRunStageRow"
                                                         required property var modelData
                                                         readonly property string stageStatus: agentStageStatus(modelData.key)
 
                                                         Layout.preferredWidth: Math.max(0, (agentRunStageGrid.width - agentRunStageGrid.columnSpacing) / 2)
-                                                        Layout.preferredHeight: 30
-                                                        radius: theme.radiusControl
-                                                        color: theme.alpha(theme.ink900, 0.24)
-                                                        border.width: 1
-                                                        border.color: theme.alpha(agentStageStatusColor(stageStatus), stageStatus === "pending" ? 0.16 : 0.36)
-
-                                                        RowLayout {
-                                                            anchors.fill: parent
-                                                            anchors.margins: 5
-                                                            spacing: 5
-
-                                                            Rectangle {
-                                                                Layout.preferredWidth: 7
-                                                                Layout.preferredHeight: 7
-                                                                radius: 4
-                                                                color: agentStageStatusColor(stageStatus)
-                                                            }
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: modelData.label
-                                                                color: theme.textMain
-                                                                font.family: theme.fontUi
-                                                                font.pixelSize: 9
-                                                                elide: Text.ElideRight
-                                                            }
-
-                                                            Label {
-                                                                text: agentStageStatusLabel(stageStatus)
-                                                                color: agentStageStatusColor(stageStatus)
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 8
-                                                                elide: Text.ElideRight
-                                                            }
-                                                        }
+                                                        label: String(modelData.label || "Stage")
+                                                        statusText: agentStageStatusLabel(stageStatus)
+                                                        statusColor: agentStageStatusColor(stageStatus)
                                                     }
                                                 }
                                             }
@@ -4909,48 +6315,61 @@ Rectangle {
 
                                         ActionButton {
                                             Layout.fillWidth: true
+                                            minimumReadableWidth: 88
                                             text: "Commit"
                                             iconName: "check"
                                             compact: true
-                                            enabled: agentEdit.draftActive && !agentEdit.running
-                                            onClicked: agentEdit.commitDraft(true)
+                                            enabled: root.agentEditController.draftActive && !root.agentEditController.running
+                                            onClicked: root.agentEditController.commitDraft(true)
                                         }
 
                                         ActionButton {
                                             Layout.fillWidth: true
-                                            text: "Revise"
+                                            minimumReadableWidth: 126
+                                            text: agentSampleReviewWaiting() ? "Make Changes" : "Revise"
                                             iconName: "adjust"
                                             compact: true
-                                            enabled: agentEdit.draftActive && !agentEdit.running
-                                            onClicked: agentEdit.runDraftOnSelected(agentEdit.userInstructions)
+                                            enabled: root.agentEditController.draftActive &&
+                                                     !root.agentEditController.running &&
+                                                     (!agentSampleReviewWaiting() ||
+                                                      String(root.agentEditController.userInstructions || "").trim().length > 0)
+                                            onClicked: {
+                                                if (agentSampleReviewWaiting())
+                                                    root.agentEditController.reviseSampleReview(root.agentEditController.userInstructions)
+                                                else
+                                                    root.agentEditController.runDraftOnSelected(root.agentEditController.userInstructions)
+                                            }
                                         }
 
                                         ConfirmActionButton {
                                             Layout.fillWidth: true
-                                            text: "Queue Export"
+                                            minimumReadableWidth: 132
+                                            text: "Start Export"
                                             confirmText: "Confirm Export"
                                             iconName: "export"
                                             compact: true
-                                            enabled: editorPreview.hasAsset && catalogAssets.selectedAssetCount >= 1 && !agentEdit.running
+                                            enabled: editorPreview.hasAsset && catalogAssets.selectedAssetCount >= 1 && !root.agentEditController.running
                                             helperText: "Queue selected assets after agent review"
-                                            onConfirmed: agentEdit.queueExportForSelected("", "", true)
+                                            onConfirmed: root.agentEditController.queueExportForSelected("", "", true)
                                         }
 
                                         ConfirmActionButton {
                                             Layout.fillWidth: true
+                                            minimumReadableWidth: 96
                                             text: "Rollback"
                                             compact: true
-                                            enabled: agentEdit.draftActive && !agentEdit.running
+                                            enabled: root.agentEditController.draftActive && !root.agentEditController.running
                                             helperText: "Restore the pre-agent recipe"
-                                            onConfirmed: agentEdit.rollbackDraft()
+                                            onConfirmed: root.agentEditController.rollbackDraft()
                                         }
                                     }
 
                                     Label {
                                         Layout.fillWidth: true
-                                        visible: agentEdit.lastRunReport.analysisSummary !== undefined &&
-                                                 agentEdit.lastRunReport.analysisSummary.length > 0
-                                        text: agentEdit.lastRunReport.analysisSummary || ""
+                                        visible: agentDetailsExpanded &&
+                                                 root.agentEditController.lastRunReport.analysisSummary !== undefined &&
+                                                 root.agentEditController.lastRunReport.analysisSummary.length > 0
+                                        text: root.agentEditController.lastRunReport.analysisSummary || ""
                                         color: theme.textMain
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
@@ -4959,9 +6378,10 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        visible: agentEdit.lastRunReport.planSummary !== undefined &&
-                                                 agentEdit.lastRunReport.planSummary.length > 0
-                                        text: agentEdit.lastRunReport.planSummary || ""
+                                        visible: agentDetailsExpanded &&
+                                                 root.agentEditController.lastRunReport.planSummary !== undefined &&
+                                                 root.agentEditController.lastRunReport.planSummary.length > 0
+                                        text: root.agentEditController.lastRunReport.planSummary || ""
                                         color: theme.textMain
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
@@ -4997,68 +6417,138 @@ Rectangle {
                                                     { "role": "after", "label": "After" }
                                                 ]
 
-                                                delegate: Rectangle {
+                                                delegate: AgentProofCard {
                                                     required property var modelData
 
-                                                    Layout.fillWidth: true
                                                     Layout.preferredHeight: 104
-                                                    radius: theme.radiusControl
-                                                    color: theme.alpha(theme.ink950, 0.46)
-                                                    border.width: 1
-                                                    border.color: theme.alpha(theme.lineSoft, 0.24)
-                                                    clip: true
-
-                                                    Image {
-                                                        objectName: "agent" + modelData.label + "ProofImage"
-                                                        anchors.fill: parent
-                                                        anchors.margins: 2
-                                                        source: agentProofSource(modelData.role)
-                                                        fillMode: Image.PreserveAspectFit
-                                                        asynchronous: true
-                                                        cache: false
-                                                    }
-
-                                                    Rectangle {
-                                                        anchors.left: parent.left
-                                                        anchors.top: parent.top
-                                                        anchors.margins: 5
-                                                        radius: theme.radiusControl
-                                                        color: theme.alpha(theme.ink950, 0.76)
-                                                        implicitWidth: proofRoleLabel.implicitWidth + 10
-                                                        implicitHeight: 20
-
-                                                        Label {
-                                                            id: proofRoleLabel
-                                                            anchors.centerIn: parent
-                                                            text: modelData.label
-                                                            color: theme.textStrong
-                                                            font.family: theme.fontMono
-                                                            font.pixelSize: 9
-                                                        }
-                                                    }
+                                                    label: String(modelData.label || "Proof")
+                                                    imageObjectName: "agent" + String(modelData.label || "Proof") + "ProofImage"
+                                                    source: agentProofSource(modelData.role)
+                                                    showLabel: true
                                                 }
                                             }
                                         }
 
-                                        Rectangle {
-                                            Layout.fillWidth: true
+                                        AgentProofCard {
                                             Layout.preferredHeight: 118
-                                            radius: theme.radiusControl
-                                            color: theme.alpha(theme.ink950, 0.46)
-                                            border.width: 1
-                                            border.color: theme.alpha(theme.lineSoft, 0.24)
-                                            clip: true
                                             visible: agentProofPath("before").length === 0 ||
                                                      agentProofPath("after").length === 0
+                                            label: "Current"
+                                            imageObjectName: "agentCurrentProofImage"
+                                            source: agentProofSource("current")
+                                            showLabel: false
+                                        }
+                                    }
 
-                                            Image {
-                                                objectName: "agentCurrentProofImage"
-                                                anchors.fill: parent
-                                                anchors.margins: 2
-                                                source: agentProofSource("current")
-                                                fillMode: Image.PreserveAspectFit
-                                                asynchronous: true
-                                                cache: false
+                                    Rectangle {
+                                        objectName: "editAgentRunAuditPanel"
+                                        Layout.fillWidth: true
+                                        visible: agentDetailsExpanded && agentHasRunAudit()
+                                        radius: theme.radiusControl
+                                        color: theme.alpha(theme.ink950, 0.28)
+                                        border.width: 1
+                                        border.color: theme.alpha(theme.lineSoft, 0.22)
+                                        implicitHeight: editAgentRunAuditColumn.implicitHeight + 12
+
+                                        ColumnLayout {
+                                            id: editAgentRunAuditColumn
+                                            anchors.fill: parent
+                                            anchors.margins: 6
+                                            spacing: 6
+
+                                            RowLayout {
+                                                Layout.fillWidth: true
+                                                spacing: 8
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Run audit"
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 10
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
+                                                }
+
+                                                Label {
+                                                    text: agentToolCalls().length + " tool calls"
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
+                                                }
+                                            }
+
+                                            Label {
+                                                objectName: "editAgentRunProofPathLabel"
+                                                Layout.fillWidth: true
+                                                visible: agentRunArtifactSummary().length > 0
+                                                text: agentRunArtifactSummary()
+                                                color: theme.textMuted
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 9
+                                                wrapMode: Text.WrapAnywhere
+                                                maximumLineCount: 2
+                                                elide: Text.ElideNone
+                                            }
+
+                                            Label {
+                                                objectName: "editAgentRunEvidenceLabel"
+                                                Layout.fillWidth: true
+                                                visible: agentRunEvidenceSummary().length > 0
+                                                text: agentRunEvidenceSummary()
+                                                color: theme.textMuted
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 9
+                                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                maximumLineCount: 2
+                                                elide: Text.ElideNone
+                                            }
+
+                                            Repeater {
+                                                objectName: "editAgentLoopAttemptRepeater"
+                                                model: agentLoopAttemptRows()
+
+                                                delegate: AgentRunStageRow {
+                                                    objectName: "editAgentLoopAttemptRow"
+                                                    required property var modelData
+
+                                                    label: String(modelData.label || "Attempt")
+                                                    statusText: String(modelData.score || 0) + "% · " +
+                                                                String(modelData.status || "checked") +
+                                                                (Number(modelData.warningCount || 0) > 0
+                                                                 ? " · " + Number(modelData.warningCount || 0) + " warn"
+                                                                 : "")
+                                                    statusColor: agentLoopStatusColor(modelData)
+                                                }
+                                            }
+
+                                            Repeater {
+                                                objectName: "editAgentRunToolLogRepeater"
+                                                model: agentToolCalls().slice(0, 6)
+
+                                                delegate: AgentToolCallRow {
+                                                    objectName: "editAgentRunToolCallRow"
+                                                    required property var modelData
+
+                                                    title: agentToolCallTitle(modelData)
+                                                    detail: agentToolCallDetail(modelData)
+                                                    statusColor: agentToolCallStatusColor(modelData)
+                                                }
+                                            }
+
+                                            Label {
+                                                objectName: "editAgentRunWarningsLabel"
+                                                Layout.fillWidth: true
+                                                visible: agentRunWarnings().length > 0
+                                                text: agentRunWarnings().join("\n")
+                                                color: theme.warning
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 9
+                                                wrapMode: Text.WordWrap
                                             }
                                         }
                                     }
@@ -5066,7 +6556,7 @@ Rectangle {
                                     Rectangle {
                                         objectName: "agentRecipeDiffPanel"
                                         Layout.fillWidth: true
-                                        visible: agentHasRecipeDiff()
+                                        visible: agentDetailsExpanded && agentHasRecipeDiff()
                                         radius: theme.radiusControl
                                         color: theme.alpha(theme.ink950, 0.26)
                                         border.width: 1
@@ -5089,7 +6579,9 @@ Rectangle {
                                                     color: theme.textStrong
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 10
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
 
                                                 Label {
@@ -5097,76 +6589,27 @@ Rectangle {
                                                     color: theme.textMuted
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 9
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
                                             }
 
                                             Repeater {
                                                 model: agentRecipeDiffGroups()
 
-                                                delegate: Rectangle {
+                                                delegate: AgentRecipeDiffRow {
                                                     objectName: "agentRecipeDiffRow"
                                                     required property var modelData
 
-                                                    Layout.fillWidth: true
-                                                    implicitHeight: Math.max(38, agentRecipeDiffRowContent.implicitHeight + 10)
-                                                    radius: theme.radiusControl
-                                                    color: theme.alpha(theme.ink900, 0.28)
-                                                    border.width: 1
-                                                    border.color: theme.alpha(theme.lineSoft, 0.18)
-
-                                                    RowLayout {
-                                                        id: agentRecipeDiffRowContent
-                                                        anchors.fill: parent
-                                                        anchors.margins: 5
-                                                        spacing: 8
-
-                                                        ColumnLayout {
-                                                            Layout.fillWidth: true
-                                                            spacing: 2
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: modelData.label
-                                                                color: theme.textMain
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 10
-                                                                elide: Text.ElideRight
-                                                            }
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: modelData.summary
-                                                                color: theme.textMuted
-                                                                font.family: theme.fontUi
-                                                                font.pixelSize: 9
-                                                                wrapMode: Text.WordWrap
-                                                            }
-                                                        }
-
-                                                        Rectangle {
-                                                            radius: theme.radiusControl
-                                                            color: theme.alpha(theme.accentCool500, 0.12)
-                                                            border.width: 1
-                                                            border.color: theme.alpha(theme.accentCool500, 0.34)
-                                                            implicitWidth: Math.max(54, agentRecipeDiffCountLabel.implicitWidth + 14)
-                                                            implicitHeight: 24
-
-                                                            Label {
-                                                                id: agentRecipeDiffCountLabel
-                                                                anchors.centerIn: parent
-                                                                text: modelData.count
-                                                                color: theme.accentCool500
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 9
-                                                                horizontalAlignment: Text.AlignHCenter
-                                                            }
-                                                        }
-                                                        }
-                                                    }
+                                                    label: String(modelData.label || "Recipe group")
+                                                    summary: String(modelData.summary || "")
+                                                    countText: String(modelData.count || "0")
+                                                    countColor: theme.accentCool500
                                                 }
                                             }
                                         }
+                                    }
 
                                     Rectangle {
                                         objectName: "agentBatchStatusPanel"
@@ -5194,7 +6637,9 @@ Rectangle {
                                                     color: theme.textStrong
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 10
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
 
                                                 Label {
@@ -5202,80 +6647,68 @@ Rectangle {
                                                     color: theme.textMuted
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 9
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
+                                                }
+                                            }
+
+                                            RowLayout {
+                                                objectName: "agentFixAllReviewIssuesRow"
+                                                Layout.fillWidth: true
+                                                visible: agentFixAllReviewIssuesAvailable()
+                                                spacing: 6
+
+                                                Label {
+                                                    Layout.fillWidth: true
+                                                    text: "Multiple outliers can be repaired automatically."
+                                                    color: theme.textMuted
+                                                    font.family: theme.fontUi
+                                                    font.pixelSize: 9
+                                                    wrapMode: Text.WordWrap
+                                                }
+
+                                                ActionButton {
+                                                    objectName: "agentFixAllReviewIssuesButton"
+                                                    text: "Fix All"
+                                                    iconName: "adjust"
+                                                    compact: true
+                                                    enabled: root.agentEditController.draftActive && !root.agentEditController.running
+                                                    onClicked: root.agentEditController.fixAllReviewIssues()
                                                 }
                                             }
 
                                             Repeater {
                                                 model: agentAssetReports()
 
-                                                delegate: Rectangle {
+                                                delegate: AgentBatchStatusRow {
                                                     objectName: "agentBatchStatusRow"
                                                     required property int index
                                                     required property var modelData
                                                     readonly property string batchStatus: agentBatchReportStatus(modelData)
 
-                                                    Layout.fillWidth: true
-                                                    implicitHeight: Math.max(38, agentBatchStatusRowContent.implicitHeight + 10)
-                                                    radius: theme.radiusControl
-                                                    color: theme.alpha(theme.ink900, 0.32)
-                                                    border.width: 1
-                                                    border.color: theme.alpha(agentBatchStatusColor(batchStatus), 0.38)
-
-                                                    RowLayout {
-                                                        id: agentBatchStatusRowContent
-                                                        anchors.fill: parent
-                                                        anchors.margins: 5
-                                                        spacing: 8
-
-                                                        ColumnLayout {
-                                                            Layout.fillWidth: true
-                                                            spacing: 2
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: agentBatchReportAssetLabel(modelData, index)
-                                                                color: theme.textMain
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 10
-                                                                elide: Text.ElideMiddle
-                                                            }
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: agentBatchReportDetail(modelData)
-                                                                color: theme.textMuted
-                                                                font.family: theme.fontUi
-                                                                font.pixelSize: 9
-                                                                elide: Text.ElideRight
-                                                            }
-                                                        }
-
-                                                        Rectangle {
-                                                            radius: theme.radiusControl
-                                                            color: theme.alpha(agentBatchStatusColor(batchStatus), 0.14)
-                                                            border.width: 1
-                                                            border.color: theme.alpha(agentBatchStatusColor(batchStatus), 0.44)
-                                                            implicitWidth: Math.max(64, agentBatchStatusLabel.implicitWidth + 14)
-                                                            implicitHeight: 24
-
-                                                            Label {
-                                                                id: agentBatchStatusLabel
-                                                                anchors.centerIn: parent
-                                                                text: batchStatus
-                                                                color: agentBatchStatusColor(batchStatus)
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 9
-                                                                horizontalAlignment: Text.AlignHCenter
-                                                            }
-                                                        }
-                                                    }
+                                                    assetLabel: agentBatchReportAssetLabel(modelData, index)
+                                                    detail: agentBatchReportDetail(modelData)
+                                                    suggestedAction: agentBatchReportSuggestedAction(modelData)
+                                                    detailsText: agentReviewIssueDetailsText(modelData)
+                                                    detailsExpanded: agentReviewIssueExpanded(modelData)
+                                                    statusText: batchStatus
+                                                    statusColor: agentBatchStatusColor(batchStatus)
+                                                    thumbnailSource: agentBatchReportThumbnailSource(modelData)
+                                                    actionsVisible: modelData.actions !== undefined &&
+                                                                    modelData.actions !== null &&
+                                                                    modelData.actions.length > 0
+                                                    actionEnabled: root.agentEditController.draftActive && !root.agentEditController.running
+                                                    onFixRequested: root.agentEditController.fixReviewIssue(String(modelData.assetId || ""))
+                                                    onAcceptRequested: root.agentEditController.acceptReviewIssue(String(modelData.assetId || ""))
+                                                    onRollbackRequested: root.agentEditController.rollbackReviewIssue(String(modelData.assetId || ""))
+                                                    onDetailsToggled: toggleAgentReviewIssueDetails(modelData)
                                                 }
                                             }
 
                                             Label {
                                                 Layout.fillWidth: true
-                                                visible: agentAssetReports().length === 0 && agentEdit.running
+                                                visible: agentAssetReports().length === 0 && root.agentEditController.running
                                                 text: "Waiting for per-asset run reports"
                                                 color: theme.textMuted
                                                 font.family: theme.fontUi
@@ -5311,7 +6744,9 @@ Rectangle {
                                                     color: theme.textStrong
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 10
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
 
                                                 Label {
@@ -5319,71 +6754,23 @@ Rectangle {
                                                     color: theme.textMuted
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 9
-                                                    elide: Text.ElideRight
+                                                    fontSizeMode: Text.HorizontalFit
+                                                    minimumPixelSize: 7
+                                                    elide: Text.ElideNone
                                                 }
                                             }
 
                                             Repeater {
                                                 model: agentRunHistory().slice(0, 5)
 
-                                                delegate: Rectangle {
+                                                delegate: AgentRunHistoryRow {
                                                     objectName: "agentRunHistoryRow"
                                                     required property var modelData
 
-                                                    Layout.fillWidth: true
-                                                    implicitHeight: Math.max(36, agentRunHistoryRowContent.implicitHeight + 10)
-                                                    radius: theme.radiusControl
-                                                    color: theme.alpha(theme.ink900, 0.28)
-                                                    border.width: 1
-                                                    border.color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.34)
-
-                                                    RowLayout {
-                                                        id: agentRunHistoryRowContent
-                                                        anchors.fill: parent
-                                                        anchors.margins: 5
-                                                        spacing: 8
-
-                                                        ColumnLayout {
-                                                            Layout.fillWidth: true
-                                                            spacing: 2
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: agentRunHistoryTitle(modelData)
-                                                                color: theme.textMain
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 10
-                                                                elide: Text.ElideRight
-                                                            }
-
-                                                            Label {
-                                                                Layout.fillWidth: true
-                                                                text: agentRunHistoryDetail(modelData)
-                                                                color: theme.textMuted
-                                                                font.family: theme.fontUi
-                                                                font.pixelSize: 9
-                                                                elide: Text.ElideRight
-                                                            }
-                                                        }
-
-                                                        Rectangle {
-                                                            radius: theme.radiusControl
-                                                            color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.14)
-                                                            border.width: 1
-                                                            border.color: theme.alpha(agentRunHistoryStatusColor(modelData), 0.44)
-                                                            implicitWidth: Math.max(54, agentRunHistoryStatusLabel.implicitWidth + 14)
-                                                            implicitHeight: 24
-
-                                                            Label {
-                                                                id: agentRunHistoryStatusLabel
-                                                                anchors.centerIn: parent
-                                                                text: modelData.ok === true ? "ok" : "failed"
-                                                                color: agentRunHistoryStatusColor(modelData)
-                                                                font.family: theme.fontMono
-                                                                font.pixelSize: 9
-                                                            }
-                                                        }
-                                                    }
+                                                    title: agentRunHistoryTitle(modelData)
+                                                    detail: agentRunHistoryDetail(modelData)
+                                                    statusText: modelData.ok === true ? "ok" : "failed"
+                                                    statusColor: agentRunHistoryStatusColor(modelData)
                                                 }
                                             }
                                         }
@@ -5391,10 +6778,10 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        visible: agentEdit.lastRunReport.warnings !== undefined &&
-                                                 agentEdit.lastRunReport.warnings.length > 0
-                                        text: agentEdit.lastRunReport.warnings !== undefined
-                                              ? agentEdit.lastRunReport.warnings.join("\n")
+                                        visible: root.agentEditController.lastRunReport.warnings !== undefined &&
+                                                 root.agentEditController.lastRunReport.warnings.length > 0
+                                        text: root.agentEditController.lastRunReport.warnings !== undefined
+                                              ? root.agentEditController.lastRunReport.warnings.join("\n")
                                               : ""
                                         color: theme.warning
                                         font.family: theme.fontUi
@@ -5404,8 +6791,8 @@ Rectangle {
 
                                     Label {
                                         Layout.fillWidth: true
-                                        visible: agentEdit.errorMessage.length > 0
-                                        text: agentEdit.errorMessage
+                                        visible: root.agentEditController.errorMessage.length > 0
+                                        text: root.agentEditController.errorMessage
                                         color: theme.error
                                         font.family: theme.fontUi
                                         font.pixelSize: 10
@@ -5413,6 +6800,7 @@ Rectangle {
                                     }
                                 }
                             }
+                        }
                         }
 
                         Rectangle {
@@ -5915,11 +7303,11 @@ Rectangle {
                                         font.letterSpacing: 0.8
                                     }
 
-                                    Label {
-                                        text: "..."
+                                    AppIcon {
+                                        Layout.preferredWidth: 12
+                                        Layout.preferredHeight: 12
+                                        name: "menu"
                                         color: theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 12
                                     }
                                 }
 
@@ -6153,7 +7541,9 @@ Rectangle {
                                                         font.family: theme.fontUi
                                                         font.pixelSize: 12
                                                         font.weight: Font.Medium
-                                                        elide: Text.ElideRight
+                                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                        maximumLineCount: 2
+                                                        elide: Text.ElideNone
                                                     }
 
                                                     Label {
@@ -6162,7 +7552,9 @@ Rectangle {
                                                         color: theme.textFaint
                                                         font.family: theme.fontMono
                                                         font.pixelSize: 8
-                                                        elide: Text.ElideRight
+                                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                        maximumLineCount: 2
+                                                        elide: Text.ElideNone
                                                     }
 
                                                     Label {
@@ -6172,7 +7564,9 @@ Rectangle {
                                                         color: theme.vectorGreen
                                                         font.family: theme.fontUi
                                                         font.pixelSize: 9
-                                                        elide: Text.ElideRight
+                                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                        maximumLineCount: 2
+                                                        elide: Text.ElideNone
                                                     }
                                                 }
 
@@ -6715,9 +8109,27 @@ Rectangle {
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
-                                        Button { text: "Identity"; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
-                                        Button { text: "Mono"; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
-                                        Button { text: "Swap RB"; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                                        ChannelMixerButton {
+                                            Layout.fillWidth: true
+                                            text: "Identity"
+                                            actionValue: "Identity"
+                                            helperText: "Apply neutral channel mixer coefficients."
+                                            onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                        }
+                                        ChannelMixerButton {
+                                            Layout.fillWidth: true
+                                            text: "Mono"
+                                            actionValue: "Monochrome"
+                                            helperText: "Convert the mix to monochrome."
+                                            onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                        }
+                                        ChannelMixerButton {
+                                            Layout.fillWidth: true
+                                            text: "Swap RB"
+                                            actionValue: "Swap Red Blue"
+                                            helperText: "Swap red and blue channel contribution."
+                                            onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                        }
                                     }
 
                                     RowLayout {
@@ -6729,7 +8141,13 @@ Rectangle {
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
                                         }
-                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("red") }
+                                        ChannelMixerButton {
+                                            text: "Reset"
+                                            iconOnlyAction: true
+                                            actionValue: "red"
+                                            helperText: "Reset the output red row."
+                                            onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                        }
                                     }
 
                                     InspectorSlider {
@@ -6774,7 +8192,13 @@ Rectangle {
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
                                         }
-                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("green") }
+                                        ChannelMixerButton {
+                                            text: "Reset"
+                                            iconOnlyAction: true
+                                            actionValue: "green"
+                                            helperText: "Reset the output green row."
+                                            onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                        }
                                     }
 
                                     InspectorSlider {
@@ -6819,7 +8243,13 @@ Rectangle {
                                             font.pixelSize: 11
                                             font.weight: Font.DemiBold
                                         }
-                                        Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("blue") }
+                                        ChannelMixerButton {
+                                            text: "Reset"
+                                            iconOnlyAction: true
+                                            actionValue: "blue"
+                                            helperText: "Reset the output blue row."
+                                            onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                        }
                                     }
 
                                     InspectorSlider {
@@ -6867,10 +8297,11 @@ Rectangle {
                                     expandable: true
                                     expanded: false
 
-                                    CheckBox {
-                                        text: "Enable"
+                                    ToolOptionToggle {
+                                        label: "Enable"
                                         checked: editorPreview.blackAndWhiteEnabled
-                                        onToggled: editorPreview.blackAndWhiteEnabled = checked
+                                        helperText: "Enable black and white channel mixing."
+                                        onToggled: function(checked) { editorPreview.blackAndWhiteEnabled = checked }
                                     }
 
                                     InspectorSlider { Layout.fillWidth: true; label: "REDS"; valueText: Math.round(editorPreview.blackAndWhiteReds).toString(); from: -100; to: 100; value: editorPreview.blackAndWhiteReds; onValueDragged: function(value) { editorPreview.blackAndWhiteReds = value }; onResetRequested: editorPreview.blackAndWhiteReds = 0 }
@@ -6894,15 +8325,38 @@ Rectangle {
                                     expandable: true
                                     expanded: false
 
-                                    CheckBox { text: "Enable"; checked: editorPreview.colorReplacementEnabled; onToggled: editorPreview.colorReplacementEnabled = checked }
+                                    ToolOptionToggle {
+                                        label: "Enable"
+                                        checked: editorPreview.colorReplacementEnabled
+                                        helperText: "Enable targeted hue replacement."
+                                        onToggled: function(checked) { editorPreview.colorReplacementEnabled = checked }
+                                    }
                                     InspectorSlider { Layout.fillWidth: true; label: "SOURCE HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementSourceHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementSourceHue; onValueDragged: function(value) { editorPreview.colorReplacementSourceHue = value }; onResetRequested: editorPreview.colorReplacementSourceHue = 0 }
                                     InspectorSlider { Layout.fillWidth: true; label: "TARGET HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementTargetHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementTargetHue; onValueDragged: function(value) { editorPreview.colorReplacementTargetHue = value }; onResetRequested: editorPreview.colorReplacementTargetHue = 0.33 }
                                     InspectorSlider { Layout.fillWidth: true; label: "RANGE"; valueText: Math.round(editorPreview.colorReplacementRange).toString(); from: 1; to: 100; value: editorPreview.colorReplacementRange; onValueDragged: function(value) { editorPreview.colorReplacementRange = value }; onResetRequested: editorPreview.colorReplacementRange = 35 }
                                     InspectorSlider { Layout.fillWidth: true; label: "SOFTNESS"; valueText: Math.round(editorPreview.colorReplacementSoftness).toString(); from: 0; to: 100; value: editorPreview.colorReplacementSoftness; onValueDragged: function(value) { editorPreview.colorReplacementSoftness = value }; onResetRequested: editorPreview.colorReplacementSoftness = 100 }
                                     InspectorSlider { Layout.fillWidth: true; label: "STRENGTH"; valueText: Math.round(editorPreview.colorReplacementStrength).toString(); from: 0; to: 100; value: editorPreview.colorReplacementStrength; onValueDragged: function(value) { editorPreview.colorReplacementStrength = value }; onResetRequested: editorPreview.colorReplacementStrength = 0 }
-                                    CheckBox { text: "Preserve Luminance"; checked: editorPreview.colorReplacementPreserveLuminance; onToggled: editorPreview.colorReplacementPreserveLuminance = checked }
-                                    CheckBox { text: "Preserve Saturation"; checked: editorPreview.colorReplacementPreserveSaturation; onToggled: editorPreview.colorReplacementPreserveSaturation = checked }
-                                    CheckBox { objectName: "colorReplaceProtectSkinCheckBox"; text: "Protect Skin"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                                    ToolOptionToggle {
+                                        label: "Preserve Luminance"
+                                        checked: editorPreview.colorReplacementPreserveLuminance
+                                        helperText: "Keep source luminance while replacing hue."
+                                        onToggled: function(checked) { editorPreview.colorReplacementPreserveLuminance = checked }
+                                    }
+
+                                    ToolOptionToggle {
+                                        label: "Preserve Saturation"
+                                        checked: editorPreview.colorReplacementPreserveSaturation
+                                        helperText: "Keep source saturation while replacing hue."
+                                        onToggled: function(checked) { editorPreview.colorReplacementPreserveSaturation = checked }
+                                    }
+
+                                    ToolOptionToggle {
+                                        objectName: "colorReplaceProtectSkinCheckBox"
+                                        label: "Protect Skin"
+                                        checked: editorPreview.skinToneProtectionEnabled
+                                        helperText: "Protect skin tones from replacement spill."
+                                        onToggled: function(checked) { editorPreview.skinToneProtectionEnabled = checked }
+                                    }
                                     InspectorSlider { objectName: "colorReplaceSkinHueSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "PROTECTED HUE"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
                                     InspectorSlider { objectName: "colorReplaceSkinRangeSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "HUE RANGE"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
                                     InspectorSlider { objectName: "colorReplaceSkinProtectionSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "PROTECTION"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
@@ -6919,7 +8373,12 @@ Rectangle {
                                     expandable: true
                                     expanded: false
 
-                                    CheckBox { text: "Protect"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                                    ToolOptionToggle {
+                                        label: "Protect"
+                                        checked: editorPreview.skinToneProtectionEnabled
+                                        helperText: "Enable skin-tone protection."
+                                        onToggled: function(checked) { editorPreview.skinToneProtectionEnabled = checked }
+                                    }
                                     Rectangle {
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 28
@@ -6950,7 +8409,12 @@ Rectangle {
                                     expandable: true
                                     expanded: false
 
-                                    CheckBox { text: "Enable"; checked: editorPreview.colorHarmonyEnabled; onToggled: editorPreview.colorHarmonyEnabled = checked }
+                                    ToolOptionToggle {
+                                        label: "Enable"
+                                        checked: editorPreview.colorHarmonyEnabled
+                                        helperText: "Enable harmony palette guidance."
+                                        onToggled: function(checked) { editorPreview.colorHarmonyEnabled = checked }
+                                    }
                                     Flow {
                                         Layout.fillWidth: true
                                         spacing: 6
@@ -7374,28 +8838,32 @@ Rectangle {
                                 }
                             }
 
-                            CheckBox {
-                                text: "Highlight Recovery"
+                            ToolOptionToggle {
+                                label: "Highlight Recovery"
                                 checked: editorPreview.rawHighlightRecovery
-                                onToggled: editorPreview.rawHighlightRecovery = checked
+                                helperText: "Recover clipped highlights from RAW data."
+                                onToggled: function(checked) { editorPreview.rawHighlightRecovery = checked }
                             }
 
-                            CheckBox {
-                                text: "Gamut Mapping"
+                            ToolOptionToggle {
+                                label: "Gamut Mapping"
                                 checked: editorPreview.rawGamutMapping
-                                onToggled: editorPreview.rawGamutMapping = checked
+                                helperText: "Map out-of-gamut RAW colors into the working gamut."
+                                onToggled: function(checked) { editorPreview.rawGamutMapping = checked }
                             }
 
-                            CheckBox {
-                                text: "Lens Correction"
+                            ToolOptionToggle {
+                                label: "Lens Correction"
                                 checked: editorPreview.rawLensCorrection
-                                onToggled: editorPreview.rawLensCorrection = checked
+                                helperText: "Apply available RAW lens correction metadata."
+                                onToggled: function(checked) { editorPreview.rawLensCorrection = checked }
                             }
 
-                            CheckBox {
-                                text: "Override White Balance"
+                            ToolOptionToggle {
+                                label: "Override White Balance"
                                 checked: editorPreview.rawWhiteBalanceOverride
-                                onToggled: editorPreview.rawWhiteBalanceOverride = checked
+                                helperText: "Use manual RAW white balance controls instead of as-shot values."
+                                onToggled: function(checked) { editorPreview.rawWhiteBalanceOverride = checked }
                             }
 
                             RowLayout {
@@ -7408,7 +8876,9 @@ Rectangle {
                                     color: theme.textMuted
                                     font.family: theme.fontUi
                                     font.pixelSize: 11
-                                    elide: Text.ElideRight
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 8
+                                    elide: Text.ElideNone
                                 }
 
                                 ActionButton {
@@ -7428,7 +8898,9 @@ Rectangle {
                                 color: (editorPreview.rawShadowClipCount > 0 || editorPreview.rawHighlightClipCount > 0) ? theme.accentWarm400 : theme.textMuted
                                 font.family: theme.fontUi
                                 font.pixelSize: 11
-                                elide: Text.ElideRight
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 8
+                                elide: Text.ElideNone
                             }
 
                             InspectorSlider {
@@ -7583,9 +9055,27 @@ Rectangle {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 6
-                                Button { text: "Identity"; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
-                                Button { text: "Mono"; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
-                                Button { text: "Swap RB"; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                                ChannelMixerButton {
+                                    Layout.fillWidth: true
+                                    text: "Identity"
+                                    actionValue: "Identity"
+                                    helperText: "Apply neutral channel mixer coefficients."
+                                    onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                }
+                                ChannelMixerButton {
+                                    Layout.fillWidth: true
+                                    text: "Mono"
+                                    actionValue: "Monochrome"
+                                    helperText: "Convert the mix to monochrome."
+                                    onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                }
+                                ChannelMixerButton {
+                                    Layout.fillWidth: true
+                                    text: "Swap RB"
+                                    actionValue: "Swap Red Blue"
+                                    helperText: "Swap red and blue channel contribution."
+                                    onActionRequested: function(presetName) { editorPreview.applyChannelMixerPreset(presetName) }
+                                }
                             }
                             RowLayout {
                                 Layout.fillWidth: true
@@ -7596,7 +9086,13 @@ Rectangle {
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
                                 }
-                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("red") }
+                                ChannelMixerButton {
+                                    text: "Reset"
+                                    iconOnlyAction: true
+                                    actionValue: "red"
+                                    helperText: "Reset the output red row."
+                                    onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                }
                             }
                             InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerRedFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromRed; onValueDragged: function(value) { editorPreview.channelMixerRedFromRed = value }; onResetRequested: editorPreview.channelMixerRedFromRed = 100 }
                             InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerRedFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerRedFromGreen; onValueDragged: function(value) { editorPreview.channelMixerRedFromGreen = value }; onResetRequested: editorPreview.channelMixerRedFromGreen = 0 }
@@ -7610,7 +9106,13 @@ Rectangle {
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
                                 }
-                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("green") }
+                                ChannelMixerButton {
+                                    text: "Reset"
+                                    iconOnlyAction: true
+                                    actionValue: "green"
+                                    helperText: "Reset the output green row."
+                                    onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                }
                             }
                             InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerGreenFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromRed; onValueDragged: function(value) { editorPreview.channelMixerGreenFromRed = value }; onResetRequested: editorPreview.channelMixerGreenFromRed = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerGreenFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerGreenFromGreen; onValueDragged: function(value) { editorPreview.channelMixerGreenFromGreen = value }; onResetRequested: editorPreview.channelMixerGreenFromGreen = 100 }
@@ -7624,7 +9126,13 @@ Rectangle {
                                     font.pixelSize: 11
                                     font.weight: Font.DemiBold
                                 }
-                                Button { text: "Reset"; onClicked: editorPreview.resetChannelMixerRow("blue") }
+                                ChannelMixerButton {
+                                    text: "Reset"
+                                    iconOnlyAction: true
+                                    actionValue: "blue"
+                                    helperText: "Reset the output blue row."
+                                    onActionRequested: function(rowName) { editorPreview.resetChannelMixerRow(rowName) }
+                                }
                             }
                             InspectorSlider { Layout.fillWidth: true; label: "From Red"; valueText: Math.round(editorPreview.channelMixerBlueFromRed).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromRed; onValueDragged: function(value) { editorPreview.channelMixerBlueFromRed = value }; onResetRequested: editorPreview.channelMixerBlueFromRed = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "From Green"; valueText: Math.round(editorPreview.channelMixerBlueFromGreen).toString(); from: -200; to: 200; value: editorPreview.channelMixerBlueFromGreen; onValueDragged: function(value) { editorPreview.channelMixerBlueFromGreen = value }; onResetRequested: editorPreview.channelMixerBlueFromGreen = 0 }
@@ -7644,7 +9152,12 @@ Rectangle {
                             expandable: true
                             expanded: true
 
-                            CheckBox { text: "Enable"; checked: editorPreview.blackAndWhiteEnabled; onToggled: editorPreview.blackAndWhiteEnabled = checked }
+                            ToolOptionToggle {
+                                label: "Enable"
+                                checked: editorPreview.blackAndWhiteEnabled
+                                helperText: "Enable black and white channel mixing."
+                                onToggled: function(checked) { editorPreview.blackAndWhiteEnabled = checked }
+                            }
                             InspectorSlider { Layout.fillWidth: true; label: "Reds"; valueText: Math.round(editorPreview.blackAndWhiteReds).toString(); from: -100; to: 100; value: editorPreview.blackAndWhiteReds; onValueDragged: function(value) { editorPreview.blackAndWhiteReds = value }; onResetRequested: editorPreview.blackAndWhiteReds = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "Oranges"; valueText: Math.round(editorPreview.blackAndWhiteOranges).toString(); from: -100; to: 100; value: editorPreview.blackAndWhiteOranges; onValueDragged: function(value) { editorPreview.blackAndWhiteOranges = value }; onResetRequested: editorPreview.blackAndWhiteOranges = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "Yellows"; valueText: Math.round(editorPreview.blackAndWhiteYellows).toString(); from: -100; to: 100; value: editorPreview.blackAndWhiteYellows; onValueDragged: function(value) { editorPreview.blackAndWhiteYellows = value }; onResetRequested: editorPreview.blackAndWhiteYellows = 0 }
@@ -7668,15 +9181,40 @@ Rectangle {
                             expandable: true
                             expanded: true
 
-                            CheckBox { text: "Enable"; checked: editorPreview.colorReplacementEnabled; onToggled: editorPreview.colorReplacementEnabled = checked }
+                            ToolOptionToggle {
+                                label: "Enable"
+                                checked: editorPreview.colorReplacementEnabled
+                                helperText: "Enable targeted hue replacement."
+                                onToggled: function(checked) { editorPreview.colorReplacementEnabled = checked }
+                            }
                             InspectorSlider { Layout.fillWidth: true; label: "Source Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementSourceHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementSourceHue; onValueDragged: function(value) { editorPreview.colorReplacementSourceHue = value }; onResetRequested: editorPreview.colorReplacementSourceHue = 0 }
                             InspectorSlider { Layout.fillWidth: true; label: "Target Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.colorReplacementTargetHue * 360).toString() + "°"; from: 0; to: 1; value: editorPreview.colorReplacementTargetHue; onValueDragged: function(value) { editorPreview.colorReplacementTargetHue = value }; onResetRequested: editorPreview.colorReplacementTargetHue = 0.33 }
                             InspectorSlider { Layout.fillWidth: true; label: "Range"; valueText: Math.round(editorPreview.colorReplacementRange).toString(); from: 1; to: 100; value: editorPreview.colorReplacementRange; onValueDragged: function(value) { editorPreview.colorReplacementRange = value }; onResetRequested: editorPreview.colorReplacementRange = 35 }
                             InspectorSlider { Layout.fillWidth: true; label: "Softness"; valueText: Math.round(editorPreview.colorReplacementSoftness).toString(); from: 0; to: 100; value: editorPreview.colorReplacementSoftness; onValueDragged: function(value) { editorPreview.colorReplacementSoftness = value }; onResetRequested: editorPreview.colorReplacementSoftness = 100 }
                             InspectorSlider { Layout.fillWidth: true; label: "Strength"; valueText: Math.round(editorPreview.colorReplacementStrength).toString(); from: 0; to: 100; value: editorPreview.colorReplacementStrength; onValueDragged: function(value) { editorPreview.colorReplacementStrength = value }; onResetRequested: editorPreview.colorReplacementStrength = 0 }
-                            CheckBox { objectName: "colorReplacementPreserveLuminanceCheckBox"; text: "Preserve Luminance"; checked: editorPreview.colorReplacementPreserveLuminance; onToggled: editorPreview.colorReplacementPreserveLuminance = checked }
-                            CheckBox { objectName: "colorReplacementPreserveSaturationCheckBox"; text: "Preserve Saturation"; checked: editorPreview.colorReplacementPreserveSaturation; onToggled: editorPreview.colorReplacementPreserveSaturation = checked }
-                            CheckBox { objectName: "colorReplaceProtectSkinCheckBox"; text: "Protect Skin"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                            ToolOptionToggle {
+                                objectName: "colorReplacementPreserveLuminanceCheckBox"
+                                label: "Preserve Luminance"
+                                checked: editorPreview.colorReplacementPreserveLuminance
+                                helperText: "Keep source luminance while replacing hue."
+                                onToggled: function(checked) { editorPreview.colorReplacementPreserveLuminance = checked }
+                            }
+
+                            ToolOptionToggle {
+                                objectName: "colorReplacementPreserveSaturationCheckBox"
+                                label: "Preserve Saturation"
+                                checked: editorPreview.colorReplacementPreserveSaturation
+                                helperText: "Keep source saturation while replacing hue."
+                                onToggled: function(checked) { editorPreview.colorReplacementPreserveSaturation = checked }
+                            }
+
+                            ToolOptionToggle {
+                                objectName: "colorReplaceProtectSkinCheckBox"
+                                label: "Protect Skin"
+                                checked: editorPreview.skinToneProtectionEnabled
+                                helperText: "Protect skin tones from replacement spill."
+                                onToggled: function(checked) { editorPreview.skinToneProtectionEnabled = checked }
+                            }
                             InspectorSlider { objectName: "colorReplaceSkinHueSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Protected Hue"; valueInputMode: "degreesNormalized"; valueText: Math.round(editorPreview.skinToneLineAngle).toString() + "°"; from: 0; to: 1; value: editorPreview.skinToneLineHue; onValueDragged: function(value) { editorPreview.skinToneLineHue = value }; onResetRequested: editorPreview.skinToneLineHue = 0.08 }
                             InspectorSlider { objectName: "colorReplaceSkinRangeSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Hue Range"; valueText: Math.round(editorPreview.skinToneProtectionRange).toString(); from: 1; to: 100; value: editorPreview.skinToneProtectionRange; onValueDragged: function(value) { editorPreview.skinToneProtectionRange = value }; onResetRequested: editorPreview.skinToneProtectionRange = 30 }
                             InspectorSlider { objectName: "colorReplaceSkinProtectionSlider"; Layout.fillWidth: true; visible: editorPreview.skinToneProtectionEnabled; label: "Protection"; valueText: Math.round(editorPreview.skinToneProtectionStrength).toString(); from: 0; to: 100; value: editorPreview.skinToneProtectionStrength; onValueDragged: function(value) { editorPreview.skinToneProtectionStrength = value }; onResetRequested: editorPreview.skinToneProtectionStrength = 0 }
@@ -7695,7 +9233,12 @@ Rectangle {
                             expandable: true
                             expanded: true
 
-                            CheckBox { text: "Protect"; checked: editorPreview.skinToneProtectionEnabled; onToggled: editorPreview.skinToneProtectionEnabled = checked }
+                            ToolOptionToggle {
+                                label: "Protect"
+                                checked: editorPreview.skinToneProtectionEnabled
+                                helperText: "Enable skin-tone protection."
+                                onToggled: function(checked) { editorPreview.skinToneProtectionEnabled = checked }
+                            }
                             Rectangle {
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: 28
@@ -7722,7 +9265,12 @@ Rectangle {
                             expandable: true
                             expanded: true
 
-                            CheckBox { text: "Enable"; checked: editorPreview.colorHarmonyEnabled; onToggled: editorPreview.colorHarmonyEnabled = checked }
+                            ToolOptionToggle {
+                                label: "Enable"
+                                checked: editorPreview.colorHarmonyEnabled
+                                helperText: "Enable harmony palette guidance."
+                                onToggled: function(checked) { editorPreview.colorHarmonyEnabled = checked }
+                            }
                             Flow {
                                 Layout.fillWidth: true
                                 spacing: 6
@@ -8636,10 +10184,11 @@ Rectangle {
                                 onClicked: editorPreview.applyGuidedUpright()
                             }
 
-                            CheckBox {
-                                text: "Local Crop Edge Fill"
+                            ToolOptionToggle {
+                                label: "Local Crop Edge Fill"
                                 checked: editorPreview.contentAwareCropFill
-                                onToggled: editorPreview.contentAwareCropFill = checked
+                                helperText: "Fill transparent crop edges with local content-aware pixels."
+                                onToggled: function(checked) { editorPreview.contentAwareCropFill = checked }
                             }
 
                             InspectorSlider {

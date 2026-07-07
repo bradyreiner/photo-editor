@@ -1,0 +1,72 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+Rectangle {
+    id: root
+
+    property var issue: ({})
+    readonly property string severity: String(issue.severity || "warning")
+    readonly property string message: String(issue.message || "")
+    readonly property string tone: severity === "error" ? "error" : "warning"
+    readonly property string label: severity === "error" ? "Blocking" : "Check"
+    readonly property string exportPreflightIssueRowContract: "export-preflight-issue-row:v1|severity-chip:true|severity-role:" +
+                                                              root.tone +
+                                                              "|message-wrap:true|readable-text:true|no-elide:true|shared-tone:true|compact-failure:true|tooltip-full:true"
+    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|message-wrap:true|tooltip-full:true|accessibility-full:true"
+    readonly property string statusSurfaceContract: "status-surface:v1|preflight:blocking-warning|compact-row:true|status-chip:true|message-after-status:true"
+
+    Theme { id: theme }
+
+    Layout.fillWidth: true
+    implicitHeight: issueRow.implicitHeight + theme.space12
+    radius: theme.radius8
+    color: tone === "error"
+           ? theme.alpha(theme.error, 0.10)
+           : theme.alpha(theme.warning, 0.10)
+    border.width: theme.chromeBorderWidth
+    border.color: tone === "error"
+                  ? theme.alpha(theme.error, 0.42)
+                  : theme.alpha(theme.warning, 0.36)
+    clip: true
+    Accessible.name: label + ": " + message
+    Accessible.role: Accessible.StaticText
+
+    ToolTip.visible: issueHover.hovered && issueText.contentHeight > issueText.height + 1
+    ToolTip.delay: 350
+    ToolTip.timeout: 3600
+    ToolTip.text: message
+
+    HoverHandler { id: issueHover }
+
+    RowLayout {
+        id: issueRow
+        anchors.fill: parent
+        anchors.margins: theme.space6
+        spacing: theme.space8
+
+        StatusChip {
+            text: root.label
+            tone: root.tone
+            compact: true
+            detailText: root.message
+            tooltipText: root.label + " preflight issue."
+            Layout.preferredWidth: implicitWidth
+            Layout.preferredHeight: implicitHeight
+            Layout.alignment: Qt.AlignTop
+        }
+
+        Label {
+            id: issueText
+            Layout.fillWidth: true
+            text: root.message
+            color: root.tone === "error" ? theme.textStrong : theme.textMain
+            font.family: theme.fontUi
+            font.pixelSize: 10
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 3
+            elide: Text.ElideNone
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+}

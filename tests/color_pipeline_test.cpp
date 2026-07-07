@@ -605,5 +605,171 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  const photo_editor::pipeline::ColorPixel layer_opacity_source{
+      .red = 0.24F,
+      .green = 0.36F,
+      .blue = 0.52F,
+      .alpha = 1.0F,
+  };
+  photo_editor::pipeline::PhotoLayer opacity_layer;
+  opacity_layer.kind = "adjustment";
+  opacity_layer.blend_mode = "normal";
+  opacity_layer.exposure = 0.55;
+  opacity_layer.contrast = 18.0;
+  opacity_layer.vibrance = 26.0;
+  opacity_layer.curve_lights = 32.0;
+  opacity_layer.luma_curve_points = {
+      {.x = 0.0, .y = 0.0},
+      {.x = 0.45, .y = 0.32},
+      {.x = 1.0, .y = 1.0},
+  };
+  opacity_layer.grading_highlights_hue = 0.58;
+  opacity_layer.grading_highlights_saturation = 34.0;
+  opacity_layer.grading_highlights_luminance = 18.0;
+  opacity_layer.grading_amount = 100.0;
+  const auto render_adjustment_opacity = [&](double opacity) {
+    photo_editor::pipeline::ColorAdjustmentState state;
+    auto layer = opacity_layer;
+    layer.opacity = opacity;
+    state.photo_layers.push_back(layer);
+    std::vector<photo_editor::pipeline::ColorPixel> pixels = {layer_opacity_source};
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
+    return pixels[0];
+  };
+  const auto opacity_zero = render_adjustment_opacity(0.0);
+  const auto opacity_half = render_adjustment_opacity(0.5);
+  const auto opacity_full = render_adjustment_opacity(1.0);
+  const auto midpoint = [](float low, float high) {
+    return low + ((high - low) * 0.5F);
+  };
+  const auto opacity_tolerance = 0.04F;
+  if (std::abs(opacity_full.red - opacity_zero.red) < 0.04F ||
+      std::abs(opacity_full.green - opacity_zero.green) < 0.04F ||
+      std::abs(opacity_full.blue - opacity_zero.blue) < 0.04F ||
+      std::abs(opacity_half.red - midpoint(opacity_zero.red, opacity_full.red)) >
+          opacity_tolerance ||
+      std::abs(opacity_half.green - midpoint(opacity_zero.green, opacity_full.green)) >
+          opacity_tolerance ||
+      std::abs(opacity_half.blue - midpoint(opacity_zero.blue, opacity_full.blue)) >
+          opacity_tolerance) {
+    std::cerr << "adjustment layer opacity should gate the full tone/curve/grading result once\n";
+    return EXIT_FAILURE;
+  }
+  const auto render_adjustment_mask_gate = [&](double mask_opacity, double mask_density) {
+    photo_editor::pipeline::ColorAdjustmentState state;
+    auto layer = opacity_layer;
+    layer.opacity = 1.0;
+    layer.mask_data = {0xff};
+    layer.mask_width = 1;
+    layer.mask_height = 1;
+    layer.mask_opacity = mask_opacity;
+    layer.mask_density = mask_density;
+    state.photo_layers.push_back(layer);
+    std::vector<photo_editor::pipeline::ColorPixel> pixels = {layer_opacity_source};
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
+    return pixels[0];
+  };
+  const auto mask_opacity_half = render_adjustment_mask_gate(0.5, 1.0);
+  const auto mask_density_half = render_adjustment_mask_gate(1.0, 0.5);
+  const auto mask_gate_tolerance = 0.01F;
+  if (std::abs(mask_opacity_half.red - opacity_half.red) > mask_gate_tolerance ||
+      std::abs(mask_opacity_half.green - opacity_half.green) > mask_gate_tolerance ||
+      std::abs(mask_opacity_half.blue - opacity_half.blue) > mask_gate_tolerance ||
+      std::abs(mask_density_half.red - opacity_half.red) > mask_gate_tolerance ||
+      std::abs(mask_density_half.green - opacity_half.green) > mask_gate_tolerance ||
+      std::abs(mask_density_half.blue - opacity_half.blue) > mask_gate_tolerance) {
+    std::cerr << "layer mask opacity and density should gate mask alpha before the layer recipe\n";
+    return EXIT_FAILURE;
+  }
+
+  const photo_editor::pipeline::ColorPixel layer_effect_source{
+      .red = 0.70F,
+      .green = 0.24F,
+      .blue = 0.10F,
+      .alpha = 1.0F,
+  };
+  photo_editor::pipeline::PhotoLayer effect_layer;
+  effect_layer.kind = "adjustment";
+  effect_layer.blend_mode = "normal";
+  effect_layer.dehaze = 100.0;
+  const auto render_layer_effect = [&](double mask_opacity, double mask_density) {
+    photo_editor::pipeline::ColorAdjustmentState state;
+    auto layer = effect_layer;
+    layer.mask_data = {0xff};
+    layer.mask_width = 1;
+    layer.mask_height = 1;
+    layer.mask_opacity = mask_opacity;
+    layer.mask_density = mask_density;
+    state.photo_layers.push_back(layer);
+    std::vector<photo_editor::pipeline::ColorPixel> pixels = {layer_effect_source};
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
+    return pixels[0];
+  };
+  const auto effect_none = render_layer_effect(0.0, 1.0);
+  const auto effect_half_opacity = render_layer_effect(0.5, 1.0);
+  const auto effect_half_density = render_layer_effect(1.0, 0.5);
+  const auto effect_full = render_layer_effect(1.0, 1.0);
+  if (std::abs(effect_full.red - effect_none.red) < 0.003F ||
+      std::abs(effect_half_opacity.red - midpoint(effect_none.red, effect_full.red)) >
+          mask_gate_tolerance ||
+      std::abs(effect_half_opacity.green - midpoint(effect_none.green, effect_full.green)) >
+          mask_gate_tolerance ||
+      std::abs(effect_half_opacity.blue - midpoint(effect_none.blue, effect_full.blue)) >
+          mask_gate_tolerance ||
+      std::abs(effect_half_density.red - effect_half_opacity.red) > mask_gate_tolerance ||
+      std::abs(effect_half_density.green - effect_half_opacity.green) > mask_gate_tolerance ||
+      std::abs(effect_half_density.blue - effect_half_opacity.blue) > mask_gate_tolerance) {
+    std::cerr << "layer-local effects/detail should evaluate before mask opacity and density gate alpha\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::PhotoLayer spatial_effect_layer;
+  spatial_effect_layer.kind = "adjustment";
+  spatial_effect_layer.blend_mode = "normal";
+  spatial_effect_layer.texture = 100.0;
+  spatial_effect_layer.clarity = 100.0;
+  const std::vector<photo_editor::pipeline::ColorPixel> spatial_effect_source = {
+      {.red = 0.22F, .green = 0.24F, .blue = 0.26F, .alpha = 1.0F},
+      {.red = 0.31F, .green = 0.33F, .blue = 0.35F, .alpha = 1.0F},
+      {.red = 0.68F, .green = 0.70F, .blue = 0.72F, .alpha = 1.0F},
+      {.red = 0.34F, .green = 0.36F, .blue = 0.38F, .alpha = 1.0F},
+      {.red = 0.24F, .green = 0.26F, .blue = 0.28F, .alpha = 1.0F},
+  };
+  const auto render_layer_spatial_effect = [&](double mask_opacity, double mask_density) {
+    photo_editor::pipeline::ColorAdjustmentState state;
+    auto layer = spatial_effect_layer;
+    layer.mask_data = {0xff, 0xff, 0xff, 0xff, 0xff};
+    layer.mask_width = 5;
+    layer.mask_height = 1;
+    layer.mask_opacity = mask_opacity;
+    layer.mask_density = mask_density;
+    state.photo_layers.push_back(layer);
+    auto pixels = spatial_effect_source;
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 5, 1, state);
+    return pixels;
+  };
+  const auto spatial_effect_none = render_layer_spatial_effect(0.0, 1.0);
+  const auto spatial_effect_half_opacity = render_layer_spatial_effect(0.5, 1.0);
+  const auto spatial_effect_half_density = render_layer_spatial_effect(1.0, 0.5);
+  const auto spatial_effect_full = render_layer_spatial_effect(1.0, 1.0);
+  constexpr auto kSpatialEffectCenterIndex = std::size_t{2};
+  const auto& spatial_none = spatial_effect_none[kSpatialEffectCenterIndex];
+  const auto& spatial_half_opacity = spatial_effect_half_opacity[kSpatialEffectCenterIndex];
+  const auto& spatial_half_density = spatial_effect_half_density[kSpatialEffectCenterIndex];
+  const auto& spatial_full = spatial_effect_full[kSpatialEffectCenterIndex];
+  if (std::abs(spatial_full.red - spatial_none.red) < 0.01F ||
+      std::abs(spatial_half_opacity.red - midpoint(spatial_none.red, spatial_full.red)) >
+          opacity_tolerance ||
+      std::abs(spatial_half_opacity.green - midpoint(spatial_none.green, spatial_full.green)) >
+          opacity_tolerance ||
+      std::abs(spatial_half_opacity.blue - midpoint(spatial_none.blue, spatial_full.blue)) >
+          opacity_tolerance ||
+      std::abs(spatial_half_density.red - spatial_half_opacity.red) > mask_gate_tolerance ||
+      std::abs(spatial_half_density.green - spatial_half_opacity.green) > mask_gate_tolerance ||
+      std::abs(spatial_half_density.blue - spatial_half_opacity.blue) > mask_gate_tolerance) {
+    std::cerr << "layer-local texture and clarity should render before mask opacity and density gate alpha\n";
+    return EXIT_FAILURE;
+  }
+
   return EXIT_SUCCESS;
 }

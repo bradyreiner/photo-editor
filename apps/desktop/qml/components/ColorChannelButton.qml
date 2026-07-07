@@ -14,12 +14,24 @@ Rectangle {
 
     implicitWidth: Math.max(68, labelText.implicitWidth + 24)
     implicitHeight: theme.controlHeightDense
-    radius: 1
+    radius: theme.radius6
     color: root.selected ? theme.alpha(root.swatch, 0.10) : theme.alpha(theme.ink950, 0.28)
-    border.width: root.activeFocus ? 2 : 1
+    border.width: root.activeFocus ? 2 : 0
     border.color: root.activeFocus
                   ? theme.alpha(theme.focusRing, 0.92)
-                  : (root.selected ? theme.alpha(root.swatch, 0.40) : theme.alpha(theme.glassEdge, 0.16))
+                  : "transparent"
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        height: 2
+        radius: 1
+        visible: root.selected
+        color: root.swatch
+    }
 
     Keys.onReturnPressed: root.clicked()
     Keys.onEnterPressed: root.clicked()

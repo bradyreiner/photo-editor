@@ -43,7 +43,9 @@ GlassSurface {
             font.family: theme.fontDisplay
             font.pixelSize: 18
             font.weight: Font.Medium
-            elide: Text.ElideRight
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 12
+            elide: Text.ElideNone
             Layout.fillWidth: true
         }
 
@@ -55,7 +57,7 @@ GlassSurface {
             font.family: theme.fontUi
             font.pixelSize: 11
             maximumLineCount: 2
-            elide: Text.ElideRight
+            elide: Text.ElideNone
             Layout.fillWidth: true
         }
     }

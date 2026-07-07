@@ -10,6 +10,14 @@ Rectangle {
     property real progressValue: -1
     property color accent: theme.accentWarm400
     property bool emphasized: false
+    property string tone: emphasized ? "accent" : "neutral"
+    readonly property string activityBannerContract: "activity-banner:v1|title-detail-actions-progress|tone:" +
+                                                     root.tone +
+                                                     "|progress:" +
+                                                     String(root.progressValue >= 0) +
+                                                     "|calm-surface:true|readable-text:true|no-elide:true"
+    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|title-wrap:true|detail-wrap:true|tooltip-full:true|accessibility-full:true"
+    readonly property string statusSurfaceContract: "status-surface:v1|progress-summary:true|actions:right|compact-but-readable:true"
     default property alias actionData: actionRow.data
 
     Theme { id: theme }
@@ -20,6 +28,9 @@ Rectangle {
     border.color: root.emphasized ? theme.alpha(root.accent, 0.42) : theme.alpha(theme.glassEdge, 0.18)
 
     implicitHeight: contentColumn.implicitHeight + (theme.space10 * 2)
+    Accessible.name: root.title
+    Accessible.description: root.detail
+    Accessible.role: Accessible.StaticText
 
     ColumnLayout {
         id: contentColumn
@@ -42,7 +53,9 @@ Rectangle {
                     font.family: theme.fontUi
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
-                    elide: Text.ElideRight
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    maximumLineCount: 2
+                    elide: Text.ElideNone
                 }
 
                 Label {
@@ -52,7 +65,9 @@ Rectangle {
                     color: theme.textMuted
                     font.family: theme.fontUi
                     font.pixelSize: 10
-                    elide: Text.ElideRight
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    maximumLineCount: 2
+                    elide: Text.ElideNone
                 }
             }
 

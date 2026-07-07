@@ -22,21 +22,44 @@ Rectangle {
 
     Theme { id: theme }
 
+    readonly property string reviewCardContract: "review-preview-card:v1|image-dominant:true|selection:" +
+                                                 String(selected) +
+                                                 "|rating:" +
+                                                 String(rating > 0) +
+                                                 "|pick:" +
+                                                 String(picked) +
+                                                 "|reject:" +
+                                                 String(rejected) +
+                                                 "|burst:" +
+                                                 String(burstText.length > 0) +
+                                                 "|focus-loupe:" +
+                                                 String(focusCheckEnabled && photoAsset) +
+                                                 "|badges:status-chip|no-elide:true|double-click:true"
+    readonly property color reviewStateColor: rejected ? theme.error
+                                           : picked ? theme.success
+                                           : selected ? theme.accentWarm400
+                                           : theme.textMuted
+
     radius: theme.radius12
-    color: theme.alpha(theme.glassBase, 0.72)
-    border.width: selected ? 2 : 1
-    border.color: selected
-                  ? theme.accentWarm400
-                  : rejected
-                    ? theme.alpha(theme.error, 0.72)
-                    : picked
-                      ? theme.alpha(theme.success, 0.72)
-                       : theme.alpha(theme.glassEdge, 0.26)
+    color: selected ? theme.alpha(theme.accentWarm400, 0.08)
+                    : theme.alpha(theme.glassBase, 0.72)
+    border.width: selected || picked || rejected ? 1 : 0
+    border.color: theme.alpha(reviewStateColor, selected ? 0.62 : 0.46)
     clip: true
 
     property real normalizedLoupeX: 0.5
     property real normalizedLoupeY: 0.5
     property bool hoverLoupeVisible: false
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: 3
+        visible: root.selected || root.picked || root.rejected
+        color: root.reviewStateColor
+        z: 3
+    }
 
     Rectangle {
         id: imageFrame
@@ -63,76 +86,49 @@ Rectangle {
             anchors.margins: 10
             spacing: 6
 
-            Rectangle {
+            StatusChip {
                 visible: root.rating > 0
-                radius: 8
-                color: "#11161bcc"
-                implicitWidth: ratingLabel.implicitWidth + 14
-                implicitHeight: 22
-
-                Label {
-                    id: ratingLabel
-                    anchors.centerIn: parent
-                    text: "R" + root.rating
-                    color: "#f3f5f7"
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
+                width: implicitWidth
+                height: implicitHeight
+                text: "R" + root.rating
+                tone: "neutral"
+                compact: true
+                dotVisible: false
+                tooltipText: "Rating " + root.rating
             }
 
-            Rectangle {
+            StatusChip {
                 visible: root.picked || root.rejected
-                radius: 8
-                color: root.rejected ? "#6a3530dd" : "#334d39dd"
-                implicitWidth: cullLabel.implicitWidth + 14
-                implicitHeight: 22
-
-                Label {
-                    id: cullLabel
-                    anchors.centerIn: parent
-                    text: root.rejected ? "Reject" : "Pick"
-                    color: "#f3f5f7"
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
+                width: implicitWidth
+                height: implicitHeight
+                text: root.rejected ? "Reject" : "Pick"
+                tone: root.rejected ? "error" : "success"
+                compact: true
+                dotVisible: false
             }
 
-            Rectangle {
+            StatusChip {
                 visible: root.burstText.length > 0
-                radius: 8
-                color: "#263445dd"
-                implicitWidth: burstLabel.implicitWidth + 14
-                implicitHeight: 22
-
-                Label {
-                    id: burstLabel
-                    anchors.centerIn: parent
-                    text: root.burstText
-                    color: "#f3f5f7"
-                    font.family: theme.fontMono
-                    font.pixelSize: 9
-                }
+                width: implicitWidth
+                height: implicitHeight
+                text: root.burstText
+                tone: "info"
+                compact: true
+                dotVisible: false
             }
         }
 
-        Rectangle {
+        StatusChip {
             visible: root.focusCheckEnabled && root.photoAsset
             anchors.right: parent.right
             anchors.bottom: parent.bottom
             anchors.margins: 10
-            radius: 8
-            color: "#11161bcc"
-            implicitWidth: focusLabel.implicitWidth + 14
-            implicitHeight: 22
-
-            Label {
-                id: focusLabel
-                anchors.centerIn: parent
-                text: root.hoverLoupeVisible ? "Focus On" : "Focus"
-                color: "#f3f5f7"
-                font.family: theme.fontMono
-                font.pixelSize: 9
-            }
+            width: implicitWidth
+            height: implicitHeight
+            text: root.hoverLoupeVisible ? "Focus On" : "Focus"
+            tone: root.hoverLoupeVisible ? "accent" : "neutral"
+            compact: true
+            dotVisible: false
         }
 
         MouseArea {
@@ -212,7 +208,9 @@ Rectangle {
             font.family: theme.fontUi
             font.pixelSize: 12
             font.weight: Font.Medium
-            elide: Text.ElideRight
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
+            elide: Text.ElideNone
         }
 
         Label {
@@ -223,7 +221,9 @@ Rectangle {
             color: theme.textMuted
             font.family: theme.fontUi
             font.pixelSize: 10
-            elide: Text.ElideRight
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            maximumLineCount: 2
+            elide: Text.ElideNone
         }
     }
 }

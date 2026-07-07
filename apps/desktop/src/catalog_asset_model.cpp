@@ -45,8 +45,9 @@ namespace {
 
 constexpr int kThumbnailEdge = 768;
 constexpr int kThumbnailDecodeCeiling = 1280;
-constexpr int kMaxConcurrentThumbnailTasks = 3;
+constexpr int kMaxConcurrentThumbnailTasks = 8;
 constexpr int kVisibleThumbnailPrefetchRows = 18;
+constexpr qint64 kImportSourceRefreshCacheWindowMs = 30000;
 
 const QStringList& supported_video_extensions() {
   static const QStringList kExtensions = {
@@ -458,6 +459,12 @@ QString photo_thumbnail_cache_key(const QString& file_path, const QString& recip
   return QStringLiteral("photo-v2:%1:%2").arg(file_path, recipe_json.trimmed());
 }
 
+QString thumbnail_recipe_hash(const QString& recipe_json) {
+  return QStringLiteral("sha1:%1").arg(
+      QString::fromLatin1(
+          QCryptographicHash::hash(recipe_json.trimmed().toUtf8(), QCryptographicHash::Sha1).toHex()));
+}
+
 bool cached_thumbnail_is_readable(const QString& cache_path) {
   QImageReader reader(cache_path);
   if (!reader.canRead()) {
@@ -740,6 +747,27 @@ void clear_thumbnail_source_for_item(CatalogAssetItem* item) {
   }
 
   item->thumbnail_source.clear();
+  item->thumbnail_stale_detected = false;
+  item->thumbnail_stale_mismatch = false;
+  item->thumbnail_stale_detection_reason.clear();
+  item->thumbnail_stale_previous_recipe_hash.clear();
+  item->thumbnail_stale_current_recipe_hash.clear();
+  item->thumbnail_stale_detection_signature.clear();
+}
+
+void copy_thumbnail_runtime_fields(
+    const CatalogAssetItem& source,
+    CatalogAssetItem* target) {
+  if (target == nullptr) {
+    return;
+  }
+  target->thumbnail_source = source.thumbnail_source;
+  target->thumbnail_stale_detected = source.thumbnail_stale_detected;
+  target->thumbnail_stale_mismatch = source.thumbnail_stale_mismatch;
+  target->thumbnail_stale_detection_reason = source.thumbnail_stale_detection_reason;
+  target->thumbnail_stale_previous_recipe_hash = source.thumbnail_stale_previous_recipe_hash;
+  target->thumbnail_stale_current_recipe_hash = source.thumbnail_stale_current_recipe_hash;
+  target->thumbnail_stale_detection_signature = source.thumbnail_stale_detection_signature;
 }
 
 QDateTime parse_iso_datetime(const QString& value) {
@@ -1194,6 +1222,18 @@ QVariant CatalogAssetModel::data(const QModelIndex& index, int role) const {
       return item.file_path;
     case ThumbnailSourceRole:
       return item.thumbnail_source;
+    case ThumbnailStaleDetectedRole:
+      return item.thumbnail_stale_detected;
+    case ThumbnailStaleMismatchRole:
+      return item.thumbnail_stale_mismatch;
+    case ThumbnailStaleDetectionReasonRole:
+      return item.thumbnail_stale_detection_reason;
+    case ThumbnailStalePreviousRecipeHashRole:
+      return item.thumbnail_stale_previous_recipe_hash;
+    case ThumbnailStaleCurrentRecipeHashRole:
+      return item.thumbnail_stale_current_recipe_hash;
+    case ThumbnailStaleDetectionSignatureRole:
+      return item.thumbnail_stale_detection_signature;
     case RecipeJsonRole:
       return item.recipe_json;
     case DriveIdRole:
@@ -1262,6 +1302,12 @@ QHash<int, QByteArray> CatalogAssetModel::roleNames() const {
       {LocationPathRole, "locationPath"},
       {FilePathRole, "filePath"},
       {ThumbnailSourceRole, "thumbnailSource"},
+      {ThumbnailStaleDetectedRole, "thumbnailStaleDetected"},
+      {ThumbnailStaleMismatchRole, "thumbnailStaleMismatch"},
+      {ThumbnailStaleDetectionReasonRole, "thumbnailStaleDetectionReason"},
+      {ThumbnailStalePreviousRecipeHashRole, "thumbnailStalePreviousRecipeHash"},
+      {ThumbnailStaleCurrentRecipeHashRole, "thumbnailStaleCurrentRecipeHash"},
+      {ThumbnailStaleDetectionSignatureRole, "thumbnailStaleDetectionSignature"},
       {RecipeJsonRole, "recipeJson"},
       {DriveIdRole, "driveId"},
       {ImportModeRole, "importMode"},
@@ -1579,6 +1625,12 @@ QVariantMap CatalogAssetModel::assetMap(const CatalogAssetItem& item) const {
   map.insert(QStringLiteral("locationPath"), item.location_path);
   map.insert(QStringLiteral("filePath"), item.file_path);
   map.insert(QStringLiteral("thumbnailSource"), item.thumbnail_source);
+  map.insert(QStringLiteral("thumbnailStaleDetected"), item.thumbnail_stale_detected);
+  map.insert(QStringLiteral("thumbnailStaleMismatch"), item.thumbnail_stale_mismatch);
+  map.insert(QStringLiteral("thumbnailStaleDetectionReason"), item.thumbnail_stale_detection_reason);
+  map.insert(QStringLiteral("thumbnailStalePreviousRecipeHash"), item.thumbnail_stale_previous_recipe_hash);
+  map.insert(QStringLiteral("thumbnailStaleCurrentRecipeHash"), item.thumbnail_stale_current_recipe_hash);
+  map.insert(QStringLiteral("thumbnailStaleDetectionSignature"), item.thumbnail_stale_detection_signature);
   map.insert(QStringLiteral("recipeJson"), item.recipe_json);
   map.insert(QStringLiteral("driveId"), item.drive_id);
   map.insert(QStringLiteral("importMode"), item.import_mode);
@@ -1789,7 +1841,7 @@ void CatalogAssetModel::refresh() {
 
   setLoading(true);
   setErrorMessage({});
-  setStatus(QStringLiteral("Loading catalog snapshot..."));
+  setStatus(QStringLiteral("Loading catalog snapshot"));
 
   snapshot_process_.setWorkingDirectory(QDir::currentPath());
   QProcessEnvironment environment;
@@ -1804,7 +1856,16 @@ void CatalogAssetModel::refresh() {
   snapshot_process_.start(snapshotProgram(), snapshotArguments());
 }
 
-void CatalogAssetModel::refreshImportSources() { rebuildImportSources(); }
+void CatalogAssetModel::refreshImportSources(bool force) {
+  const auto now = QDateTime::currentMSecsSinceEpoch();
+  if (!force &&
+      !import_sources_.isEmpty() &&
+      import_sources_last_rebuilt_msecs_ > 0 &&
+      now - import_sources_last_rebuilt_msecs_ < kImportSourceRefreshCacheWindowMs) {
+    return;
+  }
+  rebuildImportSources();
+}
 
 void CatalogAssetModel::clearFilters() {
   const auto preferred_asset_id = selectedAssetId();
@@ -1969,8 +2030,8 @@ void CatalogAssetModel::startImport(
   setImporting(true);
   setErrorMessage({});
   setStatus(selected_file_paths.isEmpty()
-                ? QStringLiteral("Queued source import...")
-                : QStringLiteral("Queued selected photo import..."));
+                ? QStringLiteral("Queued source import")
+                : QStringLiteral("Queued selected photo import"));
 }
 
 void CatalogAssetModel::selectIndex(int index) {
@@ -2391,7 +2452,7 @@ void CatalogAssetModel::deleteSelectedAssets() {
   setDeleteTargetCount(static_cast<int>(selected_ids.size()));
   setDeleteProgress(0);
   setErrorMessage({});
-  setStatus(QStringLiteral("Removing %1 selected %2 from the gallery...")
+  setStatus(QStringLiteral("Removing %1 selected %2 from the gallery")
                 .arg(selected_ids.size())
                 .arg(selected_ids.size() == 1 ? QStringLiteral("asset") : QStringLiteral("assets")));
 
@@ -2511,12 +2572,26 @@ int CatalogAssetModel::applyRecipeJsonToAssetIds(
     }
 
     item.recipe_json = iterator.value();
-    item.thumbnail_source = updated_thumbnail_sources.value(item.asset_id);
+    const auto all_index_iterator = all_asset_index_by_id_.constFind(item.asset_id);
+    if (all_index_iterator != all_asset_index_by_id_.cend() &&
+        all_index_iterator.value() >= 0 &&
+        all_index_iterator.value() < all_assets_.size()) {
+      copy_thumbnail_runtime_fields(all_assets_.at(all_index_iterator.value()), &item);
+    } else {
+      item.thumbnail_source = updated_thumbnail_sources.value(item.asset_id);
+    }
     const auto model_index = static_cast<int>(index);
     emit dataChanged(
         this->index(model_index, 0),
         this->index(model_index, 0),
-        {RecipeJsonRole, ThumbnailSourceRole});
+        {RecipeJsonRole,
+         ThumbnailSourceRole,
+         ThumbnailStaleDetectedRole,
+         ThumbnailStaleMismatchRole,
+         ThumbnailStaleDetectionReasonRole,
+         ThumbnailStalePreviousRecipeHashRole,
+         ThumbnailStaleCurrentRecipeHashRole,
+         ThumbnailStaleDetectionSignatureRole});
   }
 
   if (!persisted_all) {
@@ -2793,6 +2868,31 @@ void CatalogAssetModel::replaceAssetsForTesting(const QVector<CatalogAssetItem>&
   updateAssets(items);
 }
 
+bool CatalogAssetModel::applyThumbnailResultForTesting(
+    const QString& asset_id,
+    const QString& file_path,
+    const QString& recipe_json,
+    const QString& thumbnail_source) {
+  return applyThumbnailResult(ThumbnailTaskResult{
+      .asset_id = asset_id,
+      .file_path = file_path,
+      .recipe_json = recipe_json,
+      .thumbnail_source = thumbnail_source,
+  });
+}
+
+void CatalogAssetModel::clearVirtualCopiesForTesting() {
+  QVector<CatalogAssetItem> base_assets;
+  base_assets.reserve(all_assets_.size());
+  for (const auto& item : all_assets_) {
+    if (!item.virtual_copy) {
+      base_assets.push_back(item);
+    }
+  }
+  virtual_copies_.clear();
+  updateAssets(base_assets);
+}
+
 void CatalogAssetModel::setProjectFilter(const QString& project_filter) {
   auto next_filter = normalizedProjectName(project_filter);
   if (next_filter.isEmpty()) {
@@ -3000,8 +3100,8 @@ void CatalogAssetModel::pollActiveImportJob() {
       setImporting(true);
       setStatus(
           latest_active_import_job.status == QStringLiteral("Queued")
-              ? QStringLiteral("Queued source import...")
-              : QStringLiteral("Importing source into catalog..."));
+              ? QStringLiteral("Queued source import")
+              : QStringLiteral("Importing source into catalog"));
       return;
     }
 
@@ -3024,13 +3124,13 @@ void CatalogAssetModel::pollActiveImportJob() {
   const auto job = *iterator;
   if (job.status == QStringLiteral("Queued")) {
     setImporting(true);
-    setStatus(QStringLiteral("Queued source import..."));
+    setStatus(QStringLiteral("Queued source import"));
     return;
   }
 
   if (job.status == QStringLiteral("Running")) {
     setImporting(true);
-    setStatus(QStringLiteral("Importing source into catalog..."));
+    setStatus(QStringLiteral("Importing source into catalog"));
     return;
   }
 
@@ -3270,6 +3370,7 @@ void CatalogAssetModel::setDriveCount(int drive_count) {
 
 void CatalogAssetModel::rebuildImportSources() {
   const auto next_sources = build_import_sources();
+  import_sources_last_rebuilt_msecs_ = QDateTime::currentMSecsSinceEpoch();
   if (import_sources_ == next_sources) {
     return;
   }
@@ -3586,6 +3687,47 @@ bool CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
   auto& all_item = all_assets_[all_index];
   if (all_item.file_path != result.file_path || all_item.recipe_json != result.recipe_json ||
       result.thumbnail_source.isEmpty()) {
+    const auto stale_recipe_mismatch =
+        all_item.file_path == result.file_path &&
+        all_item.recipe_json != result.recipe_json;
+    if (stale_recipe_mismatch) {
+      all_item.thumbnail_stale_detected = true;
+      all_item.thumbnail_stale_mismatch = true;
+      all_item.thumbnail_stale_detection_reason = QStringLiteral("catalog_thumbnail_recipe_mismatch");
+      all_item.thumbnail_stale_previous_recipe_hash = thumbnail_recipe_hash(result.recipe_json);
+      all_item.thumbnail_stale_current_recipe_hash = thumbnail_recipe_hash(all_item.recipe_json);
+      all_item.thumbnail_stale_detection_signature =
+          QStringLiteral("catalog-thumbnail-stale|detected:true|mismatch:true|reason:%1|previous:%2|current:%3")
+              .arg(all_item.thumbnail_stale_detection_reason,
+                   all_item.thumbnail_stale_previous_recipe_hash,
+                   all_item.thumbnail_stale_current_recipe_hash);
+      const auto visible_index_iterator = visible_asset_index_by_id_.constFind(result.asset_id);
+      if (visible_index_iterator != visible_asset_index_by_id_.cend()) {
+        const auto index = visible_index_iterator.value();
+        if (index >= 0 && index < assets_.size()) {
+          copy_thumbnail_runtime_fields(all_item, &assets_[index]);
+          emit dataChanged(
+              this->index(static_cast<int>(index), 0),
+              this->index(static_cast<int>(index), 0),
+              {ThumbnailStaleDetectedRole,
+               ThumbnailStaleMismatchRole,
+               ThumbnailStaleDetectionReasonRole,
+               ThumbnailStalePreviousRecipeHashRole,
+               ThumbnailStaleCurrentRecipeHashRole,
+               ThumbnailStaleDetectionSignatureRole});
+        }
+      }
+      observability::logWarning(
+          photoEditorCatalogLog(),
+          QStringLiteral("thumbnail.stale_detected"),
+          {
+              {QStringLiteral("scope"), QStringLiteral("catalog_grid")},
+              {QStringLiteral("asset_id"), result.asset_id},
+              {QStringLiteral("reason"), all_item.thumbnail_stale_detection_reason},
+              {QStringLiteral("previous_recipe_hash"), all_item.thumbnail_stale_previous_recipe_hash},
+              {QStringLiteral("current_recipe_hash"), all_item.thumbnail_stale_current_recipe_hash},
+          });
+    }
     return false;
   }
   all_item.thumbnail_source = result.thumbnail_source;
@@ -3598,7 +3740,7 @@ bool CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
       if (item.file_path != result.file_path || item.recipe_json != result.recipe_json) {
         return false;
       }
-      item.thumbnail_source = result.thumbnail_source;
+      copy_thumbnail_runtime_fields(all_item, &item);
       visible_index = static_cast<int>(index);
       if (selected_index_ == visible_index) {
         selected_changed = true;
@@ -3610,7 +3752,13 @@ bool CatalogAssetModel::applyThumbnailResult(const ThumbnailTaskResult& result) 
     emit dataChanged(
         this->index(visible_index, 0),
         this->index(visible_index, 0),
-        {ThumbnailSourceRole});
+        {ThumbnailSourceRole,
+         ThumbnailStaleDetectedRole,
+         ThumbnailStaleMismatchRole,
+         ThumbnailStaleDetectionReasonRole,
+         ThumbnailStalePreviousRecipeHashRole,
+         ThumbnailStaleCurrentRecipeHashRole,
+         ThumbnailStaleDetectionSignatureRole});
   }
   if (selected_changed) {
     emit selectedAssetChanged();

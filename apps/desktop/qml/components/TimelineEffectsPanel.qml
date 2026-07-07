@@ -244,7 +244,9 @@ GlassSurface {
                                             color: theme.textMain
                                             font.family: theme.fontMono
                                             font.pixelSize: 10
-                                            elide: Text.ElideRight
+                                            fontSizeMode: Text.HorizontalFit
+                                            minimumPixelSize: 7
+                                            elide: Text.ElideNone
                                         }
 
                                         ConfirmActionButton {
@@ -309,73 +311,10 @@ GlassSurface {
                         spacing: 6
                         model: root.effectLibraryItems
 
-                        delegate: Item {
-                            required property var modelData
-                            readonly property bool matchesSearch: root.effectSearchText.length === 0
-                                                                 || String(modelData.name).toLowerCase().indexOf(root.effectSearchText.toLowerCase()) >= 0
-                                                                 || String(modelData.category).toLowerCase().indexOf(root.effectSearchText.toLowerCase()) >= 0
-                            visible: matchesSearch
-                            width: ListView.view.width
-                            height: visible ? 62 : 0
-
-                            Rectangle {
-                                id: effectTile
-                                anchors.fill: parent
-                                radius: 8
-                                color: theme.alpha(theme.ink900, 0.88)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.34)
-                                property string libraryType: "effect"
-                                property string libraryName: modelData.name
-                                property real libraryDurationSeconds: 0.35
-                                Drag.active: effectDrag.active
-                                Drag.hotSpot.x: width / 2
-                                Drag.hotSpot.y: height / 2
-                                Drag.dragType: Drag.Automatic
-                                Drag.supportedActions: Qt.CopyAction
-                                Drag.keys: ["effect"]
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 8
-
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 2
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.name + "  •  " + modelData.category
-                                            color: theme.textStrong
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 11
-                                            font.weight: Font.Medium
-                                            elide: Text.ElideRight
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.description
-                                            color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 9
-                                            wrapMode: Text.Wrap
-                                        }
-                                    }
-
-                                    ActionButton {
-                                        text: "Add"
-                                        compact: true
-                                        enabled: root.hasSelection
-                                        onClicked: root.addQuickEffect(modelData.name)
-                                    }
-                                }
-
-                                DragHandler {
-                                    id: effectDrag
-                                }
-                            }
+                        delegate: TimelineEffectLibraryRow {
+                            searchText: root.effectSearchText
+                            actionEnabled: root.hasSelection
+                            onAddRequested: function(effectName) { root.addQuickEffect(effectName) }
                         }
                     }
                 }
@@ -461,82 +400,11 @@ GlassSurface {
                         spacing: 6
                         model: root.transitionLibraryItems
 
-                        delegate: Item {
-                            required property var modelData
-                            readonly property bool matchesSearch: root.transitionSearchText.length === 0
-                                                                 || String(modelData.name).toLowerCase().indexOf(root.transitionSearchText.toLowerCase()) >= 0
-                            visible: matchesSearch
-                            width: ListView.view.width
-                            height: visible ? 60 : 0
-
-                            Rectangle {
-                                id: transitionTile
-                                anchors.fill: parent
-                                radius: 8
-                                color: theme.alpha(theme.ink900, 0.88)
-                                border.width: 1
-                                border.color: theme.alpha(theme.lineSoft, 0.34)
-                                property string libraryType: "transition"
-                                property string libraryName: modelData.name
-                                property real libraryDurationSeconds: modelData.name === "Cut" ? 0 : 0.35
-                                Drag.active: transitionDrag.active
-                                Drag.hotSpot.x: width / 2
-                                Drag.hotSpot.y: height / 2
-                                Drag.dragType: Drag.Automatic
-                                Drag.supportedActions: Qt.CopyAction
-                                Drag.keys: ["transition"]
-
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 8
-
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 2
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.name
-                                            color: theme.textStrong
-                                            font.family: theme.fontUi
-                                            font.pixelSize: 11
-                                            font.weight: Font.Medium
-                                            elide: Text.ElideRight
-                                        }
-
-                                        Label {
-                                            Layout.fillWidth: true
-                                            text: modelData.description
-                                            color: theme.textMuted
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 9
-                                            wrapMode: Text.Wrap
-                                        }
-                                    }
-
-                                    ColumnLayout {
-                                        spacing: 4
-
-                                        ActionButton {
-                                            text: "In"
-                                            compact: true
-                                            enabled: root.hasSelection
-                                            onClicked: root.assignTransition("in", modelData.name, transitionTile.libraryDurationSeconds)
-                                        }
-
-                                        ActionButton {
-                                            text: "Out"
-                                            compact: true
-                                            enabled: root.hasSelection
-                                            onClicked: root.assignTransition("out", modelData.name, transitionTile.libraryDurationSeconds)
-                                        }
-                                    }
-                                }
-
-                                DragHandler {
-                                    id: transitionDrag
-                                }
+                        delegate: TimelineTransitionLibraryRow {
+                            searchText: root.transitionSearchText
+                            actionEnabled: root.hasSelection
+                            onTransitionRequested: function(edge, transitionName, durationSeconds) {
+                                root.assignTransition(edge, transitionName, durationSeconds)
                             }
                         }
                     }
@@ -572,68 +440,69 @@ GlassSurface {
                         onActivated: if (root.documentController) root.documentController.setSelectedFrameMode(currentText.toLowerCase())
                     }
 
-                    Label {
-                        text: "Scale  •  " + Number(root.hasClip ? (clipState.frameScale || 1) : 1).toFixed(2) + "x"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Scale"
+                        valueText: Number(root.hasClip ? (clipState.frameScale || 1) : 1).toFixed(2) + "x"
                         from: 1
                         to: 2.5
                         value: root.hasClip && clipState.frameScale ? clipState.frameScale : 1
+                        defaultValue: 1
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedFrameScale(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedFrameScale(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedFrameScale(1)
                     }
 
-                    Label {
-                        text: "Horizontal  •  " + Number(root.hasClip ? (clipState.frameOffsetX || 0) : 0).toFixed(2)
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Horizontal"
+                        valueText: Number(root.hasClip ? (clipState.frameOffsetX || 0) : 0).toFixed(2)
                         from: -1
                         to: 1
                         value: root.hasClip && clipState.frameOffsetX ? clipState.frameOffsetX : 0
+                        defaultValue: 0
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedFrameOffsetX(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedFrameOffsetX(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedFrameOffsetX(0)
                     }
 
-                    Label {
-                        text: "Vertical  •  " + Number(root.hasClip ? (clipState.frameOffsetY || 0) : 0).toFixed(2)
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Vertical"
+                        valueText: Number(root.hasClip ? (clipState.frameOffsetY || 0) : 0).toFixed(2)
                         from: -1
                         to: 1
                         value: root.hasClip && clipState.frameOffsetY ? clipState.frameOffsetY : 0
+                        defaultValue: 0
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedFrameOffsetY(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedFrameOffsetY(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedFrameOffsetY(0)
                     }
 
-                    Label {
-                        text: "Opacity  •  " + Math.round(Number(root.hasClip ? (clipState.opacity || 1) : 1) * 100) + "%"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Opacity"
+                        valueText: Math.round(Number(root.hasClip ? (clipState.opacity || 1) : 1) * 100) + "%"
                         from: 0
                         to: 1
                         value: root.hasClip && clipState.opacity !== undefined ? clipState.opacity : 1
+                        defaultValue: 1
+                        valueInputMode: "percentNormalized"
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedClipOpacity(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedClipOpacity(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedClipOpacity(1)
                     }
                 }
             }
@@ -659,52 +528,52 @@ GlassSurface {
                         font.pixelSize: 10
                     }
 
-                    Label {
-                        text: "Gain  •  " + Number(root.hasClip ? (clipState.audioGainDb || 0) : 0).toFixed(1) + " dB"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Gain"
+                        valueText: Number(root.hasClip ? (clipState.audioGainDb || 0) : 0).toFixed(1) + " dB"
                         from: -36
                         to: 12
                         value: root.hasClip && clipState.audioGainDb !== undefined ? clipState.audioGainDb : 0
+                        defaultValue: 0
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedClipAudioGain(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedClipAudioGain(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedClipAudioGain(0)
                     }
 
-                    Label {
-                        text: "Fade In  •  " + Number(root.hasClip ? (clipState.fadeInSeconds || 0) : 0).toFixed(2) + "s"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Fade In"
+                        valueText: Number(root.hasClip ? (clipState.fadeInSeconds || 0) : 0).toFixed(2) + "s"
                         from: 0
                         to: root.hasClip && clipState.trimmedDurationSeconds ? clipState.trimmedDurationSeconds : 1
                         value: root.hasClip && clipState.fadeInSeconds !== undefined ? clipState.fadeInSeconds : 0
+                        defaultValue: 0
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedClipFadeInSeconds(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedClipFadeInSeconds(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedClipFadeInSeconds(0)
                     }
 
-                    Label {
-                        text: "Fade Out  •  " + Number(root.hasClip ? (clipState.fadeOutSeconds || 0) : 0).toFixed(2) + "s"
-                        color: theme.textMuted
-                        font.family: theme.fontMono
-                        font.pixelSize: 10
-                    }
-
-                    Slider {
+                    InspectorSlider {
                         Layout.fillWidth: true
+                        label: "Fade Out"
+                        valueText: Number(root.hasClip ? (clipState.fadeOutSeconds || 0) : 0).toFixed(2) + "s"
                         from: 0
                         to: root.hasClip && clipState.trimmedDurationSeconds ? clipState.trimmedDurationSeconds : 1
                         value: root.hasClip && clipState.fadeOutSeconds !== undefined ? clipState.fadeOutSeconds : 0
+                        defaultValue: 0
                         enabled: root.hasSelection
-                        onMoved: if (root.documentController) root.documentController.setSelectedClipFadeOutSeconds(value)
+                        onValueDragged: function(value) {
+                            if (root.documentController)
+                                root.documentController.setSelectedClipFadeOutSeconds(value)
+                        }
+                        onResetRequested: if (root.documentController) root.documentController.setSelectedClipFadeOutSeconds(0)
                     }
                 }
             }

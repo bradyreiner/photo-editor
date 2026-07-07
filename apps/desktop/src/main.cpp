@@ -3,12 +3,15 @@
 #include <QDebug>
 #include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFont>
+#include <QFutureWatcher>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
 #include <QSize>
 #include <QString>
 #include <QTimer>
+#include <QtConcurrent/QtConcurrent>
 
 #include <functional>
 
@@ -330,6 +333,7 @@ int main(int argc, char* argv[]) {
   startup_timer.start();
   QQuickStyle::setStyle(QStringLiteral("Basic"));
   QApplication app(argc, argv);
+  QApplication::setFont(QFont(QStringLiteral("Helvetica Neue")));
   QApplication::setApplicationName(photo_editor::desktop::AppBootstrap::application_name);
   QApplication::setOrganizationName(photo_editor::desktop::AppBootstrap::organization_name);
   photo_editor::desktop::AppBootstrap::ensureRuntimeDirectories();
@@ -342,15 +346,6 @@ int main(int argc, char* argv[]) {
           {QStringLiteral("run_directory"), photo_editor::desktop::observability::runDirectory()},
           {QStringLiteral("desktop_log_file"), photo_editor::desktop::observability::desktopLogFilePath()},
       });
-  QString catalog_bootstrap_error;
-  if (!photo_editor::desktop::AppBootstrap::ensureCatalogService(&catalog_bootstrap_error) &&
-      !catalog_bootstrap_error.isEmpty()) {
-    photo_editor::desktop::observability::logWarning(
-        photoEditorCatalogLog(),
-        QStringLiteral("catalog.bootstrap.failed"),
-        {{QStringLiteral("error"), catalog_bootstrap_error}});
-  }
-
   photo_editor::desktop::CatalogAssetModel catalog_assets;
   photo_editor::desktop::AgentEditController agent_edit;
   photo_editor::desktop::AppShellController app_shell;
@@ -363,11 +358,17 @@ int main(int argc, char* argv[]) {
   agent_edit.setExportJobController(&export_jobs);
   photo_editor::desktop::PhotoAutomationBridge photo_automation(&agent_edit, &catalog_assets);
   if (photo_automation.start()) {
+    agent_edit.setMcpEndpoint(photo_automation.mcpEndpoint(), photo_automation.mcpEndpointKind());
+    QTimer::singleShot(0, &agent_edit, [&agent_edit]() {
+      agent_edit.refreshMcpTools();
+    });
     photo_editor::desktop::observability::logInfo(
         photoEditorAppLog(),
         QStringLiteral("automation.bridge.started"),
         {
             {QStringLiteral("endpoint"), photo_automation.endpointName()},
+            {QStringLiteral("mcp_endpoint"), photo_automation.mcpEndpoint()},
+            {QStringLiteral("mcp_endpoint_kind"), photo_automation.mcpEndpointKind()},
             {QStringLiteral("session_file"), photo_automation.sessionFilePath()},
         });
   } else {
@@ -403,7 +404,38 @@ int main(int argc, char* argv[]) {
       []() { QCoreApplication::exit(EXIT_FAILURE); },
       Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("PhotoEditor"), QStringLiteral("Main"));
-  catalog_assets.refresh();
+  auto* catalog_bootstrap_watcher = new QFutureWatcher<QString>(&app);
+  QObject::connect(
+      catalog_bootstrap_watcher,
+      &QFutureWatcher<QString>::finished,
+      &app,
+      [catalog_bootstrap_watcher, &catalog_assets, &export_jobs, &job_queue, &job_runner]() {
+        const auto catalog_bootstrap_error = catalog_bootstrap_watcher->result();
+        if (!catalog_bootstrap_error.isEmpty()) {
+          photo_editor::desktop::observability::logWarning(
+              photoEditorCatalogLog(),
+              QStringLiteral("catalog.bootstrap.failed"),
+              {{QStringLiteral("error"), catalog_bootstrap_error}});
+        } else {
+          export_jobs.initializeFromStore();
+          job_queue.initializeFromStore();
+          job_runner.initializeFromStore();
+          catalog_assets.refresh();
+        }
+        catalog_bootstrap_watcher->deleteLater();
+      });
+  photo_editor::desktop::observability::logInfo(
+      photoEditorCatalogLog(),
+      QStringLiteral("catalog.bootstrap.async_started"),
+      {{QStringLiteral("elapsed_ms"), startup_timer.elapsed()}});
+  catalog_bootstrap_watcher->setFuture(QtConcurrent::run([]() {
+    QString catalog_bootstrap_error;
+    if (!photo_editor::desktop::AppBootstrap::ensureCatalogService(&catalog_bootstrap_error) &&
+        !catalog_bootstrap_error.isEmpty()) {
+      return catalog_bootstrap_error;
+    }
+    return QString();
+  }));
   scheduleDesktopProofAutorun(&editor_preview);
 
   // Periodically write session state for crash recovery

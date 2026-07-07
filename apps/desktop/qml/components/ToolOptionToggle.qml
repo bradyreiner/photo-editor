@@ -1,0 +1,113 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+Rectangle {
+    id: root
+
+    property string label: "Option"
+    property string helperText: ""
+    property bool checked: false
+    property bool toggleEnabled: true
+    property color accent: theme.focusRing
+
+    signal toggled(bool checked)
+
+    readonly property string toolOptionToggleContract: "tool-option-toggle:v1|checked-state:true|keyboard:true|hover:true|disabled-state:true|readable-text:true|no-elide:true|tooltip-full:true"
+    readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
+
+    Theme { id: theme }
+
+    implicitWidth: Math.max(92, optionContent.implicitWidth + theme.space16)
+    implicitHeight: theme.controlHeightDense
+    radius: theme.radiusControl
+    color: !toggleEnabled
+           ? theme.alpha(theme.glassBase, 0.22)
+           : checked
+             ? theme.alpha(root.accent, optionHover.hovered ? 0.18 : 0.12)
+             : optionHover.hovered
+               ? theme.alpha(theme.glassLift, 0.38)
+               : theme.alpha(theme.glassBase, 0.34)
+    border.width: activeFocus ? 2 : 0
+    border.color: !toggleEnabled
+                  ? theme.alpha(theme.lineSoft, 0.1)
+                  : activeFocus
+                    ? theme.alpha(theme.focusRing, 0.9)
+                    : "transparent"
+    opacity: toggleEnabled ? 1 : 0.58
+    activeFocusOnTab: true
+    clip: true
+    Accessible.name: label
+    Accessible.description: helperText.length > 0 ? helperText : label
+    Accessible.role: Accessible.CheckBox
+    Accessible.checked: checked
+
+    function toggle() {
+        if (!toggleEnabled)
+            return
+        toggled(!checked)
+    }
+
+    Keys.onReturnPressed: root.toggle()
+    Keys.onEnterPressed: root.toggle()
+    Keys.onSpacePressed: root.toggle()
+
+    HoverHandler {
+        id: optionHover
+        cursorShape: root.toggleEnabled ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+    }
+
+    RowLayout {
+        id: optionContent
+        anchors.fill: parent
+        anchors.leftMargin: theme.space8
+        anchors.rightMargin: theme.space8
+        spacing: theme.space6
+
+        Rectangle {
+            Layout.preferredWidth: 12
+            Layout.preferredHeight: 12
+            Layout.alignment: Qt.AlignVCenter
+            radius: 3
+            color: root.checked ? theme.alpha(root.accent, 0.24) : theme.alpha(theme.ink950, 0.2)
+            border.width: 1
+            border.color: root.checked ? "transparent" : theme.alpha(theme.glassEdge, 0.3)
+
+            AppIcon {
+                anchors.centerIn: parent
+                width: 9
+                height: 9
+                visible: root.checked
+                name: "check"
+                color: theme.textStrong
+            }
+        }
+
+        Text {
+            id: optionLabel
+            Layout.fillWidth: true
+            text: root.label
+            color: root.checked ? theme.textStrong : theme.textMain
+            font.family: theme.fontUi
+            font.pixelSize: 11
+            font.weight: root.checked ? Font.DemiBold : Font.Medium
+            font.letterSpacing: 0
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 9
+            maximumLineCount: 1
+            elide: Text.ElideNone
+        }
+    }
+
+    ToolTip.visible: optionHover.hovered && (helperText.length > 0 || optionLabel.contentWidth > optionLabel.width + 1)
+    ToolTip.delay: 250
+    ToolTip.timeout: 3200
+    ToolTip.text: helperText.length > 0 ? helperText : label
+
+    TapHandler {
+        enabled: root.toggleEnabled
+        onTapped: root.toggle()
+    }
+}

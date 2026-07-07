@@ -6,12 +6,19 @@ import QtQuick.Layouts
 import QtQuick.Window
 import QtMultimedia
 import "../components"
+import "../components" as Components
 
 Rectangle {
     id: root
+    objectName: "timelineWorkspace"
     color: "transparent"
 
     Theme { id: theme }
+
+    readonly property string timelineVisibilityContract: "timeline-visibility:v1|always:header-program-monitor-timeline|contextual:source-panel-effects-panel-selected-clip-markers|one-expansion:tools-media-picker-effects-transitions-render-jobs|hover-focus:clip-actions-marker-actions-track-resize|diagnostic:render-errors-job-detail|preserve:functionality"
+    readonly property string timelineSurfaceContract: "timeline-surfaces:v1|program-monitor:dominant|transport:compact|source-panel:collapsible|effects-panel:collapsible|tracks:stable-rows|clips:readable|markers:contextual-strip|waveform:track-contained|minimap:secondary|no-elide:true|no-overlap:true"
+    readonly property string timelineWorkflowPolishContract: "timeline-workflow-polish:v1|first-glance:source-program-timeline-effects|close-inspection:active-tool-edit-mode-playhead-selection-markers-effects-render|clutter:panels-collapsible-details-contextual|interaction:load-source-insert-overwrite-play-trim-split-marker-effect-render|text:no-elide-no-overlap|functionality:preserved"
+    readonly property string timelinePageCompletionContract: "page-completion:v1|timeline|sidebar:source-media-picker|content:program-monitor-transport-timeline-tracks-waveform|inspector:effects-transitions-selected-clip|toolbar:tools-search-marker-filter-zoom|states:setup-empty-source-selected-dragging-rendering-error"
 
     property var currentClip: timelineDocument.currentClip
     property var sourceClip: timelineDocument.sourceClip
@@ -70,10 +77,25 @@ Rectangle {
     property real marqueeCurrentY: 0
     property var dragPreviewState: ({"visible": false, "x": 0, "y": 0, "width": 0})
     property var snapGuideState: ({"visible": false, "seconds": 0, "label": ""})
+    property var trimFeedbackState: ({"visible": false, "mode": "", "edge": "", "deltaSeconds": 0, "label": ""})
+    property bool markerFeedbackVisible: false
+    property string markerFeedbackText: ""
     property var cachedSnapPoints: []
     property real lastSnapCalcTime: 0
     readonly property var sequenceTrackModel: timelineDocument.sequenceTracks ? timelineDocument.sequenceTracks : []
     readonly property var sequenceMarkerModel: timelineDocument.sequenceMarkers ? timelineDocument.sequenceMarkers : []
+    readonly property string markerFeedbackSignature: "timeline-marker-feedback:v1|visible:" +
+                                                       String(markerFeedbackVisible) +
+                                                       "|text:" + markerFeedbackText +
+                                                       "|chip:immediate-playhead|no-elide:true"
+    readonly property string trimFeedbackSignature: "timeline-trim-feedback:v1|visible:" +
+                                                     String(trimFeedbackState.visible === true) +
+                                                     "|mode:" + String(trimFeedbackState.mode || "") +
+                                                     "|edge:" + String(trimFeedbackState.edge || "") +
+                                                     "|delta:" + Number(trimFeedbackState.deltaSeconds || 0).toFixed(2) +
+                                                     "|label:" + String(trimFeedbackState.label || "") +
+                                                     "|snap-guide-during-drag:" + String(snapGuideState.visible === true) +
+                                                     "|hover-handles:true|ghost-drag:true|no-elide:true"
     readonly property bool timelineSearchActive: timelineSearchQuery.trim().length > 0 || markerStatusFilter !== "all"
     readonly property var effectLibraryModel: [
         {"name": "Transform", "category": "Motion", "description": "Position, scale, and framing controls."},
@@ -181,6 +203,13 @@ Rectangle {
     }
     Component.onDestruction: timelinePlayback.attachVideoOutput(null)
 
+    Timer {
+        id: markerFeedbackTimer
+        interval: 1800
+        repeat: false
+        onTriggered: root.markerFeedbackVisible = false
+    }
+
     onSourcePanelCollapsedChanged: timelineWorkspaceSettings.sourcePanelCollapsed = sourcePanelCollapsed
     onSourcePanelHiddenChanged: timelineWorkspaceSettings.sourcePanelHidden = sourcePanelHidden
     onEffectsPanelCollapsedChanged: timelineWorkspaceSettings.effectsPanelCollapsed = effectsPanelCollapsed
@@ -240,6 +269,16 @@ Rectangle {
         return mediaPickerDialog.selectedMediaType !== "timeline"
                 && mediaPickerDialog.selectedFilePath.length > 0
                 && mediaPickerDialog.selectedOnline
+    }
+
+    function pickedMediaDisabledReason() {
+        if (mediaPickerDialog.selectedMediaType === "timeline")
+            return "Choose photo, video, or audio media instead of a timeline document."
+        if (mediaPickerDialog.selectedFilePath.length === 0)
+            return "Choose media from the gallery before loading it."
+        if (!mediaPickerDialog.selectedOnline)
+            return "This media is offline. Reconnect it in Library before using it in the timeline."
+        return ""
     }
 
     function preferredMediaPickerProject() {
@@ -330,6 +369,36 @@ Rectangle {
         })
     }
 
+    function timelineWorkflowPolishSignature() {
+        const mode = timelineDocument.hasActiveTimeline ? "timeline" : "setup"
+        const selected = timelineDocument.currentIndex >= 0
+        const dragging = root.dragPreviewState && root.dragPreviewState.visible === true
+        const snapVisible = root.snapGuideState && root.snapGuideState.visible === true
+        return "timeline-workflow-polish:v1" +
+               "|mode:" + mode +
+               "|tool:" + String(timelineDocument.activeTool || "select") +
+               "|edit-mode:" + String(timelineDocument.editMode || "insert") +
+               "|timeline:" + String(timelineDocument.hasActiveTimeline) +
+               "|clips:" + String(timelineDocument.clipCount) +
+               "|tracks:" + String(root.sequenceTrackModel.length) +
+               "|markers:" + String(root.sequenceMarkerModel.length) +
+               "|selected:" + String(selected) +
+               "|source:" + String(timelineDocument.hasSourceClip) +
+               "|source-panel:" + String(!root.sourcePanelHidden) + "/" + String(!root.sourcePanelCollapsed) +
+               "|effects-panel:" + String(!root.effectsPanelCollapsed) +
+               "|playhead:" + root.timecodeText(root.sequencePlayheadSeconds) +
+               "|duration:" + root.timecodeText(root.sequenceDurationSeconds()) +
+               "|playing:" + String(root.sequencePlaying) +
+               "|snapping:" + String(root.snappingEnabled) +
+               "|ripple:" + String(root.rippleModeEnabled) +
+               "|search:" + String(root.timelineSearchActive) +
+               "|marker-editor:" + String(markerEditorPopup.visible) +
+               "|drag:" + String(dragging) +
+               "|snap-guide:" + String(snapVisible) +
+               "|rendering:" + String(root.hasActiveTimelineRenderJobs()) +
+               "|preserve:source-load-insert-overwrite-play-step-seek-select-razor-slip-roll-snap-ripple-split-move-lift-extract-marker-effect-transition-zoom-save-render"
+    }
+
     function trimStartSeconds() {
         return Number(currentClip.trimStartSeconds || 0)
     }
@@ -340,6 +409,44 @@ Rectangle {
 
     function hasPlayableClip() {
         return clipSourceUrl().length > 0
+    }
+
+    function playableClipDisabledReason() {
+        if (timelineDocument.clipCount === 0)
+            return "Add media to the timeline before using playback controls."
+        if (timelineDocument.currentIndex < 0)
+            return "Select a timeline clip before using this control."
+        if (!hasPlayableClip())
+            return "The selected clip has no playable source loaded."
+        return ""
+    }
+
+    function sourceClipDisabledReason() {
+        if (!timelineDocument.hasSourceClip)
+            return "Load media to the source monitor before inserting or overwriting."
+        return ""
+    }
+
+    function selectedClipDisabledReason() {
+        if (timelineDocument.currentIndex < 0)
+            return "Select a timeline clip first."
+        return ""
+    }
+
+    function moveClipEarlierDisabledReason() {
+        if (timelineDocument.currentIndex < 0)
+            return "Select a timeline clip before moving it."
+        if (timelineDocument.currentIndex === 0)
+            return "The selected clip is already first in the sequence."
+        return ""
+    }
+
+    function moveClipLaterDisabledReason() {
+        if (timelineDocument.currentIndex < 0)
+            return "Select a timeline clip before moving it."
+        if (timelineDocument.currentIndex >= timelineDocument.clipCount - 1)
+            return "The selected clip is already last in the sequence."
+        return ""
     }
 
     function shouldShowVideoMonitor() {
@@ -410,6 +517,15 @@ Rectangle {
         if (status === "exported")
             return theme.accentCool500
         return marker && marker.color ? marker.color : theme.accentWarm300
+    }
+
+    function markerStatusTone(marker) {
+        const status = markerStatusLabel(marker ? marker.status : "", marker ? marker.completed : false)
+        if (status === "done" || status === "approved" || status === "exported")
+            return "success"
+        if (status === "review")
+            return "warning"
+        return "accent"
     }
 
     function markerMatchesFilters(marker) {
@@ -694,6 +810,172 @@ Rectangle {
         return true
     }
 
+    function timelineHeaderMenuItems() {
+        return [
+            {
+                key: "save",
+                label: root.hasActiveTimelineRenderJobs() ? "Rendering" : "Save Timeline",
+                icon: "save",
+                enabled: timelineDocument.clipCount > 0 && !root.hasActiveTimelineRenderJobs(),
+                disabledReason: root.hasActiveTimelineRenderJobs()
+                                ? "Wait for the active render to finish before saving."
+                                : "Add clips to the timeline before saving.",
+                tooltip: "Save the timeline to the library."
+            },
+            {
+                key: "jobs",
+                label: "Open Export Jobs",
+                icon: "export",
+                enabled: jobQueue && jobQueue.totalJobCountForKind("timeline_render") > 0,
+                disabledReason: "No timeline render jobs are available yet.",
+                tooltip: "Open the export queue and render jobs."
+            }
+        ]
+    }
+
+    function handleTimelineHeaderMenuAction(key) {
+        if (key === "save") {
+            root.saveTimelineToLibrary()
+            return
+        }
+        if (key === "jobs")
+            root.openJobsWorkspace()
+    }
+
+    function timelineToolMenuItems() {
+        return [
+            {
+                key: "tool-select",
+                label: "Select Tool",
+                icon: "select",
+                checked: timelineDocument.activeTool === "select",
+                tooltip: "Select, move, and trim clips."
+            },
+            {
+                key: "tool-razor",
+                label: "Razor Tool",
+                icon: "cut",
+                checked: timelineDocument.activeTool === "razor",
+                tooltip: "Split clips at the pointer."
+            },
+            {
+                key: "tool-slip",
+                label: "Slip Tool",
+                icon: "slip",
+                checked: timelineDocument.activeTool === "slip",
+                tooltip: "Slip a clip's source timing."
+            },
+            {
+                key: "tool-roll",
+                label: "Roll Tool",
+                icon: "roll",
+                checked: timelineDocument.activeTool === "roll",
+                tooltip: "Roll adjacent edit points."
+            },
+            {
+                key: "mode-insert",
+                label: "Insert Mode",
+                icon: "plus",
+                checked: timelineDocument.editMode === "insert",
+                tooltip: "Insert source media at the playhead."
+            },
+            {
+                key: "mode-overwrite",
+                label: "Overwrite Mode",
+                icon: "media",
+                checked: timelineDocument.editMode === "overwrite",
+                tooltip: "Overwrite timeline media at the playhead."
+            },
+            {
+                key: "toggle-linked",
+                label: timelineDocument.linkedSelectionEnabled ? "Linked Selection On" : "Linked Selection Off",
+                icon: "link",
+                checked: timelineDocument.linkedSelectionEnabled,
+                tooltip: "Toggle linked audio/video selection."
+            },
+            {
+                key: "toggle-snapping",
+                label: snappingEnabled ? "Snapping On" : "Snapping Off",
+                icon: "snap",
+                checked: snappingEnabled,
+                tooltip: "Toggle snapping."
+            },
+            {
+                key: "toggle-ripple",
+                label: rippleModeEnabled ? "Ripple Trim On" : "Ripple Trim Off",
+                icon: "ripple",
+                checked: rippleModeEnabled,
+                enabled: timelineDocument.currentIndex >= 0,
+                disabledReason: "Select a timeline clip before changing ripple trim.",
+                tooltip: "Toggle ripple trim for selected clips."
+            },
+            {
+                key: "split",
+                label: "Split At Playhead",
+                icon: "cut",
+                enabled: root.hasPlayableClip(),
+                disabledReason: "Load a playable clip and place the playhead before splitting.",
+                tooltip: "Split the selected clip at the playhead."
+            },
+            {
+                key: "delete",
+                label: rippleModeEnabled ? "Extract Selected Clip" : "Lift Selected Clip",
+                icon: "delete",
+                destructive: true,
+                separatorBefore: true,
+                enabled: timelineDocument.currentIndex >= 0,
+                disabledReason: "Select a timeline clip before removing it.",
+                tooltip: rippleModeEnabled ? "Remove the selected clip and close the gap." : "Remove the selected clip and leave the gap."
+            }
+        ]
+    }
+
+    function handleTimelineToolMenuAction(key) {
+        if (key === "tool-select") {
+            timelineDocument.activeTool = "select"
+            return
+        }
+        if (key === "tool-razor") {
+            timelineDocument.activeTool = "razor"
+            return
+        }
+        if (key === "tool-slip") {
+            timelineDocument.activeTool = "slip"
+            return
+        }
+        if (key === "tool-roll") {
+            timelineDocument.activeTool = "roll"
+            return
+        }
+        if (key === "mode-insert") {
+            timelineDocument.editMode = "insert"
+            return
+        }
+        if (key === "mode-overwrite") {
+            timelineDocument.editMode = "overwrite"
+            return
+        }
+        if (key === "toggle-linked") {
+            timelineDocument.linkedSelectionEnabled = !timelineDocument.linkedSelectionEnabled
+            return
+        }
+        if (key === "toggle-snapping") {
+            snappingEnabled = !snappingEnabled
+            return
+        }
+        if (key === "toggle-ripple") {
+            if (timelineDocument.currentIndex >= 0)
+                rippleModeEnabled = !rippleModeEnabled
+            return
+        }
+        if (key === "split") {
+            root.splitAtPlayhead()
+            return
+        }
+        if (key === "delete")
+            root.deleteSelectedTimelineClip()
+    }
+
     function hasActiveTimelineRenderJobs() {
         return jobQueue && jobQueue.activeJobCountForKind("timeline_render") > 0
     }
@@ -795,6 +1077,7 @@ Rectangle {
     function resetTimelinePreviewState() {
         dragPreviewState = {"visible": false, "x": 0, "y": 0, "width": 0}
         snapGuideState = {"visible": false, "seconds": 0, "label": ""}
+        trimFeedbackState = {"visible": false, "mode": "", "edge": "", "deltaSeconds": 0, "label": ""}
     }
 
     function updateSnapGuide(seconds, snapped, labelPrefix) {
@@ -803,6 +1086,38 @@ Rectangle {
         } else {
             snapGuideState = {"visible": false, "seconds": 0, "label": ""}
         }
+    }
+
+    function signedSecondsLabel(value) {
+        const seconds = Number(value || 0)
+        if (Math.abs(seconds) < 0.005)
+            return "0.00s"
+        return (seconds > 0 ? "+" : "") + seconds.toFixed(2) + "s"
+    }
+
+    function updateTrimFeedback(mode, edge, baselineSeconds, nextSeconds) {
+        const normalizedMode = String(mode || "trim")
+        const normalizedEdge = String(edge || "")
+        const delta = Number(nextSeconds || 0) - Number(baselineSeconds || 0)
+        const title = normalizedMode === "slip" ? "Slip"
+                    : normalizedMode === "roll" ? "Roll"
+                    : normalizedEdge === "out" ? "Trim Out"
+                    : "Trim In"
+        trimFeedbackState = {
+            "visible": true,
+            "mode": normalizedMode,
+            "edge": normalizedEdge,
+            "deltaSeconds": delta,
+            "label": title + " " + root.signedSecondsLabel(delta)
+        }
+    }
+
+    function addMarkerAtPlayhead() {
+        timelineDocument.addSequenceMarker()
+        markerFeedbackText = "Marker " + root.timecodeText(sequencePlayheadSeconds)
+        markerFeedbackVisible = true
+        markerFeedbackTimer.restart()
+        return markerFeedbackSignature
     }
 
     function applyEffectToClip(clipIndex, effectName) {
@@ -827,7 +1142,23 @@ Rectangle {
             timelineDocument.setSelectedClipFadeInSeconds(durationSeconds)
         else if (transitionName === "Fade Out")
             timelineDocument.setSelectedClipFadeOutSeconds(durationSeconds)
-        inspectorTab = "transitions"
+            inspectorTab = "transitions"
+    }
+
+    function clipMetadataText(clip) {
+        if (!clip)
+            return ""
+        if (clip.trackKind === "audio") {
+            if (clip.silentPlaceholder)
+                return "Silent bed"
+            return Number(clip.audioGainDb || 0).toFixed(1) + " dB  -  Fades "
+                    + Number(clip.fadeInSeconds || 0).toFixed(1)
+                    + "/" + Number(clip.fadeOutSeconds || 0).toFixed(1)
+        }
+        return String(clip.trimmedDurationText || "")
+                + "  -  Op "
+                + Math.round(Number(clip.opacity || 1) * 100)
+                + "%  -  " + Number(clip.playbackRate || 1).toFixed(2) + "x"
     }
 
     function selectClipFromMarquee() {
@@ -890,6 +1221,7 @@ Rectangle {
                     text: "Load To Source"
                     tone: "primary"
                     enabled: root.canLoadPickedMedia()
+                    disabledReason: root.pickedMediaDisabledReason()
                     onClicked: root.addPickedMedia()
                 }
 
@@ -897,6 +1229,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "Insert"
                     enabled: root.canLoadPickedMedia()
+                    disabledReason: root.pickedMediaDisabledReason()
                     onClicked: root.insertPickedMedia()
                 }
 
@@ -904,6 +1237,7 @@ Rectangle {
                     Layout.fillWidth: true
                     text: "Overwrite"
                     enabled: root.canLoadPickedMedia()
+                    disabledReason: root.pickedMediaDisabledReason()
                     onClicked: root.overwritePickedMedia()
                 }
             }
@@ -1003,6 +1337,7 @@ Rectangle {
     }
 
     ColumnLayout {
+        objectName: "timelineSetupSurface"
         anchors.fill: parent
         visible: !timelineDocument.hasActiveTimeline
         spacing: 0
@@ -1223,58 +1558,20 @@ Rectangle {
                         model: root.recentTimelineRecords
                         spacing: 4
 
-                        delegate: Rectangle {
+                        delegate: RecentDocumentRow {
                             required property var modelData
                             required property int index
 
                             width: recentTimelinesList.width
-                            height: 48
-                            radius: 8
-                            color: recentHover.containsMouse
-                                   ? theme.alpha(theme.accentCool400, 0.16)
-                                   : theme.alpha(theme.ink900, 0.62)
-                            border.width: 1
-                            border.color: recentHover.containsMouse
-                                          ? theme.alpha(theme.accentCool400, 0.42)
-                                          : theme.alpha(theme.lineSoft, 0.24)
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 12
-                                anchors.rightMargin: 12
-                                anchors.topMargin: 6
-                                anchors.bottomMargin: 6
-                                spacing: 2
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.name || "Untitled"
-                                    color: theme.textStrong
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 12
-                                    font.weight: Font.DemiBold
-                                    elide: Text.ElideRight
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.updatedAt || modelData.createdAt || ""
-                                    color: theme.textFaint
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 9
-                                    elide: Text.ElideRight
-                                }
-                            }
-
-                            MouseArea {
-                                id: recentHover
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: {
-                                    if (modelData.documentPath && modelData.documentPath.length > 0)
-                                        timelineDocument.loadTimeline(modelData.documentPath)
-                                }
+                            height: 60
+                            iconName: "timeline"
+                            title: modelData.name || "Untitled"
+                            detail: modelData.updatedAt || modelData.createdAt || ""
+                            accent: theme.accentCool400
+                            actionable: modelData.documentPath && modelData.documentPath.length > 0
+                            onActivated: {
+                                if (modelData.documentPath && modelData.documentPath.length > 0)
+                                    timelineDocument.loadTimeline(modelData.documentPath)
                             }
                         }
                     }
@@ -1340,10 +1637,10 @@ Rectangle {
             sequence: "M"
             context: Qt.WindowShortcut
             enabled: root.shortcutsEnabled()
-            onActivated: timelineDocument.addSequenceMarker()
+            onActivated: root.addMarkerAtPlayhead()
         }
         Shortcut {
-            sequence: StandardKey.Delete
+            sequences: [StandardKey.Delete]
             context: Qt.WindowShortcut
             enabled: root.shortcutsEnabled() && timelineDocument.currentIndex >= 0
             onActivated: root.deleteSelectedTimelineClip()
@@ -1404,6 +1701,8 @@ Rectangle {
         }
 
         RowLayout {
+            objectName: "timelineHeaderBar"
+            readonly property string visibilityRole: "always-visible|timeline-name-format-media-save"
             Layout.fillWidth: true
             spacing: 8
 
@@ -1454,14 +1753,21 @@ Rectangle {
                 onClicked: root.openMediaPicker()
             }
 
-            ActionButton {
-                text: root.hasActiveTimelineRenderJobs() ? "Rendering..." : "Save"
+            MenuButton {
+                text: root.hasActiveTimelineRenderJobs() ? "Rendering" : "Save"
                 iconName: "save"
                 compact: true
                 tooltipText: "Save timeline to the library"
                 tone: "primary"
-                enabled: timelineDocument.clipCount > 0 && !root.hasActiveTimelineRenderJobs()
-                onClicked: root.saveTimelineToLibrary()
+                enabled: timelineDocument.clipCount > 0 ||
+                         (jobQueue && jobQueue.totalJobCountForKind("timeline_render") > 0)
+                menuItems: root.timelineHeaderMenuItems()
+                menuWidth: 190
+                onClicked: {
+                    if (timelineDocument.clipCount > 0 && !root.hasActiveTimelineRenderJobs())
+                        root.saveTimelineToLibrary()
+                }
+                onMenuItemTriggered: root.handleTimelineHeaderMenuAction(key)
             }
 
             ActionButton {
@@ -1473,6 +1779,8 @@ Rectangle {
         }
 
         RowLayout {
+            objectName: "timelineStatusBar"
+            readonly property string visibilityRole: "always-visible|timecode-source-tool-mode-render-status"
             Layout.fillWidth: true
             spacing: 8
 
@@ -1497,7 +1805,9 @@ Rectangle {
                 color: theme.textMain
                 font.family: theme.fontUi
                 font.pixelSize: 11
-                elide: Text.ElideRight
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: 8
+                elide: Text.ElideNone
             }
 
             Rectangle {
@@ -1535,12 +1845,15 @@ Rectangle {
         }
 
         SplitView {
+            objectName: "timelineMainSplit"
+            readonly property string visibilityRole: "media-surface|source-program-effects"
             Layout.fillWidth: true
             Layout.fillHeight: true
             orientation: Qt.Horizontal
 
             TimelineSourcePanel {
                 id: sourceRail
+                objectName: "timelineSourceRail"
                 visible: !sourcePanelHidden
                 SplitView.preferredWidth: sourcePanelHidden ? 0 : (sourcePanelCollapsed ? 56 : sourcePanelWidth)
                 SplitView.minimumWidth: sourcePanelHidden ? 0 : (sourcePanelCollapsed ? 56 : 260)
@@ -1561,6 +1874,8 @@ Rectangle {
             }
 
             Rectangle {
+                objectName: "timelineProgramPanel"
+                readonly property string surfaceContract: "timeline-program-panel:v1|monitor-dominant:true|transport-compact:true|empty-action:media-picker|error-nonblocking:true|no-overlap:true"
                 SplitView.fillWidth: true
                 SplitView.minimumWidth: 480
                 radius: 12
@@ -1574,6 +1889,7 @@ Rectangle {
                     spacing: 8
 
                     Rectangle {
+                        objectName: "timelineProgramMonitor"
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         radius: 12
@@ -1697,6 +2013,8 @@ Rectangle {
                     }
 
                     Rectangle {
+                        objectName: "timelineTransportBar"
+                        readonly property string transportContract: "timeline-transport:v1|playback:first|edit-actions:compact|timecode:stable|slider:stable|disabled-reasons:true|no-elide:true|no-overlap:true"
                         Layout.fillWidth: true
                         radius: 10
                         color: theme.alpha(theme.ink950, 0.78)
@@ -1714,11 +2032,13 @@ Rectangle {
                                 spacing: 6
 
                                 ActionButton {
+                                    objectName: "timelinePlayPauseButton"
                                     iconName: sequencePlaying ? "pause" : "play"
                                     showText: false
                                     compact: true
                                     tooltipText: sequencePlaying ? "Pause playback" : "Play sequence"
                                     enabled: root.hasPlayableClip()
+                                    disabledReason: root.playableClipDisabledReason()
                                     onClicked: {
                                         if (sequencePlaying) {
                                             timelinePlayback.pause()
@@ -1734,6 +2054,7 @@ Rectangle {
                                     compact: true
                                     tooltipText: "Jump to start"
                                     enabled: timelineDocument.clipCount > 0
+                                    disabledReason: "Add clips to the timeline before seeking."
                                     onClicked: timelinePlayback.seekSequenceSeconds(0)
                                 }
 
@@ -1743,6 +2064,7 @@ Rectangle {
                                     compact: true
                                     tooltipText: "Step back one frame"
                                     enabled: root.hasPlayableClip()
+                                    disabledReason: root.playableClipDisabledReason()
                                     onClicked: timelinePlayback.stepFrames(-1)
                                 }
 
@@ -1752,6 +2074,7 @@ Rectangle {
                                     compact: true
                                     tooltipText: "Step forward one frame"
                                     enabled: root.hasPlayableClip()
+                                    disabledReason: root.playableClipDisabledReason()
                                     onClicked: timelinePlayback.stepFrames(1)
                                 }
 
@@ -1768,24 +2091,29 @@ Rectangle {
                                     tooltipText: "Split at playhead"
                                     tone: "primary"
                                     enabled: root.hasPlayableClip()
+                                    disabledReason: root.playableClipDisabledReason()
                                     onClicked: splitAtPlayhead()
                                 }
 
                                 ActionButton {
+                                    objectName: "timelineInsertSourceButton"
                                     iconName: "insert"
                                     showText: false
                                     compact: true
                                     tooltipText: "Insert source at playhead"
                                     enabled: timelineDocument.hasSourceClip
+                                    disabledReason: root.sourceClipDisabledReason()
                                     onClicked: timelineDocument.insertSourceClipAtPlayhead()
                                 }
 
                                 ActionButton {
+                                    objectName: "timelineOverwriteSourceButton"
                                     iconName: "overwrite"
                                     showText: false
                                     compact: true
                                     tooltipText: "Overwrite with source at playhead"
                                     enabled: timelineDocument.hasSourceClip
+                                    disabledReason: root.sourceClipDisabledReason()
                                     onClicked: timelineDocument.overwriteSourceClipAtPlayhead()
                                 }
 
@@ -1801,6 +2129,7 @@ Rectangle {
                                     compact: true
                                     tooltipText: "Move clip earlier"
                                     enabled: timelineDocument.currentIndex > 0
+                                    disabledReason: root.moveClipEarlierDisabledReason()
                                     onClicked: timelineDocument.moveSelectedBackward()
                                 }
 
@@ -1811,6 +2140,7 @@ Rectangle {
                                     tooltipText: "Move clip later"
                                     enabled: timelineDocument.currentIndex >= 0
                                              && timelineDocument.currentIndex < timelineDocument.clipCount - 1
+                                    disabledReason: root.moveClipLaterDisabledReason()
                                     onClicked: timelineDocument.moveSelectedForward()
                                 }
 
@@ -1820,6 +2150,7 @@ Rectangle {
                                     compact: true
                                     tooltipText: rippleModeEnabled ? "Extract selected clip and close gap" : "Lift selected clip and leave gap"
                                     enabled: timelineDocument.currentIndex >= 0
+                                    disabledReason: root.selectedClipDisabledReason()
                                     onClicked: root.deleteSelectedTimelineClip()
                                 }
 
@@ -1833,9 +2164,12 @@ Rectangle {
                                 }
                             }
 
-                            Slider {
+                            ToolValueSlider {
                                 id: transportSlider
                                 Layout.fillWidth: true
+                                label: "Transport"
+                                valueText: timecodeText(sequencePlayheadSeconds) + " / " + timecodeText(sequenceDurationSeconds())
+                                tooltipText: "Timeline transport - " + valueText
                                 from: 0
                                 to: Math.max(0, sequenceDurationSeconds())
                                 value: sequencePlayheadSeconds
@@ -1853,6 +2187,7 @@ Rectangle {
 
             TimelineEffectsPanel {
                 id: effectsRail
+                objectName: "timelineEffectsRail"
                 SplitView.preferredWidth: effectsPanelCollapsed ? 56 : effectsPanelWidth
                 SplitView.minimumWidth: effectsPanelCollapsed ? 56 : 288
                 SplitView.maximumWidth: effectsPanelCollapsed ? 56 : 460
@@ -1873,6 +2208,8 @@ Rectangle {
         }
 
         Rectangle {
+            objectName: "timelineSurfacePanel"
+            readonly property string surfaceContract: "timeline-surface:v1|toolbar:compact|search-filter:contextual|tools:one-expansion|tracks:stable|clips:readable|markers:contextual|minimap:secondary|waveform:track-contained|no-overlap:true"
             Layout.fillWidth: true
             Layout.preferredHeight: 378
             radius: 12
@@ -1886,6 +2223,8 @@ Rectangle {
                 spacing: 6
 
                 RowLayout {
+                    objectName: "timelineSurfaceHeader"
+                    readonly property string visibilityRole: "always-visible|track-count-marker-count-add-marker-add-track-timecode"
                     Layout.fillWidth: true
                     spacing: 8
 
@@ -1911,6 +2250,18 @@ Rectangle {
                         font.pixelSize: 10
                     }
 
+                    StatusChip {
+                        objectName: "timelineMarkerFeedbackChip"
+                        visible: root.markerFeedbackVisible
+                        text: root.markerFeedbackText
+                        tone: "accent"
+                        iconName: "star"
+                        compact: true
+                        minimumReadableWidth: 118
+                        maximumReadableWidth: 180
+                        tooltipText: "Marker added at the current playhead."
+                    }
+
                     Item { Layout.fillWidth: true }
 
                     ActionButton {
@@ -1918,7 +2269,7 @@ Rectangle {
                         iconName: "plus"
                         compact: true
                         tooltipText: "Add marker at playhead"
-                        onClicked: timelineDocument.addSequenceMarker()
+                        onClicked: root.addMarkerAtPlayhead()
                     }
 
                     ActionButton {
@@ -1938,6 +2289,8 @@ Rectangle {
                 }
 
                 RowLayout {
+                    objectName: "timelineSearchBar"
+                    readonly property string visibilityRole: "contextual|clip-marker-search-filter-navigation-clear"
                     Layout.fillWidth: true
                     spacing: 6
 
@@ -1984,6 +2337,8 @@ Rectangle {
                 }
 
                 Flow {
+                    objectName: "timelineMarkerFilterBar"
+                    readonly property string visibilityRole: "contextual|marker-status-filter"
                     Layout.fillWidth: true
                     spacing: 6
 
@@ -2007,86 +2362,103 @@ Rectangle {
                 }
 
                 Flow {
+                    objectName: "timelineToolBar"
+                    readonly property string visibilityRole: "one-expansion|tool-switch-edit-mode-snapping-ripple-zoom-split-delete"
                     Layout.fillWidth: true
                     spacing: 6
 
-                    ActionButton {
-                        iconName: "select"
-                        showText: false
+                    MenuButton {
+                        text: "Tools"
+                        iconName: timelineDocument.activeTool === "razor" ? "cut"
+                                  : timelineDocument.activeTool === "slip" ? "slip"
+                                  : timelineDocument.activeTool === "roll" ? "roll"
+                                  : "select"
                         compact: true
-                        tooltipText: "Select tool (V)"
+                        tooltipText: "Switch timeline tools and edit modes."
+                        menuItems: root.timelineToolMenuItems()
+                        menuWidth: 218
+                        onClicked: timelineDocument.activeTool = "select"
+                        onMenuItemTriggered: root.handleTimelineToolMenuAction(key)
+                    }
+
+                    Components.ToolButton {
+                        iconName: "select"
+                        compact: true
+                        label: "Select tool"
+                        shortcut: "V"
                         active: timelineDocument.activeTool === "select"
                         onClicked: timelineDocument.activeTool = "select"
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "cut"
-                        showText: false
                         compact: true
-                        tooltipText: "Razor tool (C)"
+                        label: "Razor tool"
+                        shortcut: "C"
                         active: timelineDocument.activeTool === "razor"
                         onClicked: timelineDocument.activeTool = "razor"
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "slip"
-                        showText: false
                         compact: true
-                        tooltipText: "Slip tool (Y)"
+                        label: "Slip tool"
+                        shortcut: "Y"
                         active: timelineDocument.activeTool === "slip"
                         onClicked: timelineDocument.activeTool = "slip"
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "roll"
-                        showText: false
                         compact: true
-                        tooltipText: "Roll tool (N)"
+                        label: "Roll tool"
+                        shortcut: "N"
                         active: timelineDocument.activeTool === "roll"
                         onClicked: timelineDocument.activeTool = "roll"
                     }
 
-                    ActionButton {
-                        text: "Ins"
+                    Components.ToolButton {
+                        label: "Insert"
+                        iconText: "Ins"
+                        showLabel: true
                         compact: true
-                        tooltipText: "Insert edit mode"
                         active: timelineDocument.editMode === "insert"
                         onClicked: timelineDocument.editMode = "insert"
                     }
 
-                    ActionButton {
-                        text: "Ovr"
+                    Components.ToolButton {
+                        label: "Overwrite"
+                        iconText: "Ovr"
+                        showLabel: true
                         compact: true
-                        tooltipText: "Overwrite edit mode"
                         active: timelineDocument.editMode === "overwrite"
                         onClicked: timelineDocument.editMode = "overwrite"
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "link"
-                        showText: false
                         compact: true
-                        tooltipText: timelineDocument.linkedSelectionEnabled ? "Disable linked selection" : "Enable linked selection"
+                        label: timelineDocument.linkedSelectionEnabled ? "Disable linked selection" : "Enable linked selection"
                         active: timelineDocument.linkedSelectionEnabled
                         onClicked: timelineDocument.linkedSelectionEnabled = !timelineDocument.linkedSelectionEnabled
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "snap"
-                        showText: false
                         compact: true
-                        tooltipText: snappingEnabled ? "Disable snapping (S)" : "Enable snapping (S)"
+                        label: snappingEnabled ? "Disable snapping" : "Enable snapping"
+                        shortcut: "S"
                         active: snappingEnabled
                         onClicked: snappingEnabled = !snappingEnabled
                     }
 
-                    ActionButton {
+                    Components.ToolButton {
                         iconName: "ripple"
-                        showText: false
                         compact: true
-                        tooltipText: rippleModeEnabled ? "Disable ripple trim" : "Enable ripple trim"
+                        label: rippleModeEnabled ? "Disable ripple trim" : "Enable ripple trim"
                         active: rippleModeEnabled
                         enabled: timelineDocument.currentIndex >= 0
+                        disabledReason: "Select a timeline clip before changing ripple trim."
                         onClicked: rippleModeEnabled = !rippleModeEnabled
                     }
 
@@ -2114,9 +2486,12 @@ Rectangle {
                         color: theme.alpha(theme.lineSoft, 0.78)
                     }
 
-                    Slider {
+                    ToolValueSlider {
                         id: zoomSlider
                         implicitWidth: 120
+                        label: "Timeline zoom"
+                        valueText: Math.round(root.timelineZoom / 84 * 100) + "%"
+                        tooltipText: "Timeline zoom - " + valueText
                         from: Math.log2(root.timelineZoomMin)
                         to: Math.log2(root.timelineZoomMax)
                         value: Math.log2(root.timelineZoom)
@@ -2139,6 +2514,8 @@ Rectangle {
                 }
 
                 Rectangle {
+                    objectName: "timelineMarkerStrip"
+                    readonly property string visibilityRole: "contextual|marker-review-jump-edit-complete"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 88
                     radius: 10
@@ -2155,89 +2532,28 @@ Rectangle {
                         clip: true
                         model: sequenceMarkerModel
 
-                        delegate: Rectangle {
+                        delegate: TimelineMarkerCard {
                             required property var modelData
                             visible: root.markerMatchesFilters(modelData)
                             width: visible ? 254 : 0
-                            height: parent.height - 4
-                            radius: 8
-                            color: theme.alpha(root.markerAccentColor(modelData), 0.12)
-                            border.width: 1
-                            border.color: theme.alpha(root.markerAccentColor(modelData), 0.42)
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 8
-                                spacing: 4
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Label {
-                                        text: modelData.label
-                                        color: theme.textStrong
-                                        font.family: theme.fontUi
-                                        font.pixelSize: 11
-                                        font.weight: Font.DemiBold
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-
-                                    Label {
-                                        text: root.markerStatusLabel(modelData.status, modelData.completed)
-                                        color: theme.ink950
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 8
-                                        padding: 4
-                                        background: Rectangle {
-                                            radius: 5
-                                            color: root.markerAccentColor(modelData)
-                                        }
-                                    }
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: modelData.note && modelData.note.length > 0 ? modelData.note : "No note"
-                                    color: modelData.note && modelData.note.length > 0 ? theme.textMain : theme.textFaint
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    elide: Text.ElideRight
-                                }
-
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 6
-
-                                    Label {
-                                        text: modelData.timecode
-                                        color: theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 9
-                                    }
-
-                                    Item { Layout.fillWidth: true }
-
-                                    ActionButton {
-                                        text: "Jump"
-                                        compact: true
-                                        onClicked: timelineDocument.seekSequenceMarker(modelData.markerId)
-                                    }
-
-                                    ActionButton {
-                                        text: "Edit"
-                                        compact: true
-                                        onClicked: root.openMarkerEditor(modelData)
-                                    }
-
-                                    ActionButton {
-                                        text: modelData.completed ? "Undo" : "Done"
-                                        compact: true
-                                        active: modelData.completed
-                                        onClicked: timelineDocument.setSequenceMarkerCompleted(modelData.markerId, !modelData.completed)
-                                    }
-                                }
+                            height: parent ? parent.height - 4 : 0
+                            objectName: "timelineMarkerCard"
+                            markerId: String(modelData.markerId || "")
+                            title: String(modelData.label || "Marker")
+                            note: String(modelData.note || "")
+                            timecode: String(modelData.timecode || "")
+                            statusText: root.markerStatusLabel(modelData.status, modelData.completed)
+                            statusTone: root.markerStatusTone(modelData)
+                            completed: Boolean(modelData.completed)
+                            accent: root.markerAccentColor(modelData)
+                            onJumpRequested: function(markerId) {
+                                timelineDocument.seekSequenceMarker(markerId)
+                            }
+                            onEditRequested: function(markerId) {
+                                root.openMarkerEditor(modelData)
+                            }
+                            onCompletionToggled: function(markerId, completed) {
+                                timelineDocument.setSequenceMarkerCompleted(markerId, completed)
                             }
                         }
                     }
@@ -2245,6 +2561,8 @@ Rectangle {
 
                 Rectangle {
                     id: minimapBar
+                    objectName: "timelineMinimapBar"
+                    readonly property string visibilityRole: "secondary|overview-scroll-playhead"
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
                     Layout.leftMargin: laneHeaderWidth
@@ -2286,7 +2604,7 @@ Rectangle {
                         x: 2 + (timelineViewport.contentX / timelineZoom) * minimapBar.barScale
                         y: 0
                         width: Math.max(20, (timelineViewport.width / timelineZoom) * minimapBar.barScale)
-                        height: parent.height
+                        height: parent ? parent.height : 0
                         radius: 3
                         color: theme.alpha(theme.textStrong, 0.12)
                         border.width: 1
@@ -2297,7 +2615,7 @@ Rectangle {
                         x: 2 + sequencePlayheadSeconds * minimapBar.barScale
                         y: 0
                         width: 1
-                        height: parent.height
+                        height: parent ? parent.height : 0
                         color: theme.accentWarm500
                     }
 
@@ -2319,6 +2637,7 @@ Rectangle {
                     spacing: 0
 
                     Item {
+                        objectName: "timelineTrackHeaderColumn"
                         Layout.preferredWidth: laneHeaderWidth
                         Layout.fillHeight: true
                         clip: true
@@ -2377,6 +2696,7 @@ Rectangle {
 
                         Flickable {
                             id: timelineViewport
+                            objectName: "timelineViewport"
                             anchors.fill: parent
                             contentWidth: timelineContentWidth
                             contentHeight: timelineContentHeight
@@ -2453,22 +2773,30 @@ Rectangle {
                                     }
                                 }
 
-                                Menu {
+                                AppMenu {
                                     id: timelineCanvasMenu
+                                    objectName: "timelineCanvasMenu"
+                                    accent: theme.accentWarm500
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         text: "Add Marker At Playhead"
-                                        onTriggered: timelineDocument.addSequenceMarker()
+                                        iconName: "star"
+                                        accent: timelineCanvasMenu.accent
+                                        onTriggered: root.addMarkerAtPlayhead()
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         text: "Insert Source Here"
+                                        iconName: "plus"
+                                        accent: timelineCanvasMenu.accent
                                         enabled: timelineDocument.hasSourceClip
                                         onTriggered: timelineDocument.insertSourceClipAtPlayhead()
                                     }
 
-                                    MenuItem {
+                                    AppMenuItem {
                                         text: "Overwrite Source Here"
+                                        iconName: "overwrite"
+                                        accent: timelineCanvasMenu.accent
                                         enabled: timelineDocument.hasSourceClip
                                         onTriggered: timelineDocument.overwriteSourceClipAtPlayhead()
                                     }
@@ -2576,47 +2904,21 @@ Rectangle {
                                 Repeater {
                                     model: sequenceMarkerModel
 
-                                    delegate: Item {
+                                    delegate: TimelineMarkerPin {
                                         required property var modelData
                                         visible: root.markerMatchesFilters(modelData)
 
                                         x: Number(modelData.seconds || 0) * timelineZoom
                                         y: 0
-                                        width: 2
                                         height: timelineContentHeight
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            width: 2
-                                            height: timelineContentHeight
-                                            color: root.markerAccentColor(modelData)
-                                            opacity: 0.7
+                                        markerId: String(modelData.markerId || "")
+                                        label: String(modelData.label || "Marker")
+                                        accent: root.markerAccentColor(modelData)
+                                        onJumpRequested: function(markerId) {
+                                            timelineDocument.seekSequenceMarker(markerId)
                                         }
-
-                                        Rectangle {
-                                            anchors.top: parent.top
-                                            anchors.topMargin: 2
-                                            anchors.horizontalCenter: parent.horizontalCenter
-                                            radius: 6
-                                            color: root.markerAccentColor(modelData)
-                                            implicitWidth: markerLabel.implicitWidth + 12
-                                            implicitHeight: markerLabel.implicitHeight + 6
-
-                                            Label {
-                                                id: markerLabel
-                                                anchors.centerIn: parent
-                                                text: modelData.label
-                                                color: theme.ink950
-                                                font.family: theme.fontMono
-                                                font.pixelSize: 8
-                                            }
-                                        }
-
-                                        MouseArea {
-                                            anchors.fill: parent
-                                            cursorShape: Qt.PointingHandCursor
-                                            onClicked: timelineDocument.seekSequenceMarker(modelData.markerId)
-                                            onDoubleClicked: root.openMarkerEditor(modelData)
+                                        onEditRequested: function(markerId) {
+                                            root.openMarkerEditor(modelData)
                                         }
                                     }
                                 }
@@ -2663,7 +2965,7 @@ Rectangle {
                                                 x: committedX + dragOffsetX
                                                 y: 6 + dragOffsetY
                                                 width: root.clipWidth(modelData.trimmedDurationSeconds) - 6
-                                                height: parent.height - 12
+                                                height: parent ? parent.height - 12 : 0
                                                 radius: 8
                                                 color: {
                                                     if (modelData.trackKind === "audio") {
@@ -2761,6 +3063,7 @@ Rectangle {
                                                         } else if (timelineDocument.activeTool === "slip") {
                                                             const deltaSeconds = (mouse.x - clipBlock.pressX) / timelineZoom
                                                             timelineDocument.slipSelectedClipBySeconds(deltaSeconds)
+                                                            root.updateTrimFeedback("slip", "body", 0, deltaSeconds)
                                                             clipBlock.pressX = mouse.x
                                                             root.updateSnapGuide(
                                                                         Number(modelData.startSeconds || 0),
@@ -2810,30 +3113,41 @@ Rectangle {
                                                     }
                                                 }
 
-                                                Menu {
+                                                AppMenu {
                                                     id: clipMenu
+                                                    objectName: "timelineClipMenu"
+                                                    accent: theme.accentWarm500
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         text: "Split At Playhead"
+                                                        iconName: "cut"
+                                                        accent: clipMenu.accent
                                                         enabled: root.hasPlayableClip()
                                                         onTriggered: splitAtPlayhead()
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         text: "Move Earlier"
+                                                        iconName: "chevron-left"
+                                                        accent: clipMenu.accent
                                                         enabled: timelineDocument.currentIndex > 0
                                                         onTriggered: timelineDocument.moveSelectedBackward()
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         text: "Move Later"
+                                                        iconName: "chevron-right"
+                                                        accent: clipMenu.accent
                                                         enabled: timelineDocument.currentIndex >= 0
                                                                  && timelineDocument.currentIndex < timelineDocument.clipCount - 1
                                                         onTriggered: timelineDocument.moveSelectedForward()
                                                     }
 
-                                                    MenuItem {
+                                                    AppMenuItem {
                                                         text: rippleModeEnabled ? "Extract Clip" : "Lift Clip"
+                                                        iconName: "delete"
+                                                        danger: true
+                                                        accent: clipMenu.accent
                                                         enabled: timelineDocument.currentIndex >= 0
                                                         onTriggered: root.deleteSelectedTimelineClip()
                                                     }
@@ -2919,6 +3233,10 @@ Rectangle {
                                                             timelineDocument.beginContinuousEdit()
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            root.updateTrimFeedback(timelineDocument.activeTool === "roll" ? "roll" : "trim",
+                                                                                    "in",
+                                                                                    Number(modelData.startSeconds || 0),
+                                                                                    snapResult.seconds)
                                                             if (timelineDocument.activeTool === "roll")
                                                                 timelineDocument.rollSelectedClipStartToSequenceSeconds(snapResult.seconds)
                                                             else
@@ -2930,6 +3248,10 @@ Rectangle {
                                                                 return
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            root.updateTrimFeedback(timelineDocument.activeTool === "roll" ? "roll" : "trim",
+                                                                                    "in",
+                                                                                    Number(modelData.startSeconds || 0),
+                                                                                    snapResult.seconds)
                                                             if (timelineDocument.activeTool === "roll")
                                                                 timelineDocument.rollSelectedClipStartToSequenceSeconds(snapResult.seconds)
                                                             else
@@ -2985,6 +3307,10 @@ Rectangle {
                                                             timelineDocument.beginContinuousEdit()
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            root.updateTrimFeedback(timelineDocument.activeTool === "roll" ? "roll" : "trim",
+                                                                                    "out",
+                                                                                    Number(modelData.endSeconds || 0),
+                                                                                    snapResult.seconds)
                                                             if (timelineDocument.activeTool === "roll")
                                                                 timelineDocument.rollSelectedClipEndToSequenceSeconds(snapResult.seconds)
                                                             else
@@ -2996,6 +3322,10 @@ Rectangle {
                                                                 return
                                                             const point = parent.mapToItem(trackLane, mouse.x, mouse.y)
                                                             const snapResult = root.snapSequenceResult(point.x / timelineZoom, modelData.clipId)
+                                                            root.updateTrimFeedback(timelineDocument.activeTool === "roll" ? "roll" : "trim",
+                                                                                    "out",
+                                                                                    Number(modelData.endSeconds || 0),
+                                                                                    snapResult.seconds)
                                                             if (timelineDocument.activeTool === "roll")
                                                                 timelineDocument.rollSelectedClipEndToSequenceSeconds(snapResult.seconds)
                                                             else
@@ -3010,8 +3340,11 @@ Rectangle {
                                                 }
 
                                                 Rectangle {
+                                                    objectName: "timelineTrimFeedbackOverlay"
+                                                    readonly property string feedbackContract: root.trimFeedbackSignature
                                                     visible: modelData.trackKind === "video"
-                                                             && (leftTrimHandle.pressed || rightTrimHandle.pressed)
+                                                             && ((root.trimFeedbackState.visible === true && modelData.selected)
+                                                                 || leftTrimHandle.pressed || rightTrimHandle.pressed)
                                                     anchors.horizontalCenter: parent.horizontalCenter
                                                     anchors.bottom: parent.top
                                                     anchors.bottomMargin: 6
@@ -3024,12 +3357,19 @@ Rectangle {
 
                                                     Label {
                                                         id: trimOverlayLabel
+                                                        objectName: "timelineTrimFeedbackLabel"
                                                         anchors.centerIn: parent
-                                                        text: "In " + Number(modelData.trimStartSeconds || 0).toFixed(2)
-                                                              + "  •  Out " + Number(modelData.trimEndSeconds || 0).toFixed(2)
+                                                        text: root.trimFeedbackState.visible === true
+                                                              && String(root.trimFeedbackState.label || "").length > 0
+                                                              ? String(root.trimFeedbackState.label)
+                                                              : "In " + Number(modelData.trimStartSeconds || 0).toFixed(2)
+                                                                + "  •  Out " + Number(modelData.trimEndSeconds || 0).toFixed(2)
                                                         color: theme.textStrong
                                                         font.family: theme.fontMono
                                                         font.pixelSize: 9
+                                                        elide: Text.ElideNone
+                                                        fontSizeMode: Text.HorizontalFit
+                                                        minimumPixelSize: 7
                                                     }
                                                 }
 
@@ -3165,69 +3505,13 @@ Rectangle {
                                                     }
                                                 }
 
-                                                ColumnLayout {
+                                                TimelineClipContent {
                                                     anchors.fill: parent
-                                                    anchors.leftMargin: 8 + clipBlock.trimHandleWidth
-                                                    anchors.rightMargin: 8 + clipBlock.trimHandleWidth
-                                                    anchors.topMargin: 6
-                                                    anchors.bottomMargin: 6
-                                                    spacing: 2
-
-                                                    Label {
-                                                        Layout.fillWidth: true
-                                                        text: modelData.displayLabel
-                                                        color: theme.textStrong
-                                                        font.family: theme.fontUi
-                                                        font.pixelSize: 10
-                                                        elide: Text.ElideRight
-                                                    }
-
-                                                    Label {
-                                                        Layout.fillWidth: true
-                                                        text: modelData.trackKind === "audio"
-                                                              ? (modelData.silentPlaceholder
-                                                                 ? "Silent bed"
-                                                                 : (Number(modelData.audioGainDb || 0).toFixed(1) + " dB  •  Fades "
-                                                                    + Number(modelData.fadeInSeconds || 0).toFixed(1)
-                                                                    + "/" + Number(modelData.fadeOutSeconds || 0).toFixed(1)))
-                                                              : (modelData.trimmedDurationText
-                                                                 + "  •  Op "
-                                                                 + Math.round(Number(modelData.opacity || 1) * 100)
-                                                                 + "%  •  " + Number(modelData.playbackRate || 1).toFixed(2) + "x")
-                                                        color: theme.textMuted
-                                                        font.family: theme.fontMono
-                                                        font.pixelSize: 9
-                                                        elide: Text.ElideRight
-                                                    }
-
-                                                    Flow {
-                                                        Layout.fillWidth: true
-                                                        spacing: 4
-                                                        visible: modelData.effectStack && modelData.effectStack.length > 0
-
-                                                        Repeater {
-                                                            model: modelData.effectStack ? modelData.effectStack : []
-
-                                                            delegate: Rectangle {
-                                                                required property var modelData
-                                                                radius: 5
-                                                                color: theme.alpha(theme.ink950, 0.74)
-                                                                border.width: 1
-                                                                border.color: theme.alpha(theme.lineStrong, 0.34)
-                                                                implicitWidth: effectChipLabel.implicitWidth + 10
-                                                                implicitHeight: effectChipLabel.implicitHeight + 4
-
-                                                                Label {
-                                                                    id: effectChipLabel
-                                                                    anchors.centerIn: parent
-                                                                    text: modelData
-                                                                    color: theme.textMain
-                                                                    font.family: theme.fontMono
-                                                                    font.pixelSize: 8
-                                                                }
-                                                            }
-                                                        }
-                                                    }
+                                                    title: String(modelData.displayLabel || "Clip")
+                                                    metadata: root.clipMetadataText(modelData)
+                                                    effects: modelData.effectStack ? modelData.effectStack : []
+                                                    horizontalInset: clipBlock.trimHandleWidth
+                                                    selected: Boolean(modelData.selected)
                                                 }
                                             }
                                         }

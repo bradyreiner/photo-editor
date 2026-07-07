@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Popup {
     id: root
+    objectName: "commandPaletteDialog"
     modal: true
     dim: true
     width: 480
@@ -18,6 +19,9 @@ Popup {
     property var requiredCommandLabels: []
     readonly property int commandCount: commands.length
     readonly property int requiredCommandCount: requiredCommandLabels.length
+    readonly property string dialogVisibilityContract: "dialog-visibility:v1|command-palette|always:search-results-count-shortcuts|contextual:filtered-results-disabled-state-empty-state|one-expansion:all-commands-through-search|hover-focus:row-current-selection|diagnostic:missing-required-commands|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v1|command-palette|search:always|results:dominant|footer:keyboard-help|rows:shared-readable|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v1|command-search:always|command-run:keyboard-and-row|disabled-reasons:row-state|shortcuts:footer-and-row|missing-required:diagnostic-signature"
 
     function buildCommands() {
         let items = []
@@ -141,7 +145,7 @@ Popup {
                 TextField {
                     id: searchField
                     Layout.fillWidth: true
-                    placeholderText: "Type a command..."
+                    placeholderText: "Type a command"
                     placeholderTextColor: theme.textFaint
                     color: theme.textStrong
                     font.family: theme.fontUi
@@ -199,63 +203,21 @@ Popup {
             currentIndex: 0
             boundsBehavior: Flickable.StopAtBounds
 
-            delegate: Rectangle {
-                id: commandDelegate
-                width: commandList.width
-                height: 36
-                color: ListView.isCurrentItem ? theme.alpha(theme.accentWarm400, 0.14) : mouseArea.containsMouse ? theme.alpha(theme.polar, 0.06) : "transparent"
-
+            delegate: CommandPaletteRow {
                 required property int index
                 required property string label
                 required property string shortcutHint
                 required property string category
                 required property bool itemEnabled
 
-                MouseArea {
-                    id: mouseArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-
-                    onClicked: {
-                        if (commandDelegate.itemEnabled) {
-                            commandList.currentIndex = commandDelegate.index
-                            searchField.executeSelected()
-                        }
-                    }
-
-                    onEntered: commandList.currentIndex = commandDelegate.index
+                rowIndex: index
+                current: ListView.isCurrentItem
+                onSelected: function(rowIndex) {
+                    commandList.currentIndex = rowIndex
                 }
-
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 14
-                    anchors.rightMargin: 14
-                    spacing: 8
-
-                    Label {
-                        visible: commandDelegate.category.length > 0
-                        text: commandDelegate.category
-                        color: theme.textFaint
-                        font.family: theme.fontUi
-                        font.pixelSize: 11
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: commandDelegate.label
-                        color: commandDelegate.itemEnabled ? theme.textMain : theme.textFaint
-                        font.family: theme.fontUi
-                        font.pixelSize: 13
-                        elide: Text.ElideRight
-                    }
-
-                    Label {
-                        visible: commandDelegate.shortcutHint.length > 0
-                        text: commandDelegate.shortcutHint
-                        color: theme.textFaint
-                        font.family: theme.fontMono
-                        font.pixelSize: 11
-                    }
+                onActivated: function(rowIndex) {
+                    commandList.currentIndex = rowIndex
+                    searchField.executeSelected()
                 }
             }
         }

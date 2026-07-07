@@ -33,6 +33,12 @@ struct CatalogAssetItem final {
   QString location_path;
   QString file_path;
   QString thumbnail_source;
+  bool thumbnail_stale_detected = false;
+  bool thumbnail_stale_mismatch = false;
+  QString thumbnail_stale_detection_reason;
+  QString thumbnail_stale_previous_recipe_hash;
+  QString thumbnail_stale_current_recipe_hash;
+  QString thumbnail_stale_detection_signature;
   QString recipe_json;
   QString drive_id;
   QString import_mode;
@@ -171,6 +177,12 @@ class CatalogAssetModel final : public QAbstractListModel {
     LocationPathRole,
     FilePathRole,
     ThumbnailSourceRole,
+    ThumbnailStaleDetectedRole,
+    ThumbnailStaleMismatchRole,
+    ThumbnailStaleDetectionReasonRole,
+    ThumbnailStalePreviousRecipeHashRole,
+    ThumbnailStaleCurrentRecipeHashRole,
+    ThumbnailStaleDetectionSignatureRole,
     RecipeJsonRole,
     DriveIdRole,
     ImportModeRole,
@@ -276,7 +288,7 @@ class CatalogAssetModel final : public QAbstractListModel {
 
   Q_INVOKABLE void refresh();
   Q_INVOKABLE void clearFilters();
-  Q_INVOKABLE void refreshImportSources();
+  Q_INVOKABLE void refreshImportSources(bool force = false);
   Q_INVOKABLE void importFolder();
   Q_INVOKABLE void importFolderPath(const QString& folder_path);
   Q_INVOKABLE void importSelection(
@@ -349,6 +361,12 @@ class CatalogAssetModel final : public QAbstractListModel {
   Q_INVOKABLE int relinkOfflineAssetsToFolder(const QString& folder_url);
   Q_INVOKABLE void setVisibleAssetRange(int first_index, int last_index);
   void replaceAssetsForTesting(const QVector<CatalogAssetItem>& items);
+  void clearVirtualCopiesForTesting();
+  bool applyThumbnailResultForTesting(
+      const QString& asset_id,
+      const QString& file_path,
+      const QString& recipe_json,
+      const QString& thumbnail_source);
 
   void setProjectFilter(const QString& project_filter);
   void setImportDateFilter(const QString& import_date_filter);
@@ -472,6 +490,7 @@ class CatalogAssetModel final : public QAbstractListModel {
   QHash<QString, QString> relinked_file_paths_;
   QStringList capture_years_;
   QVariantList import_sources_;
+  qint64 import_sources_last_rebuilt_msecs_ = 0;
   QProcess snapshot_process_;
   QProcess import_process_;
   std::vector<std::unique_ptr<QFutureWatcher<ThumbnailTaskResult>>> thumbnail_watchers_;

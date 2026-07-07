@@ -379,39 +379,15 @@ Item {
             Repeater {
                 model: root.availableChannels
 
-                delegate: Rectangle {
+                delegate: ToneCurveChannelButton {
                     required property var modelData
 
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
-                    radius: 0
-                    color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.08) : theme.alpha(theme.ink950, 0.30)
-                    border.width: 1
-                    border.color: root.selectedChannel === modelData ? theme.alpha(root.accent, 0.50) : theme.alpha(theme.glassEdge, 0.14)
-
-                    Label {
-                        anchors.centerIn: parent
-                        text: modelData
-                        color: root.selectedChannel === modelData ? theme.textStrong : theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 9
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 0
-                    }
-
-                    Rectangle {
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.bottom: parent.bottom
-                        height: 1
-                        visible: root.selectedChannel === modelData
-                        color: root.accent
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: root.channelSelected(modelData)
-                    }
+                    channelName: String(modelData)
+                    selected: root.selectedChannel === modelData
+                    accent: root.accent
+                    onSelectedRequested: function(channelName) { root.channelSelected(channelName) }
                 }
             }
         }
@@ -465,26 +441,27 @@ Item {
                 Layout.fillWidth: true
             }
 
-            Button {
+            ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "DeletePointButton" : ""
                 Layout.preferredHeight: 22
                 Layout.preferredWidth: 62
                 enabled: root.selectedPointDeletable
                 text: "Delete"
-                font.family: theme.fontUi
                 font.pixelSize: 9
-                font.weight: Font.DemiBold
+                compact: true
+                tone: "danger"
+                tooltipText: "Delete the selected curve point."
                 onClicked: root.deleteSelectedPoint()
             }
 
-            Button {
+            ActionButton {
                 objectName: root.objectName.length > 0 ? root.objectName + "ResetCurveButton" : ""
                 Layout.preferredHeight: 22
                 Layout.preferredWidth: 52
                 text: "Reset"
-                font.family: theme.fontUi
                 font.pixelSize: 9
-                font.weight: Font.DemiBold
+                compact: true
+                tooltipText: "Reset the active curve."
                 onClicked: root.resetActiveCurve()
             }
         }
@@ -499,39 +476,15 @@ Item {
             Repeater {
                 model: root.presetNames
 
-                delegate: Rectangle {
+                delegate: ToneCurvePresetButton {
                     required property var modelData
 
                     Layout.fillWidth: true
                     Layout.preferredHeight: 24
-                    radius: 3
-                    color: theme.alpha(theme.ink950, 0.30)
-                    border.width: 1
-                    border.color: theme.alpha(theme.glassEdge, 0.16)
-
-                    Label {
-                        anchors.centerIn: parent
-                        anchors.leftMargin: 4
-                        anchors.rightMargin: 4
-                        width: parent.width - 8
-                        text: modelData
-                        elide: Text.ElideRight
-                        horizontalAlignment: Text.AlignHCenter
-                        color: theme.textMuted
-                        font.family: theme.fontUi
-                        font.pixelSize: 9
-                        font.weight: Font.DemiBold
-                        font.letterSpacing: 0
-                    }
-
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        hoverEnabled: true
-                        onEntered: root.previewPreset(modelData)
-                        onExited: root.clearPresetPreview()
-                        onClicked: root.presetSelected(modelData)
-                    }
+                    presetName: String(modelData)
+                    onPreviewRequested: function(presetName) { root.previewPreset(presetName) }
+                    onPreviewCleared: root.clearPresetPreview()
+                    onSelectedRequested: function(presetName) { root.presetSelected(presetName) }
                 }
             }
         }
@@ -724,31 +677,18 @@ Item {
                 Repeater {
                     model: root.displayPoints()
 
-                    delegate: Rectangle {
+                    delegate: ToneCurvePointHandle {
                         required property var modelData
                         required property int index
 
                         property point handlePoint: root.graphPoint(index)
+                        readonly property bool endpointHandle: index === 0 || index === root.currentPoints().length - 1
 
                         x: handlePoint.x - width / 2
                         y: handlePoint.y - height / 2
-                        width: index === 0 || index === root.currentPoints().length - 1
-                               ? (index === interaction.selectedIndex ? 12 : 10)
-                               : (index === interaction.selectedIndex ? 11 : 9)
-                        height: width
-                        radius: width / 2
-                        color: index === 0 || index === root.currentPoints().length - 1 ? theme.alpha(theme.polar, 0.86) : root.accent
-                        border.width: 1
-                        border.color: index === interaction.selectedIndex ? theme.polar : theme.alpha(theme.ink950, 0.8)
-                        antialiasing: true
-
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 3
-                            height: 3
-                            radius: 0
-                            color: index === 0 || index === root.currentPoints().length - 1 ? theme.ink950 : theme.polar
-                        }
+                        selected: index === interaction.selectedIndex
+                        endpoint: endpointHandle
+                        accent: root.accent
                     }
                 }
 
@@ -851,7 +791,7 @@ Item {
             }
 
             ToneTextField {
-                Layout.preferredWidth: 58
+                Layout.preferredWidth: theme.valueColumnWidth
                 text: root.selectedInputText()
                 enabled: root.effectiveSelectedIndex() > 0 && root.effectiveSelectedIndex() < root.currentPoints().length - 1
                 horizontalAlignment: TextInput.AlignHCenter
@@ -868,7 +808,7 @@ Item {
             }
 
             ToneTextField {
-                Layout.preferredWidth: 58
+                Layout.preferredWidth: theme.valueColumnWidth
                 text: root.selectedOutputText()
                 horizontalAlignment: TextInput.AlignHCenter
                 validator: IntValidator { bottom: 0; top: 255 }

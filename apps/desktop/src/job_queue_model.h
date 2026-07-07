@@ -51,6 +51,7 @@ class JobQueueModel final : public QAbstractListModel {
   [[nodiscard]] QString status() const;
 
   Q_INVOKABLE void refresh();
+  Q_INVOKABLE void initializeFromStore();
   Q_INVOKABLE int activeJobCountForKind(const QString& job_kind) const;
   Q_INVOKABLE int failedJobCountForKind(const QString& job_kind) const;
   Q_INVOKABLE int totalJobCountForKind(const QString& job_kind) const;

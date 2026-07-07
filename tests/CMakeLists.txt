@@ -68,6 +68,9 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   set(photo_editor_desktop_ai_model_sources
     ../apps/desktop/src/ai_model_runtime.h
     ../apps/desktop/src/ai_model_runtime.cpp)
+  set(photo_editor_desktop_mask_alpha_provider_sources
+    ../apps/desktop/src/mask_alpha_provider.h
+    ../apps/desktop/src/mask_alpha_provider.cpp)
   set(photo_editor_desktop_brush_preview_frameworks)
   if(APPLE)
     if(PHOTO_EDITOR_ENABLE_METAL_PREVIEW_BACKEND)
@@ -199,7 +202,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   target_link_libraries(
     agent_local_model_test
     PRIVATE
-      Qt6::Core)
+      Qt6::Core
+      Qt6::Network)
   photo_editor_apply_warnings(agent_local_model_test)
 
   add_test(NAME agent_local_model_test COMMAND agent_local_model_test)
@@ -236,6 +240,10 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/agent_image_validation.cpp
     ../apps/desktop/src/agent_local_model.h
     ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/agent_memory.h
+    ../apps/desktop/src/agent_memory.cpp
+    ../apps/desktop/src/agent_mcp_client.h
+    ../apps/desktop/src/agent_mcp_client.cpp
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ../apps/desktop/src/catalog_asset_model.h
@@ -248,6 +256,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -270,6 +279,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
       Qt6::Concurrent
       Qt6::Core
       Qt6::Gui
+      Qt6::Network
       Qt6::Widgets
       ${photo_editor_desktop_image_decoder_frameworks}
       photo_engine)
@@ -291,6 +301,10 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/agent_image_validation.cpp
     ../apps/desktop/src/agent_local_model.h
     ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/agent_memory.h
+    ../apps/desktop/src/agent_memory.cpp
+    ../apps/desktop/src/agent_mcp_client.h
+    ../apps/desktop/src/agent_mcp_client.cpp
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ../apps/desktop/src/catalog_asset_model.h
@@ -305,6 +319,9 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/photo_automation_bridge.h
     ../apps/desktop/src/photo_automation_bridge.cpp
+    ../apps/desktop/src/photo_mcp_server.h
+    ../apps/desktop/src/photo_mcp_server.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -349,6 +366,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -388,6 +406,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -434,8 +453,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/catalog_asset_model.h
     ../apps/desktop/src/catalog_asset_model.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/editor_preview_image_provider.h
+    ../apps/desktop/src/editor_preview_image_provider.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/vision_segmentation.h
     ../apps/desktop/src/vision_segmentation_stub.cpp
@@ -489,6 +512,42 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   photo_editor_apply_warnings(desktop_shell_smoke_test)
 
   add_test(NAME desktop_shell_smoke_test COMMAND desktop_shell_smoke_test)
+
+  add_executable(
+    thumbnail_state_utils_test
+    thumbnail_state_utils_test.cpp)
+  target_compile_definitions(
+    thumbnail_state_utils_test
+    PRIVATE
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    thumbnail_state_utils_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Qml
+      Qt6::Quick)
+  photo_editor_apply_warnings(thumbnail_state_utils_test)
+
+  add_test(NAME thumbnail_state_utils_test COMMAND thumbnail_state_utils_test)
+
+  add_executable(
+    canvas_coordinate_mapper_test
+    canvas_coordinate_mapper_test.cpp)
+  target_compile_definitions(
+    canvas_coordinate_mapper_test
+    PRIVATE
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    canvas_coordinate_mapper_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Qml
+      Qt6::Quick)
+  photo_editor_apply_warnings(canvas_coordinate_mapper_test)
+
+  add_test(NAME canvas_coordinate_mapper_test COMMAND canvas_coordinate_mapper_test)
 
   add_executable(
     job_queue_model_test
@@ -549,10 +608,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -584,10 +645,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -619,10 +682,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -658,10 +723,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -693,10 +760,12 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/app_bootstrap.h
     ../apps/desktop/src/app_bootstrap.cpp
     ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -722,6 +791,123 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
       ${photo_editor_desktop_image_decoder_frameworks}
       photo_engine)
   photo_editor_apply_warnings(preview_benchmark_driver)
+
+  add_executable(
+    interaction_workflow_benchmark_driver
+    interaction_workflow_benchmark_driver.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(interaction_workflow_benchmark_driver PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    interaction_workflow_benchmark_driver
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    interaction_workflow_benchmark_driver
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1)
+  target_link_libraries(
+    interaction_workflow_benchmark_driver
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(interaction_workflow_benchmark_driver)
+
+  add_executable(
+    actual_app_workflow_benchmark_driver
+    actual_app_workflow_benchmark_driver.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/app_shell_controller.h
+    ../apps/desktop/src/app_shell_controller.cpp
+    ../apps/desktop/src/brush_live_preview_item.h
+    ../apps/desktop/src/brush_live_preview_item.cpp
+    ../apps/desktop/src/tablet_input_area.h
+    ../apps/desktop/src/tablet_input_area.cpp
+    ../apps/desktop/src/editor_preview_texture_item.h
+    ../apps/desktop/src/editor_preview_texture_item.cpp
+    ../apps/desktop/src/carousel_document_controller.h
+    ../apps/desktop/src/carousel_document_controller.cpp
+    ../apps/desktop/src/catalog_asset_model.h
+    ../apps/desktop/src/catalog_asset_model.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/editor_preview_image_provider.h
+    ../apps/desktop/src/editor_preview_image_provider.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp
+    ../apps/desktop/src/export_job_controller.h
+    ../apps/desktop/src/export_job_controller.cpp
+    ../apps/desktop/src/macos_updater.h
+    ../apps/desktop/src/macos_updater_stub.cpp
+    ../apps/desktop/src/job_queue_model.h
+    ../apps/desktop/src/job_queue_model.cpp
+    ../apps/desktop/src/job_runner.h
+    ../apps/desktop/src/job_runner.cpp
+    ../apps/desktop/src/job_store.h
+    ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ../apps/desktop/src/preview_backend_controller.h
+    ../apps/desktop/src/preview_backend_controller.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/timeline_asset_store.h
+    ../apps/desktop/src/timeline_asset_store.cpp
+    ../apps/desktop/src/timeline_document_controller.h
+    ../apps/desktop/src/timeline_document_controller.cpp
+    ../apps/desktop/src/timeline_playback_controller.h
+    ../apps/desktop/src/timeline_playback_controller.cpp)
+  set_target_properties(actual_app_workflow_benchmark_driver PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    actual_app_workflow_benchmark_driver
+    PRIVATE
+      ../apps/desktop/src)
+  target_compile_definitions(
+    actual_app_workflow_benchmark_driver
+    PRIVATE
+      PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY=1
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    actual_app_workflow_benchmark_driver
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Multimedia
+      Qt6::Qml
+      Qt6::Quick
+      Qt6::QuickControls2
+      Qt6::Widgets
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine
+      photo_rust_ffi)
+  photo_editor_apply_warnings(actual_app_workflow_benchmark_driver)
 
   add_executable(
     color_adjustment_benchmark_driver
@@ -751,6 +937,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     render_parity_test.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources})
@@ -775,6 +962,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     layer_lut_render_parity_test.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources})
@@ -798,6 +986,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     render_golden_test.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources})
@@ -830,6 +1019,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}
@@ -893,6 +1083,7 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_store.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
+    ${photo_editor_desktop_mask_alpha_provider_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
     ${photo_editor_desktop_image_decoder_sources}

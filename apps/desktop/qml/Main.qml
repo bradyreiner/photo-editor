@@ -22,6 +22,14 @@ ApplicationWindow {
 
     property bool workspaceInitialized: false
     property int currentWorkspace: 0
+    property string pendingEditInspectorTab: ""
+    property bool libraryWorkspaceLoaded: false
+    property bool carouselWorkspaceLoaded: false
+    property bool editWorkspaceLoaded: false
+    property bool timelineWorkspaceLoaded: false
+    property bool exportWorkspaceLoaded: false
+    property bool secondaryWorkspacesPrewarmStarted: false
+    property int secondaryWorkspacePrewarmStep: 0
     property string libraryWorkspaceMode: "catalog"
     property string editWorkspaceMode: "adjust"
     property bool editorUsesLocalAsset: false
@@ -35,8 +43,13 @@ ApplicationWindow {
     readonly property int carouselWorkspaceIndex: 2
     readonly property int timelineWorkspaceIndex: 3
     readonly property int exportWorkspaceIndex: 4
+    property int pendingPreferencesDialogPage: -1
+    property bool pendingKeyboardShortcutsDialogOpen: false
+    property bool pendingCommandPaletteDialogOpen: false
+    property bool pendingAboutDialogOpen: false
     readonly property var workspaceTitles: ["Library", "Edit", "Carousel", "Timeline", "Export"]
     readonly property var workspaceKinds: ["library", "edit", "carousel", "timeline", "export"]
+    readonly property string pageVisibilityAuditContract: "page-visibility-audit:v1|pages:library,import,edit,masks,carousel,timeline,export|buckets:always,contextual,one-expansion,hover-focus,diagnostic,preserve|runtime-active:true|functionality:preserved|major-shape:preserved"
     readonly property var workspaceSubtitles: [
         "Browse imported assets or bring media into the catalog.",
         "Refine tone, color, crop, retouch, and local adjustments.",
@@ -44,6 +57,7 @@ ApplicationWindow {
         "Cut video on a dedicated editing timeline.",
         "Prepare deliveries and export jobs."
     ]
+
     readonly property var latestImportJob: {
         if (!jobQueue)
             return ({})
@@ -201,7 +215,7 @@ ApplicationWindow {
     readonly property bool primaryActivityCancelable: canCancelActivityKind(primaryActivityKind)
     readonly property int activityIndicatorBottomMargin: currentWorkspace === editWorkspaceIndex ? 104 : 12
     readonly property int activityIndicatorRightMargin: {
-        const workspace = workspaceLoader.item
+        const workspace = activeWorkspaceItem()
         if (currentWorkspace === editWorkspaceIndex &&
                 workspace &&
                 workspace.editingChromeVisible &&
@@ -213,6 +227,42 @@ ApplicationWindow {
 
     function primaryShortcut(key) {
         return (macStyle ? "Meta+" : "Ctrl+") + key
+    }
+
+    function openPreferencesDialog(pageIndex) {
+        pendingPreferencesDialogPage = Math.max(0, Number(pageIndex || 0))
+        preferencesDialogLoader.active = true
+        if (preferencesDialogLoader.item) {
+            preferencesDialogLoader.item.openAt(pendingPreferencesDialogPage)
+            pendingPreferencesDialogPage = -1
+        }
+    }
+
+    function openKeyboardShortcutsDialog() {
+        pendingKeyboardShortcutsDialogOpen = true
+        keyboardShortcutsDialogLoader.active = true
+        if (keyboardShortcutsDialogLoader.item) {
+            keyboardShortcutsDialogLoader.item.open()
+            pendingKeyboardShortcutsDialogOpen = false
+        }
+    }
+
+    function openCommandPaletteDialog() {
+        pendingCommandPaletteDialogOpen = true
+        commandPaletteDialogLoader.active = true
+        if (commandPaletteDialogLoader.item) {
+            commandPaletteDialogLoader.item.open()
+            pendingCommandPaletteDialogOpen = false
+        }
+    }
+
+    function openAboutDialog() {
+        pendingAboutDialogOpen = true
+        aboutDialogLoader.active = true
+        if (aboutDialogLoader.item) {
+            aboutDialogLoader.item.open()
+            pendingAboutDialogOpen = false
+        }
     }
 
     function primaryShiftShortcut(key) {
@@ -393,7 +443,101 @@ ApplicationWindow {
     }
 
     function activeWorkspaceItem() {
+        if (currentWorkspace === editWorkspaceIndex)
+            return editWorkspaceLoader.item ? editWorkspaceLoader.item : null
+        if (currentWorkspace === carouselWorkspaceIndex)
+            return carouselWorkspaceLoader.item ? carouselWorkspaceLoader.item : null
+        if (currentWorkspace === timelineWorkspaceIndex)
+            return timelineWorkspaceLoader.item ? timelineWorkspaceLoader.item : null
+        if (currentWorkspace === exportWorkspaceIndex)
+            return exportWorkspaceLoader.item ? exportWorkspaceLoader.item : null
         return workspaceLoader.item ? workspaceLoader.item : null
+    }
+
+    function resolvedEditTool() {
+        if (editWorkspaceMode === "compare")
+            return "compare"
+        if (editWorkspaceMode === "masks")
+            return "masks"
+        if (editWorkspaceMode === "crop")
+            return "crop"
+        if (editWorkspaceMode === "brush")
+            return "brush"
+        return "adjust"
+    }
+
+    function preloadEditWorkspace() {
+        if (editWorkspaceLoaded)
+            return true
+        editWorkspaceLoaded = true
+        return true
+    }
+
+    function preloadSecondaryWorkspaces() {
+        if (secondaryWorkspacesPrewarmStarted)
+            return true
+        secondaryWorkspacesPrewarmStarted = true
+        secondaryWorkspacePrewarmStep = 0
+        secondaryWorkspacePrewarmTimer.restart()
+        return true
+    }
+
+    function preloadNextSecondaryWorkspace() {
+        if (secondaryWorkspacePrewarmStep === 0) {
+            if (!carouselWorkspaceLoaded)
+                carouselWorkspaceLoaded = true
+            secondaryWorkspacePrewarmStep += 1
+            secondaryWorkspacePrewarmTimer.restart()
+            return
+        }
+        if (secondaryWorkspacePrewarmStep === 1) {
+            if (!timelineWorkspaceLoaded)
+                timelineWorkspaceLoaded = true
+            secondaryWorkspacePrewarmStep += 1
+            secondaryWorkspacePrewarmTimer.restart()
+            return
+        }
+        if (secondaryWorkspacePrewarmStep === 2) {
+            if (!exportWorkspaceLoaded)
+                exportWorkspaceLoaded = true
+            secondaryWorkspacePrewarmStep += 1
+        }
+    }
+
+    function editWorkspacePrewarmReady() {
+        return editWorkspaceLoader.item !== null
+    }
+
+    function activePageKind() {
+        if (currentWorkspace === libraryWorkspaceIndex)
+            return libraryWorkspaceMode === "import" ? "import" : "library"
+        if (currentWorkspace === editWorkspaceIndex)
+            return editWorkspaceMode === "masks" || editWorkspaceMode === "brush" ? "masks" : "edit"
+        if (currentWorkspace === carouselWorkspaceIndex)
+            return "carousel"
+        if (currentWorkspace === timelineWorkspaceIndex)
+            return "timeline"
+        if (currentWorkspace === exportWorkspaceIndex)
+            return "export"
+        return "unknown"
+    }
+
+    function activeWorkspaceVisibilityContract() {
+        const workspace = activeWorkspaceItem()
+        if (workspace && typeof workspace.activeVisibilityContract === "function")
+            return String(workspace.activeVisibilityContract())
+        if (workspace && workspace.carouselVisibilityContract !== undefined)
+            return String(workspace.carouselVisibilityContract)
+        if (workspace && workspace.timelineVisibilityContract !== undefined)
+            return String(workspace.timelineVisibilityContract)
+        return ""
+    }
+
+    function pageVisibilityAuditSignature() {
+        return pageVisibilityAuditContract +
+               "|active:" + activePageKind() +
+               "|live:" + activeWorkspaceVisibilityContract() +
+               "|coverage:library/import/edit/masks/carousel/timeline/export"
     }
 
     function focusItemSupports(methodName) {
@@ -440,6 +584,44 @@ ApplicationWindow {
 
     function switchWorkspaceByNumber(number) {
         return switchToWorkspaceIndex(Number(number) - 1)
+    }
+
+    function openEditPresetPanelFromExport(action) {
+        const requestedAction = String(action || "")
+        pendingEditInspectorTab = "presets"
+        editWorkspaceMode = "adjust"
+        currentWorkspace = editWorkspaceIndex
+        Qt.callLater(function() {
+            const workspace = activeWorkspaceItem()
+            if (workspace && workspace.objectName === "editStudioWorkspace") {
+                workspace.editInspectorTab = "presets"
+                workspace.studioPresetSearchText = ""
+                if (requestedAction === "save-current" && workspace.studioPresetDraftName.length === 0)
+                    workspace.studioPresetDraftName = currentSelectionLabel()
+                pendingEditInspectorTab = ""
+            }
+        })
+        return true
+    }
+
+    function restorePrimaryStudioPanels(workspace) {
+        if (!workspace)
+            return false
+        if (workspace.librarySourcesPanelVisible !== undefined)
+            workspace.librarySourcesPanelVisible = true
+        if (workspace.libraryInspectorPanelVisible !== undefined)
+            workspace.libraryInspectorPanelVisible = true
+        if (workspace.editSidebarCollapsed !== undefined)
+            workspace.editSidebarCollapsed = false
+        if (workspace.editContextPanelVisible !== undefined)
+            workspace.editContextPanelVisible = true
+        if (workspace.editInspectorPanelVisible !== undefined)
+            workspace.editInspectorPanelVisible = true
+        if (workspace.fullScreenEditingEnabled !== undefined)
+            workspace.fullScreenEditingEnabled = false
+        if (workspace.focusEditLayoutEnabled !== undefined)
+            workspace.focusEditLayoutEnabled = false
+        return true
     }
 
     function canSelectAllCurrentWorkspace() {
@@ -814,7 +996,7 @@ ApplicationWindow {
 
     Action {
         id: importFolderAction
-        text: "Import Folder..."
+        text: "Import Folder"
         shortcut: StandardKey.Open
         enabled: !catalogAssets.busy
         onTriggered: {
@@ -836,7 +1018,7 @@ ApplicationWindow {
 
     Action {
         id: queueExportAction
-        text: "Queue Export..."
+        text: "Start Export"
         shortcut: window.primaryShiftShortcut("E")
         enabled: window.canQueueExportFromMenu()
         onTriggered: window.queueExportFromMenu()
@@ -844,9 +1026,9 @@ ApplicationWindow {
 
     Action {
         id: preferencesAction
-        text: "Preferences..."
+        text: "Preferences"
         shortcut: StandardKey.Preferences
-        onTriggered: preferencesDialog.openAt(0)
+        onTriggered: window.openPreferencesDialog(0)
     }
 
     Action {
@@ -1213,7 +1395,7 @@ ApplicationWindow {
 
     Action {
         id: carouselExportAction
-        text: "Export Carousel..."
+        text: "Export Carousel"
         shortcut: window.primaryShiftShortcut("C")
         enabled: window.currentWorkspace === window.carouselWorkspaceIndex && !carouselDocument.exportBusy
         onTriggered: carouselDocument.exportCarousel()
@@ -1372,12 +1554,12 @@ ApplicationWindow {
     Action {
         id: keyboardShortcutsAction
         text: "Keyboard Shortcuts"
-        onTriggered: keyboardShortcutsDialog.open()
+        onTriggered: window.openKeyboardShortcutsDialog()
     }
 
     Action {
         id: checkForUpdatesAction
-        text: "Check for Updates..."
+        text: "Check for Updates"
         enabled: window.macStyle && macosUpdater && macosUpdater.available
         onTriggered: macosUpdater.checkForUpdates()
     }
@@ -1392,19 +1574,19 @@ ApplicationWindow {
         id: commandPaletteAction
         text: "Command Palette"
         shortcut: window.primaryShortcut("K")
-        onTriggered: commandPaletteDialog.open()
+        onTriggered: window.openCommandPaletteDialog()
     }
 
     Action {
         id: aboutAction
         text: "About Virel Studio"
-        onTriggered: aboutDialog.open()
+        onTriggered: window.openAboutDialog()
     }
 
     Action {
         id: runtimePathsAction
         text: "Show Runtime Paths"
-        onTriggered: preferencesDialog.openAt(2)
+        onTriggered: window.openPreferencesDialog(2)
     }
 
     Action {
@@ -1558,6 +1740,20 @@ ApplicationWindow {
         currentWorkspace = appShell.preferredStartupWorkspace
         workspaceInitialized = true
         appShell.currentWorkspace = currentWorkspace
+        if (currentWorkspace === libraryWorkspaceIndex) {
+            libraryWorkspaceLoaded = true
+        } else if (currentWorkspace === editWorkspaceIndex) {
+            editWorkspaceLoaded = true
+        } else if (currentWorkspace === carouselWorkspaceIndex) {
+            carouselWorkspaceLoaded = true
+        } else if (currentWorkspace === timelineWorkspaceIndex) {
+            timelineWorkspaceLoaded = true
+        } else if (currentWorkspace === exportWorkspaceIndex) {
+            exportWorkspaceLoaded = true
+        }
+        if (currentWorkspace !== editWorkspaceIndex)
+            editWorkspacePrewarmTimer.restart()
+        preloadSecondaryWorkspaces()
     }
 
     onCurrentWorkspaceChanged: {
@@ -1567,12 +1763,52 @@ ApplicationWindow {
         if (currentWorkspace !== editWorkspaceIndex)
             syncEditorRecipeToCatalog()
 
-        if (currentWorkspace === editWorkspaceIndex) {
+        if (currentWorkspace === libraryWorkspaceIndex) {
+            libraryWorkspaceLoaded = true
+            Qt.callLater(function() {
+                window.restorePrimaryStudioPanels(workspaceLoader.item)
+            })
+        } else if (currentWorkspace === editWorkspaceIndex) {
+            editWorkspaceLoaded = true
             if (editorUsesLocalAsset)
                 loadLocalAssetIntoEditor()
             else
                 loadSelectedAssetIntoEditor()
+            Qt.callLater(function() {
+                window.restorePrimaryStudioPanels(editWorkspaceLoader.item)
+                if (editWorkspaceLoader.item && editWorkspaceLoader.item.contentWorkspace)
+                    window.restorePrimaryStudioPanels(editWorkspaceLoader.item.contentWorkspace)
+            })
+        } else if (currentWorkspace === carouselWorkspaceIndex) {
+            carouselWorkspaceLoaded = true
+        } else if (currentWorkspace === timelineWorkspaceIndex) {
+            timelineWorkspaceLoaded = true
+        } else if (currentWorkspace === exportWorkspaceIndex) {
+            exportWorkspaceLoaded = true
         }
+    }
+
+    onEditWorkspaceModeChanged: {
+        if (editWorkspaceLoader.item) {
+            editWorkspaceLoader.item.editTool = resolvedEditTool()
+            window.restorePrimaryStudioPanels(editWorkspaceLoader.item)
+            if (editWorkspaceLoader.item.contentWorkspace)
+                window.restorePrimaryStudioPanels(editWorkspaceLoader.item.contentWorkspace)
+        }
+    }
+
+    Timer {
+        id: editWorkspacePrewarmTimer
+        interval: 10
+        repeat: false
+        onTriggered: window.preloadEditWorkspace()
+    }
+
+    Timer {
+        id: secondaryWorkspacePrewarmTimer
+        interval: 10
+        repeat: false
+        onTriggered: window.preloadNextSecondaryWorkspace()
     }
 
     Connections {
@@ -1639,8 +1875,8 @@ ApplicationWindow {
 
                             objectName: "workspaceTab" + workspaceTab.modelData
                             text: workspaceTab.modelData
-                            Layout.preferredWidth: Math.max(74, tabLabel.implicitWidth + 18)
-                            Layout.preferredHeight: 52
+                            Layout.preferredWidth: Math.max(theme.navItemMinWidth, tabLabel.implicitWidth + 18)
+                            Layout.preferredHeight: theme.navHeight
                             flat: true
                             hoverEnabled: true
                             focusPolicy: Qt.TabFocus
@@ -1656,7 +1892,7 @@ ApplicationWindow {
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.bottom: parent.bottom
-                                    height: 2
+                                    height: theme.navUnderlineHeight
                                     color: workspaceTab.index === window.currentWorkspace
                                            ? window.workspaceAccent(workspaceTab.index)
                                            : "transparent"
@@ -1724,7 +1960,9 @@ ApplicationWindow {
                         font.pixelSize: 10
                         font.letterSpacing: 0
                         horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideMiddle
+                        fontSizeMode: Text.HorizontalFit
+                        minimumPixelSize: 7
+                        elide: Text.ElideNone
                     }
 
                     Text {
@@ -1736,7 +1974,9 @@ ApplicationWindow {
                         font.pixelSize: 9
                         font.letterSpacing: 0
                         horizontalAlignment: Text.AlignRight
-                        elide: Text.ElideRight
+                        fontSizeMode: Text.HorizontalFit
+                        minimumPixelSize: 7
+                        elide: Text.ElideNone
                     }
                 }
             }
@@ -1762,7 +2002,118 @@ ApplicationWindow {
                 id: workspaceLoader
                 anchors.fill: parent
                 anchors.margins: 6
-                sourceComponent: [libraryView, editView, carouselView, timelineView, exportView][window.currentWorkspace]
+                active: window.libraryWorkspaceLoaded || window.currentWorkspace === window.libraryWorkspaceIndex
+                visible: window.currentWorkspace === window.libraryWorkspaceIndex
+                sourceComponent: active ? libraryView : null
+            }
+
+            Loader {
+                id: editWorkspaceLoader
+                anchors.fill: parent
+                anchors.margins: 6
+                active: window.editWorkspaceLoaded || window.currentWorkspace === window.editWorkspaceIndex
+                visible: window.currentWorkspace === window.editWorkspaceIndex
+                sourceComponent: active ? editView : null
+                onLoaded: {
+                    if (item) {
+                        item.editTool = window.resolvedEditTool()
+                        window.restorePrimaryStudioPanels(item)
+                        if (item.contentWorkspace)
+                            window.restorePrimaryStudioPanels(item.contentWorkspace)
+                    }
+                    if (item && window.pendingEditInspectorTab.length > 0) {
+                        item.editInspectorTab = window.pendingEditInspectorTab
+                        window.pendingEditInspectorTab = ""
+                    }
+                    window.preloadSecondaryWorkspaces()
+                }
+            }
+
+            Connections {
+                target: editWorkspaceLoader.item
+                enabled: editWorkspaceLoader.item !== null
+                ignoreUnknownSignals: true
+
+                function onAssetActivated(destination) {
+                    if (destination === "library") {
+                        window.currentWorkspace = window.libraryWorkspaceIndex
+                        return
+                    }
+                    if (destination === "masks") {
+                        window.editWorkspaceMode = "masks"
+                        window.currentWorkspace = window.editWorkspaceIndex
+                        return
+                    }
+                    if (destination === "compare") {
+                        window.editWorkspaceMode = "compare"
+                        window.currentWorkspace = window.editWorkspaceIndex
+                        return
+                    }
+                    if (destination === "export") {
+                        window.currentWorkspace = window.exportWorkspaceIndex
+                        return
+                    }
+                }
+            }
+
+            Binding {
+                target: editWorkspaceLoader.item
+                property: "workspaceActive"
+                value: window.currentWorkspace === window.editWorkspaceIndex
+                when: editWorkspaceLoader.item !== null
+                restoreMode: Binding.RestoreBindingOrValue
+            }
+
+            Loader {
+                id: carouselWorkspaceLoader
+                anchors.fill: parent
+                anchors.margins: 6
+                active: window.carouselWorkspaceLoaded || window.currentWorkspace === window.carouselWorkspaceIndex
+                visible: window.currentWorkspace === window.carouselWorkspaceIndex
+                source: Qt.resolvedUrl("workspaces/CarouselView.qml")
+            }
+
+            Loader {
+                id: timelineWorkspaceLoader
+                anchors.fill: parent
+                anchors.margins: 6
+                active: window.timelineWorkspaceLoaded || window.currentWorkspace === window.timelineWorkspaceIndex
+                visible: window.currentWorkspace === window.timelineWorkspaceIndex
+                source: Qt.resolvedUrl("workspaces/TimelineView.qml")
+            }
+
+            Loader {
+                id: exportWorkspaceLoader
+                anchors.fill: parent
+                anchors.margins: 6
+                active: window.exportWorkspaceLoaded || window.currentWorkspace === window.exportWorkspaceIndex
+                visible: window.currentWorkspace === window.exportWorkspaceIndex
+                source: Qt.resolvedUrl("workspaces/ExportWorkspaceHost.qml")
+            }
+
+            Connections {
+                target: exportWorkspaceLoader.item
+                enabled: exportWorkspaceLoader.item !== null
+                ignoreUnknownSignals: true
+
+                function onPresetManagementRequested(action) {
+                    window.openEditPresetPanelFromExport(action)
+                }
+
+                function onAssetActivated(destination) {
+                    if (destination === "library") {
+                        window.currentWorkspace = window.libraryWorkspaceIndex
+                        return
+                    }
+                    if (destination === "import") {
+                        window.beginImportWorkspace()
+                        return
+                    }
+                    if (destination === "edit") {
+                        window.currentWorkspace = window.editWorkspaceIndex
+                        return
+                    }
+                }
             }
 
             InlineActivityIndicator {
@@ -1847,188 +2198,258 @@ ApplicationWindow {
         }
     }
 
-    AppPreferencesDialog {
-        id: preferencesDialog
-        parent: Overlay.overlay
-    }
-
-    StartupLoadingPopup {
-        id: startupLoadingPopup
-        parent: Overlay.overlay
-        catalogLoading: catalogAssets.loading
-        catalogStatus: catalogAssets.status
-    }
-
-    KeyboardShortcutsDialog {
-        id: keyboardShortcutsDialog
-        objectName: "keyboardShortcutsDialog"
-        parent: Overlay.overlay
-    }
-
-    CommandPaletteDialog {
-        id: commandPaletteDialog
-        objectName: "commandPaletteDialog"
-        parent: Overlay.overlay
-        requiredCommandLabels: [
-            "Library",
-            "Edit",
-            "Carousel",
-            "Timeline",
-            "Export",
-            "Adjust Tool",
-            "Crop Tool",
-            "Masks Tool",
-            "Brush Tool",
-            "Compare Tool",
-            "Export Tool",
-            "New Import",
-            "New Timeline",
-            "New Carousel",
-            "Open Selected In Edit",
-            "Queue Export...",
-            "Reset Adjustments",
-            "Compare View",
-            "Crop Overlay",
-            "Select Tool",
-            "Razor Tool",
-            "Slip Tool",
-            "Roll Tool",
-            "Add Slide",
-            "Export Carousel...",
-            "Keyboard Shortcuts",
-            "Command Palette"
-        ]
-        commands: [
-            { action: switchToLibraryAction, category: "Navigate", shortcutHint: macStyle ? "⌘1" : "Ctrl+1" },
-            { action: switchToEditAction, category: "Navigate", shortcutHint: macStyle ? "⌘2" : "Ctrl+2" },
-            { action: switchToCarouselAction, category: "Navigate", shortcutHint: macStyle ? "⌘3" : "Ctrl+3" },
-            { action: switchToTimelineAction, category: "Navigate", shortcutHint: macStyle ? "⌘4" : "Ctrl+4" },
-            { action: switchToExportAction, category: "Navigate", shortcutHint: macStyle ? "⌘5" : "Ctrl+5" },
-            { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
-            { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
-            { action: newCarouselAction, category: "File", shortcutHint: "" },
-            { action: openSelectedInEditAction, category: "File", shortcutHint: macStyle ? "⌘E" : "Ctrl+E" },
-            { action: openSelectedTimelineAction, category: "File", shortcutHint: "" },
-            { action: saveTimelineAction, category: "File", shortcutHint: macStyle ? "⌘S" : "Ctrl+S" },
-            { action: importFolderAction, category: "File", shortcutHint: macStyle ? "⌘O" : "Ctrl+O" },
-            { action: refreshLibraryAction, category: "Library", shortcutHint: macStyle ? "⌘R" : "Ctrl+R" },
-            { action: queueExportAction, category: "Export", shortcutHint: macStyle ? "⇧⌘E" : "Ctrl+Shift+E" },
-            { action: undoEditAction, category: "Edit", shortcutHint: macStyle ? "⌘Z" : "Ctrl+Z" },
-            { action: redoEditAction, category: "Edit", shortcutHint: macStyle ? "⇧⌘Z" : "Ctrl+Shift+Z" },
-            { action: selectAllAction, category: "Selection", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
-            { action: deselectAction, category: "Selection", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
-            { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
-            { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
-            { action: toggleCropAction, category: "Edit", shortcutHint: "" },
-            { action: adjustToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘A" : "Ctrl+Alt+A" },
-            { action: cropToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘C" : "Ctrl+Alt+C" },
-            { action: masksToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘M" : "Ctrl+Alt+M" },
-            { action: brushToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘B" : "Ctrl+Alt+B" },
-            { action: compareToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘P" : "Ctrl+Alt+P" },
-            { action: exportToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘E" : "Ctrl+Alt+E" },
-            { action: addSequenceMarkerAction, category: "Timeline", shortcutHint: "M" },
-            { action: splitAtPlayheadAction, category: "Timeline", shortcutHint: macStyle ? "⌘\\" : "Ctrl+\\" },
-            { action: removeSelectedClipAction, category: "Timeline", shortcutHint: "" },
-            { action: openTimelineMediaBrowserAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘M" : "Ctrl+Shift+M" },
-            { action: toggleTimelinePlaybackAction, category: "Timeline", shortcutHint: "Space" },
-            { action: stepTimelineBackwardAction, category: "Timeline", shortcutHint: "Left" },
-            { action: stepTimelineForwardAction, category: "Timeline", shortcutHint: "Right" },
-            { action: addTimelineVideoTrackAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘T" : "Ctrl+Shift+T" },
-            { action: zoomInTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘=" : "Ctrl+=" },
-            { action: zoomOutTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘-" : "Ctrl+-" },
-            { action: zoomToFitTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘0" : "Ctrl+0" },
-            { action: timelineSelectToolAction, category: "Timeline", shortcutHint: "V" },
-            { action: timelineRazorToolAction, category: "Timeline", shortcutHint: "B" },
-            { action: timelineSlipToolAction, category: "Timeline", shortcutHint: "Y" },
-            { action: timelineRollToolAction, category: "Timeline", shortcutHint: "N" },
-            { action: timelineToggleSnapAction, category: "Timeline", shortcutHint: "S" },
-            { action: timelineGoToStartAction, category: "Timeline", shortcutHint: "Home" },
-            { action: timelineGoToEndAction, category: "Timeline", shortcutHint: "End" },
-            { action: timelineDeleteClipAction, category: "Timeline", shortcutHint: "Backspace" },
-            { action: timelineSelectAllAction, category: "Timeline", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
-            { action: toggleSourcePanelAction, category: "Timeline", shortcutHint: "" },
-            { action: toggleEffectsPanelAction, category: "Timeline", shortcutHint: "" },
-            { action: toggleRippleAction, category: "Timeline", shortcutHint: "" },
-            { action: restoreTimelineLayoutAction, category: "Timeline", shortcutHint: "" },
-            { action: carouselAddSlideAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
-            { action: carouselRemoveSlideAction, category: "Carousel", shortcutHint: "" },
-            { action: carouselMoveBackwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘[" : "Ctrl+[" },
-            { action: carouselMoveForwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘]" : "Ctrl+]" },
-            { action: carouselAssignSelectedMediaAction, category: "Carousel", shortcutHint: "" },
-            { action: carouselExportAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘C" : "Ctrl+Shift+C" },
-            { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
-            { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
-            { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
-            { action: commandPaletteAction, category: "View", shortcutHint: macStyle ? "⌘K" : "Ctrl+K" },
-            { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
-            { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
-            { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
-            { action: aboutAction, category: "Help", shortcutHint: "" },
-            { action: runtimePathsAction, category: "Help", shortcutHint: "" },
-            { action: openAppDataFolderAction, category: "Help", shortcutHint: "" },
-            { action: openLogFolderAction, category: "Help", shortcutHint: "" },
-            { action: openBackupsFolderAction, category: "Help", shortcutHint: "" },
-            { action: openCacheFolderAction, category: "Help", shortcutHint: "" },
-            { action: clearFinishedExportsAction, category: "Export", shortcutHint: "" },
-            { action: minimizeWindowAction, category: "Window", shortcutHint: "" },
-            { action: zoomWindowAction, category: "Window", shortcutHint: "" },
-            { action: bringWindowToFrontAction, category: "Window", shortcutHint: "" },
-            { action: quitAction, category: "App", shortcutHint: macStyle ? "⌘Q" : "Ctrl+Q" }
-        ]
-    }
-
-    Dialog {
-        id: aboutDialog
-        parent: Overlay.overlay
-        modal: true
-        width: 420
-        standardButtons: Dialog.Ok
-        title: "About Virel Studio"
-
-        background: Rectangle {
-            radius: theme.radius16
-            color: theme.ink900
-            border.width: 1
-            border.color: theme.alpha(theme.lineSoft, 0.85)
+    Loader {
+        id: preferencesDialogLoader
+        active: false
+        sourceComponent: preferencesDialogComponent
+        onLoaded: {
+            if (window.pendingPreferencesDialogPage >= 0 && item) {
+                item.openAt(window.pendingPreferencesDialogPage)
+                window.pendingPreferencesDialogPage = -1
+            }
         }
+    }
 
-        contentItem: ColumnLayout {
-            spacing: 12
+    Loader {
+        id: startupLoadingPopupLoader
+        active: catalogAssets.loading
+        sourceComponent: startupLoadingPopupComponent
+    }
 
-            BrandWordmark {
-                Layout.fillWidth: true
-                Layout.preferredHeight: implicitHeight
+    Loader {
+        id: keyboardShortcutsDialogLoader
+        active: false
+        sourceComponent: keyboardShortcutsDialogComponent
+        onLoaded: {
+            if (window.pendingKeyboardShortcutsDialogOpen && item) {
+                item.open()
+                window.pendingKeyboardShortcutsDialogOpen = false
+            }
+        }
+    }
+
+    Loader {
+        id: commandPaletteDialogLoader
+        active: false
+        sourceComponent: commandPaletteDialogComponent
+        onLoaded: {
+            if (window.pendingCommandPaletteDialogOpen && item) {
+                item.open()
+                window.pendingCommandPaletteDialogOpen = false
+            }
+        }
+    }
+
+    Loader {
+        id: aboutDialogLoader
+        active: false
+        sourceComponent: aboutDialogComponent
+        onLoaded: {
+            if (window.pendingAboutDialogOpen && item) {
+                item.open()
+                window.pendingAboutDialogOpen = false
+            }
+        }
+    }
+
+    Component {
+        id: preferencesDialogComponent
+
+        AppPreferencesDialog {
+            objectName: "preferencesDialog"
+            parent: Overlay.overlay
+        }
+    }
+
+    Component {
+        id: startupLoadingPopupComponent
+
+        StartupLoadingPopup {
+            parent: Overlay.overlay
+            catalogLoading: catalogAssets.loading
+            catalogStatus: catalogAssets.status
+        }
+    }
+
+    Component {
+        id: keyboardShortcutsDialogComponent
+
+        KeyboardShortcutsDialog {
+            objectName: "keyboardShortcutsDialog"
+            parent: Overlay.overlay
+        }
+    }
+
+    Component {
+        id: commandPaletteDialogComponent
+
+        CommandPaletteDialog {
+            objectName: "commandPaletteDialog"
+            parent: Overlay.overlay
+            requiredCommandLabels: [
+                "Library",
+                "Edit",
+                "Carousel",
+                "Timeline",
+                "Export",
+                "Adjust Tool",
+                "Crop Tool",
+                "Masks Tool",
+                "Brush Tool",
+                "Compare Tool",
+                "Export Tool",
+                "New Import",
+                "New Timeline",
+                "New Carousel",
+                "Open Selected In Edit",
+                "Start Export",
+                "Reset Adjustments",
+                "Compare View",
+                "Crop Overlay",
+                "Select Tool",
+                "Razor Tool",
+                "Slip Tool",
+                "Roll Tool",
+                "Add Slide",
+                "Export Carousel",
+                "Keyboard Shortcuts",
+                "Command Palette"
+            ]
+            commands: [
+                { action: switchToLibraryAction, category: "Navigate", shortcutHint: macStyle ? "⌘1" : "Ctrl+1" },
+                { action: switchToEditAction, category: "Navigate", shortcutHint: macStyle ? "⌘2" : "Ctrl+2" },
+                { action: switchToCarouselAction, category: "Navigate", shortcutHint: macStyle ? "⌘3" : "Ctrl+3" },
+                { action: switchToTimelineAction, category: "Navigate", shortcutHint: macStyle ? "⌘4" : "Ctrl+4" },
+                { action: switchToExportAction, category: "Navigate", shortcutHint: macStyle ? "⌘5" : "Ctrl+5" },
+                { action: newImportAction, category: "File", shortcutHint: macStyle ? "⇧⌘I" : "Ctrl+Shift+I" },
+                { action: newTimelineAction, category: "File", shortcutHint: macStyle ? "⌘N" : "Ctrl+N" },
+                { action: newCarouselAction, category: "File", shortcutHint: "" },
+                { action: openSelectedInEditAction, category: "File", shortcutHint: macStyle ? "⌘E" : "Ctrl+E" },
+                { action: openSelectedTimelineAction, category: "File", shortcutHint: "" },
+                { action: saveTimelineAction, category: "File", shortcutHint: macStyle ? "⌘S" : "Ctrl+S" },
+                { action: importFolderAction, category: "File", shortcutHint: macStyle ? "⌘O" : "Ctrl+O" },
+                { action: refreshLibraryAction, category: "Library", shortcutHint: macStyle ? "⌘R" : "Ctrl+R" },
+                { action: queueExportAction, category: "Export", shortcutHint: macStyle ? "⇧⌘E" : "Ctrl+Shift+E" },
+                { action: undoEditAction, category: "Edit", shortcutHint: macStyle ? "⌘Z" : "Ctrl+Z" },
+                { action: redoEditAction, category: "Edit", shortcutHint: macStyle ? "⇧⌘Z" : "Ctrl+Shift+Z" },
+                { action: selectAllAction, category: "Selection", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
+                { action: deselectAction, category: "Selection", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
+                { action: resetAdjustmentsAction, category: "Edit", shortcutHint: "" },
+                { action: toggleCompareAction, category: "Edit", shortcutHint: "" },
+                { action: toggleCropAction, category: "Edit", shortcutHint: "" },
+                { action: adjustToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘A" : "Ctrl+Alt+A" },
+                { action: cropToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘C" : "Ctrl+Alt+C" },
+                { action: masksToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘M" : "Ctrl+Alt+M" },
+                { action: brushToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘B" : "Ctrl+Alt+B" },
+                { action: compareToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘P" : "Ctrl+Alt+P" },
+                { action: exportToolAction, category: "Tools", shortcutHint: macStyle ? "⌥⌘E" : "Ctrl+Alt+E" },
+                { action: addSequenceMarkerAction, category: "Timeline", shortcutHint: "M" },
+                { action: splitAtPlayheadAction, category: "Timeline", shortcutHint: macStyle ? "⌘\\" : "Ctrl+\\" },
+                { action: removeSelectedClipAction, category: "Timeline", shortcutHint: "" },
+                { action: openTimelineMediaBrowserAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘M" : "Ctrl+Shift+M" },
+                { action: toggleTimelinePlaybackAction, category: "Timeline", shortcutHint: "Space" },
+                { action: stepTimelineBackwardAction, category: "Timeline", shortcutHint: "Left" },
+                { action: stepTimelineForwardAction, category: "Timeline", shortcutHint: "Right" },
+                { action: addTimelineVideoTrackAction, category: "Timeline", shortcutHint: macStyle ? "⇧⌘T" : "Ctrl+Shift+T" },
+                { action: zoomInTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘=" : "Ctrl+=" },
+                { action: zoomOutTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘-" : "Ctrl+-" },
+                { action: zoomToFitTimelineAction, category: "Timeline", shortcutHint: macStyle ? "⌘0" : "Ctrl+0" },
+                { action: timelineSelectToolAction, category: "Timeline", shortcutHint: "V" },
+                { action: timelineRazorToolAction, category: "Timeline", shortcutHint: "B" },
+                { action: timelineSlipToolAction, category: "Timeline", shortcutHint: "Y" },
+                { action: timelineRollToolAction, category: "Timeline", shortcutHint: "N" },
+                { action: timelineToggleSnapAction, category: "Timeline", shortcutHint: "S" },
+                { action: timelineGoToStartAction, category: "Timeline", shortcutHint: "Home" },
+                { action: timelineGoToEndAction, category: "Timeline", shortcutHint: "End" },
+                { action: timelineDeleteClipAction, category: "Timeline", shortcutHint: "Backspace" },
+                { action: timelineSelectAllAction, category: "Timeline", shortcutHint: macStyle ? "⌘A" : "Ctrl+A" },
+                { action: toggleSourcePanelAction, category: "Timeline", shortcutHint: "" },
+                { action: toggleEffectsPanelAction, category: "Timeline", shortcutHint: "" },
+                { action: toggleRippleAction, category: "Timeline", shortcutHint: "" },
+                { action: restoreTimelineLayoutAction, category: "Timeline", shortcutHint: "" },
+                { action: carouselAddSlideAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘A" : "Ctrl+Shift+A" },
+                { action: carouselRemoveSlideAction, category: "Carousel", shortcutHint: "" },
+                { action: carouselMoveBackwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘[" : "Ctrl+[" },
+                { action: carouselMoveForwardAction, category: "Carousel", shortcutHint: macStyle ? "⌘]" : "Ctrl+]" },
+                { action: carouselAssignSelectedMediaAction, category: "Carousel", shortcutHint: "" },
+                { action: carouselExportAction, category: "Carousel", shortcutHint: macStyle ? "⇧⌘C" : "Ctrl+Shift+C" },
+                { action: carouselFormat4x5Action, category: "Carousel", shortcutHint: "" },
+                { action: carouselFormat5x4Action, category: "Carousel", shortcutHint: "" },
+                { action: toggleDarkModeAction, category: "View", shortcutHint: "" },
+                { action: commandPaletteAction, category: "View", shortcutHint: macStyle ? "⌘K" : "Ctrl+K" },
+                { action: preferencesAction, category: "App", shortcutHint: macStyle ? "⌘," : "Ctrl+," },
+                { action: keyboardShortcutsAction, category: "Help", shortcutHint: "" },
+                { action: checkForUpdatesAction, category: "Help", shortcutHint: "" },
+                { action: aboutAction, category: "Help", shortcutHint: "" },
+                { action: runtimePathsAction, category: "Help", shortcutHint: "" },
+                { action: openAppDataFolderAction, category: "Help", shortcutHint: "" },
+                { action: openLogFolderAction, category: "Help", shortcutHint: "" },
+                { action: openBackupsFolderAction, category: "Help", shortcutHint: "" },
+                { action: openCacheFolderAction, category: "Help", shortcutHint: "" },
+                { action: clearFinishedExportsAction, category: "Export", shortcutHint: "" },
+                { action: minimizeWindowAction, category: "Window", shortcutHint: "" },
+                { action: zoomWindowAction, category: "Window", shortcutHint: "" },
+                { action: bringWindowToFrontAction, category: "Window", shortcutHint: "" },
+                { action: quitAction, category: "App", shortcutHint: macStyle ? "⌘Q" : "Ctrl+Q" }
+            ]
+        }
+    }
+
+    Component {
+        id: aboutDialogComponent
+
+        Dialog {
+            parent: Overlay.overlay
+            modal: true
+            width: 420
+            standardButtons: Dialog.Ok
+            title: "About Virel Studio"
+
+            background: Rectangle {
+                radius: theme.radius16
+                color: theme.ink900
+                border.width: 1
+                border.color: theme.alpha(theme.lineSoft, 0.85)
             }
 
-            Label {
-                Layout.fillWidth: true
-                text: "Version " + appShell.appVersion
-                color: theme.textMuted
-                font.family: theme.fontMono
-                font.pixelSize: 11
-            }
+            contentItem: ColumnLayout {
+                spacing: 12
 
-            Label {
-                Layout.fillWidth: true
-                text: "A native editing shell for library browsing, still-image adjustments, timeline editing, carousel layouts, and export queue management."
-                color: theme.textMain
-                wrapMode: Text.WordWrap
-            }
+                BrandWordmark {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: implicitHeight
+                }
 
-            Label {
-                Layout.fillWidth: true
-                text: "Runtime data is stored in your application support, cache, log, and backup folders shown in Preferences."
-                color: theme.textMuted
-                wrapMode: Text.WordWrap
-            }
+                Label {
+                    Layout.fillWidth: true
+                    text: "Version " + appShell.appVersion
+                    color: theme.textMuted
+                    font.family: theme.fontMono
+                    font.pixelSize: 11
+                }
 
-            ActionButton {
-                visible: window.macStyle && macosUpdater && macosUpdater.available
-                text: "Check for Updates"
-                compact: true
-                onClicked: {
-                    aboutDialog.close()
-                    macosUpdater.checkForUpdates()
+                Label {
+                    Layout.fillWidth: true
+                    text: "A native editing shell for library browsing, still-image adjustments, timeline editing, carousel layouts, and export queue management."
+                    color: theme.textMain
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: "Runtime data is stored in your application support, cache, log, and backup folders shown in Preferences."
+                    color: theme.textMuted
+                    wrapMode: Text.WordWrap
+                }
+
+                ActionButton {
+                    visible: window.macStyle && macosUpdater && macosUpdater.available
+                    text: "Check for Updates"
+                    compact: true
+                    onClicked: {
+                        aboutDialogLoader.item.close()
+                        macosUpdater.checkForUpdates()
+                    }
                 }
             }
         }
@@ -2038,9 +2459,23 @@ ApplicationWindow {
         id: libraryView
 
         StudioWorkspace {
+            objectName: "libraryStudioWorkspace"
             page: "library"
             catalogAssets: window.catalogAssetModel
             importModeOpen: window.libraryWorkspaceMode === "import"
+
+            Component.onCompleted: {
+                window.restorePrimaryStudioPanels(this)
+                if (importModeOpen)
+                    window.catalogAssetModel.refreshImportSources()
+            }
+
+            onImportModeOpenChanged: {
+                window.libraryWorkspaceMode = importModeOpen ? "import" : "catalog"
+                if (importModeOpen)
+                    window.catalogAssetModel.refreshImportSources()
+            }
+
             onAssetActivated: function(destination) {
                 if (destination === "edit") {
                     window.editWorkspaceMode = "adjust"
@@ -2065,9 +2500,9 @@ ApplicationWindow {
                     return
                 }
 
-                if (catalogAssets.selectedMediaType === "timeline"
-                        && catalogAssets.selectedTimelineDocumentPath.length > 0)
-                    timelineDocument.loadTimeline(catalogAssets.selectedTimelineDocumentPath)
+                if (window.catalogAssetModel.selectedMediaType === "timeline"
+                        && window.catalogAssetModel.selectedTimelineDocumentPath.length > 0)
+                    timelineDocument.loadTimeline(window.catalogAssetModel.selectedTimelineDocumentPath)
 
                 window.currentWorkspace = window.timelineWorkspaceIndex
             }
@@ -2090,28 +2525,32 @@ ApplicationWindow {
         id: editView
 
         StudioWorkspace {
+            objectName: "editStudioWorkspace"
             page: "edit"
             catalogAssets: window.catalogAssetModel
-            editTool: window.editWorkspaceMode === "compare" ? "compare"
-                      : window.editWorkspaceMode === "masks" ? "masks"
-                      : window.editWorkspaceMode === "crop" ? "crop"
-                      : window.editWorkspaceMode === "brush" ? "brush"
-                      : "adjust"
+            editTool: window.resolvedEditTool()
+            workspaceActive: window.currentWorkspace === window.editWorkspaceIndex
+
+            Component.onCompleted: window.restorePrimaryStudioPanels(this)
+
             onAssetActivated: function(destination) {
                 if (destination === "library") {
                     window.currentWorkspace = window.libraryWorkspaceIndex
                     return
                 }
+
                 if (destination === "masks") {
                     window.editWorkspaceMode = "masks"
                     window.currentWorkspace = window.editWorkspaceIndex
                     return
                 }
+
                 if (destination === "compare") {
                     window.editWorkspaceMode = "compare"
                     window.currentWorkspace = window.editWorkspaceIndex
                     return
                 }
+
                 if (destination === "export") {
                     window.currentWorkspace = window.exportWorkspaceIndex
                     return
@@ -2120,24 +2559,4 @@ ApplicationWindow {
         }
     }
 
-    Component {
-        id: carouselView
-
-        CarouselView {}
-    }
-
-    Component {
-        id: timelineView
-
-        TimelineView {}
-    }
-
-    Component {
-        id: exportView
-
-        StudioWorkspace {
-            page: "export"
-            catalogAssets: window.catalogAssetModel
-        }
-    }
 }

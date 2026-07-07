@@ -7,13 +7,21 @@ import "../components"
 
 Rectangle {
     id: root
+    objectName: "importWorkspace"
     color: "transparent"
 
     Theme { id: theme }
 
+    readonly property string importVisibilityContract: "import-visibility:v1|always:sources-folders-header-media-grid-primary-import|contextual:destination-panel-selection-actions-filter-empty-progress|one-expansion:import-options-project-target-refresh-sources-clear-selection|hover-focus:media-selection-source-folder-keyboard|diagnostic:import-progress-source-empty|preserve:functionality"
+    readonly property string importSurfaceContract: "import-surfaces:v1|sources:left-rail|folders:navigation-list|media:grid-filter-selection|destination:contextual-project-picker|actions:split-import-menu|no-elide:true|no-overlap:true"
+    readonly property string importWorkflowPolishContract: "import-workflow-polish:v1|first-glance:sources-current-folder-media-grid-primary-import|close-inspection:source-confirmation-filter-counts-selection-destination-progress|clutter:single-progress-place-split-import-options|interaction:choose-source-select-visible-clear-import-retry-refresh|text:no-elide-no-overlap-paths-wrap|functionality:preserved"
+    readonly property string importPageCompletionContract: "page-completion:v1|import|sidebar:sources-folders-refresh|content:header-filter-media-grid-empty|destination:project-picker-create-confirm-cancel|toolbar:select-visible-clear-primary-import|states:no-source-empty-filtered-selected-importing-failed-complete"
+
     property string sourceRootPath: ""
     property string sourceRootUrl: ""
     property string sourceLabel: ""
+    property string pendingFolderPath: ""
+    property string pendingFolderUrl: ""
     property string currentFolderPath: ""
     property string currentFolderUrl: ""
     property string projectTarget: ""
@@ -34,6 +42,7 @@ Rectangle {
     readonly property bool hasStagedSelection: selectedFileCount > 0
     readonly property bool canImportSelection: hasStagedSelection && !catalogAssets.busy
     readonly property bool canImportFolder: currentFolderPath.length > 0 && !catalogAssets.busy
+    readonly property string importActionContract: "import-actions:v1|split-button:true|primary:import-to-virel-vault|menu:import-selection,import-folder,import-with-preset,select-visible,clear-selection,refresh-sources|disabled-reasons:true|no-clutter:true"
     readonly property string currentFolderName: currentFolderPath.length > 0 ? fileNameForPath(currentFolderPath) : "No folder"
     readonly property int visiblePhotoCount: {
         const total = fileModel.count
@@ -93,6 +102,24 @@ Rectangle {
         return paths
     }
     readonly property int selectedFileCount: selectedFilePaths.length
+    readonly property int selectedPhotoCount: {
+        selectionRevision
+        let count = 0
+        for (let index = 0; index < selectedFilePaths.length; ++index) {
+            if (!isVideoFile(selectedFilePaths[index]))
+                ++count
+        }
+        return count
+    }
+    readonly property int selectedVideoCount: {
+        selectionRevision
+        let count = 0
+        for (let index = 0; index < selectedFilePaths.length; ++index) {
+            if (isVideoFile(selectedFilePaths[index]))
+                ++count
+        }
+        return count
+    }
     readonly property var projectOptionValues: {
         const values = [""]
         for (let i = 0; i < catalogAssets.projectNames.length; ++i)
@@ -182,6 +209,28 @@ Rectangle {
         return "All Media"
     }
 
+    function supportedImportTypesText() {
+        return "Supported: RAW, JPG, PNG, TIFF, HEIC, MP4, MOV, M4V, MPEG, WEBM."
+    }
+
+    function sourceConfirmationText() {
+        if (!root.hasSource)
+            return "Choose Source"
+        if (root.currentFolderPath.length === 0)
+            return "Source Ready"
+        return "Folder Ready"
+    }
+
+    function selectionMixText() {
+        if (selectedFileCount === 0)
+            return String(filteredFileCount) + " visible"
+        if (selectedPhotoCount > 0 && selectedVideoCount > 0)
+            return selectedPhotoCount + " photo / " + selectedVideoCount + " video"
+        if (selectedVideoCount > 0)
+            return selectedVideoCount + (selectedVideoCount === 1 ? " video" : " videos")
+        return selectedPhotoCount + (selectedPhotoCount === 1 ? " photo" : " photos")
+    }
+
     function syncProjectTarget() {
         if (projectTarget.length > 0 && catalogAssets.projectNames.indexOf(projectTarget) !== -1)
             return
@@ -200,8 +249,11 @@ Rectangle {
         sourceRootPath = path
         sourceRootUrl = url
         sourceLabel = label
-        currentFolderPath = path
-        currentFolderUrl = url
+        currentFolderPath = ""
+        currentFolderUrl = ""
+        pendingFolderPath = path
+        pendingFolderUrl = url
+        deferredFolderLoadTimer.restart()
         importProjectChooserOpen = false
         clearSelection()
     }
@@ -265,6 +317,75 @@ Rectangle {
         catalogAssets.importSelection(currentFolderPath, [], projectTarget)
     }
 
+    function importActionMenuItems() {
+        return [
+            {
+                key: "import-selection",
+                label: "Import Selection",
+                icon: "media",
+                enabled: root.canImportSelection,
+                disabledReason: root.selectedFileCount > 0 ? "Selected files are not importable." : "Select media to import.",
+                tooltip: "Import the currently selected files."
+            },
+            {
+                key: "import-folder",
+                label: "Import Current Folder",
+                icon: "folder",
+                enabled: root.canImportFolder,
+                disabledReason: root.currentFolderPath.length > 0 ? "No importable media found in this folder." : "Choose a folder first.",
+                tooltip: "Import the current folder."
+            },
+            {
+                key: "import-with-preset",
+                label: "Import With Preset",
+                icon: "swatch",
+                enabled: false,
+                disabledReason: "Import preset application needs controller support before it can run.",
+                tooltip: "Apply metadata or develop defaults during import."
+            },
+            {
+                key: "select-visible",
+                label: "Select Visible Media",
+                icon: "check",
+                enabled: root.filteredFileCount > 0,
+                disabledReason: "No visible media matches the current filters.",
+                tooltip: "Select all currently visible media."
+            },
+            {
+                key: "clear-selection",
+                label: "Clear Selection",
+                icon: "delete",
+                enabled: root.selectedFileCount > 0,
+                disabledReason: "No files are selected.",
+                tooltip: "Clear the staged import selection."
+            },
+            {
+                key: "refresh-sources",
+                label: "Refresh Sources",
+                icon: "source",
+                enabled: !catalogAssets.busy,
+                disabledReason: "Source refresh is already running.",
+                tooltip: "Rescan mounted storage and import sources."
+            }
+        ]
+    }
+
+    function handleImportMenuAction(key) {
+        if (key === "import-selection") {
+            importSelected()
+        } else if (key === "import-folder") {
+            importCurrentFolder()
+        } else if (key === "import-with-preset") {
+            return
+        } else if (key === "select-visible") {
+            selectAllVisible()
+        } else if (key === "clear-selection") {
+            clearSelection()
+        } else if (key === "refresh-sources") {
+            catalogAssets.refreshImportSources(true)
+        }
+    }
+
     function hasActiveImportJobs() {
         return jobQueue && jobQueue.activeJobCountForKind("catalog_import") > 0
     }
@@ -299,6 +420,27 @@ Rectangle {
         if (raw > 0)
             return Math.max(0.05, Math.min(1, raw / 100.0))
         return -1
+    }
+
+    function importWorkflowPolishSignature() {
+        const hasJob = root.hasActiveImportJobs()
+        return "import-workflow-polish:v1" +
+               "|source:" + (root.hasSource ? "selected" : "none") +
+               "|folder:" + (root.currentFolderPath.length > 0 ? "selected" : "none") +
+               "|visible:" + String(root.filteredFileCount) +
+               "|selected:" + String(root.selectedFileCount) +
+               "|selected-photos:" + String(root.selectedPhotoCount) +
+               "|selected-videos:" + String(root.selectedVideoCount) +
+               "|photos:" + String(root.visiblePhotoCount) +
+               "|videos:" + String(root.visibleVideoCount) +
+               "|source-confirmation:" + root.sourceConfirmationText() +
+               "|filter:" + root.mediaQuickFilter +
+               "|destination:" + (root.importProjectChooserOpen ? "open" : "closed") +
+               "|can-import-selection:" + String(root.canImportSelection) +
+               "|can-import-folder:" + String(root.canImportFolder) +
+               "|progress:" + (hasJob ? "active" : "idle") +
+               "|activity-title:" + (hasJob ? root.importActivityTitle() : "none") +
+               "|preserve:choose-source-select-visible-clear-selection-import-selected-import-folder-refresh-project-target"
     }
 
     Component.onCompleted: {
@@ -343,12 +485,28 @@ Rectangle {
             root.sourceLabel = ""
             root.currentFolderPath = ""
             root.currentFolderUrl = ""
+            root.pendingFolderPath = ""
+            root.pendingFolderUrl = ""
             root.ensureDefaultSource()
         }
 
         function onImportingChanged() {
             if (!catalogAssets.importing && catalogAssets.errorMessage.length === 0)
                 root.clearSelection()
+        }
+    }
+
+    Timer {
+        id: deferredFolderLoadTimer
+        interval: 120
+        repeat: false
+        onTriggered: {
+            if (root.pendingFolderPath.length === 0 || root.pendingFolderUrl.length === 0)
+                return
+            root.currentFolderPath = root.pendingFolderPath
+            root.currentFolderUrl = root.pendingFolderUrl
+            root.pendingFolderPath = ""
+            root.pendingFolderUrl = ""
         }
     }
 
@@ -383,6 +541,8 @@ Rectangle {
             spacing: theme.space8
 
             BrandPanel {
+                objectName: "importSourcePanel"
+                readonly property string visibilityRole: "always-visible|source-list-folder-nav-folder-list-refresh"
                 Layout.preferredWidth: 216
                 Layout.fillHeight: true
                 title: "Sources"
@@ -391,6 +551,8 @@ Rectangle {
 
             ListView {
                 id: sourceListView
+                objectName: "importSourceList"
+                readonly property string visibilityRole: "always-visible|mounted-sources-select"
                 Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(contentHeight, 320)
                 Layout.fillHeight: false
@@ -399,101 +561,16 @@ Rectangle {
                 model: catalogAssets.importSources
                 boundsBehavior: Flickable.StopAtBounds
 
-                delegate: Rectangle {
+                delegate: ImportSourceRow {
                     required property string label
                     required property string subtitle
                     required property string path
                     required property string url
 
-                    width: ListView.view.width
-                    height: 64
-                    radius: theme.radius10
-                    color: root.sourceRootPath === path
-                           ? theme.alpha(theme.accentCool500, 0.12)
-                           : (sourceMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.88) : theme.alpha(theme.ink900, 0.82))
-                    border.width: 1
-                    border.color: root.sourceRootPath === path
-                                  ? theme.alpha(theme.accentWarm400, 0.64)
-                                  : (sourceMouseArea.containsMouse ? theme.alpha(theme.lineSoft, 0.34) : theme.alpha(theme.lineSoft, 0.18))
-
-                    Behavior on color {
-                        ColorAnimation { duration: theme.durationFast }
-                    }
-
-                    Behavior on border.color {
-                        ColorAnimation { duration: theme.durationFast }
-                    }
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: theme.sectionPadding
-                        spacing: theme.space10
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            implicitWidth: 3
-                            Layout.fillHeight: true
-                            radius: 2
-                            color: root.sourceRootPath === path
-                                   ? theme.accentWarm400
-                                   : theme.alpha(theme.lineSoft, sourceMouseArea.containsMouse ? 0.34 : 0.14)
-                        }
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 2
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: label
-                                color: theme.textStrong
-                                font.family: theme.fontUi
-                                font.pixelSize: 13
-                                font.weight: Font.DemiBold
-                                elide: Text.ElideRight
-                            }
-
-                            Label {
-                                Layout.fillWidth: true
-                                text: subtitle
-                                color: root.sourceRootPath === path ? theme.textMain : theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 10
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            visible: root.sourceRootPath === path || sourceMouseArea.containsMouse
-                            implicitWidth: sourceStateLabel.implicitWidth + (theme.space8 * 2)
-                            implicitHeight: sourceStateLabel.implicitHeight + theme.space6
-                            radius: 999
-                            color: root.sourceRootPath === path
-                                   ? theme.alpha(theme.accentWarm400, 0.2)
-                                   : theme.alpha(theme.ink800, 0.92)
-                            border.width: 1
-                            border.color: root.sourceRootPath === path
-                                          ? theme.alpha(theme.accentWarm300, 0.34)
-                                          : theme.alpha(theme.lineSoft, 0.16)
-
-                            Label {
-                                id: sourceStateLabel
-                                anchors.centerIn: parent
-                                text: root.sourceRootPath === path ? "Active" : "Open"
-                                color: root.sourceRootPath === path ? theme.accentWarm300 : theme.textMuted
-                                font.family: theme.fontUi
-                                font.pixelSize: 9
-                                font.weight: Font.DemiBold
-                            }
-                        }
-                    }
-
-                    MouseArea {
-                        id: sourceMouseArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: root.openSource(path, url, label)
+                    sourceUrl: url
+                    selected: root.sourceRootPath === path
+                    onActivated: function(path, sourceUrl, label) {
+                        root.openSource(path, sourceUrl, label)
                     }
                 }
             }
@@ -519,6 +596,8 @@ Rectangle {
             }
 
             Rectangle {
+                objectName: "importFolderNavigation"
+                readonly property string visibilityRole: "contextual|up-current-folder-source-folder-count"
                 visible: root.hasSource
                 Layout.fillWidth: true
                 implicitHeight: folderNavRow.implicitHeight + (theme.space8 * 2)
@@ -554,7 +633,9 @@ Rectangle {
                             font.family: theme.fontUi
                             font.pixelSize: 11
                             font.weight: Font.Medium
-                            elide: Text.ElideRight
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 8
+                            elide: Text.ElideNone
                         }
 
                         Label {
@@ -563,7 +644,9 @@ Rectangle {
                             color: theme.textFaint
                             font.family: theme.fontUi
                             font.pixelSize: 9
-                            elide: Text.ElideRight
+                            fontSizeMode: Text.HorizontalFit
+                            minimumPixelSize: 7
+                            elide: Text.ElideNone
                         }
                     }
 
@@ -589,6 +672,8 @@ Rectangle {
 
             ListView {
                 id: folderListView
+                objectName: "importFolderList"
+                readonly property string visibilityRole: "contextual|folder-browse-keyboard"
                 visible: root.hasSource
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -597,61 +682,12 @@ Rectangle {
                 model: directoryModel
                 boundsBehavior: Flickable.StopAtBounds
 
-                delegate: Rectangle {
+                delegate: ImportFolderRow {
                     required property string fileName
                     required property string fileUrl
 
-                    width: ListView.view.width
-                    height: 40
-                    radius: theme.radius8
-                    color: root.currentFolderUrl === fileUrl
-                           ? theme.alpha(theme.accentCool500, 0.1)
-                           : (folderRailMouseArea.containsMouse ? theme.alpha(theme.ink800, 0.84) : theme.alpha(theme.ink950, 0.16))
-                    border.width: 1
-                    border.color: root.currentFolderUrl === fileUrl
-                                  ? theme.alpha(theme.accentWarm400, 0.44)
-                                  : (folderRailMouseArea.containsMouse ? theme.alpha(theme.lineSoft, 0.26) : theme.alpha(theme.lineSoft, 0.1))
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: theme.space10
-                        anchors.rightMargin: theme.space10
-                        spacing: theme.space8
-
-                        Rectangle {
-                            Layout.alignment: Qt.AlignVCenter
-                            implicitWidth: 6
-                            implicitHeight: 6
-                            radius: 3
-                            color: root.currentFolderUrl === fileUrl
-                                   ? theme.accentWarm400
-                                   : theme.alpha(theme.accentCool400, folderRailMouseArea.containsMouse ? 0.82 : 0.46)
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: fileName
-                            color: root.currentFolderUrl === fileUrl ? theme.textStrong : theme.textMain
-                            font.family: theme.fontUi
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-
-                        AppIcon {
-                            name: "chevron-right"
-                            color: theme.textFaint
-                            implicitWidth: 12
-                            implicitHeight: 12
-                            Layout.alignment: Qt.AlignVCenter
-                        }
-                    }
-
-                    MouseArea {
-                        id: folderRailMouseArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: root.openFolder(fileUrl)
-                    }
+                    selected: root.currentFolderUrl === fileUrl
+                    onActivated: function(fileUrl) { root.openFolder(fileUrl) }
                 }
             }
 
@@ -660,11 +696,13 @@ Rectangle {
                 text: "Refresh Sources"
                 iconName: "source"
                 enabled: !catalogAssets.busy
-                onClicked: catalogAssets.refreshImportSources()
+                onClicked: catalogAssets.refreshImportSources(true)
             }
         }
 
         Rectangle {
+            objectName: "importMainPanel"
+            readonly property string surfaceContract: "import-main-panel:v1|header:always|media-grid:always|filter:always|selection-actions:always|empty-states:contextual|primary-import:always|no-elide:true|no-overlap:true"
             Layout.fillWidth: true
             Layout.fillHeight: true
             radius: theme.radiusSurface
@@ -684,14 +722,17 @@ Rectangle {
                 spacing: theme.gapPanel
 
                 Rectangle {
+                    objectName: "importHeaderBar"
+                    readonly property string visibilityRole: "always-visible|source-path-counts-select-visible-clear-import"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 82
+                    Layout.preferredHeight: Math.max(104, importHeaderContent.implicitHeight + theme.space24)
                     radius: theme.radiusSurface
                     color: theme.alpha(theme.ink900, 0.92)
                     border.width: 1
                     border.color: theme.alpha(theme.lineSoft, 0.3)
 
                     RowLayout {
+                        id: importHeaderContent
                         anchors.fill: parent
                         anchors.margins: theme.space12
                         spacing: theme.space12
@@ -707,7 +748,9 @@ Rectangle {
                                 font.family: theme.fontDisplay
                                 font.pixelSize: 22
                                 font.weight: Font.DemiBold
-                                elide: Text.ElideRight
+                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                maximumLineCount: 2
+                                elide: Text.ElideNone
                             }
 
                             Label {
@@ -716,7 +759,42 @@ Rectangle {
                                 color: root.currentFolderPath.length > 0 ? theme.accentWarm300 : theme.textMuted
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
-                                elide: Text.ElideMiddle
+                                wrapMode: Text.WrapAnywhere
+                                maximumLineCount: 2
+                                elide: Text.ElideNone
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: theme.space6
+
+                                StatusChip {
+                                    objectName: "importSourceConfirmationChip"
+                                    text: root.sourceConfirmationText()
+                                    iconName: root.hasSource ? "check" : "source"
+                                    tone: root.hasSource ? "success" : "neutral"
+                                    compact: true
+                                    minimumReadableWidth: 108
+                                    maximumReadableWidth: 168
+                                    tooltipText: root.currentFolderPath.length > 0
+                                                 ? root.currentFolderPath
+                                                 : "Choose an import source from the left rail."
+                                }
+
+                                StatusChip {
+                                    objectName: "importSelectionMixChip"
+                                    text: root.selectionMixText()
+                                    iconName: root.selectedFileCount > 0 ? "media" : "grid"
+                                    tone: root.selectedFileCount > 0
+                                          ? (root.selectedPhotoCount > 0 && root.selectedVideoCount > 0 ? "warning" : "accent")
+                                          : "neutral"
+                                    compact: true
+                                    minimumReadableWidth: 118
+                                    maximumReadableWidth: 192
+                                    tooltipText: root.selectedFileCount > 0
+                                                 ? "Selection includes " + root.selectedPhotoCount + " photos and " + root.selectedVideoCount + " videos."
+                                                 : root.filteredFileCount + " visible files in this folder."
+                                }
                             }
                         }
 
@@ -752,12 +830,20 @@ Rectangle {
                             onClicked: root.clearSelection()
                         }
 
-                        ActionButton {
-                            text: root.hasActiveImportJobs() ? "Importing..." : "Import Selected"
+                        SplitButton {
+                            objectName: "importPrimarySplitButton"
+                            readonly property string visibilityRole: "always-visible|primary-import-one-expansion-options"
+                            text: root.hasActiveImportJobs() ? "Importing" : "Import to VIREL Vault"
                             iconName: "media"
                             tone: "primary"
-                            enabled: root.canImportSelection
+                            primaryEnabled: root.canImportSelection
+                            disabledReason: root.hasStagedSelection
+                                            ? "Selected files are not importable right now."
+                                            : "Select media to import."
+                            menuItems: root.importActionMenuItems()
+                            menuTooltipText: "Import options"
                             onClicked: root.importSelected()
+                            onMenuItemTriggered: function(key) { root.handleImportMenuAction(key) }
                         }
                     }
                 }
@@ -781,6 +867,8 @@ Rectangle {
                             spacing: theme.space6
 
                             Rectangle {
+                                objectName: "importMediaFilterBar"
+                                readonly property string visibilityRole: "always-visible|all-photos-videos-selected-filter-summary-reset"
                                 Layout.fillWidth: true
                                 implicitHeight: mediaToolbar.implicitHeight + (theme.space6 * 2)
                                 radius: theme.radius10
@@ -852,6 +940,8 @@ Rectangle {
                                 Layout.fillHeight: true
                                 GridView {
                                     id: mediaGrid
+                                    objectName: "importMediaGrid"
+                                    readonly property string visibilityRole: "always-visible|media-preview-selection-keyboard"
                                     anchors.fill: parent
                                     clip: true
                                     property int columns: Math.max(2, Math.floor(width / 250))
@@ -1007,7 +1097,9 @@ Rectangle {
                                                 font.family: theme.fontUi
                                                 font.pixelSize: 11
                                                 font.weight: Font.Medium
-                                                elide: Text.ElideRight
+                                                fontSizeMode: Text.HorizontalFit
+                                                minimumPixelSize: 8
+                                                elide: Text.ElideNone
                                             }
 
                                             RowLayout {
@@ -1047,6 +1139,8 @@ Rectangle {
                                 }
 
                                 Column {
+                                    objectName: "importEmptyState"
+                                    readonly property string visibilityRole: "contextual|empty-folder-filter-reset"
                                     anchors.centerIn: parent
                                     visible: root.currentFolderPath.length > 0 && root.filteredFileCount === 0
                                     spacing: theme.space10
@@ -1080,10 +1174,15 @@ Rectangle {
 
                                     Label {
                                         anchors.horizontalCenter: parent.horizontalCenter
-                                        text: root.mediaQuickFilter === "all" ? "Try another folder." : "Try another filter."
+                                        text: root.mediaQuickFilter === "all"
+                                              ? root.supportedImportTypesText()
+                                              : "Try another filter or show all supported media."
                                         color: theme.textMuted
                                         font.family: theme.fontUi
                                         font.pixelSize: 12
+                                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        width: Math.min(420, root.width - 96)
+                                        horizontalAlignment: Text.AlignHCenter
                                     }
 
                                     ActionButton {
@@ -1096,6 +1195,8 @@ Rectangle {
                                 }
 
                                 Column {
+                                    objectName: "importNoSourceState"
+                                    readonly property string visibilityRole: "contextual|no-source-pick-left"
                                     visible: !root.hasSource
                                     anchors.centerIn: parent
                                     spacing: theme.space10
@@ -1143,6 +1244,8 @@ Rectangle {
         }
 
         BrandPanel {
+            objectName: "importDestinationPanel"
+            readonly property string visibilityRole: "contextual|project-picker-create-confirm-cancel"
             visible: root.importProjectChooserOpen
             Layout.preferredWidth: visible ? 260 : 0
             Layout.fillHeight: true
@@ -1217,7 +1320,9 @@ Rectangle {
                                 font.family: theme.fontUi
                                 font.pixelSize: 11
                                 font.weight: Font.Medium
-                                elide: Text.ElideRight
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 8
+                                elide: Text.ElideNone
                             }
                         }
                     }

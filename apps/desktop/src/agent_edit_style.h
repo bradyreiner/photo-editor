@@ -25,6 +25,10 @@ struct AgentEditStyle final {
   QVariantMap validation;
   QVariantMap batch_behavior;
   QVariantMap reference_policy;
+  QVariantMap learned_profile;
+  QVariantMap tool_knowledge;
+  QVariantMap quality_model;
+  QVariantMap project_workflow;
   QString source;
 };
 

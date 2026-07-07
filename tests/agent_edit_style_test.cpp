@@ -85,6 +85,10 @@ QJsonObject style_object_from_public_map(const QVariantMap& style) {
           {QStringLiteral("validation"), style.value(QStringLiteral("validation"))},
           {QStringLiteral("batch_behavior"), style.value(QStringLiteral("batchBehavior"))},
           {QStringLiteral("reference_policy"), style.value(QStringLiteral("referencePolicy"))},
+          {QStringLiteral("learned_profile"), style.value(QStringLiteral("learnedProfile"))},
+          {QStringLiteral("tool_knowledge"), style.value(QStringLiteral("toolKnowledge"))},
+          {QStringLiteral("quality_model"), style.value(QStringLiteral("qualityModel"))},
+          {QStringLiteral("project_workflow"), style.value(QStringLiteral("projectWorkflow"))},
       });
 }
 
@@ -186,15 +190,59 @@ int main() {
     return fail("style validation should reject nested executable payload fields");
   }
 
-  auto reference_image_style = style;
-  reference_image_style.insert(
+  auto learned_reference_style = style;
+  learned_reference_style.insert(
+      QStringLiteral("reference_policy"),
+      QVariantMap{
+          {QStringLiteral("mode"), QStringLiteral("learned_style_profile")},
+          {QStringLiteral("reference_image_matching"), QStringLiteral("metadata_only")},
+          {QStringLiteral("examples_supported"), true},
+      });
+  learned_reference_style.insert(
+      QStringLiteral("learned_profile"),
+      QVariantMap{
+          {QStringLiteral("source_asset_count"), 2},
+          {QStringLiteral("usable_recipe_count"), 2},
+          {QStringLiteral("reference_examples"),
+           QVariantList{
+               QVariantMap{
+                   {QStringLiteral("assetId"), QStringLiteral("asset-1")},
+                   {QStringLiteral("filePath"), QStringLiteral("/tmp/look.jpg")},
+                   {QStringLiteral("recipeSummary"),
+                    QVariantMap{{QStringLiteral("exposure"), 0.2}}},
+               },
+           }},
+      });
+  learned_reference_style.insert(
+      QStringLiteral("tool_knowledge"),
+      QVariantMap{{QStringLiteral("globalTone"), QStringLiteral("Protect highlight detail.")}});
+  learned_reference_style.insert(
+      QStringLiteral("quality_model"),
+      QVariantMap{{QStringLiteral("priorities"), QStringList{QStringLiteral("consistent style")}}});
+  learned_reference_style.insert(
+      QStringLiteral("project_workflow"),
+      QVariantMap{{QStringLiteral("validateEveryImage"), true}});
+  const auto learned_reference_validation =
+      photo_editor::desktop::validate_agent_edit_style_object(QJsonObject::fromVariantMap(learned_reference_style));
+  if (!learned_reference_validation.valid) {
+    std::cerr << learned_reference_validation.errors.join(QStringLiteral("; ")).toStdString() << '\n';
+    return fail("style validation should accept learned reference metadata for schema v1");
+  }
+
+  auto embedded_reference_style = learned_reference_style;
+  embedded_reference_style.insert(
       QStringLiteral("reference_images"),
-      QVariantList{QVariantMap{{QStringLiteral("path"), QStringLiteral("/tmp/look.jpg")}}});
-  const auto reference_image_validation =
-      photo_editor::desktop::validate_agent_edit_style_object(QJsonObject::fromVariantMap(reference_image_style));
-  if (reference_image_validation.valid ||
-      !reference_image_validation.errors.join(QStringLiteral("; ")).contains(QStringLiteral("text-rulebook"))) {
-    return fail("style validation should reject reference image payloads for schema v1 text-rulebook styles");
+      QVariantList{
+          QVariantMap{
+              {QStringLiteral("path"), QStringLiteral("/tmp/look.jpg")},
+              {QStringLiteral("dataUrl"), QStringLiteral("data:image/png;base64,abc")},
+          },
+      });
+  const auto embedded_reference_validation =
+      photo_editor::desktop::validate_agent_edit_style_object(QJsonObject::fromVariantMap(embedded_reference_style));
+  if (embedded_reference_validation.valid ||
+      !embedded_reference_validation.errors.join(QStringLiteral("; ")).contains(QStringLiteral("embedded image payloads"))) {
+    return fail("style validation should reject embedded image payloads in learned style references");
   }
 
   auto unsupported_reference_policy_style = style;
@@ -209,8 +257,8 @@ int main() {
       photo_editor::desktop::validate_agent_edit_style_object(
           QJsonObject::fromVariantMap(unsupported_reference_policy_style));
   if (unsupported_reference_policy_validation.valid ||
-      !unsupported_reference_policy_validation.errors.join(QStringLiteral("; ")).contains(QStringLiteral("schema v1"))) {
-    return fail("style validation should keep schema v1 styles text/rule based");
+      !unsupported_reference_policy_validation.errors.join(QStringLiteral("; ")).contains(QStringLiteral("reference_policy.mode"))) {
+    return fail("style validation should constrain schema v1 reference matching modes");
   }
 
   auto invalid_color_constraints_style = style;

@@ -13,6 +13,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
@@ -20,6 +21,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QTime>
 #include <QTimer>
 
@@ -82,6 +84,18 @@ QByteArray read_file_bytes(const QString& file_path) {
   return file.readAll();
 }
 
+QByteArray fake_ollama_response(const QJsonObject& content_object) {
+  return QJsonDocument(QJsonObject{
+      {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+      {QStringLiteral("done"), true},
+      {QStringLiteral("message"),
+       QJsonObject{
+           {QStringLiteral("role"), QStringLiteral("assistant")},
+           {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(content_object).toJson(QJsonDocument::Compact))},
+       }},
+  }).toJson(QJsonDocument::Compact);
+}
+
 int observability_event_count(const QString& file_path, const QString& event_name) {
   QFile file(file_path);
   if (!file.open(QIODevice::ReadOnly)) {
@@ -106,6 +120,25 @@ bool has_citation_field(const QVariantList& citations, const QString& field) {
     }
   }
   return false;
+}
+
+bool json_array_contains_string(const QJsonArray& values, const QString& expected) {
+  for (const auto& value : values) {
+    if (value.toString() == expected) {
+      return true;
+    }
+  }
+  return false;
+}
+
+QVariantMap model_by_id(const QVariantList& models, const QString& id) {
+  for (const auto& model_value : models) {
+    const auto model = model_value.toMap();
+    if (model.value(QStringLiteral("id")).toString() == id) {
+      return model;
+    }
+  }
+  return {};
 }
 
 }  // namespace
@@ -135,9 +168,16 @@ int main(int argc, char** argv) {
   if (!write_fixture_image(second_source_path)) {
     return fail("second fixture image should be written");
   }
+  const auto third_source_path = QDir(runtime_root.path()).filePath(QStringLiteral("fixtures/source-3.png"));
+  if (!write_fixture_image(third_source_path)) {
+    return fail("third fixture image should be written");
+  }
   const auto original_source_bytes = read_file_bytes(source_path);
   const auto original_second_source_bytes = read_file_bytes(second_source_path);
-  if (original_source_bytes.isEmpty() || original_second_source_bytes.isEmpty()) {
+  const auto original_third_source_bytes = read_file_bytes(third_source_path);
+  if (original_source_bytes.isEmpty() ||
+      original_second_source_bytes.isEmpty() ||
+      original_third_source_bytes.isEmpty()) {
     return fail("fixture source image bytes should be readable before agent workflows");
   }
 
@@ -154,6 +194,13 @@ int main(int argc, char** argv) {
   second_original_state.temperature = 12.0;
   const auto second_original_recipe =
       photo_editor::desktop::serialize_edit_recipe_json(second_original_state);
+  photo_editor::desktop::EditRecipeState third_original_state;
+  third_original_state.exposure = 0.0;
+  third_original_state.contrast = 0.0;
+  third_original_state.saturation = 0.0;
+  third_original_state.temperature = 2.0;
+  const auto third_original_recipe =
+      photo_editor::desktop::serialize_edit_recipe_json(third_original_state);
 
   photo_editor::desktop::CatalogAssetModel catalog_model;
   catalog_model.replaceAssetsForTesting({
@@ -167,6 +214,104 @@ int main(int argc, char** argv) {
   photo_editor::desktop::ExportJobController export_jobs;
   controller.setCatalogModel(&catalog_model);
   controller.setExportJobController(&export_jobs);
+
+  const auto model_manifest_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("agent-models/models.json"));
+  if (!QDir().mkpath(QFileInfo(model_manifest_path).dir().absolutePath())) {
+    return fail("agent model manifest directory should be created");
+  }
+  QFile model_manifest_file(model_manifest_path);
+  if (!model_manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return fail("agent model manifest should be writable");
+  }
+  model_manifest_file.write(QJsonDocument(QJsonObject{
+      {QStringLiteral("models"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("id"), QStringLiteral("ollama-qwen-test")},
+               {QStringLiteral("name"), QStringLiteral("Qwen test via Ollama")},
+               {QStringLiteral("backend"), QStringLiteral("ollama")},
+               {QStringLiteral("endpoint"), QStringLiteral("http://127.0.0.1:11434")},
+               {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+               {QStringLiteral("vision"), true},
+               {QStringLiteral("available"), true},
+           },
+       }},
+  }).toJson(QJsonDocument::Compact));
+  model_manifest_file.close();
+  controller.reloadModels();
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  const auto ollama_setup = controller.prepareSelectedModelInstall();
+  if (!ollama_setup.value(QStringLiteral("ok")).toBool() ||
+      !ollama_setup.value(QStringLiteral("installable")).toBool() ||
+      ollama_setup.value(QStringLiteral("command")).toString() != QStringLiteral("ollama pull qwen2.5vl:7b") ||
+      ollama_setup.value(QStringLiteral("arguments")).toStringList() !=
+          QStringList{QStringLiteral("pull"), QStringLiteral("qwen2.5vl:7b")}) {
+    return fail("Ollama model setup should expose a bounded local pull command");
+  }
+  qputenv(
+      "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON",
+      QByteArrayLiteral(R"json({"model":"qwen2.5vl:7b","details":{"family":"qwen2","parameter_size":"7B","quantization_level":"Q4_K_M"}})json"));
+  const auto controller_probe = controller.probeSelectedModel();
+  const auto probed_ollama_model = model_by_id(controller.availableModels(), QStringLiteral("ollama-qwen-test"));
+  if (!controller_probe.value(QStringLiteral("ok")).toBool() ||
+      !controller_probe.value(QStringLiteral("available")).toBool() ||
+      probed_ollama_model.value(QStringLiteral("status")).toString() != QStringLiteral("available") ||
+      probed_ollama_model.value(QStringLiteral("modelFamily")).toString() != QStringLiteral("qwen2") ||
+      probed_ollama_model.value(QStringLiteral("parameterSize")).toString() != QStringLiteral("7B") ||
+      controller.modelInstallStatus() != QStringLiteral("Model available")) {
+    return fail("controller model probe should update selected Ollama model runtime status");
+  }
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  const auto unconfirmed_install = controller.installSelectedModel(false);
+  if (unconfirmed_install.value(QStringLiteral("ok")).toBool() ||
+      !unconfirmed_install.value(QStringLiteral("confirmationRequired")).toBool()) {
+    return fail("Ollama install should require confirmation before starting a process");
+  }
+  const auto fake_ollama_path = QDir(runtime_root.path()).filePath(QStringLiteral("fake-ollama.sh"));
+  QFile fake_ollama(fake_ollama_path);
+  if (!fake_ollama.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return fail("fake Ollama executable should be writable");
+  }
+  fake_ollama.write(
+      "#!/bin/sh\n"
+      "printf '{\"status\":\"pulling manifest\"}\\n'\n"
+      "printf '{\"status\":\"downloading\",\"digest\":\"sha256:test-layer\",\"total\":100,\"completed\":25}\\n'\n"
+      "printf '{\"status\":\"downloading\",\"digest\":\"sha256:test-layer\",\"total\":100,\"completed\":100}\\n'\n"
+      "printf '{\"status\":\"success\"}\\n'\n"
+      "printf 'pulled %s %s\\n' \"$1\" \"$2\"\n"
+      "exit 0\n");
+  fake_ollama.close();
+  QFile::setPermissions(
+      fake_ollama_path,
+      QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+  qputenv("PHOTO_EDITOR_OLLAMA_BINARY", fake_ollama_path.toUtf8());
+  const auto confirmed_install = controller.installSelectedModel(true);
+  if (!confirmed_install.value(QStringLiteral("ok")).toBool() ||
+      !confirmed_install.value(QStringLiteral("started")).toBool() ||
+      !controller.modelInstallRunning()) {
+    return fail("confirmed Ollama install should start the configured local process");
+  }
+  for (auto attempt = 0; attempt < 100 && controller.modelInstallRunning(); ++attempt) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+    QThread::msleep(10);
+  }
+  if (controller.modelInstallRunning() ||
+      controller.modelInstallStatus() != QStringLiteral("Installed") ||
+      !controller.modelInstallOutput().contains(QStringLiteral("pulled pull qwen2.5vl:7b"))) {
+    return fail("confirmed Ollama install should capture process completion and output");
+  }
+  const auto install_progress = controller.modelInstallProgress();
+  if (install_progress.value(QStringLiteral("status")).toString() != QStringLiteral("success") ||
+      install_progress.value(QStringLiteral("digest")).toString() != QStringLiteral("sha256:test-layer") ||
+      install_progress.value(QStringLiteral("completedBytes")).toLongLong() != 100 ||
+      install_progress.value(QStringLiteral("totalBytes")).toLongLong() != 100 ||
+      install_progress.value(QStringLiteral("progressPercent")).toInt() != 100 ||
+      install_progress.value(QStringLiteral("jsonLineCount")).toInt() < 4) {
+    return fail("confirmed Ollama install should parse streaming pull progress JSON");
+  }
+  qunsetenv("PHOTO_EDITOR_OLLAMA_BINARY");
+  controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
   const auto invalid_style = controller.createStyle(
       QString(),
@@ -221,6 +366,58 @@ int main(int argc, char** argv) {
   if (controller.selectedStyleId() != QStringLiteral("moody-test-style")) {
     return fail("newly created style should become the selected agent style");
   }
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  qputenv("PHOTO_EDITOR_OLLAMA_BINARY", fake_ollama_path.toUtf8());
+  qputenv(
+      "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON",
+      QByteArrayLiteral(R"json({"model":"qwen2.5vl:7b","details":{"family":"qwen2","parameter_size":"7B","quantization_level":"Q4_K_M"}})json"));
+  const auto local_ai_setup = controller.setupLocalAi(false);
+  qunsetenv("PHOTO_EDITOR_OLLAMA_BINARY");
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  const auto setup_checks = local_ai_setup.value(QStringLiteral("checks")).toList();
+  auto saw_model_response_check = false;
+  auto saw_mcp_check = false;
+  auto saw_proof_check = false;
+  auto saw_model_proof_check = false;
+  for (const auto& check_value : setup_checks) {
+    const auto check = check_value.toMap();
+    const auto key = check.value(QStringLiteral("key")).toString();
+    if (key == QStringLiteral("model_can_respond") && check.value(QStringLiteral("ok")).toBool()) {
+      saw_model_response_check = true;
+    } else if (key == QStringLiteral("mcp_tools_reachable") &&
+               check.value(QStringLiteral("ok")).toBool() &&
+               !check.value(QStringLiteral("required")).toBool()) {
+      saw_mcp_check = true;
+    } else if (key == QStringLiteral("proof_rendering") &&
+               check.value(QStringLiteral("ok")).toBool() &&
+               !check.value(QStringLiteral("details")).toMap().value(QStringLiteral("skipped")).toBool()) {
+      saw_proof_check = true;
+    } else if (key == QStringLiteral("model_can_inspect_proof_image") &&
+               check.value(QStringLiteral("ok")).toBool()) {
+      saw_model_proof_check = true;
+    }
+  }
+  const auto setup_proof_artifacts =
+      local_ai_setup.value(QStringLiteral("proofReadiness")).toMap().value(QStringLiteral("artifacts")).toMap();
+  if (!local_ai_setup.value(QStringLiteral("ok")).toBool() ||
+      !local_ai_setup.value(QStringLiteral("setupComplete")).toBool() ||
+      local_ai_setup.value(QStringLiteral("mode")).toString() != QStringLiteral("local-ai-setup") ||
+      local_ai_setup.value(QStringLiteral("primaryAction")).toString() != QStringLiteral("ready") ||
+      controller.status() != QStringLiteral("Local AI ready") ||
+      !controller.errorMessage().isEmpty() ||
+      controller.lastRunReport().value(QStringLiteral("mode")).toString() != QStringLiteral("local-ai-setup") ||
+      local_ai_setup.value(QStringLiteral("setupMemoryPacket")).toMap().value(QStringLiteral("phase")).toString() !=
+          QStringLiteral("setup") ||
+      local_ai_setup.value(QStringLiteral("setupMemoryPacket")).toMap().value(QStringLiteral("rawVaultIncluded")).toBool() ||
+      !saw_model_response_check ||
+      !saw_mcp_check ||
+      !saw_proof_check ||
+      !saw_model_proof_check ||
+      !QFileInfo(setup_proof_artifacts.value(QStringLiteral("beforeProofPath")).toString()).isFile() ||
+      !QFileInfo(setup_proof_artifacts.value(QStringLiteral("afterProofPath")).toString()).isFile()) {
+    return fail("one local AI setup action should probe model readiness, MCP status, setup memory, proof rendering, and publish visible state");
+  }
+  controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
   const auto style_path =
       QDir(runtime_root.path()).filePath(QStringLiteral("agent-styles/moody-test-style.json"));
   const auto persisted_style = read_json_object(style_path);
@@ -254,6 +451,606 @@ int main(int argc, char** argv) {
       !QFileInfo(imported_style.value(QStringLiteral("importPath")).toString()).isFile()) {
     return fail("style import should validate JSON, avoid id collisions, reload styles, and select the import");
   }
+
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  const auto edited_reference_id =
+      catalog_model.createVirtualCopyForAsset(QStringLiteral("asset-1"), QStringLiteral("Edited reference"));
+  if (edited_reference_id.isEmpty()) {
+    return fail("test setup should create an edited reference virtual copy");
+  }
+  catalog_model.selectAll();
+  controller.setSelectedStyleId(QStringLiteral("moody-test-style-2"));
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  const auto learnable_style_state = controller.aiEditWorkflowState();
+  const auto learnable_style_action =
+      learnable_style_state.value(QStringLiteral("primaryAction")).toMap();
+  const auto learnable_style_candidate =
+      learnable_style_state.value(QStringLiteral("styleLearning")).toMap();
+  if (!learnable_style_state.value(QStringLiteral("ok")).toBool() ||
+      learnable_style_state.value(QStringLiteral("statusLine")).toString() !=
+          QStringLiteral("Needs style") ||
+      learnable_style_action.value(QStringLiteral("key")).toString() !=
+          QStringLiteral("learn_style") ||
+      learnable_style_action.value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Learn This Style") ||
+      !learnable_style_candidate.value(QStringLiteral("available")).toBool() ||
+      learnable_style_candidate.value(QStringLiteral("editedReferenceCount")).toInt() != 1 ||
+      learnable_style_candidate.value(QStringLiteral("usableRecipeCount")).toInt() != 2) {
+    return fail("AI edit workflow should offer one Learn This Style action when edited references are selected");
+  }
+  const auto learned_style = controller.createLearnedStyleProfileFromSelection(
+      QStringLiteral("Learned Wedding Style"),
+      QStringLiteral("Match my warm clean wedding edits consistently."),
+      QStringLiteral("Keep skin believable and protect dress highlights."));
+  if (!learned_style.value(QStringLiteral("ok")).toBool() ||
+      learned_style.value(QStringLiteral("mode")).toString() != QStringLiteral("learned-style-profile") ||
+      learned_style.value(QStringLiteral("styleId")).toString() != QStringLiteral("learned-wedding-style") ||
+      learned_style.value(QStringLiteral("sourceAssetCount")).toInt() != 2 ||
+      learned_style.value(QStringLiteral("usableRecipeCount")).toInt() != 2 ||
+      controller.selectedStyleId() != QStringLiteral("learned-wedding-style")) {
+    std::cerr << learned_style.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")).toStdString()
+              << '\n';
+    return fail("learned style creation should summarize selected edited assets and select the new style");
+  }
+  const auto learned_style_ai_state = controller.aiEditWorkflowState();
+  const auto learned_taste_card =
+      learned_style_ai_state.value(QStringLiteral("tasteCard")).toMap();
+  if (learned_style_ai_state.value(QStringLiteral("statusLine")).toString() !=
+          QStringLiteral("Ready") ||
+      learned_style_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("create_samples") ||
+      !learned_taste_card.value(QStringLiteral("available")).toBool() ||
+      !learned_taste_card.value(QStringLiteral("learned")).toBool() ||
+      learned_taste_card.value(QStringLiteral("referenceCount")).toInt() != 2 ||
+      learned_taste_card.value(QStringLiteral("confidence")).toString().isEmpty() ||
+      learned_taste_card.value(QStringLiteral("summary")).toString().isEmpty()) {
+    return fail("AI edit workflow should show a compact learned-style taste card after learning from selected references");
+  }
+  const auto learned_style_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("agent-styles/learned-wedding-style.json"));
+  const auto persisted_learned_style = read_json_object(learned_style_path);
+  const auto learned_profile =
+      persisted_learned_style.value(QStringLiteral("learned_profile")).toObject();
+  const auto learned_persistence_ok =
+      persisted_learned_style.value(QStringLiteral("reference_policy"))
+              .toObject()
+              .value(QStringLiteral("mode"))
+              .toString() == QStringLiteral("learned_style_profile") &&
+      learned_profile.value(QStringLiteral("source_asset_count")).toInt() == 2 &&
+      learned_profile.value(QStringLiteral("reference_examples")).toArray().size() == 2 &&
+      learned_profile.value(QStringLiteral("before_after_pair_count")).toInt() == 1 &&
+      learned_profile.value(QStringLiteral("before_after_pairs")).toArray().size() == 1 &&
+      learned_profile.value(QStringLiteral("visualFingerprintSummary")).toObject().value(QStringLiteral("referenceFingerprintCount")).toInt() >= 1 &&
+      !persisted_learned_style.value(QStringLiteral("tool_knowledge")).toObject().isEmpty() &&
+      !persisted_learned_style.value(QStringLiteral("quality_model")).toObject().isEmpty() &&
+      !persisted_learned_style.value(QStringLiteral("project_workflow")).toObject().isEmpty();
+  if (!learned_persistence_ok) {
+    return fail("learned style should persist reference metadata, tool knowledge, quality model, and project workflow");
+  }
+  const auto style_memory_path = learned_style.value(QStringLiteral("memoryNotePath")).toString();
+  const auto style_memory_note = QString::fromUtf8(read_file_bytes(style_memory_path));
+  const auto tool_memory_path = learned_style.value(QStringLiteral("toolMemoryNotePath")).toString();
+  const auto tool_memory_note = QString::fromUtf8(read_file_bytes(tool_memory_path));
+  const auto learned_memory_events =
+      learned_style.value(QStringLiteral("userVisibleMemoryEvents")).toList();
+  const auto learned_memory_event =
+      learned_memory_events.isEmpty() ? QVariantMap{} : learned_memory_events.first().toMap();
+  if (!QFileInfo(style_memory_path).isFile() ||
+      !style_memory_note.contains(QStringLiteral("type: agent_style_memory")) ||
+      !style_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !style_memory_note.contains(QStringLiteral("# Learned Wedding Style")) ||
+      !style_memory_note.contains(QStringLiteral("## Reference Examples")) ||
+      !style_memory_note.contains(QStringLiteral("## Related Memory")) ||
+      !style_memory_note.contains(QStringLiteral("backlinks:")) ||
+      !style_memory_note.contains(QStringLiteral("asset-1")) ||
+      style_memory_note.contains(runtime_root.path()) ||
+      style_memory_note.contains(QStringLiteral("data:image")) ||
+      style_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("learned style creation should write an inspectable local Markdown memory note without image bytes or local source paths");
+  }
+  if (learned_memory_event.value(QStringLiteral("type")).toString() !=
+          QStringLiteral("durable-style-memory") ||
+      learned_memory_event.value(QStringLiteral("changeType")).toString() !=
+          QStringLiteral("style_profile_created") ||
+      !learned_memory_event.value(QStringLiteral("requiresUserVisibility")).toBool() ||
+      learned_memory_event.value(QStringLiteral("notePaths"))
+              .toMap()
+              .value(QStringLiteral("styleMemoryNotePath"))
+              .toString() != style_memory_path) {
+    return fail("learned style creation should emit a user-visible durable memory event");
+  }
+  if (!QFileInfo(tool_memory_path).isFile() ||
+      !tool_memory_note.contains(QStringLiteral("type: agent_tool_memory")) ||
+      !tool_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !tool_memory_note.contains(QStringLiteral("links:\n  - \"[[learned-wedding-style]]\"")) ||
+      !tool_memory_note.contains(QStringLiteral("# Tool Rulebook - Learned Wedding Style")) ||
+      !tool_memory_note.contains(QStringLiteral("globalTone")) ||
+      !tool_memory_note.contains(QStringLiteral("Protect highlight detail")) ||
+      tool_memory_note.contains(runtime_root.path()) ||
+      tool_memory_note.contains(QStringLiteral("data:image")) ||
+      tool_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("learned style creation should write an inspectable tool rulebook memory note without image bytes or local paths");
+  }
+  const auto initial_vault_status = controller.memoryVaultStatus();
+  const auto initial_note_counts = initial_vault_status.value(QStringLiteral("noteCounts")).toMap();
+  const auto initial_memory_root_path =
+      initial_vault_status.value(QStringLiteral("rootPath")).toString();
+  if (!initial_vault_status.value(QStringLiteral("ok")).toBool() ||
+      !initial_vault_status.value(QStringLiteral("obsidianCompatible")).toBool() ||
+      !initial_vault_status.value(QStringLiteral("localFirst")).toBool() ||
+      initial_vault_status.value(QStringLiteral("storesImageBytes")).toBool() ||
+      initial_vault_status.value(QStringLiteral("schemaVersion")).toInt() != 1 ||
+      !initial_vault_status.value(QStringLiteral("schemaVersionOk")).toBool() ||
+      initial_vault_status.value(QStringLiteral("schemaMismatchCount")).toInt() != 0 ||
+      initial_vault_status.value(QStringLiteral("migrationRequired")).toBool() ||
+      initial_vault_status.value(QStringLiteral("contextStrategy")).toString() !=
+          QStringLiteral("retrieved-packets-not-raw-vault") ||
+      initial_vault_status.value(QStringLiteral("vaultFingerprint")).toString().isEmpty() ||
+      initial_vault_status.value(QStringLiteral("externalChangeDetected")).toBool() ||
+      initial_vault_status.value(QStringLiteral("externalChangeCount")).toInt() != 0 ||
+      initial_note_counts.value(QStringLiteral("styles")).toInt() != 1 ||
+      initial_note_counts.value(QStringLiteral("tools")).toInt() != 1 ||
+      initial_vault_status.value(QStringLiteral("activeStyleNotePath")).toString() !=
+          style_memory_path) {
+    return fail("memory vault status should expose an Obsidian-compatible local Markdown vault without image payloads");
+  }
+  const auto setup_memory_packet = controller.memoryPacketForPhase(QStringLiteral("setup"));
+  if (!setup_memory_packet.value(QStringLiteral("ok")).toBool() ||
+      setup_memory_packet.value(QStringLiteral("phase")).toString() != QStringLiteral("setup") ||
+      !setup_memory_packet.value(QStringLiteral("includedMemoryKinds")).toStringList().isEmpty() ||
+      setup_memory_packet.value(QStringLiteral("memoryBudget"))
+              .toMap()
+              .value(QStringLiteral("maxCards"))
+              .toInt() != 0 ||
+      setup_memory_packet.value(QStringLiteral("memoryBudget"))
+          .toMap()
+          .value(QStringLiteral("rawVaultIncluded"))
+          .toBool()) {
+    return fail("setup memory retrieval should avoid style memory and raw vault context");
+  }
+  const auto sample_memory_packet = controller.memoryPacketForPhase(QStringLiteral("sample"));
+  if (!sample_memory_packet.value(QStringLiteral("ok")).toBool() ||
+      sample_memory_packet.value(QStringLiteral("phase")).toString() != QStringLiteral("sample") ||
+      sample_memory_packet.value(QStringLiteral("rawVaultIncluded")).toBool() ||
+      !sample_memory_packet.value(QStringLiteral("includedMemoryKinds")).toStringList().contains(QStringLiteral("style")) ||
+      sample_memory_packet.value(QStringLiteral("retrievalPlan")).toList().isEmpty() ||
+      !sample_memory_packet.value(QStringLiteral("relevancePolicy"))
+           .toMap()
+           .value(QStringLiteral("deterministicFirstPass"))
+           .toBool() ||
+      sample_memory_packet.value(QStringLiteral("relevancePolicy"))
+              .toMap()
+              .value(QStringLiteral("secondarySimilaritySearch"))
+              .toMap()
+              .value(QStringLiteral("role"))
+              .toString() != QStringLiteral("secondary-ranking-only") ||
+      sample_memory_packet.value(QStringLiteral("styleMemoryNotePath")).toString() != style_memory_path ||
+      sample_memory_packet.value(QStringLiteral("styleCard"))
+              .toMap()
+              .value(QStringLiteral("styleName"))
+              .toString() != QStringLiteral("Learned Wedding Style") ||
+      sample_memory_packet.value(QStringLiteral("toolMemoryNotePath")).toString() != tool_memory_path ||
+      sample_memory_packet.value(QStringLiteral("toolCard")).toMap().value(QStringLiteral("tools")).toList().isEmpty()) {
+    return fail("agent memory retrieval should return compact style/tool packets instead of the full memory vault");
+  }
+  const auto project_plan = controller.planStyleProjectRun(QStringLiteral("selected-assets"));
+  if (!project_plan.value(QStringLiteral("ok")).toBool() ||
+      project_plan.value(QStringLiteral("mode")).toString() != QStringLiteral("style-project-plan") ||
+      project_plan.value(QStringLiteral("assetCount")).toInt() != 2 ||
+      project_plan.value(QStringLiteral("clusterCount")).toInt() < 1 ||
+      project_plan.value(QStringLiteral("sampleAssetIds")).toStringList().isEmpty() ||
+      project_plan.value(QStringLiteral("beforeAfterPairCount")).toInt() != 1 ||
+      project_plan.value(QStringLiteral("styleMatchScoring")).toString().isEmpty()) {
+    return fail("style project planning should expose clusters, sample assets, before/after pairs, and style-match policy");
+  }
+  const auto project_memory_path = project_plan.value(QStringLiteral("projectMemoryNotePath")).toString();
+  const auto project_memory_note = QString::fromUtf8(read_file_bytes(project_memory_path));
+  const auto project_style_memory_note = QString::fromUtf8(read_file_bytes(style_memory_path));
+  if (!QFileInfo(project_memory_path).isFile() ||
+      !project_memory_note.contains(QStringLiteral("type: agent_project_memory")) ||
+      !project_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !project_memory_note.contains(QStringLiteral("links:\n  - \"[[learned-wedding-style]]\"")) ||
+      !project_memory_note.contains(QStringLiteral("Related style: [[learned-wedding-style]]")) ||
+      !project_memory_note.contains(QStringLiteral("## Sample Assets")) ||
+      !project_memory_note.contains(QStringLiteral("asset-1")) ||
+      !project_style_memory_note.contains(QStringLiteral("[[learned-wedding-style-selected-assets]]")) ||
+      project_memory_note.contains(runtime_root.path()) ||
+      project_memory_note.contains(QStringLiteral("data:image")) ||
+      project_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("project planning should write a local Obsidian-style project memory note without source paths or image bytes");
+  }
+  const auto feedback_report = controller.recordStyleFeedback(
+      QStringLiteral("Samples should be a little warmer but keep dress highlights clean."),
+      QVariantMap{{QStringLiteral("sampleApproved"), false}});
+  if (!feedback_report.value(QStringLiteral("ok")).toBool() ||
+      feedback_report.value(QStringLiteral("mode")).toString() != QStringLiteral("style-feedback") ||
+      feedback_report.value(QStringLiteral("feedbackEventCount")).toInt() != 1) {
+    return fail("style feedback should update the active learned profile");
+  }
+  const auto feedback_style = read_json_object(learned_style_path);
+  if (feedback_style.value(QStringLiteral("learned_profile"))
+          .toObject()
+          .value(QStringLiteral("feedback_event_count"))
+          .toInt() != 1 ||
+      feedback_style.value(QStringLiteral("learned_profile"))
+          .toObject()
+          .value(QStringLiteral("latestFeedback"))
+          .toString()
+          .isEmpty()) {
+    return fail("style feedback should persist into the learned profile file");
+  }
+  const auto updated_style_memory_note = QString::fromUtf8(read_file_bytes(style_memory_path));
+  const auto feedback_memory_path =
+      feedback_report.value(QStringLiteral("feedbackMemoryNotePath")).toString();
+  const auto feedback_memory_note = QString::fromUtf8(read_file_bytes(feedback_memory_path));
+  const auto feedback_note_link =
+      QStringLiteral("[[%1]]").arg(QFileInfo(feedback_memory_path).completeBaseName());
+  const auto feedback_memory_events =
+      feedback_report.value(QStringLiteral("userVisibleMemoryEvents")).toList();
+  const auto feedback_memory_event =
+      feedback_memory_events.isEmpty() ? QVariantMap{} : feedback_memory_events.first().toMap();
+  if (!updated_style_memory_note.contains(QStringLiteral("## Feedback History")) ||
+      !updated_style_memory_note.contains(QStringLiteral("Samples should be a little warmer")) ||
+      !QFileInfo(feedback_memory_path).isFile() ||
+      !feedback_memory_note.contains(QStringLiteral("type: agent_feedback_memory")) ||
+      !feedback_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !feedback_memory_note.contains(QStringLiteral("links:\n  - \"[[learned-wedding-style]]\"")) ||
+      !feedback_memory_note.contains(QStringLiteral("Samples should be a little warmer")) ||
+      !updated_style_memory_note.contains(feedback_note_link) ||
+      feedback_memory_note.contains(runtime_root.path()) ||
+      feedback_memory_note.contains(QStringLiteral("data:image")) ||
+      feedback_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("style feedback should write inspectable feedback memory and refresh the style memory note");
+  }
+  const auto feedback_run_history = controller.runHistory();
+  const auto latest_history =
+      feedback_run_history.isEmpty() ? QVariantMap{} : feedback_run_history.first().toMap();
+  const auto latest_history_memory_events =
+      latest_history.value(QStringLiteral("userVisibleMemoryEvents")).toList();
+  if (feedback_memory_event.value(QStringLiteral("type")).toString() !=
+          QStringLiteral("durable-style-memory") ||
+      feedback_memory_event.value(QStringLiteral("changeType")).toString() !=
+          QStringLiteral("style_feedback_saved") ||
+      !feedback_memory_event.value(QStringLiteral("requiresUserVisibility")).toBool() ||
+      feedback_report.value(QStringLiteral("styleChangeSummary")).toString() !=
+          QStringLiteral("Style changed because: Samples should be a little warmer but keep dress highlights clean.") ||
+      feedback_memory_event.value(QStringLiteral("styleChangeSummary")).toString() !=
+          feedback_report.value(QStringLiteral("styleChangeSummary")).toString() ||
+      feedback_memory_event.value(QStringLiteral("detail")).toString() !=
+          feedback_report.value(QStringLiteral("styleChangeSummary")).toString() ||
+      !feedback_memory_event.value(QStringLiteral("memoryWriteApproved")).toBool() ||
+      feedback_memory_event.value(QStringLiteral("notePaths"))
+              .toMap()
+              .value(QStringLiteral("feedbackMemoryNotePath"))
+              .toString() != feedback_memory_path ||
+      latest_history_memory_events.isEmpty()) {
+    return fail("style feedback should emit user-visible durable memory events in reports and run history");
+  }
+  const auto feedback_vault_status = controller.memoryVaultStatus();
+  const auto feedback_note_counts = feedback_vault_status.value(QStringLiteral("noteCounts")).toMap();
+  if (feedback_note_counts.value(QStringLiteral("styles")).toInt() != 1 ||
+      feedback_note_counts.value(QStringLiteral("projects")).toInt() != 1 ||
+      feedback_note_counts.value(QStringLiteral("tools")).toInt() != 1 ||
+      feedback_note_counts.value(QStringLiteral("feedback")).toInt() != 1 ||
+      !feedback_vault_status.value(QStringLiteral("schemaVersionOk")).toBool() ||
+      feedback_vault_status.value(QStringLiteral("migrationRequired")).toBool() ||
+      feedback_vault_status.value(QStringLiteral("externalChangeDetected")).toBool() ||
+      feedback_vault_status.value(QStringLiteral("totalNoteCount")).toInt() < 4) {
+    return fail("memory vault status should count style, project, tool, and feedback notes after the agent learns from corrections");
+  }
+  QFile external_feedback_edit(feedback_memory_path);
+  if (!external_feedback_edit.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text) ||
+      external_feedback_edit.write("\nExternal Obsidian note: keep ceremony skin tones consistent.\n") <= 0) {
+    return fail("test should be able to simulate an external Obsidian memory edit");
+  }
+  external_feedback_edit.close();
+  const auto external_memory_status = controller.memoryVaultStatus();
+  const auto external_changed_files =
+      external_memory_status.value(QStringLiteral("externalChangedFiles")).toList();
+  auto saw_feedback_memory_change = false;
+  for (const auto& changed_file_value : external_changed_files) {
+    const auto changed_file = changed_file_value.toMap();
+    if (changed_file.value(QStringLiteral("relativePath")).toString() ==
+            QDir(initial_memory_root_path).relativeFilePath(feedback_memory_path) &&
+        changed_file.value(QStringLiteral("changeType")).toString() == QStringLiteral("modified")) {
+      saw_feedback_memory_change = true;
+    }
+  }
+  if (!external_memory_status.value(QStringLiteral("externalChangeDetected")).toBool() ||
+      external_memory_status.value(QStringLiteral("externalChangeCount")).toInt() < 1 ||
+      !saw_feedback_memory_change ||
+      external_memory_status.value(QStringLiteral("externalChangePolicy")).toString() !=
+          QStringLiteral("warn-user-before-overwriting-obsidian-edits")) {
+    return fail("memory vault status should detect Markdown notes changed outside the app while it is running");
+  }
+  const auto obsidian_open_dry_run = controller.openMemoryVaultInObsidian(true);
+  if (!obsidian_open_dry_run.value(QStringLiteral("ok")).toBool() ||
+      obsidian_open_dry_run.value(QStringLiteral("mode")).toString() !=
+          QStringLiteral("agent-memory-vault-open-obsidian") ||
+      !obsidian_open_dry_run.value(QStringLiteral("dryRun")).toBool() ||
+      !obsidian_open_dry_run.value(QStringLiteral("deepLinkReady")).toBool() ||
+      obsidian_open_dry_run.value(QStringLiteral("fallback")).toString() !=
+          QStringLiteral("folder-open") ||
+      !obsidian_open_dry_run.value(QStringLiteral("obsidianUrl"))
+           .toString()
+           .startsWith(QStringLiteral("obsidian://open?path=")) ||
+      obsidian_open_dry_run.value(QStringLiteral("rootPath")).toString() != initial_memory_root_path) {
+    return fail("memory vault should expose a dry-run Obsidian deep link with folder-open fallback metadata");
+  }
+  const auto memory_export = controller.exportMemoryVault(
+      QDir(runtime_root.path()).filePath(QStringLiteral("memory-exports")),
+      true);
+  const auto memory_export_path = memory_export.value(QStringLiteral("exportPath")).toString();
+  const auto memory_export_manifest_path =
+      memory_export.value(QStringLiteral("manifestPath")).toString();
+  const auto memory_export_manifest =
+      QJsonDocument::fromJson(read_file_bytes(memory_export_manifest_path)).object();
+  const auto exported_style_note_path =
+      QDir(memory_export_path).filePath(QStringLiteral("styles/learned-wedding-style.md"));
+  const auto exported_style_note = QString::fromUtf8(read_file_bytes(exported_style_note_path));
+  if (!memory_export.value(QStringLiteral("ok")).toBool() ||
+      !memory_export.value(QStringLiteral("redacted")).toBool() ||
+      memory_export.value(QStringLiteral("noteCount")).toInt() < 4 ||
+      !QFileInfo(memory_export_manifest_path).isFile() ||
+      !memory_export_manifest.value(QStringLiteral("redacted")).toBool() ||
+      memory_export_manifest.value(QStringLiteral("memorySchemaVersion")).toInt() != 1 ||
+      memory_export_manifest.value(QStringLiteral("sourceVaultIncluded")).toBool() ||
+      !QFileInfo(exported_style_note_path).isFile() ||
+      !exported_style_note.contains(QStringLiteral("schema_version: 1")) ||
+      exported_style_note.contains(runtime_root.path()) ||
+      exported_style_note.contains(QStringLiteral("data:image")) ||
+      exported_style_note.contains(QStringLiteral("base64"))) {
+    return fail("memory vault export should create a redacted inspectable Markdown copy with a manifest");
+  }
+  const auto unconfirmed_memory_reset = controller.resetMemoryVault(false);
+  if (unconfirmed_memory_reset.value(QStringLiteral("ok")).toBool() ||
+      !unconfirmed_memory_reset.value(QStringLiteral("requiresConfirmation")).toBool() ||
+      !QFileInfo(style_memory_path).isFile()) {
+    return fail("memory vault reset should require explicit confirmation and leave notes untouched when unconfirmed");
+  }
+  const auto revision_memory_packet = controller.memoryPacketForPhase(QStringLiteral("revision"));
+  if (!revision_memory_packet.value(QStringLiteral("ok")).toBool() ||
+      revision_memory_packet.value(QStringLiteral("phase")).toString() != QStringLiteral("revision") ||
+      revision_memory_packet.value(QStringLiteral("styleCard"))
+              .toMap()
+              .value(QStringLiteral("latestFeedback"))
+              .toString()
+              .isEmpty()) {
+    return fail("revision memory packet should include latest approved feedback in compact form");
+  }
+  const auto learned_validation = controller.validateBatchForScope(QStringLiteral("selected-assets"));
+  const auto learned_validation_reports = learned_validation.value(QStringLiteral("assetReports")).toList();
+  const auto first_learned_style_match =
+      learned_validation_reports.isEmpty()
+          ? QVariantMap{}
+          : learned_validation_reports.first()
+                .toMap()
+                .value(QStringLiteral("validationReport"))
+                .toMap()
+                .value(QStringLiteral("styleMatch"))
+                .toMap();
+  if (!learned_validation.value(QStringLiteral("ok")).toBool() ||
+      !first_learned_style_match.value(QStringLiteral("available")).toBool() ||
+      first_learned_style_match.value(QStringLiteral("method")).toString() !=
+          QStringLiteral("metadata_recipe_visual_fingerprint_v1") ||
+      first_learned_style_match.value(QStringLiteral("scorePercent")).toInt() <= 0) {
+    return fail("learned-style validation should include per-image style-match scoring");
+  }
+  catalog_model.clearVirtualCopiesForTesting();
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.clearSelection();
+  catalog_model.toggleSelectionIndex(0);
+  controller.setSelectedStyleId(QStringLiteral("moody-test-style-2"));
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+
+  const auto ready_ai_state = controller.aiEditWorkflowState();
+  if (!ready_ai_state.value(QStringLiteral("ok")).toBool() ||
+      ready_ai_state.value(QStringLiteral("mode")).toString() != QStringLiteral("ai-edit-workflow-state") ||
+      ready_ai_state.value(QStringLiteral("statusLine")).toString() != QStringLiteral("Ready") ||
+      ready_ai_state.value(QStringLiteral("scope")).toString() != QStringLiteral("current-photo") ||
+      ready_ai_state.value(QStringLiteral("assetCount")).toInt() != 1 ||
+      ready_ai_state.value(QStringLiteral("scopeLabel")).toString() != QStringLiteral("1 photo") ||
+      ready_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("create_samples") ||
+      ready_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Apply Edit") ||
+      ready_ai_state.value(QStringLiteral("secondaryActions")).toList().size() < 5) {
+    return fail("AI edit workflow state should expose one ready status, one direct apply primary action, and compact secondary actions");
+  }
+  catalog_model.toggleSelectionIndex(1);
+  const auto multi_ai_state = controller.aiEditWorkflowState();
+  if (multi_ai_state.value(QStringLiteral("scope")).toString() != QStringLiteral("selected-assets") ||
+      multi_ai_state.value(QStringLiteral("assetCount")).toInt() != 2 ||
+      multi_ai_state.value(QStringLiteral("scopeLabel")).toString() != QStringLiteral("2 selected photos")) {
+    return fail("AI edit workflow state should infer selected-set scope for multiple selected photos");
+  }
+  catalog_model.clearSelection();
+  catalog_model.createProject(QStringLiteral("Workflow Wedding"));
+  catalog_model.addAssetToProject(QStringLiteral("asset-1"), QStringLiteral("Workflow Wedding"));
+  catalog_model.addAssetToProject(QStringLiteral("asset-2"), QStringLiteral("Workflow Wedding"));
+  catalog_model.openProject(QStringLiteral("Workflow Wedding"));
+  const auto project_ai_state = controller.aiEditWorkflowState();
+  if (project_ai_state.value(QStringLiteral("scope")).toString() != QStringLiteral("project") ||
+      project_ai_state.value(QStringLiteral("assetCount")).toInt() != 2 ||
+      project_ai_state.value(QStringLiteral("scopeLabel")).toString() != QStringLiteral("2 project photos")) {
+    return fail("AI edit workflow state should infer project scope when no assets are selected and a project is active");
+  }
+  catalog_model.setProjectFilter(QStringLiteral("all"));
+  catalog_model.setSearchFilter(QStringLiteral("source-2"));
+  const auto filtered_ai_state = controller.aiEditWorkflowState();
+  if (filtered_ai_state.value(QStringLiteral("scope")).toString() != QStringLiteral("filtered-library") ||
+      filtered_ai_state.value(QStringLiteral("assetCount")).toInt() != 1) {
+    return fail("AI edit workflow state should infer filtered-library scope when no assets are selected and a filter is active");
+  }
+  catalog_model.setSearchFilter(QString());
+  catalog_model.clearSelection();
+  catalog_model.toggleSelectionIndex(0);
+  controller.setSelectedStyleId(QStringLiteral("missing-style"));
+  const auto missing_style_state = controller.aiEditWorkflowState();
+  if (missing_style_state.value(QStringLiteral("ok")).toBool() ||
+      missing_style_state.value(QStringLiteral("statusLine")).toString() != QStringLiteral("Needs style") ||
+      missing_style_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("choose_style") ||
+      missing_style_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("enabled")).toBool()) {
+    return fail("AI edit workflow state should reduce missing style setup to a single Choose Style action");
+  }
+  controller.setSelectedStyleId(QStringLiteral("moody-test-style-2"));
+  controller.setSelectedModelId(QStringLiteral("missing-model"));
+  const auto missing_model_state = controller.aiEditWorkflowState();
+  if (missing_model_state.value(QStringLiteral("ok")).toBool() ||
+      !missing_model_state.value(QStringLiteral("setupRequired")).toBool() ||
+      missing_model_state.value(QStringLiteral("statusLine")).toString() != QStringLiteral("Set up local AI") ||
+      missing_model_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("set_up_local_ai") ||
+      !missing_model_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("enabled")).toBool()) {
+    return fail("AI edit workflow state should reduce local model readiness to one setup action");
+  }
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+
+  const QJsonObject needs_input_content{
+      {QStringLiteral("decision"), QStringLiteral("needs_user_input")},
+      {QStringLiteral("summary"), QStringLiteral("Need the target reception warmth before editing.")},
+      {QStringLiteral("userQuestions"),
+       QJsonArray{QStringLiteral("Should the reception photos stay warm editorial or neutral documentary?")}},
+  };
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON");
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON", fake_ollama_response(needs_input_content));
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  const auto needs_input_report =
+      controller.runDraftOnSelected(QStringLiteral("edit this wedding sample to my style"));
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  if (needs_input_report.value(QStringLiteral("ok")).toBool() ||
+      needs_input_report.value(QStringLiteral("decision")).toString() != QStringLiteral("needs_user_input") ||
+      !needs_input_report.value(QStringLiteral("needsUserInput")).toBool() ||
+      !controller.awaitingUserInput() ||
+      controller.pendingUserQuestions().isEmpty() ||
+      controller.status() != QStringLiteral("Needs user input") ||
+      controller.draftActive()) {
+    return fail("model clarification should become pending controller input without applying a draft");
+  }
+  if (controller.pendingUserQuestions().first().toString() !=
+      QStringLiteral("Should the reception photos stay warm editorial or neutral documentary?")) {
+    return fail("pending model clarification should preserve the user-facing question");
+  }
+  const auto pending_ai_state = controller.aiEditWorkflowState();
+  if (pending_ai_state.value(QStringLiteral("statusLine")).toString() !=
+          QStringLiteral("Waiting for your answer") ||
+      !pending_ai_state.value(QStringLiteral("reviewRequired")).toBool() ||
+      !pending_ai_state.value(QStringLiteral("awaitingUserInput")).toBool() ||
+      pending_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("answer_question")) {
+    return fail("AI edit workflow state should make model clarification a review state");
+  }
+
+  const QJsonObject answered_patch_content{
+      {QStringLiteral("decision"), QStringLiteral("recipe_patch")},
+      {QStringLiteral("summary"), QStringLiteral("Warm reception edit with protected highlights.")},
+      {QStringLiteral("styleConstraintCitations"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("field"), QStringLiteral("style.goal")},
+               {QStringLiteral("reason"), QStringLiteral("The user answered that the reception should stay warm.")},
+           },
+       }},
+      {QStringLiteral("recipePatch"),
+       QJsonObject{
+           {QStringLiteral("globalTone"),
+            QJsonObject{
+                {QStringLiteral("exposure"), 0.10},
+                {QStringLiteral("highlights"), -12.0},
+            }},
+           {QStringLiteral("color"),
+            QJsonObject{
+                {QStringLiteral("temperature"), 4.0},
+            }},
+       }},
+  };
+  const auto answer_request_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("ollama-clarification-answer-request.json"));
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON", fake_ollama_response(answered_patch_content));
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH", answer_request_path.toUtf8());
+  const auto answered_report =
+      controller.answerPendingUserInput(QStringLiteral("Keep reception warm but protect skin and dress highlights."));
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH");
+  const auto answer_request_bytes = read_file_bytes(answer_request_path);
+  if (!answered_report.value(QStringLiteral("ok")).toBool() ||
+      controller.awaitingUserInput() ||
+      !controller.pendingUserQuestions().isEmpty() ||
+      !controller.draftActive() ||
+      !answer_request_bytes.contains("User answer to agent question") ||
+      !answer_request_bytes.contains("Keep reception warm but protect skin and dress highlights")) {
+    return fail("answering a pending model clarification should resume planning with the answer in context");
+  }
+  const auto draft_ai_state = controller.aiEditWorkflowState();
+  if (draft_ai_state.value(QStringLiteral("statusLine")).toString() != QStringLiteral("Ready to commit") ||
+      !draft_ai_state.value(QStringLiteral("draftActive")).toBool() ||
+      !draft_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("confirmationRequired")).toBool() ||
+      draft_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("commit")) {
+    return fail("AI edit workflow state should surface a single commit action for active drafts");
+  }
+  const auto answered_rollback = controller.rollbackDraft();
+  if (!answered_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
+    return fail("draft created after a model clarification answer should remain rollbackable");
+  }
+
+  const QJsonObject high_risk_patch_content{
+      {QStringLiteral("decision"), QStringLiteral("recipe_patch")},
+      {QStringLiteral("summary"), QStringLiteral("Tighten the composition with a strong editorial crop.")},
+      {QStringLiteral("styleConstraintCitations"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("field"), QStringLiteral("style.rules.crop")},
+               {QStringLiteral("reason"), QStringLiteral("The style allows composition cleanup with review.")},
+           },
+       }},
+      {QStringLiteral("recipePatch"),
+       QJsonObject{
+           {QStringLiteral("crop"),
+            QJsonObject{
+                {QStringLiteral("cropX"), 0.12},
+                {QStringLiteral("cropY"), 0.08},
+                {QStringLiteral("cropWidth"), 0.82},
+                {QStringLiteral("cropHeight"), 0.82},
+                {QStringLiteral("cropZoom"), 1.18},
+            }},
+       }},
+  };
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON", fake_ollama_response(high_risk_patch_content));
+  const auto high_risk_stop =
+      controller.runDraftOnSelected(QStringLiteral("make the sample more editorial"));
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  const auto high_risk_policy =
+      high_risk_stop.value(QStringLiteral("preDraftStopPolicy")).toMap();
+  const auto high_risk_assessment =
+      high_risk_stop.value(QStringLiteral("riskAssessment")).toMap();
+  if (high_risk_stop.value(QStringLiteral("ok")).toBool() ||
+      high_risk_stop.value(QStringLiteral("decision")).toString() != QStringLiteral("needs_user_input") ||
+      high_risk_stop.value(QStringLiteral("safeStopReason")).toString() !=
+          QStringLiteral("high_risk_or_low_confidence") ||
+      !high_risk_stop.value(QStringLiteral("needsUserInput")).toBool() ||
+      !high_risk_policy.value(QStringLiteral("stopRequired")).toBool() ||
+      !high_risk_policy.value(QStringLiteral("triggers")).toStringList().contains(QStringLiteral("high_risk")) ||
+      !high_risk_assessment.value(QStringLiteral("approvalTypes")).toStringList().contains(QStringLiteral("large_crop")) ||
+      !controller.awaitingUserInput() ||
+      controller.pendingUserQuestions().isEmpty() ||
+      controller.status() != QStringLiteral("Needs user input") ||
+      controller.draftActive()) {
+    return fail("model-planned high-risk edits should stop for user approval before creating a draft");
+  }
+  const auto high_risk_dismiss = controller.dismissPendingAgentInput();
+  if (!high_risk_dismiss.value(QStringLiteral("ok")).toBool() || controller.awaitingUserInput()) {
+    return fail("dismissing a high-risk pre-draft stop should clear pending input");
+  }
+  controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
   controller.setUserInstructions(QStringLiteral("bright warm editorial draft with soft highlights"));
 
@@ -479,18 +1276,176 @@ int main(int argc, char** argv) {
   const auto revised_asset_reports = revised_draft.value(QStringLiteral("assetReports")).toList();
   const auto revised_asset_report =
       revised_asset_reports.isEmpty() ? QVariantMap{} : revised_asset_reports.first().toMap();
+  const auto revised_edit_loop = revised_asset_report.value(QStringLiteral("editLoop")).toMap();
   if (!revised_draft.value(QStringLiteral("ok")).toBool() ||
+      revised_draft.value(QStringLiteral("editLoopVersion")).toString() != QStringLiteral("agent-edit-loop-v1") ||
+      revised_draft.value(QStringLiteral("editLoops")).toList().isEmpty() ||
+      revised_edit_loop.value(QStringLiteral("version")).toString() != QStringLiteral("agent-edit-loop-v1") ||
+      revised_edit_loop.value(QStringLiteral("attemptCount")).toInt() < 2 ||
+      revised_edit_loop.value(QStringLiteral("maxAttempts")).toInt() != 3 ||
+      revised_edit_loop.value(QStringLiteral("finalScore")).toDouble() <= 0.0 ||
+      revised_edit_loop.value(QStringLiteral("attempts")).toList().first().toMap().value(QStringLiteral("patchHash")).toString().isEmpty() ||
       revised_asset_report.value(QStringLiteral("revisionCount")).toInt() < 1 ||
+      revised_asset_report.value(QStringLiteral("qualityScore")).toDouble() <= 0.0 ||
       revised_asset_report.value(QStringLiteral("validationIterations")).toList().size() < 2 ||
       revised_draft.value(QStringLiteral("requestedRecipePatch")).toMap() ==
           revised_draft.value(QStringLiteral("recipePatch")).toMap() ||
       !controller.draftActive()) {
-    return fail("agent draft should revise unsafe patches from validation feedback before applying");
+    return fail("agent draft should run a scored edit-verify loop and revise unsafe patches before applying");
   }
   const auto revised_rollback = controller.rollbackDraft();
   if (!revised_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
     return fail("revised validation-feedback draft should remain rollbackable");
   }
+
+  const QJsonObject unsafe_plan_content{
+      {QStringLiteral("decision"), QStringLiteral("recipe_patch")},
+      {QStringLiteral("summary"), QStringLiteral("Unsafe first pass for repair coverage")},
+      {QStringLiteral("styleConstraintCitations"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("field"), QStringLiteral("allowedTools.color")},
+               {QStringLiteral("reason"), QStringLiteral("Color edits are allowed.")},
+           },
+       }},
+      {QStringLiteral("recipePatch"),
+       QJsonObject{
+           {QStringLiteral("globalTone"),
+            QJsonObject{
+                {QStringLiteral("exposure"), 5.0},
+                {QStringLiteral("highlights"), 100.0},
+                {QStringLiteral("whites"), 100.0},
+            }},
+       }},
+  };
+  const QJsonObject repaired_plan_content{
+      {QStringLiteral("decision"), QStringLiteral("recipe_patch")},
+      {QStringLiteral("summary"), QStringLiteral("Reduced highlight risk after validation")},
+      {QStringLiteral("styleConstraintCitations"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("field"), QStringLiteral("validation.highlight_clip_limit_percent")},
+               {QStringLiteral("reason"), QStringLiteral("Repair lowers highlight pressure.")},
+           },
+       }},
+      {QStringLiteral("recipePatch"),
+       QJsonObject{
+           {QStringLiteral("globalTone"),
+            QJsonObject{
+                {QStringLiteral("exposure"), 0.10},
+                {QStringLiteral("highlights"), -12.0},
+                {QStringLiteral("whites"), -8.0},
+            }},
+       }},
+  };
+  const QJsonObject proof_critique_content{
+      {QStringLiteral("pass"), false},
+      {QStringLiteral("summary"), QStringLiteral("Rendered proof is too bright and needs highlight repair.")},
+      {QStringLiteral("issues"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("kind"), QStringLiteral("highlight_clipping")},
+               {QStringLiteral("severity"), QStringLiteral("high")},
+           },
+       }},
+      {QStringLiteral("repairHints"),
+       QJsonArray{
+           QStringLiteral("Lower exposure and pull highlights before accepting the draft."),
+       }},
+      {QStringLiteral("needsUserReview"), true},
+      {QStringLiteral("tasteConfidence"), QStringLiteral("medium")},
+  };
+  const QJsonArray repair_sequence{
+      QJsonObject{
+          {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+          {QStringLiteral("done"), true},
+          {QStringLiteral("message"),
+           QJsonObject{
+               {QStringLiteral("role"), QStringLiteral("assistant")},
+               {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(unsafe_plan_content).toJson(QJsonDocument::Compact))},
+           }},
+      },
+      QJsonObject{
+          {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+          {QStringLiteral("done"), true},
+          {QStringLiteral("message"),
+           QJsonObject{
+               {QStringLiteral("role"), QStringLiteral("assistant")},
+               {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(proof_critique_content).toJson(QJsonDocument::Compact))},
+           }},
+      },
+      QJsonObject{
+          {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+          {QStringLiteral("done"), true},
+          {QStringLiteral("message"),
+           QJsonObject{
+               {QStringLiteral("role"), QStringLiteral("assistant")},
+               {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(repaired_plan_content).toJson(QJsonDocument::Compact))},
+           }},
+      },
+  };
+  const auto repair_request_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("ollama-repair-requests.jsonl"));
+  qputenv(
+      "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON",
+      QJsonDocument(repair_sequence).toJson(QJsonDocument::Compact));
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH", repair_request_path.toUtf8());
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  const auto model_repaired_draft =
+      controller.runDraftOnSelected(QStringLiteral("make a bright edit but obey validation feedback"));
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON");
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_REQUEST_PATH");
+  const auto model_repaired_asset_reports =
+      model_repaired_draft.value(QStringLiteral("assetReports")).toList();
+  const auto model_repaired_asset_report =
+      model_repaired_asset_reports.isEmpty() ? QVariantMap{} : model_repaired_asset_reports.first().toMap();
+  const auto model_repaired_repair_budget =
+      model_repaired_asset_report.value(QStringLiteral("repairBudget")).toMap();
+  auto saw_model_repair_tool_call = false;
+  auto saw_model_proof_critique_tool_call = false;
+  for (const auto& tool_call_value : model_repaired_draft.value(QStringLiteral("toolCalls")).toList()) {
+    const auto name = tool_call_value.toMap().value(QStringLiteral("name")).toString();
+    if (name == QStringLiteral("model_evaluate_rendered_proof")) {
+      saw_model_proof_critique_tool_call = true;
+    }
+    if (name == QStringLiteral("model_repair_recipe_patch_from_validation") ||
+        name == QStringLiteral("apply_model_repaired_recipe_patch")) {
+      saw_model_repair_tool_call = true;
+    }
+  }
+  const auto model_repaired_loop_attempts =
+      model_repaired_asset_report.value(QStringLiteral("editLoop")).toMap().value(QStringLiteral("attempts")).toList();
+  const auto model_repaired_first_attempt =
+      model_repaired_loop_attempts.isEmpty() ? QVariantMap{} : model_repaired_loop_attempts.first().toMap();
+  const auto model_repaired_critique =
+      model_repaired_first_attempt.value(QStringLiteral("modelProofCritique")).toMap();
+  const auto repair_request_bytes = read_file_bytes(repair_request_path);
+  if (!model_repaired_draft.value(QStringLiteral("ok")).toBool() ||
+      model_repaired_asset_report.value(QStringLiteral("modelRepairCount")).toInt() < 1 ||
+      model_repaired_asset_report.value(QStringLiteral("revisionCount")).toInt() < 1 ||
+      !model_repaired_repair_budget.value(QStringLiteral("hardLimit")).toBool() ||
+      model_repaired_repair_budget.value(QStringLiteral("maxValidationRevisionIterations")).toInt() != 2 ||
+      model_repaired_repair_budget.value(QStringLiteral("maxModelRepairTurns")).toInt() != 2 ||
+      model_repaired_asset_report.value(QStringLiteral("editLoop")).toMap().value(QStringLiteral("attemptCount")).toInt() < 2 ||
+      model_repaired_asset_report.value(QStringLiteral("modelRepairReports")).toList().isEmpty() ||
+      model_repaired_draft.value(QStringLiteral("requestedRecipePatch")).toMap() ==
+          model_repaired_draft.value(QStringLiteral("recipePatch")).toMap() ||
+      !saw_model_proof_critique_tool_call ||
+      !saw_model_repair_tool_call ||
+      !model_repaired_critique.value(QStringLiteral("ok")).toBool() ||
+      model_repaired_critique.value(QStringLiteral("pass")).toBool() ||
+      model_repaired_critique.value(QStringLiteral("repairHints")).toList().isEmpty() ||
+      !repair_request_bytes.contains("Validation warnings JSON") ||
+      !repair_request_bytes.contains("You are a local photo-editing proof evaluator") ||
+      !repair_request_bytes.contains("Previous attempts JSON") ||
+      !controller.draftActive()) {
+    return fail("model-planned drafts should use a scored model repair turn with validation history before procedural fallback");
+  }
+  const auto model_repair_rollback = controller.rollbackDraft();
+  if (!model_repair_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
+    return fail("model-repaired validation draft should remain rollbackable");
+  }
+  controller.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
   const auto representative_proof = controller.applyDraftRecipePatchToSelected(
       QVariantMap{
@@ -558,6 +1513,22 @@ int main(int argc, char** argv) {
       !controller.draftActive()) {
     return fail("representative color, crop, and mask draft should render proof artifacts and grouped diffs");
   }
+  const auto representative_risk =
+      representative_proof.value(QStringLiteral("riskAssessment")).toMap();
+  const auto representative_approval_types =
+      representative_risk.value(QStringLiteral("approvalTypes")).toStringList();
+  const auto representative_manifest =
+      read_json_object(representative_proof.value(QStringLiteral("manifestPath")).toString());
+  const auto representative_manifest_risk =
+      representative_manifest.value(QStringLiteral("riskAssessment")).toObject();
+  if (!representative_risk.value(QStringLiteral("approvalRequired")).toBool() ||
+      !representative_approval_types.contains(QStringLiteral("large_crop")) ||
+      representative_risk.value(QStringLiteral("approvalRequests")).toList().isEmpty() ||
+      !json_array_contains_string(
+          representative_manifest_risk.value(QStringLiteral("approvalTypes")).toArray(),
+          QStringLiteral("large_crop"))) {
+    return fail("large crop drafts should carry explicit approval requirements in reports and manifests");
+  }
   const QImage representative_after(
       representative_artifacts.value(QStringLiteral("afterProofPath")).toString());
   if (representative_after.isNull()) {
@@ -567,6 +1538,113 @@ int main(int argc, char** argv) {
   if (!representative_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
     return fail("representative proof draft should remain rollbackable");
   }
+
+  auto retouch_allowed_tools = allowed_tools;
+  retouch_allowed_tools.insert(QStringLiteral("retouch"), true);
+  const auto retouch_style = controller.createStyle(
+      QStringLiteral("Retouch Approval Style"),
+      QStringLiteral("Retouch testing style with explicit cleanup approval."),
+      retouch_allowed_tools,
+      {},
+      {},
+      {});
+  if (!retouch_style.value(QStringLiteral("ok")).toBool()) {
+    return fail("retouch approval test should create a style with retouch permission");
+  }
+  const QVariantMap retouch_patch{
+      {QStringLiteral("retouch"),
+       QVariantMap{
+           {QStringLiteral("retouchStack"),
+            QVariantList{
+                QVariantMap{
+                    {QStringLiteral("id"), QStringLiteral("agent-heal-approval")},
+                    {QStringLiteral("kind"), QStringLiteral("brush")},
+                    {QStringLiteral("name"), QStringLiteral("Agent Heal Approval")},
+                    {QStringLiteral("retouchMode"), QStringLiteral("heal")},
+                    {QStringLiteral("removeStrength"), 68.0},
+                    {QStringLiteral("healTextureBlend"), 0.32},
+                    {QStringLiteral("healColorBlend"), 0.74},
+                    {QStringLiteral("brushSize"), 0.06},
+                    {QStringLiteral("brushFlow"), 0.78},
+                    {QStringLiteral("committed"), false},
+                    {QStringLiteral("brushPoints"),
+                     QVariantList{
+                         QVariantMap{
+                             {QStringLiteral("x"), 0.36},
+                             {QStringLiteral("y"), 0.44},
+                             {QStringLiteral("size"), 0.06},
+                             {QStringLiteral("flow"), 0.78},
+                         },
+                     }},
+                },
+            }},
+       }},
+  };
+  const auto retouch_draft = controller.applyDraftRecipePatchToSelected(retouch_patch);
+  const auto retouch_risk = retouch_draft.value(QStringLiteral("riskAssessment")).toMap();
+  const auto retouch_approval_types =
+      retouch_risk.value(QStringLiteral("approvalTypes")).toStringList();
+  const auto retouch_manifest =
+      read_json_object(retouch_draft.value(QStringLiteral("manifestPath")).toString());
+  const auto retouch_manifest_risk =
+      retouch_manifest.value(QStringLiteral("riskAssessment")).toObject();
+  if (!retouch_draft.value(QStringLiteral("ok")).toBool() ||
+      !retouch_risk.value(QStringLiteral("approvalRequired")).toBool() ||
+      !retouch_approval_types.contains(QStringLiteral("retouch")) ||
+      !json_array_contains_string(
+          retouch_manifest_risk.value(QStringLiteral("approvalTypes")).toArray(),
+          QStringLiteral("retouch")) ||
+      !controller.draftActive()) {
+    return fail("retouch drafts should carry explicit approval requirements in reports and manifests");
+  }
+  const auto retouch_rollback = controller.rollbackDraft();
+  if (!retouch_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
+    return fail("retouch approval draft should remain rollbackable");
+  }
+
+  catalog_model.createProject(QStringLiteral("Wedding Scope Approval"));
+  catalog_model.addAssetToProject(QStringLiteral("asset-1"), QStringLiteral("Wedding Scope Approval"));
+  catalog_model.openProject(QStringLiteral("Wedding Scope Approval"));
+  const auto outside_project_scope_draft =
+      controller.applyDraftRecipePatchForScope(
+          QStringLiteral("filtered-library"),
+          QVariantMap{
+              {QStringLiteral("globalTone"),
+               QVariantMap{
+                   {QStringLiteral("exposure"), 0.05},
+               }},
+          });
+  const auto outside_project_scope_risk =
+      outside_project_scope_draft.value(QStringLiteral("riskAssessment")).toMap();
+  const auto outside_project_scope_approval_types =
+      outside_project_scope_risk.value(QStringLiteral("approvalTypes")).toStringList();
+  const auto outside_project_scope_manifest =
+      read_json_object(outside_project_scope_draft.value(QStringLiteral("manifestPath")).toString());
+  const auto outside_project_scope_manifest_risk =
+      outside_project_scope_manifest.value(QStringLiteral("riskAssessment")).toObject();
+  if (!outside_project_scope_draft.value(QStringLiteral("ok")).toBool() ||
+      outside_project_scope_draft.value(QStringLiteral("scope")).toString() !=
+          QStringLiteral("filtered-library") ||
+      !outside_project_scope_risk.value(QStringLiteral("approvalRequired")).toBool() ||
+      !outside_project_scope_approval_types.contains(QStringLiteral("outside_project_scope")) ||
+      !outside_project_scope_risk.value(QStringLiteral("scopeContext"))
+           .toMap()
+           .value(QStringLiteral("scopeEscapesActiveProject"))
+           .toBool() ||
+      !json_array_contains_string(
+          outside_project_scope_manifest_risk.value(QStringLiteral("approvalTypes")).toArray(),
+          QStringLiteral("outside_project_scope"))) {
+    return fail("draft operations outside the active project scope should require explicit approval in reports and manifests");
+  }
+  const auto outside_project_scope_rollback = controller.rollbackDraft();
+  if (!outside_project_scope_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
+    return fail("outside-project-scope approval draft should remain rollbackable");
+  }
+  catalog_model.setProjectFilter(QStringLiteral("all"));
+  catalog_model.selectIndex(0);
+  catalog_model.clearSelection();
+  catalog_model.toggleSelectionIndex(0);
+  controller.setSelectedStyleId(QStringLiteral("moody-test-style-2"));
 
   const auto report = controller.runDraftOnSelected(QString());
   if (!report.value(QStringLiteral("ok")).toBool()) {
@@ -579,6 +1657,86 @@ int main(int argc, char** argv) {
   }
   if (report.value(QStringLiteral("runId")).toString().isEmpty()) {
     return fail("draft report should include a run id");
+  }
+  const auto last_draft_report = controller.lastRunReport();
+  const auto run_memory_path = last_draft_report.value(QStringLiteral("runMemoryNotePath")).toString();
+  const auto run_memory_note = QString::fromUtf8(read_file_bytes(run_memory_path));
+  const auto issue_memory_path = last_draft_report.value(QStringLiteral("issueMemoryNotePath")).toString();
+  const auto issue_memory_note = QString::fromUtf8(read_file_bytes(issue_memory_path));
+  if (last_draft_report.value(QStringLiteral("runId")).toString() !=
+          report.value(QStringLiteral("runId")).toString() ||
+      !QFileInfo(run_memory_path).isFile() ||
+      !run_memory_note.contains(QStringLiteral("type: agent_run_memory")) ||
+      !run_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !run_memory_note.contains(QStringLiteral("links:\n  - \"[[%1]]\"")
+                                    .arg(report.value(QStringLiteral("styleId")).toString())) ||
+      !run_memory_note.contains(report.value(QStringLiteral("runId")).toString()) ||
+      !run_memory_note.contains(QStringLiteral("Related style: [[%1]]")
+                                    .arg(report.value(QStringLiteral("styleId")).toString())) ||
+      !run_memory_note.contains(QStringLiteral("## Safe Proof Links")) ||
+      !run_memory_note.contains(QStringLiteral("Generated proofs are linked as relative app-owned artifacts")) ||
+      !run_memory_note.contains(QStringLiteral("agent-runs/")) ||
+      !run_memory_note.contains(QStringLiteral("../agent-runs/")) ||
+      !run_memory_note.contains(QStringLiteral("after.png")) ||
+      !run_memory_note.contains(QStringLiteral("safeArtifactReferences")) ||
+      !run_memory_note.contains(QStringLiteral("mcp.tools/list")) ||
+      run_memory_note.contains(runtime_root.path()) ||
+      run_memory_note.contains(QStringLiteral("data:image")) ||
+      run_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("successful drafts should persist a compact local run memory note without source paths or image bytes");
+  }
+  if (!QFileInfo(issue_memory_path).isFile() ||
+      !issue_memory_note.contains(QStringLiteral("type: agent_issue_memory")) ||
+      !issue_memory_note.contains(QStringLiteral("schema_version: 1")) ||
+      !issue_memory_note.contains(report.value(QStringLiteral("runId")).toString()) ||
+      !issue_memory_note.contains(QStringLiteral("[[%1]]")
+                                      .arg(report.value(QStringLiteral("runId")).toString())) ||
+      !issue_memory_note.contains(QStringLiteral("## Repair Strategy")) ||
+      !issue_memory_note.contains(QStringLiteral("render_proof_and_validate")) ||
+      issue_memory_note.contains(runtime_root.path()) ||
+      issue_memory_note.contains(QStringLiteral("data:image")) ||
+      issue_memory_note.contains(QStringLiteral("base64"))) {
+    return fail("runs with validation warnings should persist issue memory with repair strategy and no source paths or image bytes");
+  }
+  const auto draft_style_memory_path =
+      controller.memoryVaultStatus().value(QStringLiteral("activeStyleNotePath")).toString();
+  const auto draft_style_memory_note = QString::fromUtf8(read_file_bytes(draft_style_memory_path));
+  if (!draft_style_memory_note.contains(QStringLiteral("[[%1]]")
+                                            .arg(QFileInfo(run_memory_path).completeBaseName())) ||
+      !draft_style_memory_note.contains(QStringLiteral("[[%1]]")
+                                            .arg(QFileInfo(issue_memory_path).completeBaseName()))) {
+    return fail("style memory should backlink to run and issue notes that trained or changed the style");
+  }
+  const auto draft_memory_packet = controller.memoryPacketForPhase(QStringLiteral("batch"));
+  if (draft_memory_packet.value(QStringLiteral("rawVaultIncluded")).toBool() ||
+      !draft_memory_packet.value(QStringLiteral("includedMemoryKinds"))
+           .toStringList()
+           .contains(QStringLiteral("approved-sample-recipe")) ||
+      !draft_memory_packet.value(QStringLiteral("includedMemoryKinds"))
+           .toStringList()
+           .contains(QStringLiteral("cluster-summary")) ||
+      draft_memory_packet.value(QStringLiteral("memoryBudget"))
+              .toMap()
+              .value(QStringLiteral("approxTokenBudget"))
+              .toInt() < 2000 ||
+      !draft_memory_packet.value(QStringLiteral("approvedSampleRecipeCard"))
+           .toMap()
+           .value(QStringLiteral("available"))
+           .toBool() ||
+      draft_memory_packet.value(QStringLiteral("styleConstraintsCard"))
+              .toMap()
+              .value(QStringLiteral("allowedTools"))
+              .toMap()
+              .isEmpty() ||
+      draft_memory_packet.value(QStringLiteral("lastRunCard"))
+              .toMap()
+              .value(QStringLiteral("runId"))
+              .toString() != report.value(QStringLiteral("runId")).toString() ||
+      !draft_memory_packet.value(QStringLiteral("latestIssueCard"))
+           .toMap()
+           .value(QStringLiteral("available"))
+           .toBool()) {
+    return fail("batch memory retrieval should include compact run and issue cards without dumping the memory vault");
   }
   if (report.value(QStringLiteral("durationMs")).toInt() < 0 ||
       !report.contains(QStringLiteral("queueWaitMs")) ||
@@ -593,6 +1751,30 @@ int main(int argc, char** argv) {
            .value(QStringLiteral("passed"))
            .toBool()) {
     return fail("draft report should include run timing, queue wait timing, performance gate, and structured tool call outcomes");
+  }
+  const auto report_tool_calls = report.value(QStringLiteral("toolCalls")).toList();
+  const auto report_mcp_discovery = report.value(QStringLiteral("mcpDiscovery")).toMap();
+  const auto report_mcp_observation = report.value(QStringLiteral("mcpObservation")).toMap();
+  auto saw_mcp_discovery_tool_call = false;
+  for (const auto& tool_call_value : report_tool_calls) {
+    if (tool_call_value.toMap().value(QStringLiteral("name")).toString() ==
+        QStringLiteral("mcp.tools/list")) {
+      saw_mcp_discovery_tool_call = true;
+      break;
+    }
+  }
+  if (!saw_mcp_discovery_tool_call ||
+      report.value(QStringLiteral("mcpAttached")).toBool() ||
+      report.value(QStringLiteral("mcpToolCount")).toInt() != 0 ||
+      report_mcp_discovery.value(QStringLiteral("mode")).toString() != QStringLiteral("mcp-readiness") ||
+      report_mcp_discovery.value(QStringLiteral("ready")).toBool() ||
+      report_mcp_discovery.value(QStringLiteral("attemptCount")).toInt() != 1 ||
+      report_mcp_discovery.value(QStringLiteral("recoveryPolicy")).toString() !=
+          QStringLiteral("retry-discovery-before-agent-planning") ||
+      report_mcp_discovery.value(QStringLiteral("status")).toString() != QStringLiteral("Unavailable") ||
+      report_mcp_observation.value(QStringLiteral("status")).toString() != QStringLiteral("unavailable") ||
+      !report_mcp_observation.value(QStringLiteral("toolReports")).toList().isEmpty()) {
+    return fail("draft report should audit MCP discovery/observation and degrade cleanly without a running endpoint");
   }
   if (!report.value(QStringLiteral("validationReport")).toMap().value(QStringLiteral("ok")).toBool()) {
     return fail("draft report should include a passing validation report");
@@ -656,6 +1838,20 @@ int main(int argc, char** argv) {
       report.value(QStringLiteral("uiEventPumpCount")).toInt() < 0) {
     return fail("draft report should show that model planning ran on the worker runner");
   }
+  const auto report_prompt_audit = report.value(QStringLiteral("modelPromptAudit")).toMap();
+  if (report_prompt_audit.value(QStringLiteral("strategyPhase")).toString() != QStringLiteral("sample") ||
+      !report_prompt_audit.value(QStringLiteral("deterministicPlanning")).toBool() ||
+      report_prompt_audit.value(QStringLiteral("temperature")).toDouble() != 0.0 ||
+      report_prompt_audit.value(QStringLiteral("memoryPacketPhase")).toString() != QStringLiteral("sample") ||
+      report_prompt_audit.value(QStringLiteral("rawMemoryVaultIncluded")).toBool() ||
+      !report_prompt_audit.value(QStringLiteral("includedMemoryKinds"))
+           .toStringList()
+           .contains(QStringLiteral("style")) ||
+      !report_prompt_audit.value(QStringLiteral("strategyPrompt"))
+           .toString()
+           .contains(QStringLiteral("Phase: sample"))) {
+    return fail("draft planning should use a deterministic phase-specific strategy prompt with compact memory context");
+  }
   if (controller.recipeBaseMode() != QStringLiteral("current") ||
       report.value(QStringLiteral("recipeBaseMode")).toString() != QStringLiteral("current") ||
       report.value(QStringLiteral("manualEditPolicy")).toString() !=
@@ -701,9 +1897,13 @@ int main(int argc, char** argv) {
     return fail("validation artifact should contain a passing report");
   }
   const auto draft_manifest = read_json_object(report.value(QStringLiteral("manifestPath")).toString());
+  const auto draft_prompt_audit = draft_manifest.value(QStringLiteral("modelPromptAudit")).toObject();
   if (draft_manifest.value(QStringLiteral("mode")).toString() != QStringLiteral("draft") ||
       draft_manifest.value(QStringLiteral("styleConstraintCitations")).toArray().isEmpty() ||
       draft_manifest.value(QStringLiteral("editGoals")).toArray().isEmpty() ||
+      draft_prompt_audit.value(QStringLiteral("backend")).toString() != QStringLiteral("local") ||
+      !draft_prompt_audit.value(QStringLiteral("userPrompt")).toString().contains(controller.selectedStyleId()) ||
+      draft_prompt_audit.value(QStringLiteral("userPromptCharCount")).toInt() <= 0 ||
       !draft_manifest.value(QStringLiteral("riskAssessment")).toObject().contains(QStringLiteral("riskCount")) ||
       draft_manifest.value(QStringLiteral("toolCalls")).toArray().size() < 3 ||
       draft_manifest.value(QStringLiteral("durationMs")).toInt(-1) < 0 ||
@@ -738,16 +1938,21 @@ int main(int argc, char** argv) {
               .toObject()
               .value(QStringLiteral("backend"))
               .toString() != QStringLiteral("local")) {
-    return fail("draft manifest should persist mode, model metadata, style citations, preview proof policy, and performance proof gate");
+    return fail("draft manifest should persist mode, model metadata, prompt audit, style citations, preview proof policy, and performance proof gate");
   }
   const auto shareable_manifest_path = report.value(QStringLiteral("shareableManifestPath")).toString();
   const auto shareable_manifest_bytes = read_file_bytes(shareable_manifest_path);
   const auto shareable_manifest = QJsonDocument::fromJson(shareable_manifest_bytes).object();
+  const auto shareable_prompt_audit =
+      shareable_manifest.value(QStringLiteral("modelPromptAudit")).toObject();
   if (shareable_manifest_path.isEmpty() ||
       !QFileInfo(shareable_manifest_path).isFile() ||
       !shareable_manifest.value(QStringLiteral("redacted")).toBool() ||
       shareable_manifest.value(QStringLiteral("mode")).toString() != QStringLiteral("draft") ||
-      shareable_manifest.value(QStringLiteral("styleConstraintCitations")).toArray().isEmpty()) {
+      shareable_manifest.value(QStringLiteral("styleConstraintCitations")).toArray().isEmpty() ||
+      !shareable_prompt_audit.value(QStringLiteral("promptTextRedacted")).toBool() ||
+      shareable_prompt_audit.value(QStringLiteral("userPrompt")).toString() !=
+          QStringLiteral("<redacted-prompt>")) {
     return fail("draft run should persist a redacted shareable manifest with useful run metadata");
   }
   if (shareable_manifest_bytes.contains(runtime_root.path().toUtf8()) ||
@@ -891,6 +2096,80 @@ int main(int argc, char** argv) {
     return fail("selected-set drafts should reject global crop edits unless style batch behavior allows them");
   }
 
+  const auto missing_second_source_path =
+      QDir(runtime_root.path()).filePath(QStringLiteral("fixtures/missing-source-2.png"));
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), missing_second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.selectAll();
+  const QVariantMap resumable_patch{
+      {QStringLiteral("globalTone"),
+       QVariantMap{
+           {QStringLiteral("exposure"), 0.18},
+           {QStringLiteral("contrast"), 4.0},
+       }},
+  };
+  const auto resumable_failure = controller.applyDraftRecipePatchToSelected(resumable_patch);
+  const auto resume_plan = resumable_failure.value(QStringLiteral("resumePlan")).toMap();
+  if (resumable_failure.value(QStringLiteral("ok")).toBool() ||
+      !resume_plan.value(QStringLiteral("available")).toBool() ||
+      !resume_plan.value(QStringLiteral("cleanAssetIds")).toStringList().contains(QStringLiteral("asset-1")) ||
+      resume_plan.value(QStringLiteral("cleanAssetReports")).toList().isEmpty() ||
+      controller.draftActive() ||
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString()).exposure !=
+          original_state.exposure) {
+    return fail("failed batch draft should persist a resume plan after the last clean asset without applying recipes");
+  }
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.selectAll();
+  const auto resumed_batch = controller.resumeLastFailedBatchDraft();
+  const auto resumed_asset_reports = resumed_batch.value(QStringLiteral("assetReports")).toList();
+  auto reused_clean_validation = false;
+  for (const auto& report_value : resumed_asset_reports) {
+    const auto asset_report = report_value.toMap();
+    if (asset_report.value(QStringLiteral("assetId")).toString() == QStringLiteral("asset-1") &&
+        asset_report.value(QStringLiteral("validationSkippedByResume")).toBool()) {
+      reused_clean_validation = true;
+      break;
+    }
+  }
+  const auto resumed_first_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
+  const auto resumed_second_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(1).value(QStringLiteral("recipeJson")).toString());
+  const auto resumed_manifest =
+      read_json_object(resumed_batch.value(QStringLiteral("manifestPath")).toString());
+  if (!resumed_batch.value(QStringLiteral("ok")).toBool() ||
+      !resumed_batch.value(QStringLiteral("resumed")).toBool() ||
+      resumed_batch.value(QStringLiteral("resumedFromRunId")).toString() !=
+          resumable_failure.value(QStringLiteral("runId")).toString() ||
+      resumed_asset_reports.size() != 2 ||
+      !reused_clean_validation ||
+      resumed_first_state.exposure <= original_state.exposure ||
+      resumed_second_state.exposure <= second_original_state.exposure ||
+      !resumed_manifest.value(QStringLiteral("resumed")).toBool() ||
+      resumed_manifest.value(QStringLiteral("resumedFromRunId")).toString() !=
+          resumable_failure.value(QStringLiteral("runId")).toString() ||
+      !controller.draftActive()) {
+    return fail("resume should continue a failed batch from the last clean asset and draft the full selection");
+  }
+  const auto resumed_rollback = controller.rollbackDraft();
+  if (!resumed_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
+    return fail("resumed batch draft should remain rollbackable");
+  }
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.selectAll();
+
   const auto batch_report = controller.runDraftOnSelected(QStringLiteral("apply the style consistently"));
   if (!batch_report.value(QStringLiteral("ok")).toBool()) {
     std::cerr << batch_report.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")).toStdString()
@@ -905,14 +2184,28 @@ int main(int argc, char** argv) {
   }
   const auto batch_summary = batch_report.value(QStringLiteral("batchSummary")).toMap();
   const auto batch_status_counts = batch_summary.value(QStringLiteral("statusCounts")).toMap();
+  const auto batch_review_summary = batch_summary.value(QStringLiteral("reviewSummary")).toMap();
   const auto batch_transaction = batch_report.value(QStringLiteral("batchTransaction")).toMap();
   const auto batch_clusters = batch_report.value(QStringLiteral("batchClusters")).toList();
   const auto batch_cluster_plans = batch_report.value(QStringLiteral("clusterPlanning")).toList();
+  const auto sample_review = batch_report.value(QStringLiteral("sampleReview")).toMap();
+  const auto sample_review_samples = sample_review.value(QStringLiteral("samples")).toList();
+  const auto first_sample =
+      sample_review_samples.isEmpty() ? QVariantMap{} : sample_review_samples.first().toMap();
+  const auto sample_review_actions = sample_review.value(QStringLiteral("reviewActions")).toList();
   if (batch_summary.value(QStringLiteral("assetCount")).toInt() != 2 ||
       batch_summary.value(QStringLiteral("clusterCount")).toInt() != 2 ||
       batch_status_counts.value(QStringLiteral("drafted")).toInt() != 2 ||
       batch_summary.value(QStringLiteral("proofCount")).toInt() != 2 ||
       batch_summary.value(QStringLiteral("recipeDiffCount")).toInt() != 2 ||
+      batch_review_summary.value(QStringLiteral("editedCount")).toInt() != 2 ||
+      batch_review_summary.value(QStringLiteral("failedCount")).toInt() != 0 ||
+      batch_review_summary.value(QStringLiteral("passedCount")).toInt() +
+              batch_review_summary.value(QStringLiteral("needsReviewCount")).toInt() != 2 ||
+      batch_review_summary.value(QStringLiteral("issueCount")).toInt() !=
+          batch_summary.value(QStringLiteral("reviewIssues")).toList().size() ||
+      batch_review_summary.value(QStringLiteral("showOnlyIssuesFirst")).toBool() !=
+          !batch_summary.value(QStringLiteral("reviewIssues")).toList().isEmpty() ||
       batch_clusters.size() != 2 ||
       batch_cluster_plans.size() != 2 ||
       batch_report.value(QStringLiteral("representativeAssetIds")).toStringList().size() != 2 ||
@@ -925,24 +2218,56 @@ int main(int argc, char** argv) {
       batch_transaction.value(QStringLiteral("assetCount")).toInt() != 2) {
     return fail("selected-set draft should expose a pre-commit batch summary");
   }
+  if (!sample_review.value(QStringLiteral("available")).toBool() ||
+      !sample_review.value(QStringLiteral("sampleFirst")).toBool() ||
+      !sample_review.value(QStringLiteral("showOnlySamplesFirst")).toBool() ||
+      sample_review.value(QStringLiteral("sampleAssetIds")).toStringList().size() != 2 ||
+      sample_review.value(QStringLiteral("visibleAssetIds")).toStringList() !=
+          sample_review.value(QStringLiteral("sampleAssetIds")).toStringList() ||
+      sample_review_samples.size() != 2 ||
+      first_sample.value(QStringLiteral("badge")).toString().isEmpty() ||
+      first_sample.value(QStringLiteral("explanation")).toString().isEmpty() ||
+      !QFileInfo(first_sample.value(QStringLiteral("beforeProofPath")).toString()).isFile() ||
+      !QFileInfo(first_sample.value(QStringLiteral("afterProofPath")).toString()).isFile() ||
+      sample_review_actions.size() < 4 ||
+      sample_review_actions.at(0).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Looks good") ||
+      sample_review_actions.at(1).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Make changes") ||
+      sample_review_actions.at(2).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Reject") ||
+      sample_review_actions.at(3).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Apply to All")) {
+    return fail("selected-set draft should expose a sample-first review packet with proofs, badges, explanations, and review actions");
+  }
   QFile batch_manifest_file(batch_report.value(QStringLiteral("manifestPath")).toString());
   if (!batch_manifest_file.open(QIODevice::ReadOnly)) {
     return fail("selected-set draft manifest should be readable");
   }
   const auto batch_manifest_document =
       QJsonDocument::fromJson(batch_manifest_file.readAll()).object();
+  const auto batch_prompt_audit =
+      batch_manifest_document.value(QStringLiteral("modelPromptAudit")).toObject();
+  const auto batch_cluster_planning =
+      batch_manifest_document.value(QStringLiteral("clusterPlanning")).toArray();
+  const auto first_cluster_prompt_audit =
+      batch_cluster_planning.isEmpty()
+          ? QJsonObject{}
+          : batch_cluster_planning.first().toObject().value(QStringLiteral("modelPromptAudit")).toObject();
   if (batch_manifest_document.value(QStringLiteral("batchSummary"))
           .toObject()
           .value(QStringLiteral("assetCount"))
           .toInt() != 2 ||
       batch_manifest_document.value(QStringLiteral("batchClusters")).toArray().size() != 2 ||
-      batch_manifest_document.value(QStringLiteral("clusterPlanning")).toArray().size() != 2 ||
+      batch_cluster_planning.size() != 2 ||
+      batch_prompt_audit.value(QStringLiteral("backend")).toString() != QStringLiteral("local") ||
+      first_cluster_prompt_audit.value(QStringLiteral("backend")).toString() != QStringLiteral("local") ||
       batch_manifest_document.value(QStringLiteral("batchTransaction"))
               .toObject()
               .value(QStringLiteral("status"))
               .toString() != QStringLiteral("drafted") ||
       batch_manifest_document.value(QStringLiteral("batchConcurrencyLimit")).toInt() != 1) {
-    return fail("selected-set draft manifest should persist the pre-commit batch summary and transaction");
+    return fail("selected-set draft manifest should persist the pre-commit batch summary, prompt audits, and transaction");
   }
   const auto batch_first_state =
       photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
@@ -966,9 +2291,81 @@ int main(int argc, char** argv) {
       return fail("selected-set draft should persist per-asset cluster metadata, proof artifacts, and diffs");
     }
   }
+  const auto initial_review_issues = batch_report.value(QStringLiteral("batchSummary"))
+                                         .toMap()
+                                         .value(QStringLiteral("reviewIssues"))
+                                         .toList();
+  if (initial_review_issues.isEmpty()) {
+    return fail("selected-set draft should expose issue-first review rows when validation warnings are present");
+  }
+  const auto first_review_issue = initial_review_issues.first().toMap();
+  if (first_review_issue.value(QStringLiteral("thumbnailPath")).toString().isEmpty() ||
+      first_review_issue.value(QStringLiteral("reason")).toString().isEmpty() ||
+      first_review_issue.value(QStringLiteral("suggestedAction")).toString().isEmpty() ||
+      !first_review_issue.contains(QStringLiteral("warningCount")) ||
+      !first_review_issue.contains(QStringLiteral("errorCount")) ||
+      !first_review_issue.contains(QStringLiteral("styleMatchScorePercent"))) {
+    return fail("review issue rows should include proof thumbnail, reason, suggested action, and expandable detail fields");
+  }
+  const auto initial_review_summary = batch_report.value(QStringLiteral("batchSummary"))
+                                          .toMap()
+                                          .value(QStringLiteral("reviewSummary"))
+                                          .toMap();
+  if (initial_review_issues.size() < 2 ||
+      !initial_review_summary.value(QStringLiteral("fixAllOutliersAvailable")).toBool()) {
+    return fail("selected-set draft should offer safe bulk fixing when multiple review issues have no failures");
+  }
+  const auto fixed_all_issues = controller.fixAllReviewIssues();
+  const auto fixed_all_summary =
+      fixed_all_issues.value(QStringLiteral("batchSummary")).toMap().value(QStringLiteral("reviewSummary")).toMap();
+  if (!fixed_all_issues.value(QStringLiteral("ok")).toBool() ||
+      fixed_all_issues.value(QStringLiteral("mode")).toString() != QStringLiteral("review-issue-fix-all") ||
+      fixed_all_issues.value(QStringLiteral("fixedCount")).toInt() != initial_review_issues.size() ||
+      fixed_all_issues.value(QStringLiteral("repairReports")).toList().size() != initial_review_issues.size() ||
+      fixed_all_summary.value(QStringLiteral("editedCount")).toInt() != 2 ||
+      !controller.draftActive()) {
+    return fail("fixing all review issues should repair every safe issue and keep the batch draft active");
+  }
+  const auto review_issue_asset_id =
+      initial_review_issues.first().toMap().value(QStringLiteral("assetId")).toString();
+  const auto fixed_issue = controller.fixReviewIssue(review_issue_asset_id);
+  const auto fixed_issue_summary =
+      fixed_issue.value(QStringLiteral("batchSummary")).toMap().value(QStringLiteral("reviewSummary")).toMap();
+  if (!fixed_issue.value(QStringLiteral("ok")).toBool() ||
+      fixed_issue.value(QStringLiteral("mode")).toString() != QStringLiteral("review-issue-fix") ||
+      fixed_issue.value(QStringLiteral("assetId")).toString() != review_issue_asset_id ||
+      fixed_issue.value(QStringLiteral("resolution")).toString() != QStringLiteral("fixed") ||
+      fixed_issue.value(QStringLiteral("repairedRecipePatch")).toMap().isEmpty() ||
+      fixed_issue_summary.value(QStringLiteral("editedCount")).toInt() != 2 ||
+      !controller.draftActive()) {
+    return fail("fixing a review issue should re-draft only that photo and keep the batch review active");
+  }
+  const auto accepted_issue = controller.acceptReviewIssue(review_issue_asset_id);
+  const auto accepted_issue_summary =
+      accepted_issue.value(QStringLiteral("batchSummary")).toMap().value(QStringLiteral("reviewSummary")).toMap();
+  if (!accepted_issue.value(QStringLiteral("ok")).toBool() ||
+      accepted_issue.value(QStringLiteral("resolution")).toString() != QStringLiteral("accepted_anyway") ||
+      accepted_issue_summary.value(QStringLiteral("issueCount")).toInt() >= initial_review_issues.size() ||
+      !controller.draftActive()) {
+    return fail("accepting a review issue should resolve it without changing the active draft");
+  }
+  const auto rolled_back_issue = controller.rollbackReviewIssue(review_issue_asset_id);
+  const auto rolled_back_issue_summary =
+      rolled_back_issue.value(QStringLiteral("batchSummary")).toMap().value(QStringLiteral("reviewSummary")).toMap();
+  const auto rolled_back_issue_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
+  if (!rolled_back_issue.value(QStringLiteral("ok")).toBool() ||
+      rolled_back_issue.value(QStringLiteral("resolution")).toString() != QStringLiteral("rolled_back") ||
+      rolled_back_issue.value(QStringLiteral("restoredCount")).toInt() != 1 ||
+      rolled_back_issue_summary.value(QStringLiteral("editedCount")).toInt() != 1 ||
+      rolled_back_issue_summary.value(QStringLiteral("issueCount")).toInt() >= initial_review_issues.size() ||
+      rolled_back_issue_state.exposure != original_state.exposure ||
+      !controller.draftActive()) {
+    return fail("rolling back one review issue should restore that photo and keep the remaining batch draft active");
+  }
   const auto batch_rollback = controller.rollbackDraft();
   if (!batch_rollback.value(QStringLiteral("ok")).toBool() ||
-      batch_rollback.value(QStringLiteral("restoredCount")).toInt() != 2 ||
+      batch_rollback.value(QStringLiteral("restoredCount")).toInt() != 1 ||
       batch_rollback.value(QStringLiteral("batchTransaction"))
               .toMap()
               .value(QStringLiteral("status"))
@@ -976,8 +2373,8 @@ int main(int argc, char** argv) {
       batch_rollback.value(QStringLiteral("batchTransaction"))
               .toMap()
               .value(QStringLiteral("assetCount"))
-              .toInt() != 2) {
-    return fail("selected-set rollback should restore both drafted recipes and report the transaction");
+              .toInt() != 1) {
+    return fail("selected-set rollback should restore the remaining active draft recipes and report the transaction");
   }
   const auto restored_first_state =
       photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
@@ -987,6 +2384,162 @@ int main(int argc, char** argv) {
       restored_second_state.exposure != second_original_state.exposure) {
     return fail("selected-set rollback should restore each asset's original recipe");
   }
+
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+      make_asset(QStringLiteral("asset-3"), third_source_path, third_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.selectAll();
+  const auto sample_first_batch =
+      controller.runDraftOnSelected(QStringLiteral("create wedding samples before finishing the full set"));
+  const auto sample_first_review = sample_first_batch.value(QStringLiteral("sampleReview")).toMap();
+  if (!sample_first_batch.value(QStringLiteral("ok")).toBool() ||
+      !sample_first_batch.value(QStringLiteral("sampleOnlyDraft")).toBool() ||
+      sample_first_batch.value(QStringLiteral("draftedCount")).toInt() != 2 ||
+      sample_first_batch.value(QStringLiteral("fullTargetCount")).toInt() != 3 ||
+      sample_first_batch.value(QStringLiteral("remainingAssetIds")).toStringList() !=
+          QStringList{QStringLiteral("asset-3")} ||
+      !sample_first_review.value(QStringLiteral("applyToAllAvailable")).toBool() ||
+      sample_first_review.value(QStringLiteral("sampleAssetIds")).toStringList().size() != 2 ||
+      sample_first_review.value(QStringLiteral("remainingAssetIds")).toStringList() !=
+          QStringList{QStringLiteral("asset-3")} ||
+      sample_first_review.value(QStringLiteral("fullTargetCount")).toInt() != 3 ||
+      sample_first_batch.value(QStringLiteral("plannedPatchesByAssetId")).toMap().size() != 3 ||
+      !controller.draftActive()) {
+    return fail("larger selected-set draft should create representative samples before applying the full batch");
+  }
+  const auto sample_waiting_ai_state = controller.aiEditWorkflowState();
+  if (sample_waiting_ai_state.value(QStringLiteral("statusLine")).toString() !=
+          QStringLiteral("Waiting for your review") ||
+      !sample_waiting_ai_state.value(QStringLiteral("reviewRequired")).toBool() ||
+      !sample_waiting_ai_state.value(QStringLiteral("sampleReviewWaiting")).toBool() ||
+      sample_waiting_ai_state.value(QStringLiteral("sampleRemainingCount")).toInt() != 1 ||
+      !sample_waiting_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("confirmationRequired")).toBool() ||
+      sample_waiting_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("apply_to_all") ||
+      sample_waiting_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("label")).toString() !=
+          QStringLiteral("Apply to All")) {
+    return fail("AI edit workflow state should make a sample-only draft wait for Apply to All review");
+  }
+  const auto sample_first_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(0).value(QStringLiteral("recipeJson")).toString());
+  const auto sample_second_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(1).value(QStringLiteral("recipeJson")).toString());
+  const auto sample_third_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(2).value(QStringLiteral("recipeJson")).toString());
+  if (sample_first_state.exposure <= original_state.exposure ||
+      sample_second_state.exposure <= second_original_state.exposure ||
+      sample_third_state.exposure != third_original_state.exposure) {
+    return fail("sample-first batch should draft only representative sample recipes before approval");
+  }
+  const auto sample_source_run_id = sample_first_batch.value(QStringLiteral("runId")).toString();
+  const auto revised_sample_batch =
+      controller.reviseSampleReview(QStringLiteral("Make the samples warmer and keep dress highlights softer."));
+  const auto revised_sample_ai_state = controller.aiEditWorkflowState();
+  const auto revised_third_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(2).value(QStringLiteral("recipeJson")).toString());
+  if (!revised_sample_batch.value(QStringLiteral("ok")).toBool() ||
+      !revised_sample_batch.value(QStringLiteral("sampleRevision")).toBool() ||
+      revised_sample_batch.value(QStringLiteral("revisedFromRunId")).toString() != sample_source_run_id ||
+      revised_sample_batch.value(QStringLiteral("sampleRevisionFeedback")).toString() !=
+          QStringLiteral("Make the samples warmer and keep dress highlights softer.") ||
+      !revised_sample_batch.value(QStringLiteral("feedbackMemoryDeferred")).toBool() ||
+      !revised_sample_batch.value(QStringLiteral("sampleOnlyDraft")).toBool() ||
+      revised_sample_batch.value(QStringLiteral("draftedCount")).toInt() != 2 ||
+      revised_third_state.exposure != third_original_state.exposure ||
+      revised_sample_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("apply_to_all") ||
+      !controller.draftActive()) {
+    return fail("sample review feedback should immediately revise samples without touching remaining photos or durable style memory");
+  }
+  const auto unconfirmed_apply_all = controller.applySampleReviewToAll();
+  if (unconfirmed_apply_all.value(QStringLiteral("ok")).toBool() ||
+      !unconfirmed_apply_all.value(QStringLiteral("confirmationRequired")).toBool() ||
+      !unconfirmed_apply_all.value(QStringLiteral("sampleOnlyDraft")).toBool() ||
+      unconfirmed_apply_all.value(QStringLiteral("sampleRevisionFeedback")).toString() !=
+          QStringLiteral("Make the samples warmer and keep dress highlights softer.") ||
+      !unconfirmed_apply_all.value(QStringLiteral("feedbackMemoryDeferred")).toBool() ||
+      unconfirmed_apply_all.value(QStringLiteral("remainingAssetIds")).toStringList() !=
+          QStringList{QStringLiteral("asset-3")} ||
+      !controller.draftActive()) {
+    return fail("sample review Apply to All should require confirmation while preserving draft context");
+  }
+  const auto confirmed_apply_all = controller.applySampleReviewToAll(true);
+  const auto approved_feedback_memory = confirmed_apply_all.value(QStringLiteral("approvedFeedbackMemory")).toMap();
+  const auto approved_feedback_style =
+      read_json_object(approved_feedback_memory.value(QStringLiteral("stylePath")).toString());
+  const auto approved_feedback_note =
+      QString::fromUtf8(read_file_bytes(confirmed_apply_all.value(QStringLiteral("approvedFeedbackMemoryNotePath")).toString()));
+  const auto confirmed_third_state =
+      photo_editor::desktop::parse_edit_recipe_json(catalog_model.assetAt(2).value(QStringLiteral("recipeJson")).toString());
+  if (!confirmed_apply_all.value(QStringLiteral("ok")).toBool() ||
+      !confirmed_apply_all.value(QStringLiteral("sampleOnlyContinuation")).toBool() ||
+      !confirmed_apply_all.value(QStringLiteral("sampleFeedbackApproved")).toBool() ||
+      confirmed_apply_all.value(QStringLiteral("feedbackMemoryDeferred")).toBool() ||
+      confirmed_apply_all.value(QStringLiteral("approvedFeedback")).toString() !=
+          QStringLiteral("Make the samples warmer and keep dress highlights softer.") ||
+      confirmed_apply_all.value(QStringLiteral("styleChangeSummary")).toString() !=
+          QStringLiteral("Style changed because: Make the samples warmer and keep dress highlights softer.") ||
+      approved_feedback_memory.value(QStringLiteral("mode")).toString() != QStringLiteral("style-feedback") ||
+      approved_feedback_memory.value(QStringLiteral("styleChangeSummary")).toString() !=
+          confirmed_apply_all.value(QStringLiteral("styleChangeSummary")).toString() ||
+      approved_feedback_style.value(QStringLiteral("learned_profile"))
+              .toObject()
+              .value(QStringLiteral("latestFeedback"))
+              .toString() != QStringLiteral("Make the samples warmer and keep dress highlights softer.") ||
+      !approved_feedback_note.contains(QStringLiteral("Make the samples warmer and keep dress highlights softer.")) ||
+      confirmed_apply_all.value(QStringLiteral("userVisibleMemoryEvents")).toList().isEmpty() ||
+      confirmed_apply_all.value(QStringLiteral("draftedCount")).toInt() != 1 ||
+      confirmed_apply_all.value(QStringLiteral("remainingCount")).toInt() != 0 ||
+      confirmed_apply_all.value(QStringLiteral("fullTargetCount")).toInt() != 3 ||
+      confirmed_apply_all.value(QStringLiteral("batchSummary"))
+              .toMap()
+              .value(QStringLiteral("reviewSummary"))
+              .toMap()
+              .value(QStringLiteral("editedCount"))
+              .toInt() != 1 ||
+      confirmed_apply_all.value(QStringLiteral("batchSummary"))
+              .toMap()
+              .value(QStringLiteral("reviewSummary"))
+              .toMap()
+              .value(QStringLiteral("failedCount"))
+              .toInt() != 0 ||
+      confirmed_apply_all.value(QStringLiteral("batchSummary"))
+              .toMap()
+              .value(QStringLiteral("reviewSummary"))
+              .toMap()
+              .value(QStringLiteral("issueCount"))
+              .toInt() !=
+          confirmed_apply_all.value(QStringLiteral("batchSummary"))
+              .toMap()
+              .value(QStringLiteral("reviewIssues"))
+              .toList()
+              .size() ||
+      confirmed_third_state.exposure <= third_original_state.exposure ||
+      !controller.draftActive()) {
+    return fail("confirmed sample review Apply to All should draft the remaining selected photos");
+  }
+  const auto post_apply_all_ai_state = controller.aiEditWorkflowState();
+  if (post_apply_all_ai_state.value(QStringLiteral("statusLine")).toString() != QStringLiteral("Ready to commit") ||
+      post_apply_all_ai_state.value(QStringLiteral("sampleReviewWaiting")).toBool() ||
+      post_apply_all_ai_state.value(QStringLiteral("primaryAction")).toMap().value(QStringLiteral("key")).toString() !=
+          QStringLiteral("commit")) {
+    return fail("AI edit workflow state should return to commit after Apply to All drafts remaining photos");
+  }
+  const auto sample_first_rollback = controller.rollbackDraft();
+  if (!sample_first_rollback.value(QStringLiteral("ok")).toBool() ||
+      sample_first_rollback.value(QStringLiteral("restoredCount")).toInt() != 3 ||
+      controller.draftActive()) {
+    return fail("sample-first batch rollback should restore both sample and apply-to-all drafts");
+  }
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.selectAll();
 
   catalog_model.addAssetToProject(QStringLiteral("asset-1"), QStringLiteral("Agent Shoot"));
   catalog_model.addAssetToProject(QStringLiteral("asset-2"), QStringLiteral("Agent Shoot"));
@@ -1333,9 +2886,85 @@ int main(int argc, char** argv) {
       observability_event_count(observability_log_path, QStringLiteral("agent.edit.export_queued")) < 1) {
     return fail("agent controller should write observability events for runs, tools, validation, proof, draft, commit, rollback, and export");
   }
+
+  catalog_model.replaceAssetsForTesting({
+      make_asset(QStringLiteral("asset-1"), source_path, original_recipe),
+      make_asset(QStringLiteral("asset-2"), second_source_path, second_original_recipe),
+  });
+  catalog_model.selectIndex(0);
+  catalog_model.clearSelection();
+  catalog_model.toggleSelectionIndex(0);
+  controller.setSelectedStyleId(QStringLiteral("moody-test-style-2"));
+  controller.setSelectedModelId(QStringLiteral("ollama-qwen-test"));
+  const QJsonObject direct_apply_patch_content{
+      {QStringLiteral("decision"), QStringLiteral("recipe_patch")},
+      {QStringLiteral("summary"), QStringLiteral("Clean balanced edit for the current photo.")},
+      {QStringLiteral("styleConstraintCitations"),
+       QJsonArray{
+           QJsonObject{
+               {QStringLiteral("field"), QStringLiteral("style.goal")},
+               {QStringLiteral("reason"), QStringLiteral("The selected style asks for a polished natural edit.")},
+           },
+       }},
+      {QStringLiteral("recipePatch"),
+       QJsonObject{
+           {QStringLiteral("globalTone"),
+            QJsonObject{
+                {QStringLiteral("exposure"), 0.12},
+                {QStringLiteral("contrast"), 8.0},
+            }},
+           {QStringLiteral("color"),
+            QJsonObject{
+                {QStringLiteral("saturation"), 5.0},
+            }},
+       }},
+  };
+  qputenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON", fake_ollama_response(direct_apply_patch_content));
+  const auto direct_apply_report =
+      controller.applyEditForScope(QStringLiteral("current-photo"), QStringLiteral("make it look finished"));
+  qunsetenv("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON");
+  if (!direct_apply_report.value(QStringLiteral("ok")).toBool() ||
+      direct_apply_report.value(QStringLiteral("mode")).toString() != QStringLiteral("apply-edit") ||
+      !direct_apply_report.value(QStringLiteral("committed")).toBool() ||
+      direct_apply_report.value(QStringLiteral("committedCount")).toInt() != 1 ||
+      direct_apply_report.value(QStringLiteral("draftActive")).toBool() ||
+      controller.draftActive() ||
+      controller.status() != QStringLiteral("Applied")) {
+    return fail("primary agent apply should plan, apply, and commit a normal single-photo edit without leaving a hidden draft");
+  }
+
   if (read_file_bytes(source_path) != original_source_bytes ||
-      read_file_bytes(second_source_path) != original_second_source_bytes) {
+      read_file_bytes(second_source_path) != original_second_source_bytes ||
+      read_file_bytes(third_source_path) != original_third_source_bytes) {
     return fail("agent workflows must not overwrite source image files");
+  }
+  const auto memory_root_path = controller.memoryVaultStatus().value(QStringLiteral("rootPath")).toString();
+  const auto legacy_memory_note_path =
+      QDir(memory_root_path).filePath(QStringLiteral("feedback/legacy-unversioned-note.md"));
+  if (!QDir().mkpath(QFileInfo(legacy_memory_note_path).dir().absolutePath())) {
+    return fail("test should be able to create a legacy memory note for schema migration checks");
+  }
+  QFile legacy_memory_note(legacy_memory_note_path);
+  if (!legacy_memory_note.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate) ||
+      legacy_memory_note.write("---\ntype: agent_feedback_memory\n---\n# Legacy note\n") <= 0) {
+    return fail("test should be able to write a legacy memory note for schema migration checks");
+  }
+  legacy_memory_note.close();
+  const auto legacy_vault_status = controller.memoryVaultStatus();
+  if (legacy_vault_status.value(QStringLiteral("schemaVersion")).toInt() != 1 ||
+      legacy_vault_status.value(QStringLiteral("schemaVersionOk")).toBool() ||
+      !legacy_vault_status.value(QStringLiteral("migrationRequired")).toBool() ||
+      legacy_vault_status.value(QStringLiteral("schemaMismatchCount")).toInt() < 1 ||
+      legacy_vault_status.value(QStringLiteral("schemaMismatches")).toList().isEmpty()) {
+    return fail("memory vault status should detect legacy or unversioned notes that require migration");
+  }
+  const auto confirmed_memory_reset = controller.resetMemoryVault(true);
+  const auto reset_vault_status = controller.memoryVaultStatus();
+  if (!confirmed_memory_reset.value(QStringLiteral("ok")).toBool() ||
+      confirmed_memory_reset.value(QStringLiteral("removedFileCount")).toInt() <= 0 ||
+      reset_vault_status.value(QStringLiteral("exists")).toBool() ||
+      reset_vault_status.value(QStringLiteral("totalNoteCount")).toInt() != 0) {
+    return fail("confirmed memory vault reset should remove local memory notes and refresh vault status");
   }
 
   return EXIT_SUCCESS;

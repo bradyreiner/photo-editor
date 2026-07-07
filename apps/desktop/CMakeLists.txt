@@ -11,6 +11,8 @@ set(photo_editor_desktop_sources
   src/agent_edit_style.cpp
   src/agent_image_validation.cpp
   src/agent_local_model.cpp
+  src/agent_memory.cpp
+  src/agent_mcp_client.cpp
   src/ai_model_runtime.cpp
   src/app_shell_controller.cpp
   src/macos_updater.h
@@ -27,14 +29,17 @@ set(photo_editor_desktop_sources
   src/job_queue_model.cpp
   src/job_runner.cpp
   src/job_store.cpp
+  src/mask_alpha_provider.cpp
   src/observability.cpp
   src/photo_render_utils.cpp
   src/photo_automation_bridge.cpp
+  src/photo_mcp_server.cpp
   src/raw_image_decoder_stub.cpp
   src/main.cpp
   src/preview_backend_controller.cpp
   src/app_bootstrap.cpp
   src/tablet_input_area.cpp
+  src/thumbnail_refresh_queue_service.cpp
   src/timeline_asset_store.cpp
   src/timeline_document_controller.cpp
   src/timeline_playback_controller.cpp
@@ -132,47 +137,111 @@ qt_add_qml_module(photo_editor_app
     qml/Main.qml
     qml/components/ActionButton.qml
     qml/components/ActivityBanner.qml
+    qml/components/AgentBatchStatusRow.qml
+    qml/components/AgentModelRow.qml
+    qml/components/AgentPermissionModeButton.qml
+    qml/components/AgentProofCard.qml
+    qml/components/AgentRecipeDiffRow.qml
+    qml/components/AgentRunHistoryRow.qml
+    qml/components/AgentRunStageRow.qml
+    qml/components/AgentStyleTile.qml
+    qml/components/AgentToolPermissionToggle.qml
+    qml/components/AgentToolCallRow.qml
     qml/components/AppIcon.qml
+    qml/components/AppMenu.qml
+    qml/components/AppMenuItem.qml
     qml/components/AppPreferencesDialog.qml
     qml/components/BrandPanel.qml
     qml/components/BrandWordmark.qml
+    qml/components/BrushContextPanel.qml
+    qml/components/BrushLayerInspectorHeader.qml
+    qml/components/BrushToolHud.qml
+    qml/components/CanvasCoordinateMapper.qml
+    qml/components/CarouselBoardThumb.qml
+    qml/components/CarouselLayerRow.qml
+    qml/components/CarouselMediaThumb.qml
+    qml/components/CarouselToolRailButton.qml
+    qml/components/ChannelMixerButton.qml
+    qml/components/ColorSwatchButton.qml
     qml/components/ColorChannelButton.qml
     qml/components/ColorWheelControl.qml
     qml/components/CommandButtonSurface.qml
+    qml/components/CommandPaletteRow.qml
     qml/components/CommandPaletteDialog.qml
     qml/components/ConfirmActionButton.qml
     qml/components/CropOverlay.qml
     qml/components/CutCornerSurface.qml
+    qml/components/EditFilmstripThumb.qml
+    qml/components/EditInspectorTabButton.qml
+    qml/components/EditLayoutToggleRow.qml
+    qml/components/EditRailButton.qml
+    qml/components/ExportPreflightIssueRow.qml
+    qml/components/ExportPresetSummary.qml
+    qml/components/ExportQueueRow.qml
     qml/components/FilterChip.qml
+    qml/components/GalleryAssetCard.qml
     qml/components/GalleryPickerDialog.qml
     qml/components/GlassSurface.qml
     qml/components/HistogramDisplay.qml
     qml/components/HorizonStraightenOverlay.qml
+    qml/components/ImportFolderChip.qml
+    qml/components/ImportFolderRow.qml
+    qml/components/ImportImageTile.qml
+    qml/components/ImportSourceRow.qml
     qml/components/InfoPill.qml
     qml/components/InspectorSection.qml
     qml/components/InspectorSlider.qml
     qml/components/InlineActivityIndicator.qml
     qml/components/KeyboardShortcutsDialog.qml
+    qml/components/LayerRowActionZone.qml
+    qml/components/LayerRow.qml
+    qml/components/LayerRowChrome.qml
     qml/components/LayerTransformOverlay.qml
+    qml/components/MenuButton.qml
+    qml/components/MiniButton.qml
     qml/components/MetricCard.qml
     qml/components/ProgressStrip.qml
     qml/components/PopupSurface.qml
+    qml/components/PopupMenuRow.qml
+    qml/components/PreferenceNavRow.qml
+    qml/components/ProjectMembershipRow.qml
+    qml/components/RecentDocumentRow.qml
     qml/components/ReviewPreview.qml
     qml/components/SectionHeader.qml
     qml/components/SidebarButton.qml
+    qml/components/SplitButton.qml
+    qml/components/StatusChip.qml
     qml/components/StartupLoadingPopup.qml
     qml/components/Theme.qml
     qml/components/TimelineEffectsPanel.qml
+    qml/components/TimelineClipContent.qml
+    qml/components/TimelineEffectLibraryRow.qml
+    qml/components/TimelineMediaAssetRow.qml
+    qml/components/TimelineMarkerCard.qml
+    qml/components/TimelineMarkerPin.qml
     qml/components/TimelineSourcePanel.qml
+    qml/components/TimelineTransitionLibraryRow.qml
     qml/components/TimelineTrackHeader.qml
+    qml/components/TimelineTrackToggleButton.qml
+    qml/components/ThumbnailStateUtils.qml
+    qml/components/ToneCurveChannelButton.qml
     qml/components/ToneComboBox.qml
     qml/components/ToneCurveEditor.qml
+    qml/components/ToneCurvePointHandle.qml
+    qml/components/ToneCurvePresetButton.qml
     qml/components/ToneTextField.qml
+    qml/components/ToolOptionToggle.qml
+    qml/components/ToolValueSlider.qml
+    qml/components/ToolHud.qml
+    qml/components/ToolRail.qml
+    qml/components/ToolButton.qml
     qml/components/TransformOverlay.qml
     qml/workspaces/CarouselView.qml
     qml/workspaces/EditView.qml
+    qml/workspaces/EditWorkspaceHost.qml
     qml/workspaces/EditWorkspace.qml
     qml/workspaces/ExportView.qml
+    qml/workspaces/ExportWorkspaceHost.qml
     qml/workspaces/ImportView.qml
     qml/workspaces/LibraryView.qml
     qml/workspaces/LibraryWorkspace.qml

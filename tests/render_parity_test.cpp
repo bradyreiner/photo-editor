@@ -454,6 +454,47 @@ int main(int argc, char** argv) {
       std::cerr << "GPU full-resolution max channel delta: " << gpu_full_resolution_delta << '\n';
       return fail("GPU full-resolution render should match CPU full-resolution render within tolerance");
     }
+
+    auto local_mask_grading_state = gpu_compatible_state();
+    local_mask_grading_state.grading_midtones_hue = 0.62;
+    local_mask_grading_state.grading_midtones_saturation = 58.0;
+    QVariantMap local_mask;
+    local_mask.insert(QStringLiteral("id"), QStringLiteral("gpu-local-mask-set-source"));
+    local_mask.insert(QStringLiteral("name"), QStringLiteral("GPU Local Mask Set Source"));
+    local_mask.insert(QStringLiteral("kind"), QStringLiteral("radial"));
+    local_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+    local_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("gpu-local-mask-set"));
+    local_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("GPU Local Mask Set"));
+    local_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+    local_mask.insert(QStringLiteral("exposure"), 0.35);
+    local_mask.insert(QStringLiteral("centerX"), 0.5);
+    local_mask.insert(QStringLiteral("centerY"), 0.5);
+    local_mask.insert(QStringLiteral("radiusX"), 0.38);
+    local_mask.insert(QStringLiteral("radiusY"), 0.32);
+    local_mask.insert(QStringLiteral("feather"), 0.35);
+    local_mask_grading_state.mask_stack.append(local_mask);
+    photo_editor::desktop::RenderBackendTelemetry local_mask_grading_telemetry;
+    const auto local_mask_grading_gpu_preview =
+        photo_editor::desktop::render_output_image_with_backend(
+            source,
+            local_mask_grading_state,
+            target_space,
+            QImage::Format_ARGB32,
+            photo_editor::desktop::RenderBackendPreference::GpuOnly,
+            nullptr,
+            &local_mask_grading_telemetry);
+    if (local_mask_grading_gpu_preview.isNull()) {
+      return fail("GPU-only render should allow Metal-aware local mask set grading");
+    }
+    if (local_mask_grading_telemetry.backend != QStringLiteral("metal") ||
+        !local_mask_grading_telemetry.fallback_reason.isEmpty()) {
+      std::cerr << "local mask grading backend: "
+                << local_mask_grading_telemetry.backend.toStdString()
+                << " fallback: "
+                << local_mask_grading_telemetry.fallback_reason.toStdString()
+                << '\n';
+      return fail("local mask set grading should be reported as Metal when GPU stages run");
+    }
   }
 
   QTemporaryDir temp_dir;
@@ -814,6 +855,68 @@ int main(int argc, char** argv) {
           full_color_layer_source.copy(2, 0, 2, 1),
           full_color_layer_preview.copy(2, 0, 2, 1)) < 18) {
     return fail("masked full-color adjustment layer should visibly affect masked pixels");
+  }
+
+  photo_editor::desktop::RenderEditState linked_selection_layer_state;
+  linked_selection_layer_state.working_color_profile = QStringLiteral("Linear sRGB");
+  linked_selection_layer_state.preview_color_space = QStringLiteral("sRGB");
+  linked_selection_layer_state.output_color_space = QStringLiteral("sRGB");
+  QVariantMap linked_selection_mask;
+  linked_selection_mask.insert(QStringLiteral("id"), QStringLiteral("linked-layer-selection-source"));
+  linked_selection_mask.insert(QStringLiteral("name"), QStringLiteral("Linked Layer Source"));
+  linked_selection_mask.insert(QStringLiteral("kind"), QStringLiteral("brush"));
+  linked_selection_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  linked_selection_mask.insert(QStringLiteral("committed"), true);
+  linked_selection_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("linked-layer-mask-set"));
+  linked_selection_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Linked Layer Mask"));
+  linked_selection_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  linked_selection_mask.insert(QStringLiteral("segmentationData"), full_color_layer_mask);
+  linked_selection_mask.insert(QStringLiteral("segmentationWidth"), 4);
+  linked_selection_mask.insert(QStringLiteral("segmentationHeight"), 1);
+  linked_selection_layer_state.mask_stack.append(linked_selection_mask);
+  QVariantMap linked_selection_adjustment_layer;
+  linked_selection_adjustment_layer.insert(
+      QStringLiteral("id"), QStringLiteral("linked-selection-full-color-layer"));
+  linked_selection_adjustment_layer.insert(
+      QStringLiteral("name"), QStringLiteral("Linked Selection Full Color Layer"));
+  linked_selection_adjustment_layer.insert(QStringLiteral("kind"), QStringLiteral("adjustment"));
+  linked_selection_adjustment_layer.insert(QStringLiteral("enabled"), true);
+  linked_selection_adjustment_layer.insert(QStringLiteral("opacity"), 0.90);
+  linked_selection_adjustment_layer.insert(QStringLiteral("adjustments"), full_color_adjustments);
+  linked_selection_adjustment_layer.insert(QStringLiteral("selectionScoped"), true);
+  linked_selection_adjustment_layer.insert(
+      QStringLiteral("selectionMaskSetId"), QStringLiteral("linked-layer-mask-set"));
+  linked_selection_layer_state.layers.append(linked_selection_adjustment_layer);
+  const auto linked_selection_preview = photo_editor::desktop::render_output_image_with_backend(
+      full_color_layer_source,
+      linked_selection_layer_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto linked_selection_export_render = photo_editor::desktop::render_output_image_with_backend(
+      full_color_layer_source,
+      linked_selection_layer_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_RGBA64,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (linked_selection_preview.isNull() || linked_selection_export_render.isNull()) {
+    return fail("linked selection full-color layer preview/export proof should produce rendered images");
+  }
+  if (max_channel_delta(
+          linked_selection_preview,
+          linked_selection_export_render.convertToFormat(QImage::Format_ARGB32)) >
+      kPreviewExportParityTolerance) {
+    return fail("linked selection full-color layer preview should match full-resolution export");
+  }
+  if (max_channel_delta(
+          full_color_layer_source.copy(0, 0, 2, 1),
+          linked_selection_preview.copy(0, 0, 2, 1)) > kPreviewExportParityTolerance) {
+    return fail("linked selection full-color layer should not leak into unselected pixels");
+  }
+  if (max_channel_delta(
+          full_color_layer_source.copy(2, 0, 2, 1),
+          linked_selection_preview.copy(2, 0, 2, 1)) < 18) {
+    return fail("linked selection full-color layer should visibly affect selected pixels");
   }
 
   const QSize layer_local_full_size(10, 8);

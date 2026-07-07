@@ -55,7 +55,9 @@ Rectangle {
             color: theme.textStrong
             font.family: theme.fontUi
             font.pixelSize: 10
-            elide: Text.ElideRight
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 8
+            elide: Text.ElideNone
             verticalAlignment: Text.AlignVCenter
         }
 
@@ -66,17 +68,15 @@ Rectangle {
             accent: root.accent
         }
 
-        Button {
+        ActionButton {
             id: actionButton
             objectName: "activityCancelButton"
             visible: root.cancelable || root.retryable
             text: root.retryable ? "Retry" : "Cancel"
-            flat: true
-            padding: 4
-            leftPadding: 6
-            rightPadding: 6
-            font.family: theme.fontUi
-            font.pixelSize: 10
+            compact: true
+            embedded: true
+            accent: root.accent
+            tooltipText: text
             onClicked: root.retryable ? root.retryRequested() : root.cancelRequested()
         }
     }

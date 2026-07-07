@@ -31,6 +31,119 @@ bool validation_flag(
   return value.isValid() ? value.toBool() : fallback;
 }
 
+double clamped_score(double value) {
+  return std::clamp(value, 0.0, 1.0);
+}
+
+bool warnings_contain(const QStringList& warnings, const QString& needle) {
+  for (const auto& warning : warnings) {
+    if (warning.contains(needle, Qt::CaseInsensitive)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+QVariantMap quality_score_report_for_validation(const QVariantMap& report) {
+  const auto errors = report.value(QStringLiteral("errors")).toStringList();
+  const auto warnings = report.value(QStringLiteral("warnings")).toStringList();
+  const auto hard_failure = !errors.isEmpty();
+  const auto highlight_clip = report.value(QStringLiteral("highlightClipPercent")).toDouble();
+  const auto shadow_clip = report.value(QStringLiteral("shadowClipPercent")).toDouble();
+  const auto highlight_limit = report.value(QStringLiteral("highlightClipLimitPercent"), 1.0).toDouble();
+  const auto shadow_limit = report.value(QStringLiteral("shadowClipLimitPercent"), 2.0).toDouble();
+  const auto saturation_extreme = report.value(QStringLiteral("saturationExtremePercent")).toDouble();
+  const auto channel_imbalance = report.value(QStringLiteral("channelImbalance")).toDouble();
+  const auto red_blue_cast = report.value(QStringLiteral("redBlueCast")).toDouble();
+  const auto green_cast = report.value(QStringLiteral("greenCast")).toDouble();
+
+  const auto tone_penalty =
+      std::max(0.0, highlight_clip - highlight_limit) / 12.0 +
+      std::max(0.0, shadow_clip - shadow_limit) / 12.0 +
+      (warnings_contain(warnings, QStringLiteral("compressed histogram")) ? 0.28 : 0.0);
+  const auto color_penalty =
+      std::max(0.0, saturation_extreme - 8.0) / 22.0 +
+      std::max(0.0, channel_imbalance - 0.42) / 0.45 +
+      std::max(0.0, red_blue_cast - 0.55) / 0.60 +
+      std::max(0.0, green_cast - 0.45) / 0.50;
+  const auto skin_required = report.value(QStringLiteral("skinToneCheckRequired")).toBool();
+  const auto skin_plausible =
+      !skin_required || report.value(QStringLiteral("skinTonePlausible"), true).toBool();
+  const auto recipe_report = report.value(QStringLiteral("recipeValidation")).toMap();
+  const auto crop_valid = recipe_report.isEmpty()
+                              ? report.value(QStringLiteral("cropValid"), true).toBool()
+                              : recipe_report.value(QStringLiteral("cropValid"), true).toBool();
+  const auto missing_retouch =
+      report.value(QStringLiteral("missingRetouchProvenanceCount"),
+                   recipe_report.value(QStringLiteral("missingRetouchProvenanceCount")))
+          .toInt();
+  auto structure_penalty = 0.0;
+  if (!crop_valid) {
+    structure_penalty += 0.35;
+  }
+  if (missing_retouch > 0) {
+    structure_penalty += std::min(0.65, 0.35 * static_cast<double>(missing_retouch));
+  }
+  if (warnings_contain(warnings, QStringLiteral("mask coverage risk"))) {
+    structure_penalty += 0.18;
+  }
+  if (warnings_contain(warnings, QStringLiteral("mask leakage risk"))) {
+    structure_penalty += 0.28;
+  }
+  if (warnings_contain(warnings, QStringLiteral("crop/rotation risk"))) {
+    structure_penalty += 0.18;
+  }
+
+  const auto technical_penalty =
+      hard_failure ? 1.0 : std::min(0.65, static_cast<double>(warnings.size()) * 0.055);
+  const auto technical_safety_score = hard_failure ? 0.0 : clamped_score(1.0 - technical_penalty);
+  const auto tone_score = hard_failure ? 0.0 : clamped_score(1.0 - tone_penalty);
+  const auto color_score = hard_failure ? 0.0 : clamped_score(1.0 - color_penalty);
+  const auto skin_score = hard_failure ? 0.0 : (skin_plausible ? 1.0 : 0.35);
+  const auto structure_score = hard_failure ? 0.0 : clamped_score(1.0 - structure_penalty);
+  const auto overall_score =
+      clamped_score((technical_safety_score * 0.20) +
+                    (tone_score * 0.24) +
+                    (color_score * 0.24) +
+                    (skin_score * 0.12) +
+                    (structure_score * 0.20));
+
+  const auto needs_review =
+      hard_failure || overall_score < 0.78 || !warnings.isEmpty() ||
+      (skin_required && !skin_plausible) || missing_retouch > 0;
+
+  return QVariantMap{
+      {QStringLiteral("version"), QStringLiteral("agent-edit-quality-score-v1")},
+      {QStringLiteral("overallScore"), overall_score},
+      {QStringLiteral("overallScorePercent"),
+       static_cast<int>(std::round(overall_score * 100.0))},
+      {QStringLiteral("technicalSafetyScore"), technical_safety_score},
+      {QStringLiteral("toneScore"), tone_score},
+      {QStringLiteral("colorScore"), color_score},
+      {QStringLiteral("skinScore"), skin_score},
+      {QStringLiteral("structureScore"), structure_score},
+      {QStringLiteral("warningCount"), warnings.size()},
+      {QStringLiteral("hardValidationFailure"), hard_failure},
+      {QStringLiteral("needsUserReview"), needs_review},
+      {QStringLiteral("method"), QStringLiteral("deterministic-render-recipe-guardrails")},
+  };
+}
+
+void attach_quality_score(QVariantMap* report) {
+  if (report == nullptr) {
+    return;
+  }
+  const auto score_report = quality_score_report_for_validation(*report);
+  report->insert(QStringLiteral("qualityScore"), score_report.value(QStringLiteral("overallScore")));
+  report->insert(
+      QStringLiteral("qualityScorePercent"),
+      score_report.value(QStringLiteral("overallScorePercent")));
+  report->insert(QStringLiteral("qualityScoreReport"), score_report);
+  report->insert(
+      QStringLiteral("needsUserReview"),
+      score_report.value(QStringLiteral("needsUserReview")));
+}
+
 bool skin_tone_candidate(const QColor& color) {
   const auto hue = color.hsvHueF();
   const auto saturation = color.hsvSaturationF();
@@ -381,7 +494,9 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
   report.insert(QStringLiteral("width"), sample.width());
   report.insert(QStringLiteral("height"), sample.height());
   report.insert(QStringLiteral("highlightClipPercent"), highlight_clip_percent);
+  report.insert(QStringLiteral("highlightClipLimitPercent"), highlight_limit);
   report.insert(QStringLiteral("shadowClipPercent"), shadow_clip_percent);
+  report.insert(QStringLiteral("shadowClipLimitPercent"), shadow_limit);
   report.insert(QStringLiteral("saturationExtremePercent"), saturation_extreme_percent);
   report.insert(QStringLiteral("averageRed"), average_red);
   report.insert(QStringLiteral("averageGreen"), average_green);
@@ -399,6 +514,7 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
   report.insert(QStringLiteral("averageSkinLuma"), average_skin_luma);
   report.insert(QStringLiteral("averageSkinRedBlueDelta"), average_skin_red_blue_delta);
   report.insert(QStringLiteral("skinTonePlausible"), skin_tone_plausible);
+  attach_quality_score(&report);
   return report;
 }
 
@@ -421,6 +537,7 @@ QVariantMap validate_agent_edit_image(
   report.insert(
       QStringLiteral("missingRetouchProvenanceCount"),
       recipe_report.value(QStringLiteral("missingRetouchProvenanceCount")));
+  attach_quality_score(&report);
   return report;
 }
 

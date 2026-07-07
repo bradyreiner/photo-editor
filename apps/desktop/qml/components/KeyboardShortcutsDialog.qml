@@ -5,6 +5,7 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
+    objectName: "keyboardShortcutsDialog"
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
@@ -29,10 +30,13 @@ Dialog {
         { "id": "tool-brush", "label": "Brush Tool", "sequence": primaryAlt("B"), "defaultSequence": primaryAlt("B") },
         { "id": "tool-compare", "label": "Compare Tool", "sequence": primaryAlt("P"), "defaultSequence": primaryAlt("P") },
         { "id": "tool-export", "label": "Export Tool", "sequence": primaryAlt("E"), "defaultSequence": primaryAlt("E") },
-        { "id": "queue-export", "label": "Queue Export", "sequence": primary("Shift+E"), "defaultSequence": primary("Shift+E") },
+        { "id": "queue-export", "label": "Start Export", "sequence": primary("Shift+E"), "defaultSequence": primary("Shift+E") },
         { "id": "toggle-full-edit", "label": "Full-Screen Edit", "sequence": "F", "defaultSequence": "F" }
     ]
     readonly property int editableShortcutCount: editableShortcuts.length
+    readonly property string dialogVisibilityContract: "dialog-visibility:v1|keyboard-shortcuts|always:title-search-editable-presets-shortcut-sections-close|contextual:status-conflicts-empty-search-platform-modifier|one-expansion:preset-apply-editable-sequence-reset|hover-focus:preset-buttons-edit-fields-reset-controls|diagnostic:conflict-count-search-results|preserve:functionality"
+    readonly property string dialogSurfaceContract: "dialog-surface:v1|keyboard-shortcuts|search:header|editable:top|sections:scrollable|keys:fixed-readable|descriptions:wrap|presets:readable-buttons|no-elide:true|no-overlap:true"
+    readonly property string functionPreservationMap: "function-preservation:v1|search-shortcuts:header-field|edit-sequence:inline-field|reset-sequence:inline-reset|apply-presets:preset-buttons|conflict-detection:set-and-preset|platform-modifiers:mac-or-control|shortcut-help:section-cards"
     readonly property var shortcutPresetMappings: [
         {
             "id": "app-native",
@@ -246,6 +250,19 @@ Dialog {
             "flow:Alt+[/Alt+]",
             "density:Ctrl+[/Ctrl+]",
             "opacity:Ctrl+Alt+[/Ctrl+Alt+]"
+        ].join("|")
+    }
+
+    function shortcutDialogWorkflowSignature() {
+        return [
+            "visible:" + dialogVisibilityContract,
+            "surface:" + dialogSurfaceContract,
+            "preserve:" + functionPreservationMap,
+            "editable:" + editableShortcutCount,
+            "presets:" + shortcutPresetCount,
+            "results:" + shortcutSearchResultCount(),
+            "conflicts:" + shortcutConflictCount(),
+            "active-preset:" + activeShortcutPreset
         ].join("|")
     }
 
@@ -537,6 +554,7 @@ Dialog {
                                     required property var modelData
                                     text: modelData.label
                                     compact: true
+                                    minimumReadableWidth: 112
                                     enabled: root.activeShortcutPreset !== modelData.id
                                     onClicked: root.applyShortcutPreset(modelData.id)
                                 }
@@ -554,14 +572,17 @@ Dialog {
 
                                 Label {
                                     Layout.fillWidth: true
+                                    Layout.minimumWidth: 160
                                     text: modelData.label
                                     color: theme.textMain
                                     font.family: theme.fontUi
                                     font.pixelSize: 12
+                                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 }
 
                                 TextField {
                                     Layout.preferredWidth: 150
+                                    Layout.minimumWidth: 150
                                     text: modelData.sequence
                                     selectByMouse: true
                                     color: theme.textStrong
@@ -573,6 +594,7 @@ Dialog {
                                 ActionButton {
                                     text: "Reset"
                                     compact: true
+                                    minimumReadableWidth: 72
                                     onClicked: root.resetShortcutSequence(modelData.id)
                                 }
                             }
@@ -639,21 +661,30 @@ Dialog {
 
                                         Rectangle {
                                             Layout.alignment: Qt.AlignTop
+                                            Layout.minimumWidth: 96
+                                            Layout.preferredWidth: Math.min(220, Math.max(96, keyLabel.implicitWidth + 18))
+                                            Layout.maximumWidth: 220
                                             radius: 7
                                             color: theme.alpha(theme.ink950, 0.34)
                                             border.width: 1
                                             border.color: theme.alpha(theme.polar, 0.16)
-                                            implicitWidth: keyLabel.implicitWidth + 18
-                                            implicitHeight: keyLabel.implicitHeight + 12
+                                            implicitHeight: Math.max(34, keyLabel.implicitHeight + 12)
 
                                             Label {
                                                 id: keyLabel
-                                                anchors.centerIn: parent
+                                                anchors.fill: parent
+                                                anchors.margins: 8
                                                 text: modelData.keys
                                                 color: theme.textStrong
                                                 font.family: theme.fontMono
                                                 font.pixelSize: 12
+                                                fontSizeMode: Text.HorizontalFit
+                                                minimumPixelSize: 9
                                                 font.weight: Font.DemiBold
+                                                horizontalAlignment: Text.AlignHCenter
+                                                verticalAlignment: Text.AlignVCenter
+                                                wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                                elide: Text.ElideNone
                                             }
                                         }
 
@@ -663,7 +694,8 @@ Dialog {
                                             color: theme.textMain
                                             font.family: theme.fontUi
                                             font.pixelSize: 12
-                                            wrapMode: Text.WordWrap
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                            elide: Text.ElideNone
                                         }
                                     }
                                 }

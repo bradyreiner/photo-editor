@@ -67,6 +67,10 @@ int main() {
       !clean.value(QStringLiteral("warnings")).toStringList().isEmpty()) {
     return fail("clean midtone image should validate without warnings");
   }
+  if (clean.value(QStringLiteral("qualityScore")).toDouble() < 0.95 ||
+      clean.value(QStringLiteral("qualityScoreReport")).toMap().value(QStringLiteral("needsUserReview")).toBool()) {
+    return fail("clean midtone image should receive a high quality score without review");
+  }
 
   const auto clipped = photo_editor::desktop::validate_agent_edit_image(
       solid_image(QColor(255, 245, 245)),
@@ -75,6 +79,11 @@ int main() {
       !clipped.value(QStringLiteral("warnings")).toStringList().join(QStringLiteral("; ")).contains(
           QStringLiteral("highlight clipping"))) {
     return fail("highlight-clipped image should report highlight warning");
+  }
+  if (clipped.value(QStringLiteral("qualityScore")).toDouble() >=
+          clean.value(QStringLiteral("qualityScore")).toDouble() ||
+      !clipped.value(QStringLiteral("qualityScoreReport")).toMap().value(QStringLiteral("needsUserReview")).toBool()) {
+    return fail("highlight-clipped image should score lower and require review");
   }
 
   const auto crushed = photo_editor::desktop::validate_agent_edit_image(
@@ -208,6 +217,11 @@ int main() {
       retouch_risk.value(QStringLiteral("missingRetouchProvenanceCount")).toInt() != 1 ||
       !retouch_warnings.contains(QStringLiteral("retouch provenance risk"))) {
     return fail("recipe-aware validation should report missing retouch provenance");
+  }
+  if (retouch_risk.value(QStringLiteral("qualityScore")).toDouble() >=
+          clean.value(QStringLiteral("qualityScore")).toDouble() ||
+      !retouch_risk.value(QStringLiteral("qualityScoreReport")).toMap().value(QStringLiteral("needsUserReview")).toBool()) {
+    return fail("retouch provenance risk should reduce the quality score and require review");
   }
 
   return EXIT_SUCCESS;
