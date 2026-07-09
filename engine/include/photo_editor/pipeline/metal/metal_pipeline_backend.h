@@ -53,7 +53,8 @@ class MetalPipelineBackend final {
       double sharpen_detail,
       double sharpen_mask_strength,
       double luma_nr_strength,
-      double color_nr_strength);
+      double color_nr_strength,
+      ColorAdjustmentTelemetry* telemetry = nullptr);
 
   [[nodiscard]] bool apply_spatial_tone_effects(
       std::vector<ColorPixel>* pixels,

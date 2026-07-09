@@ -10,6 +10,8 @@
 
 #include "app_bootstrap.h"
 #include "observability.h"
+#include "qml_performance_monitor.h"
+#include "worker_queue_registry.h"
 
 namespace {
 
@@ -87,6 +89,96 @@ int main(int argc, char** argv) {
     return fail("structured observability messages should expose standard performance fields");
   }
 
+  const auto qml_route_fields =
+      photo_editor::desktop::QmlPerformanceMonitor::routeReadyFields(
+          QStringLiteral("Masks"),
+          1,
+          42,
+          17,
+          false,
+          QStringLiteral("qml-route:masks"));
+  if (qml_route_fields.value(QStringLiteral("workflow")).toString() != QStringLiteral("qml_route") ||
+      qml_route_fields.value(QStringLiteral("workflow_id")).toString() != QStringLiteral("qml-route:masks") ||
+      qml_route_fields.value(QStringLiteral("surface")).toString() != QStringLiteral("masks") ||
+      qml_route_fields.value(QStringLiteral("route")).toString() != QStringLiteral("masks") ||
+      qml_route_fields.value(QStringLiteral("route_index")).toInt() != 1 ||
+      qml_route_fields.value(QStringLiteral("elapsed_ms")).toLongLong() != 42 ||
+      qml_route_fields.value(QStringLiteral("component_creation_ms")).toLongLong() != 17 ||
+      qml_route_fields.value(QStringLiteral("prewarmed")).toBool()) {
+    return fail("QML route telemetry should expose workflow, route, elapsed, and component timing fields");
+  }
+
+  const auto qml_frame_fields =
+      photo_editor::desktop::QmlPerformanceMonitor::frameSampleFields(
+          QStringLiteral("Edit"),
+          1,
+          41.5,
+          true,
+          false);
+  if (qml_frame_fields.value(QStringLiteral("workflow")).toString() != QStringLiteral("qml_frame") ||
+      qml_frame_fields.value(QStringLiteral("workflow_id")).toString() != QStringLiteral("qml-frame:edit") ||
+      qml_frame_fields.value(QStringLiteral("surface")).toString() != QStringLiteral("edit") ||
+      qml_frame_fields.value(QStringLiteral("frame_interval_ms")).toDouble() < 41.0 ||
+      !qml_frame_fields.value(QStringLiteral("janky")).toBool() ||
+      qml_frame_fields.value(QStringLiteral("dropped")).toBool() ||
+      qml_frame_fields.value(QStringLiteral("jank_frame_count")).toInt() != 1 ||
+      qml_frame_fields.value(QStringLiteral("dropped_frame_count")).toInt() != 0) {
+    return fail("QML frame sample telemetry should expose frame interval and jank fields");
+  }
+
+  const auto qml_frame_summary =
+      photo_editor::desktop::QmlPerformanceMonitor::frameSummaryFields(
+          QStringLiteral("Timeline"),
+          3,
+          120,
+          52.0,
+          4,
+          1);
+  if (qml_frame_summary.value(QStringLiteral("surface")).toString() != QStringLiteral("timeline") ||
+      qml_frame_summary.value(QStringLiteral("sample_count")).toInt() != 120 ||
+      qml_frame_summary.value(QStringLiteral("max_frame_interval_ms")).toDouble() != 52.0 ||
+      qml_frame_summary.value(QStringLiteral("jank_frame_count")).toInt() != 4 ||
+      qml_frame_summary.value(QStringLiteral("dropped_frame_count")).toInt() != 1) {
+    return fail("QML frame summary telemetry should expose sample, max interval, jank, and dropped counts");
+  }
+  const auto qml_frame_compact_line =
+      photo_editor::desktop::observability::compactConsoleLineForEvent(
+          QStringLiteral("qml.frame.summary"),
+          qml_frame_summary);
+  const QStringList expected_qml_frame_tokens{
+      QStringLiteral("surface=timeline"),
+      QStringLiteral("samples=120"),
+      QStringLiteral("max=52ms"),
+      QStringLiteral("jank=4"),
+      QStringLiteral("dropped=1"),
+  };
+  for (const auto& token : expected_qml_frame_tokens) {
+    if (!qml_frame_compact_line.contains(token)) {
+      return fail("compact QML frame summaries should include useful frame diagnostics");
+    }
+  }
+
+  const auto qml_preview_failure =
+      photo_editor::desktop::QmlPerformanceMonitor::previewFailureFields(
+          QStringLiteral("Edit"),
+          QStringLiteral("Selection preview unavailable"),
+          QStringLiteral("mask_rasterization"),
+          QStringLiteral("Mask source could not be rasterized."),
+          QStringLiteral("failed|blocking:false|stale:false|retry:true|stage:mask_rasterization|detail:true"),
+          false,
+          QStringLiteral("render_failure_state"));
+  if (qml_preview_failure.value(QStringLiteral("workflow")).toString() != QStringLiteral("preview") ||
+      qml_preview_failure.value(QStringLiteral("workflow_id")).toString() != QStringLiteral("preview-failure:edit") ||
+      qml_preview_failure.value(QStringLiteral("surface")).toString() != QStringLiteral("edit") ||
+      qml_preview_failure.value(QStringLiteral("status")).toString() != QStringLiteral("Selection preview unavailable") ||
+      qml_preview_failure.value(QStringLiteral("failure_stage")).toString() != QStringLiteral("mask_rasterization") ||
+      !qml_preview_failure.value(QStringLiteral("failure_detail_present")).toBool() ||
+      qml_preview_failure.value(QStringLiteral("presentation_signature")).toString().isEmpty() ||
+      qml_preview_failure.value(QStringLiteral("processing")).toBool() ||
+      qml_preview_failure.value(QStringLiteral("source")).toString() != QStringLiteral("render_failure_state")) {
+    return fail("QML preview failure telemetry should expose visible failure source, status, stage, and presentation fields");
+  }
+
   const auto colorized_perf_line =
       photo_editor::desktop::observability::colorizedConsoleLineForMessage(
           QtInfoMsg,
@@ -117,6 +209,7 @@ int main(int argc, char** argv) {
       {QStringLiteral("render_within_latency_budget"), false},
       {QStringLiteral("backend"), QStringLiteral("metal")},
       {QStringLiteral("dirty_domain"), QStringLiteral("layers_composite")},
+      {QStringLiteral("async_job_stage"), QStringLiteral("render_request")},
       {QStringLiteral("cache_hit_count"), 2},
       {QStringLiteral("cache_lookup_count"), 6},
       {QStringLiteral("generation"), 33},
@@ -136,12 +229,96 @@ int main(int argc, char** argv) {
       QStringLiteral("backend=metal"),
       QStringLiteral("dirty=layers_composite"),
       QStringLiteral("cache=2/6"),
+      QStringLiteral("job=render_request"),
       QStringLiteral("gen=33"),
   };
   for (const auto& token : expected_compact_tokens) {
     if (!compact_line.contains(token)) {
       return fail("compact observability console line should include key performance tokens");
     }
+  }
+  if (compact_line.contains(QStringLiteral("failure=render_request"))) {
+    return fail("compact observability console line should not label async job stage as failure");
+  }
+
+  const auto registered_worker_pools =
+      photo_editor::desktop::WorkerQueueRegistry::registeredPoolIds();
+  const QStringList expected_worker_pools{
+      QStringLiteral("preview-render"),
+      QStringLiteral("overlay-render"),
+      QStringLiteral("histogram-scope"),
+      QStringLiteral("thumbnail"),
+      QStringLiteral("mask-commit"),
+      QStringLiteral("smart-selection"),
+      QStringLiteral("inpaint"),
+      QStringLiteral("export"),
+      QStringLiteral("catalog-import"),
+      QStringLiteral("metadata-extraction"),
+      QStringLiteral("timeline-media"),
+      QStringLiteral("carousel-render"),
+  };
+  for (const auto& pool_id : expected_worker_pools) {
+    if (!registered_worker_pools.contains(pool_id) ||
+        !photo_editor::desktop::WorkerQueueRegistry::isRegisteredPool(pool_id)) {
+      return fail("worker queue registry should expose every expected worker pool");
+    }
+  }
+
+  const auto worker_sample =
+      photo_editor::desktop::WorkerQueueRegistry::sampleFields(
+          QStringLiteral("thumbnail"),
+          QStringLiteral("thumbnail"),
+          QStringLiteral("library"),
+          2,
+          4,
+          8,
+          6,
+          3,
+          1);
+  if (worker_sample.value(QStringLiteral("event")).isValid() ||
+      worker_sample.value(QStringLiteral("worker_pool")).toString() != QStringLiteral("thumbnail") ||
+      worker_sample.value(QStringLiteral("pool_id")).toString() != QStringLiteral("thumbnail") ||
+      worker_sample.value(QStringLiteral("workflow")).toString() != QStringLiteral("thumbnail") ||
+      worker_sample.value(QStringLiteral("surface")).toString() != QStringLiteral("library") ||
+      worker_sample.value(QStringLiteral("active_worker_count")).toInt() != 2 ||
+      worker_sample.value(QStringLiteral("pending_worker_count")).toInt() != 4 ||
+      worker_sample.value(QStringLiteral("worker_limit")).toInt() != 8 ||
+      worker_sample.value(QStringLiteral("queue_wait_ms")).toLongLong() != 6 ||
+      worker_sample.value(QStringLiteral("completed_count")).toInt() != 3 ||
+      worker_sample.value(QStringLiteral("cancelled_count")).toInt() != 1 ||
+      !worker_sample.value(QStringLiteral("registered_pool")).toBool()) {
+    return fail("worker queue samples should expose pool, workflow, counts, limits, and queue timing");
+  }
+
+  const auto worker_summary =
+      photo_editor::desktop::WorkerQueueRegistry::summaryFields(
+          QStringLiteral("preview-render"),
+          QStringLiteral("preview"),
+          QStringLiteral("edit"),
+          1,
+          0,
+          2,
+          7,
+          42,
+          1,
+          0);
+  if (worker_summary.value(QStringLiteral("worker_pool")).toString() != QStringLiteral("preview-render") ||
+      worker_summary.value(QStringLiteral("worker_elapsed_ms")).toLongLong() != 42 ||
+      worker_summary.value(QStringLiteral("queue_wait_ms")).toLongLong() != 7 ||
+      worker_summary.value(QStringLiteral("completed_count")).toInt() != 1 ||
+      worker_summary.value(QStringLiteral("cancelled_count")).toInt() != 0) {
+    return fail("worker queue summaries should expose elapsed time and completion counts");
+  }
+
+  auto failed_compact_fields = compact_fields;
+  failed_compact_fields.insert(QStringLiteral("failure_stage"), QStringLiteral("mask_alpha"));
+  const auto failed_compact_line =
+      photo_editor::desktop::observability::compactConsoleLineForEvent(
+          QStringLiteral("preview.render.failure_presented"),
+          failed_compact_fields);
+  if (!failed_compact_line.contains(QStringLiteral("failure=mask_alpha")) ||
+      failed_compact_line.contains(QStringLiteral("failure=render_request"))) {
+    return fail("compact observability console line should print only the resolved failure stage");
   }
 
   if (!photo_editor::desktop::observability::consoleModePrintsEvent(

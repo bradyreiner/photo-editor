@@ -37,6 +37,12 @@ enum class RenderIntent {
   RelativeColorimetric,
 };
 
+enum class GamutMappingPolicy {
+  Perceptual,
+  Clip,
+  PreserveSaturation,
+};
+
 struct InputColorProfile final {
   std::string profile_name = "Embedded";
   InputTransformKind kind = InputTransformKind::EmbeddedProfile;
@@ -112,6 +118,8 @@ struct ColorPipelineConfig final {
   CameraProfile camera_profile;
   InputTransformRecipe input_transform_recipe;
   RenderIntent render_intent = RenderIntent::Perceptual;
+  bool output_gamut_mapping_enabled = true;
+  GamutMappingPolicy output_gamut_mapping_policy = GamutMappingPolicy::Perceptual;
   double output_headroom = 1.0;
   bool black_point_compensation_enabled = true;
   double source_black_point = 0.0;
@@ -122,12 +130,15 @@ struct ColorPipelineConfig final {
 [[nodiscard]] std::string normalize_working_color_profile_name(std::string_view value);
 [[nodiscard]] std::string normalize_output_color_profile_name(std::string_view value);
 [[nodiscard]] std::string normalize_render_intent_name(std::string_view value);
+[[nodiscard]] std::string normalize_gamut_mapping_policy_name(std::string_view value);
 
 [[nodiscard]] InputColorProfile input_color_profile_from_name(std::string_view value);
 [[nodiscard]] WorkingColorProfile working_color_profile_from_name(std::string_view value);
 [[nodiscard]] OutputColorProfile output_color_profile_from_name(std::string_view value);
 [[nodiscard]] RenderIntent render_intent_from_name(std::string_view value);
 [[nodiscard]] const char* render_intent_name(RenderIntent intent);
+[[nodiscard]] GamutMappingPolicy gamut_mapping_policy_from_name(std::string_view value);
+[[nodiscard]] const char* gamut_mapping_policy_name(GamutMappingPolicy policy);
 [[nodiscard]] CameraProfile resolve_camera_profile(const DecodedImageMetadata& metadata);
 [[nodiscard]] CameraProfile resolve_camera_profile(
     const DecodedImageMetadata& metadata,

@@ -34,6 +34,7 @@ set(photo_editor_desktop_sources
   src/photo_render_utils.cpp
   src/photo_automation_bridge.cpp
   src/photo_mcp_server.cpp
+  src/qml_performance_monitor.cpp
   src/raw_image_decoder_stub.cpp
   src/main.cpp
   src/preview_backend_controller.cpp
@@ -43,6 +44,7 @@ set(photo_editor_desktop_sources
   src/timeline_asset_store.cpp
   src/timeline_document_controller.cpp
   src/timeline_playback_controller.cpp
+  src/worker_queue_registry.cpp
   src/macos_updater_stub.cpp
   src/vision_segmentation_stub.cpp
 )
@@ -147,6 +149,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/AgentStyleTile.qml
     qml/components/AgentToolPermissionToggle.qml
     qml/components/AgentToolCallRow.qml
+    qml/components/AgentWalkthroughDialog.qml
     qml/components/AppIcon.qml
     qml/components/AppMenu.qml
     qml/components/AppMenuItem.qml
@@ -231,6 +234,7 @@ qt_add_qml_module(photo_editor_app
     qml/components/ToneCurvePresetButton.qml
     qml/components/ToneTextField.qml
     qml/components/ToolOptionToggle.qml
+    qml/components/ToolCommandBar.qml
     qml/components/ToolValueSlider.qml
     qml/components/ToolHud.qml
     qml/components/ToolRail.qml

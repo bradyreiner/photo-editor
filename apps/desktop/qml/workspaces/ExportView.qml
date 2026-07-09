@@ -845,6 +845,9 @@ Rectangle {
                             Label {
                                 Layout.fillWidth: true
                                 text: exportPreflightSection.preflight.format + "  " +
+                                      (exportPreflightSection.preflight.bitDepth > 0
+                                       ? exportPreflightSection.preflight.bitDepth + "-bit  "
+                                       : "") +
                                       exportPreflightSection.preflight.outputColorSpace + "  " +
                                       (exportPreflightSection.preflight.estimatedPixelWidth > 0
                                        ? exportPreflightSection.preflight.estimatedPixelWidth + " x " +

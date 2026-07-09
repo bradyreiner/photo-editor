@@ -262,6 +262,18 @@ std::string normalize_render_intent_name(std::string_view value) {
   return "Perceptual";
 }
 
+std::string normalize_gamut_mapping_policy_name(std::string_view value) {
+  const auto normalized = trimmed_lower(value);
+  if (normalized == "clip" || normalized == "clipping" ||
+      normalized == "relative colorimetric" || normalized == "relative-colorimetric") {
+    return "Clip";
+  }
+  if (normalized == "preserve saturation" || normalized == "preserve-saturation") {
+    return "Preserve Saturation";
+  }
+  return "Perceptual";
+}
+
 InputColorProfile input_color_profile_from_name(std::string_view value) {
   const auto normalized = normalize_input_color_profile_name(value);
   if (trimmed_lower(normalized).rfind("camera dcp:", 0) == 0) {
@@ -431,6 +443,29 @@ const char* render_intent_name(RenderIntent intent) {
   }
 }
 
+GamutMappingPolicy gamut_mapping_policy_from_name(std::string_view value) {
+  const auto normalized = normalize_gamut_mapping_policy_name(value);
+  if (normalized == "Clip") {
+    return GamutMappingPolicy::Clip;
+  }
+  if (normalized == "Preserve Saturation") {
+    return GamutMappingPolicy::PreserveSaturation;
+  }
+  return GamutMappingPolicy::Perceptual;
+}
+
+const char* gamut_mapping_policy_name(GamutMappingPolicy policy) {
+  switch (policy) {
+    case GamutMappingPolicy::Clip:
+      return "Clip";
+    case GamutMappingPolicy::PreserveSaturation:
+      return "Preserve Saturation";
+    case GamutMappingPolicy::Perceptual:
+    default:
+      return "Perceptual";
+  }
+}
+
 CameraProfile resolve_camera_profile(
     const DecodedImageMetadata& metadata,
     const InputColorProfile& input_profile) {
@@ -559,6 +594,8 @@ ColorPipelineConfig default_color_pipeline_config() {
       .camera_profile = {},
       .input_transform_recipe = {},
       .render_intent = RenderIntent::Perceptual,
+      .output_gamut_mapping_enabled = true,
+      .output_gamut_mapping_policy = GamutMappingPolicy::Perceptual,
       .output_headroom = 1.0,
       .black_point_compensation_enabled = true,
       .source_black_point = 0.0,

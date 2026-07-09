@@ -17,8 +17,8 @@ Rectangle {
     property var acceptSizeText: null
     property var commitSizeText: null
     property color accent: theme.accentCool400
-    readonly property string hudContract: "specialized-tool-hud:v3|tool:brush|component:BrushToolHud|mode-switch:menu|precision-controls:compact-menu|status-visible:true|commit-action:true|subdued-chrome:true|no-elide:true|no-overlap:true"
-    readonly property string modularityContract: "brush-tool-hud-component:v1|owns:chrome-controls-hidden-precision|signals:mode-tuning-size-done|object-names:preserved|workspace-state:external"
+    readonly property string hudContract: "specialized-tool-hud:v4|tool:brush|component:BrushToolHud|mode-switch:menu|quick-tuning:size-flow-hardness|advanced:inspector-or-shortcuts|status-visible:true|commit-action:true|subdued-chrome:true|no-elide:true|no-overlap:true"
+    readonly property string modularityContract: "brush-tool-hud-component:v2|owns:mode-size-quick-tuning-done|hidden-precision:diagnostic-only|signals:mode-tuning-size-done|object-names:preserved|workspace-state:external"
 
     signal modeClicked()
     signal modeMenuItemTriggered(string key)
@@ -80,7 +80,7 @@ Rectangle {
                 menuWidth: 312
                 menuItemMaxLines: 3
                 menuItems: root.modeMenuItems
-                tooltipText: "Choose brush mode, presets, size source, pressure response, or reset defaults."
+                tooltipText: "Choose brush mode and presets."
                 menuTooltipText: "Brush options"
                 onClicked: root.modeClicked()
                 onMenuItemTriggered: function(key) { root.modeMenuItemTriggered(key) }
@@ -134,8 +134,8 @@ Rectangle {
                 menuWidth: 300
                 menuItemMaxLines: 3
                 menuItems: root.tuningMenuItems
-                tooltipText: "Adjust size, flow, hardness, density, opacity, or reset the brush."
-                menuTooltipText: "Brush tuning"
+                tooltipText: "Adjust brush size, flow, or hardness."
+                menuTooltipText: "Quick brush tuning"
                 onClicked: root.tuningClicked()
                 onMenuItemTriggered: function(key) { root.tuningMenuItemTriggered(key) }
             }

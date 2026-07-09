@@ -4,6 +4,10 @@ This file records reproducible local performance artifacts. Treat synthetic runs
 baselines only; release baselines still need representative JPEG/HEIC/RAW corpora on target
 hardware.
 
+For PRs that claim an optimization, use
+`docs/performance-optimization-pr-evidence.md` so the metric, before/after
+values, workload, artifact paths, and risk are recorded consistently.
+
 ## 2026-05-24 Synthetic Raster Preview Smoke
 
 Command:

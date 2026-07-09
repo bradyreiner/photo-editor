@@ -168,7 +168,7 @@ int main() {
   }
 
   const auto root = structured_document.object();
-  if (root.value(QStringLiteral("recipeVersion")).toInt() != 4) {
+  if (root.value(QStringLiteral("recipeVersion")).toInt() != photo_editor::desktop::kCurrentEditRecipeVersion) {
     return fail("structured recipe output should bump the recipe version");
   }
   if (root.value(QStringLiteral("maskSetSchemaVersion")).toInt() != 2) {
@@ -187,6 +187,124 @@ int main() {
   const auto mask_stack = root.value(QStringLiteral("maskStack")).toArray();
   if (mask_stack.size() != 1 || !mask_stack.at(0).isObject()) {
     return fail("structured recipe output should serialize the current linear mask into maskStack");
+  }
+  const auto migrated_legacy_mask = mask_stack.at(0).toObject();
+  const auto migrated_legacy_geometry =
+      migrated_legacy_mask.value(QStringLiteral("geometry")).toObject();
+  if (migrated_legacy_mask.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("vector-geometry") ||
+      migrated_legacy_mask.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      !migrated_legacy_mask.value(QStringLiteral("sourceImageRevision")).toString().isEmpty() ||
+      migrated_legacy_geometry.value(QStringLiteral("maskRasterWidth")).toInt(-1) != 0 ||
+      migrated_legacy_geometry.value(QStringLiteral("maskRasterHeight")).toInt(-1) != 0 ||
+      migrated_legacy_geometry.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      migrated_legacy_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("geometric-feather")) {
+    return fail("legacy masks should migrate into the explicit source-truth mask model");
+  }
+  QVariantMap contradictory_lasso_source;
+  contradictory_lasso_source.insert(QStringLiteral("kind"), QStringLiteral("lasso"));
+  contradictory_lasso_source.insert(QStringLiteral("maskSourceClass"), QStringLiteral("source-resolution-alpha"));
+  contradictory_lasso_source.insert(QStringLiteral("maskCoordinateSpace"), QStringLiteral("source-pixels"));
+  contradictory_lasso_source.insert(QStringLiteral("maskRasterWidth"), 99);
+  contradictory_lasso_source.insert(QStringLiteral("maskRasterHeight"), 88);
+  contradictory_lasso_source.insert(QStringLiteral("alphaSamplingMode"), QStringLiteral("nearest-source-pixel"));
+  contradictory_lasso_source.insert(QStringLiteral("softnessMode"), QStringLiteral("alpha-hard-edge"));
+  contradictory_lasso_source.insert(QStringLiteral("polygonPoints"), QVariantList{
+      QVariantMap{{QStringLiteral("x"), 0.10}, {QStringLiteral("y"), 0.10}},
+      QVariantMap{{QStringLiteral("x"), 0.90}, {QStringLiteral("y"), 0.10}},
+      QVariantMap{{QStringLiteral("x"), 0.50}, {QStringLiteral("y"), 0.90}},
+  });
+  const auto repaired_lasso_source =
+      photo_editor::desktop::normalized_mask_definition(contradictory_lasso_source, 1);
+  if (repaired_lasso_source.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("vector-geometry") ||
+      repaired_lasso_source.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      repaired_lasso_source.value(QStringLiteral("maskRasterWidth"), -1).toInt() != 0 ||
+      repaired_lasso_source.value(QStringLiteral("maskRasterHeight"), -1).toInt() != 0 ||
+      repaired_lasso_source.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      repaired_lasso_source.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("geometric-feather")) {
+    return fail("normalization should repair contradictory lasso source-truth metadata");
+  }
+  QVariantMap contradictory_luminance_source;
+  contradictory_luminance_source.insert(QStringLiteral("kind"), QStringLiteral("luminance"));
+  contradictory_luminance_source.insert(QStringLiteral("maskSourceClass"), QStringLiteral("vector-geometry"));
+  contradictory_luminance_source.insert(QStringLiteral("maskCoordinateSpace"), QStringLiteral("source-pixels"));
+  contradictory_luminance_source.insert(QStringLiteral("maskRasterWidth"), 77);
+  contradictory_luminance_source.insert(QStringLiteral("maskRasterHeight"), 66);
+  contradictory_luminance_source.insert(QStringLiteral("alphaSamplingMode"), QStringLiteral("nearest-source-pixel"));
+  contradictory_luminance_source.insert(QStringLiteral("softnessMode"), QStringLiteral("geometric-feather"));
+  contradictory_luminance_source.insert(QStringLiteral("luminanceMin"), 0.40);
+  contradictory_luminance_source.insert(QStringLiteral("luminanceMax"), 0.80);
+  const auto repaired_luminance_source =
+      photo_editor::desktop::normalized_mask_definition(contradictory_luminance_source, 1);
+  if (repaired_luminance_source.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      repaired_luminance_source.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      repaired_luminance_source.value(QStringLiteral("maskRasterWidth"), -1).toInt() != 0 ||
+      repaired_luminance_source.value(QStringLiteral("maskRasterHeight"), -1).toInt() != 0 ||
+      repaired_luminance_source.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      repaired_luminance_source.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("range-feather")) {
+    return fail("normalization should repair contradictory analytic range source-truth metadata");
+  }
+  QVariantMap contradictory_alpha_source;
+  contradictory_alpha_source.insert(QStringLiteral("kind"), QStringLiteral("alpha"));
+  contradictory_alpha_source.insert(QStringLiteral("maskSourceClass"), QStringLiteral("vector-geometry"));
+  contradictory_alpha_source.insert(QStringLiteral("maskCoordinateSpace"), QStringLiteral("source-normalized"));
+  contradictory_alpha_source.insert(QStringLiteral("maskRasterWidth"), 99);
+  contradictory_alpha_source.insert(QStringLiteral("maskRasterHeight"), 88);
+  contradictory_alpha_source.insert(QStringLiteral("alphaSamplingMode"), QStringLiteral("analytic"));
+  contradictory_alpha_source.insert(QStringLiteral("softnessMode"), QStringLiteral("geometric-feather"));
+  contradictory_alpha_source.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("00ff7f3f"));
+  contradictory_alpha_source.insert(QStringLiteral("segmentationWidth"), 2);
+  contradictory_alpha_source.insert(QStringLiteral("segmentationHeight"), 2);
+  const auto repaired_alpha_source =
+      photo_editor::desktop::normalized_mask_definition(contradictory_alpha_source, 1);
+  if (repaired_alpha_source.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("source-resolution-alpha") ||
+      repaired_alpha_source.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      repaired_alpha_source.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      repaired_alpha_source.value(QStringLiteral("maskRasterHeight")).toInt() != 2 ||
+      repaired_alpha_source.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      repaired_alpha_source.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("alpha-hard-edge")) {
+    return fail("normalization should repair contradictory alpha source-truth metadata");
+  }
+  QVariantMap contradictory_retouch_source;
+  contradictory_retouch_source.insert(QStringLiteral("kind"), QStringLiteral("object"));
+  contradictory_retouch_source.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+  contradictory_retouch_source.insert(QStringLiteral("maskSourceClass"), QStringLiteral("analytic-range-rule"));
+  contradictory_retouch_source.insert(QStringLiteral("maskCoordinateSpace"), QStringLiteral("source-normalized"));
+  contradictory_retouch_source.insert(QStringLiteral("maskRasterWidth"), 2);
+  contradictory_retouch_source.insert(QStringLiteral("maskRasterHeight"), 2);
+  contradictory_retouch_source.insert(QStringLiteral("alphaSamplingMode"), QStringLiteral("analytic"));
+  contradictory_retouch_source.insert(QStringLiteral("softnessMode"), QStringLiteral("range-feather"));
+  contradictory_retouch_source.insert(QStringLiteral("inpaintPatchData"), QByteArray("patch-png"));
+  contradictory_retouch_source.insert(QStringLiteral("inpaintPatchWidth"), 7);
+  contradictory_retouch_source.insert(QStringLiteral("inpaintPatchHeight"), 9);
+  const auto repaired_retouch_source =
+      photo_editor::desktop::normalized_mask_definition(contradictory_retouch_source, 1);
+  if (repaired_retouch_source.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("retouch-patch-mask") ||
+      repaired_retouch_source.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      repaired_retouch_source.value(QStringLiteral("maskRasterWidth")).toInt() != 7 ||
+      repaired_retouch_source.value(QStringLiteral("maskRasterHeight")).toInt() != 9 ||
+      repaired_retouch_source.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      repaired_retouch_source.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("alpha-hard-edge")) {
+    return fail("normalization should repair contradictory retouch source-truth metadata");
   }
   const auto mask_sets = root.value(QStringLiteral("maskSets")).toArray();
   if (mask_sets.size() != 1 ||
@@ -231,9 +349,10 @@ int main() {
   const auto default_color_grading = default_document.value(QStringLiteral("colorGrading")).toObject();
   const auto default_crop_transform = default_document.value(QStringLiteral("cropTransform")).toObject();
   const auto default_output_transform = default_document.value(QStringLiteral("outputTransform")).toObject();
+  const auto default_export_transform = default_document.value(QStringLiteral("exportTransform")).toObject();
   const auto default_optics = default_document.value(QStringLiteral("optics")).toObject();
   if (default_raw_adjustments.size() != 30 || default_global_adjustments.size() != 32 ||
-      default_color_pipeline.size() != 3 || default_optics.size() != 3) {
+      default_color_pipeline.size() != 11 || default_optics.size() != 3) {
     return fail("default recipe should expose the complete raw/global/pipeline/optics adjustment groups");
   }
   if (default_curves.value(QStringLiteral("parametric")).toObject().size() != 4 ||
@@ -255,11 +374,19 @@ int main() {
       !almost_equal(default_crop_transform.value(QStringLiteral("scale")).toDouble(), 1.0)) {
     return fail("default recipe should expose identity crop and transform state");
   }
-  if (default_output_transform.size() != 7 ||
-      !almost_equal(default_output_transform.value(QStringLiteral("headroom")).toDouble(), 1.0)) {
-    return fail("default recipe should expose identity output transform state");
+  if (default_output_transform.size() != 3 || default_export_transform.size() != 1 ||
+      !almost_equal(default_color_pipeline.value(QStringLiteral("headroom")).toDouble(), 1.0) ||
+      !default_color_pipeline.value(QStringLiteral("gamutMappingEnabled")).toBool() ||
+      !default_color_pipeline.value(QStringLiteral("blackPointCompensationEnabled")).toBool()) {
+    return fail("default recipe should expose identity output and color pipeline state");
   }
-  if (default_document.value(QStringLiteral("outputTransform"))
+  if (default_output_transform.contains(QStringLiteral("colorSpace")) ||
+      default_output_transform.contains(QStringLiteral("workingColorSpace")) ||
+      default_output_transform.contains(QStringLiteral("renderIntent")) ||
+      default_output_transform.contains(QStringLiteral("headroom"))) {
+    return fail("default v5 outputTransform should not duplicate export or color pipeline state");
+  }
+  if (default_document.value(QStringLiteral("exportTransform"))
           .toObject()
           .value(QStringLiteral("colorSpace"))
           .toString() != QStringLiteral("sRGB")) {
@@ -283,13 +410,13 @@ int main() {
           .toString() != QStringLiteral("Bradford")) {
     return fail("structured recipe output should include the default chromatic adaptation method");
   }
-  if (default_document.value(QStringLiteral("outputTransform"))
+  if (default_document.value(QStringLiteral("colorPipeline"))
           .toObject()
-          .value(QStringLiteral("workingColorSpace"))
+          .value(QStringLiteral("workingProfile"))
           .toString() != QStringLiteral("Linear ProPhoto RGB")) {
     return fail("structured recipe output should include the default working color profile");
   }
-  if (default_document.value(QStringLiteral("outputTransform"))
+  if (default_document.value(QStringLiteral("colorPipeline"))
           .toObject()
           .value(QStringLiteral("renderIntent"))
           .toString() != QStringLiteral("Perceptual")) {
@@ -317,6 +444,124 @@ int main() {
       photo_editor::desktop::normalized_mask_operation(QStringLiteral("union")) != QStringLiteral("union")) {
     return fail("mask operation normalization should accept exclude, replace, and union");
   }
+  EditRecipeState operation_model_state;
+  QVariantList operation_model_masks;
+  const QStringList operation_model_operations = {
+      QStringLiteral("add"),
+      QStringLiteral("subtract"),
+      QStringLiteral("intersect"),
+      QStringLiteral("replace"),
+      QStringLiteral("exclude")};
+  auto operation_ordinal = 0;
+  for (const auto& operation : operation_model_operations) {
+    ++operation_ordinal;
+    QVariantMap operation_mask;
+    operation_mask.insert(QStringLiteral("id"), QStringLiteral("operation-model-%1").arg(operation));
+    operation_mask.insert(QStringLiteral("name"), QStringLiteral("Operation Model %1").arg(operation));
+    operation_mask.insert(QStringLiteral("kind"), QStringLiteral("lasso"));
+    operation_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("operation-model-set"));
+    operation_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Operation Model Set"));
+    operation_mask.insert(QStringLiteral("operation"), operation);
+    operation_mask.insert(QStringLiteral("invert"), operation_ordinal % 2 == 0);
+    operation_mask.insert(QStringLiteral("density"), 0.50 + operation_ordinal * 0.04);
+    operation_mask.insert(QStringLiteral("opacity"), 0.42 + operation_ordinal * 0.05);
+    operation_mask.insert(QStringLiteral("selectionExpand"), -8.0 + operation_ordinal);
+    operation_mask.insert(QStringLiteral("selectionSmooth"), 11.0 + operation_ordinal);
+    operation_mask.insert(QStringLiteral("selectionEdgeContrast"), 21.0 + operation_ordinal);
+    operation_mask.insert(QStringLiteral("selectionFineEdge"), 31.0 + operation_ordinal);
+    operation_mask.insert(QStringLiteral("maskSetSelectionInvert"), true);
+    operation_mask.insert(QStringLiteral("maskSetSelectionExpand"), -4.0);
+    operation_mask.insert(QStringLiteral("maskSetSelectionSmooth"), 14.0);
+    operation_mask.insert(QStringLiteral("maskSetSelectionEdgeContrast"), 24.0);
+    operation_mask.insert(QStringLiteral("maskSetSelectionFineEdge"), 34.0);
+    operation_mask.insert(QStringLiteral("maskSetDensity"), 0.72);
+    operation_mask.insert(QStringLiteral("maskSetOpacity"), 0.64);
+    operation_mask.insert(QStringLiteral("polygonPoints"), QVariantList{
+        point(0.10 + operation_ordinal * 0.02, 0.15),
+        point(0.35 + operation_ordinal * 0.02, 0.20),
+        point(0.30 + operation_ordinal * 0.02, 0.45),
+    });
+    operation_model_masks.append(operation_mask);
+  }
+  operation_model_state.mask_stack = operation_model_masks;
+  const auto operation_model_document =
+      QJsonDocument::fromJson(
+          photo_editor::desktop::serialize_edit_recipe_json(operation_model_state).toUtf8())
+          .object();
+  const auto operation_model_stack = operation_model_document.value(QStringLiteral("maskStack")).toArray();
+  const auto operation_model_sets = operation_model_document.value(QStringLiteral("maskSets")).toArray();
+  const auto operation_model_typed_sources =
+      photo_editor::desktop::typed_mask_source_models_from_stack(operation_model_state.mask_stack);
+  const auto reparsed_operation_model =
+      photo_editor::desktop::parse_edit_recipe_json(
+          QString::fromUtf8(QJsonDocument(operation_model_document).toJson(QJsonDocument::Compact)));
+  if (operation_model_stack.size() != operation_model_operations.size() ||
+      operation_model_sets.size() != 1 ||
+      operation_model_sets.at(0).toObject().value(QStringLiteral("sources")).toArray().size() !=
+          operation_model_operations.size() ||
+      operation_model_typed_sources.size() !=
+          static_cast<std::size_t>(operation_model_operations.size()) ||
+      reparsed_operation_model.mask_stack.size() != operation_model_operations.size()) {
+    return fail("mask operation model proof should preserve every source across stack, set, typed, and parsed models");
+  }
+  const auto operation_model_set_adjustments =
+      operation_model_sets.at(0).toObject().value(QStringLiteral("adjustments")).toObject();
+  if (!operation_model_set_adjustments.value(QStringLiteral("maskSetSelectionInvert")).toBool() ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetSelectionExpand")).toDouble(), -4.0) ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetSelectionSmooth")).toDouble(), 14.0) ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetSelectionEdgeContrast")).toDouble(), 24.0) ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetSelectionFineEdge")).toDouble(), 34.0) ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetDensity")).toDouble(), 0.72) ||
+      !almost_equal(operation_model_set_adjustments.value(QStringLiteral("maskSetOpacity")).toDouble(), 0.64)) {
+    return fail("mask set model should preserve set-level invert, density, opacity, expand, smooth, edge contrast, and fine edge");
+  }
+  for (int index = 0; index < operation_model_operations.size(); ++index) {
+    const auto expected_operation = operation_model_operations.at(index);
+    const auto expected_ordinal = index + 1;
+    const auto expected_invert = expected_ordinal % 2 == 0;
+    const auto expected_density = 0.50 + expected_ordinal * 0.04;
+    const auto expected_opacity = 0.42 + expected_ordinal * 0.05;
+    const auto expected_expand = -8.0 + expected_ordinal;
+    const auto expected_smooth = 11.0 + expected_ordinal;
+    const auto expected_edge_contrast = 21.0 + expected_ordinal;
+    const auto expected_fine_edge = 31.0 + expected_ordinal;
+    const auto stack_source = operation_model_stack.at(index).toObject();
+    const auto stack_adjustments = stack_source.value(QStringLiteral("adjustments")).toObject();
+    const auto grouped_source =
+        operation_model_sets.at(0).toObject().value(QStringLiteral("sources")).toArray().at(index).toObject();
+    const auto typed_source = operation_model_typed_sources.at(static_cast<std::size_t>(index));
+    const auto reparsed_source = reparsed_operation_model.mask_stack.at(index).toMap();
+    if (stack_source.value(QStringLiteral("operation")).toString() != expected_operation ||
+        grouped_source.value(QStringLiteral("operation")).toString() != expected_operation ||
+        typed_source.metadata.value(QStringLiteral("operation")).toString() != expected_operation ||
+        reparsed_source.value(QStringLiteral("operation")).toString() != expected_operation ||
+        stack_source.value(QStringLiteral("invert")).toBool() != expected_invert ||
+        grouped_source.value(QStringLiteral("invert")).toBool() != expected_invert ||
+        typed_source.metadata.value(QStringLiteral("invert")).toBool() != expected_invert ||
+        reparsed_source.value(QStringLiteral("invert")).toBool() != expected_invert ||
+        !almost_equal(stack_source.value(QStringLiteral("density")).toDouble(), expected_density) ||
+        !almost_equal(grouped_source.value(QStringLiteral("density")).toDouble(), expected_density) ||
+        !almost_equal(typed_source.metadata.value(QStringLiteral("density")).toDouble(), expected_density) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("density")).toDouble(), expected_density) ||
+        !almost_equal(stack_source.value(QStringLiteral("opacity")).toDouble(), expected_opacity) ||
+        !almost_equal(grouped_source.value(QStringLiteral("opacity")).toDouble(), expected_opacity) ||
+        !almost_equal(typed_source.metadata.value(QStringLiteral("opacity")).toDouble(), expected_opacity) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("opacity")).toDouble(), expected_opacity) ||
+        !almost_equal(stack_adjustments.value(QStringLiteral("selectionExpand")).toDouble(), expected_expand) ||
+        !almost_equal(typed_source.adjustments.value(QStringLiteral("selectionExpand")).toDouble(), expected_expand) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("selectionExpand")).toDouble(), expected_expand) ||
+        !almost_equal(stack_adjustments.value(QStringLiteral("selectionSmooth")).toDouble(), expected_smooth) ||
+        !almost_equal(typed_source.adjustments.value(QStringLiteral("selectionSmooth")).toDouble(), expected_smooth) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("selectionSmooth")).toDouble(), expected_smooth) ||
+        !almost_equal(stack_adjustments.value(QStringLiteral("selectionEdgeContrast")).toDouble(), expected_edge_contrast) ||
+        !almost_equal(typed_source.adjustments.value(QStringLiteral("selectionEdgeContrast")).toDouble(), expected_edge_contrast) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("selectionEdgeContrast")).toDouble(), expected_edge_contrast) ||
+        !almost_equal(stack_adjustments.value(QStringLiteral("selectionFineEdge")).toDouble(), expected_fine_edge) ||
+        !almost_equal(typed_source.adjustments.value(QStringLiteral("selectionFineEdge")).toDouble(), expected_fine_edge) ||
+        !almost_equal(reparsed_source.value(QStringLiteral("selectionFineEdge")).toDouble(), expected_fine_edge)) {
+      return fail("mask operation model should preserve add/subtract/intersect/replace/exclude plus invert, density, opacity, expand, smooth, edge contrast, and fine edge");
+    }
+  }
 
   const auto valid_legacy_recipe = photo_editor::desktop::validate_edit_recipe_json(
       QStringLiteral(R"({"exposure":0.2,"contrast":12})"));
@@ -335,7 +580,8 @@ int main() {
   if (migrated_legacy_document.value(QStringLiteral("recipeVersion")).toInt() !=
           photo_editor::desktop::kCurrentEditRecipeVersion ||
       !migrated_legacy_document.value(QStringLiteral("maskStack")).isArray() ||
-      !migrated_legacy_document.value(QStringLiteral("outputTransform")).isObject()) {
+      !migrated_legacy_document.value(QStringLiteral("outputTransform")).isObject() ||
+      !migrated_legacy_document.value(QStringLiteral("exportTransform")).isObject()) {
     return fail("migration should emit a current structured recipe document");
   }
   const auto reparsed_migrated_legacy =
@@ -378,7 +624,7 @@ int main() {
       photo_editor::desktop::serialize_edit_recipe_json(diff_after_state));
   if (!recipe_diff.valid || !recipe_diff.errors.isEmpty() ||
       !errors_contain(recipe_diff.differences, QStringLiteral("globalAdjustments.exposure")) ||
-      !errors_contain(recipe_diff.differences, QStringLiteral("outputTransform.colorSpace")) ||
+      !errors_contain(recipe_diff.differences, QStringLiteral("colorPipeline.exportOutputProfile")) ||
       !errors_contain(recipe_diff.differences, QStringLiteral("cropTransform.zoom"))) {
     return fail("recipe diff should report human-readable changed paths");
   }
@@ -449,6 +695,20 @@ int main() {
   if (missing_output_transform.valid ||
       !errors_contain(missing_output_transform, QStringLiteral("outputTransform must be an object"))) {
     return fail("validator should report missing structured recipe objects");
+  }
+
+  auto duplicated_output_color_document = default_document;
+  auto duplicated_output_transform =
+      duplicated_output_color_document.value(QStringLiteral("outputTransform")).toObject();
+  duplicated_output_transform.insert(QStringLiteral("colorSpace"), QStringLiteral("Display P3"));
+  duplicated_output_color_document.insert(QStringLiteral("outputTransform"), duplicated_output_transform);
+  const auto duplicated_output_color = photo_editor::desktop::validate_edit_recipe_json(
+      compact_json(duplicated_output_color_document));
+  if (duplicated_output_color.valid ||
+      !errors_contain(
+          duplicated_output_color,
+          QStringLiteral("outputTransform.colorSpace is legacy; use exportTransform.colorSpace"))) {
+    return fail("validator should reject duplicated v5 output color state");
   }
 
   auto malformed_mask_stack_document = default_document;
@@ -581,7 +841,7 @@ int main() {
   output_transform_state.output_color_space = QStringLiteral("Display P3");
   const auto output_transform_document =
       QJsonDocument::fromJson(photo_editor::desktop::serialize_edit_recipe_json(output_transform_state).toUtf8()).object();
-  if (output_transform_document.value(QStringLiteral("outputTransform"))
+  if (output_transform_document.value(QStringLiteral("exportTransform"))
           .toObject()
           .value(QStringLiteral("colorSpace"))
           .toString() != QStringLiteral("Display P3")) {
@@ -603,6 +863,11 @@ int main() {
   color_pipeline_state.output_color_space = QStringLiteral("Rec.2020");
   color_pipeline_state.output_headroom = 2.0;
   color_pipeline_state.render_intent = QStringLiteral("Relative Colorimetric");
+  color_pipeline_state.output_gamut_mapping_enabled = false;
+  color_pipeline_state.output_gamut_mapping_policy = QStringLiteral("Clip");
+  color_pipeline_state.black_point_compensation_enabled = false;
+  color_pipeline_state.source_black_point = 0.02;
+  color_pipeline_state.output_black_point = 0.04;
   color_pipeline_state.raw_input_transform_enabled = false;
   color_pipeline_state.highlight_reconstruction_mode = QStringLiteral("Disabled");
   color_pipeline_state.chromatic_adaptation_method = QStringLiteral("CAT02");
@@ -615,17 +880,23 @@ int main() {
           .toString() != QStringLiteral("Camera DCP: Canon EOS R5 Adobe Standard")) {
     return fail("structured recipe should serialize DCP camera input profiles");
   }
-  if (color_pipeline_document.value(QStringLiteral("outputTransform"))
+  if (color_pipeline_document.value(QStringLiteral("colorPipeline"))
           .toObject()
-          .value(QStringLiteral("previewColorSpace"))
+          .value(QStringLiteral("previewOutputProfile"))
           .toString() != QStringLiteral("Display P3")) {
     return fail("structured recipe should serialize the preview output color space");
   }
-  if (color_pipeline_document.value(QStringLiteral("outputTransform"))
+  if (color_pipeline_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("exportOutputProfile"))
+          .toString() != QStringLiteral("Rec.2020")) {
+    return fail("structured recipe should serialize expanded output color spaces");
+  }
+  if (color_pipeline_document.value(QStringLiteral("exportTransform"))
           .toObject()
           .value(QStringLiteral("colorSpace"))
           .toString() != QStringLiteral("Rec.2020")) {
-    return fail("structured recipe should serialize expanded output color spaces");
+    return fail("structured recipe should serialize the export color transform target");
   }
   if (color_pipeline_document.value(QStringLiteral("outputTransform"))
           .toObject()
@@ -643,12 +914,46 @@ int main() {
               .toString() != QStringLiteral("Adobe RGB")) {
     return fail("structured recipe should serialize soft proof output profiles");
   }
-  if (std::abs(color_pipeline_document.value(QStringLiteral("outputTransform"))
+  const auto color_pipeline_output_transform =
+      color_pipeline_document.value(QStringLiteral("outputTransform")).toObject();
+  if (color_pipeline_output_transform.contains(QStringLiteral("colorSpace")) ||
+      color_pipeline_output_transform.contains(QStringLiteral("workingColorSpace")) ||
+      color_pipeline_output_transform.contains(QStringLiteral("renderIntent")) ||
+      color_pipeline_output_transform.contains(QStringLiteral("headroom"))) {
+    return fail("structured color pipeline recipes should not duplicate canonical pipeline fields in outputTransform");
+  }
+  if (std::abs(color_pipeline_document.value(QStringLiteral("colorPipeline"))
                    .toObject()
                    .value(QStringLiteral("headroom"))
                    .toDouble() -
                2.0) > 1.0e-9) {
     return fail("structured recipe should serialize scene-referred output headroom");
+  }
+  if (color_pipeline_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("gamutMappingEnabled"))
+          .toBool(true) ||
+      color_pipeline_document.value(QStringLiteral("colorPipeline"))
+              .toObject()
+              .value(QStringLiteral("gamutMappingPolicy"))
+              .toString() != QStringLiteral("Clip") ||
+      color_pipeline_document.value(QStringLiteral("colorPipeline"))
+          .toObject()
+          .value(QStringLiteral("blackPointCompensationEnabled"))
+          .toBool(true) ||
+      !almost_equal(
+          color_pipeline_document.value(QStringLiteral("colorPipeline"))
+              .toObject()
+              .value(QStringLiteral("sourceBlackPoint"))
+              .toDouble(),
+          0.02) ||
+      !almost_equal(
+          color_pipeline_document.value(QStringLiteral("colorPipeline"))
+              .toObject()
+              .value(QStringLiteral("outputBlackPoint"))
+              .toDouble(),
+          0.04)) {
+    return fail("structured recipe should serialize gamut and black-point output policy");
   }
   if (color_pipeline_document.value(QStringLiteral("rawAdjustments"))
           .toObject()
@@ -673,11 +978,68 @@ int main() {
       reparsed_color_pipeline.output_color_space != QStringLiteral("Rec.2020") ||
       std::abs(reparsed_color_pipeline.output_headroom - 2.0) > 1.0e-9 ||
       reparsed_color_pipeline.render_intent != QStringLiteral("Relative Colorimetric") ||
+      reparsed_color_pipeline.output_gamut_mapping_enabled ||
+      reparsed_color_pipeline.output_gamut_mapping_policy != QStringLiteral("Clip") ||
+      reparsed_color_pipeline.black_point_compensation_enabled ||
+      !almost_equal(reparsed_color_pipeline.source_black_point, 0.02) ||
+      !almost_equal(reparsed_color_pipeline.output_black_point, 0.04) ||
       reparsed_color_pipeline.raw_input_transform_enabled != false ||
       reparsed_color_pipeline.highlight_reconstruction_mode != QStringLiteral("Disabled") ||
       reparsed_color_pipeline.raw_camera_matching_look != QStringLiteral("Landscape") ||
       reparsed_color_pipeline.chromatic_adaptation_method != QStringLiteral("CAT02")) {
     return fail("structured recipe should round-trip color pipeline state");
+  }
+  auto conflicting_pipeline_document = color_pipeline_document;
+  auto conflicting_output_transform =
+      conflicting_pipeline_document.value(QStringLiteral("outputTransform")).toObject();
+  conflicting_output_transform.insert(QStringLiteral("colorSpace"), QStringLiteral("sRGB"));
+  conflicting_output_transform.insert(QStringLiteral("workingColorSpace"), QStringLiteral("Linear sRGB"));
+  conflicting_output_transform.insert(QStringLiteral("renderIntent"), QStringLiteral("Perceptual"));
+  conflicting_output_transform.insert(QStringLiteral("headroom"), 1.0);
+  conflicting_pipeline_document.insert(QStringLiteral("outputTransform"), conflicting_output_transform);
+  const auto parsed_conflicting_pipeline =
+      photo_editor::desktop::parse_edit_recipe_json(compact_json(conflicting_pipeline_document));
+  if (parsed_conflicting_pipeline.output_color_space != QStringLiteral("Rec.2020") ||
+      parsed_conflicting_pipeline.working_color_profile != QStringLiteral("Linear Rec.2020") ||
+      parsed_conflicting_pipeline.render_intent != QStringLiteral("Relative Colorimetric") ||
+      std::abs(parsed_conflicting_pipeline.output_headroom - 2.0) > 1.0e-9) {
+    return fail("colorPipeline should stay canonical when legacy outputTransform fields conflict");
+  }
+  const auto conflicting_pipeline_validation =
+      photo_editor::desktop::validate_edit_recipe_json(compact_json(conflicting_pipeline_document));
+  if (conflicting_pipeline_validation.valid ||
+      !errors_contain(
+          conflicting_pipeline_validation,
+          QStringLiteral("outputTransform.workingColorSpace is legacy; use colorPipeline.workingProfile")) ||
+      !errors_contain(
+          conflicting_pipeline_validation,
+          QStringLiteral("outputTransform.renderIntent is legacy; use colorPipeline.renderIntent")) ||
+      !errors_contain(
+          conflicting_pipeline_validation,
+          QStringLiteral("outputTransform.headroom is legacy; use colorPipeline.headroom"))) {
+    return fail("validator should reject v5 recipes that duplicate canonical colorPipeline fields");
+  }
+
+  EditRecipeState export_profile_baseline_state;
+  export_profile_baseline_state.exposure = 0.42;
+  export_profile_baseline_state.temperature = -6.0;
+  export_profile_baseline_state.grading_midtones_hue = 0.23;
+  export_profile_baseline_state.grading_midtones_saturation = 36.0;
+  export_profile_baseline_state.output_color_space = QStringLiteral("sRGB");
+  auto export_profile_changed_state = export_profile_baseline_state;
+  export_profile_changed_state.output_color_space = QStringLiteral("Display P3");
+  const auto reparsed_export_profile_changed = photo_editor::desktop::parse_edit_recipe_json(
+      photo_editor::desktop::serialize_edit_recipe_json(export_profile_changed_state));
+  if (reparsed_export_profile_changed.output_color_space != QStringLiteral("Display P3") ||
+      !almost_equal(reparsed_export_profile_changed.exposure, export_profile_baseline_state.exposure) ||
+      !almost_equal(reparsed_export_profile_changed.temperature, export_profile_baseline_state.temperature) ||
+      !almost_equal(
+          reparsed_export_profile_changed.grading_midtones_hue,
+          export_profile_baseline_state.grading_midtones_hue) ||
+      !almost_equal(
+          reparsed_export_profile_changed.grading_midtones_saturation,
+          export_profile_baseline_state.grading_midtones_saturation)) {
+    return fail("changing export profile should not alter scene-referred grading values");
   }
 
   EditRecipeState snapshot_state;
@@ -783,7 +1145,7 @@ int main() {
       recipe_system_document.value(QStringLiteral("layers")).toArray().size() != 4 ||
       recipe_system_document.value(QStringLiteral("cropTransform")).toObject().value(QStringLiteral("preset")).toString() !=
           QStringLiteral("4x5") ||
-      recipe_system_document.value(QStringLiteral("outputTransform")).toObject().value(QStringLiteral("colorSpace")).toString() !=
+      recipe_system_document.value(QStringLiteral("exportTransform")).toObject().value(QStringLiteral("colorSpace")).toString() !=
           QStringLiteral("Display P3")) {
     return fail("structured recipe should represent presets, layers, crops, and output intent together");
   }
@@ -1301,6 +1663,7 @@ int main() {
   brush_mask.insert(QStringLiteral("name"), QStringLiteral("Painted Subject"));
   brush_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
   brush_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
+  brush_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-mixed"));
   brush_mask.insert(QStringLiteral("brushPreset"), QStringLiteral("Detail"));
   brush_mask.insert(QStringLiteral("brushSize"), 0.12);
   brush_mask.insert(QStringLiteral("brushFlow"), 0.85);
@@ -1336,6 +1699,7 @@ int main() {
   luminance_mask.insert(QStringLiteral("name"), QStringLiteral("Highlights"));
   luminance_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
   luminance_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
+  luminance_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-mixed"));
   luminance_mask.insert(QStringLiteral("luminanceMin"), 0.62);
   luminance_mask.insert(QStringLiteral("luminanceMax"), 0.95);
   luminance_mask.insert(QStringLiteral("rangeFeather"), 0.08);
@@ -1359,6 +1723,7 @@ int main() {
   color_mask.insert(QStringLiteral("name"), QStringLiteral("Skin Range"));
   color_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
   color_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
+  color_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-mixed"));
   color_mask.insert(QStringLiteral("hueCenter"), 0.07);
   color_mask.insert(QStringLiteral("hueRange"), 0.09);
   color_mask.insert(QStringLiteral("saturationMin"), 0.18);
@@ -1396,6 +1761,7 @@ int main() {
   lasso_mask.insert(QStringLiteral("name"), QStringLiteral("Freehand Selection"));
   lasso_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
   lasso_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
+  lasso_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-mixed"));
   lasso_mask.insert(QStringLiteral("polygonPoints"), QVariantList{
       QVariantMap{{QStringLiteral("x"), 0.20}, {QStringLiteral("y"), 0.20}},
       QVariantMap{{QStringLiteral("x"), 0.70}, {QStringLiteral("y"), 0.22}},
@@ -1408,6 +1774,7 @@ int main() {
   depth_mask.insert(QStringLiteral("name"), QStringLiteral("Depth Range"));
   depth_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("painted-subject"));
   depth_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Painted Subject"));
+  depth_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-mixed"));
   depth_mask.insert(QStringLiteral("depthMin"), 0.18);
   depth_mask.insert(QStringLiteral("depthMax"), 0.66);
   depth_mask.insert(QStringLiteral("rangeFeather"), 0.07);
@@ -1433,6 +1800,50 @@ int main() {
   const auto mixed_mask_array = mixed_mask_document.value(QStringLiteral("maskStack")).toArray();
   if (mixed_mask_array.size() != 5) {
     return fail("structured recipe should serialize brush and range masks");
+  }
+  const auto brush_source_object = mixed_mask_array.at(0).toObject();
+  const auto brush_source_geometry = brush_source_object.value(QStringLiteral("geometry")).toObject();
+  const auto luminance_source_object = mixed_mask_array.at(1).toObject();
+  const auto luminance_source_geometry =
+      luminance_source_object.value(QStringLiteral("geometry")).toObject();
+  const auto lasso_source_object = mixed_mask_array.at(3).toObject();
+  const auto lasso_source_geometry =
+      lasso_source_object.value(QStringLiteral("geometry")).toObject();
+  const auto depth_source_object = mixed_mask_array.at(4).toObject();
+  const auto depth_source_geometry = depth_source_object.value(QStringLiteral("geometry")).toObject();
+  if (brush_source_object.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("source-resolution-alpha") ||
+      brush_source_object.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      brush_source_object.value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-mixed") ||
+      brush_source_geometry.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      brush_source_geometry.value(QStringLiteral("maskRasterHeight")).toInt() != 2 ||
+      brush_source_geometry.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      brush_source_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("brush-falloff") ||
+      luminance_source_object.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      luminance_source_object.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      luminance_source_object.value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-mixed") ||
+      luminance_source_geometry.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      luminance_source_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("range-feather") ||
+      lasso_source_object.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("vector-geometry") ||
+      lasso_source_object.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      lasso_source_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("geometric-feather") ||
+      depth_source_object.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      depth_source_geometry.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      depth_source_geometry.value(QStringLiteral("maskRasterHeight")).toInt() != 2) {
+    return fail("structured recipe should serialize explicit source-truth metadata for mixed mask source classes");
   }
   if (!mixed_mask_array.at(0).toObject().value(QStringLiteral("geometry")).toObject().value(QStringLiteral("brushPoints")).isArray() ||
       mixed_mask_array.at(0).toObject().value(QStringLiteral("geometry")).toObject().value(QStringLiteral("brushStrokes")).toArray().size() != 1 ||
@@ -1464,6 +1875,7 @@ int main() {
     return fail("brush mask serialization should retain brush points");
   }
   QJsonObject grouped_brush_geometry;
+  QJsonObject grouped_brush_source;
   const auto grouped_sources =
       mixed_mask_document.value(QStringLiteral("maskSets"))
           .toArray()
@@ -1479,11 +1891,24 @@ int main() {
     if (source_object.value(QStringLiteral("kind")).toString() != QStringLiteral("brush")) {
       continue;
     }
+    grouped_brush_source = source_object;
     grouped_brush_geometry = source_object.value(QStringLiteral("geometry")).toObject();
     break;
   }
-  if (!grouped_brush_geometry.contains(QStringLiteral("segmentationData"))) {
-    return fail("grouped brush serialization should retain raster mask payloads");
+  if (!grouped_brush_geometry.contains(QStringLiteral("segmentationData")) ||
+      grouped_brush_source.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("source-resolution-alpha") ||
+      grouped_brush_source.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      grouped_brush_source.value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-mixed") ||
+      grouped_brush_geometry.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      grouped_brush_geometry.value(QStringLiteral("maskRasterHeight")).toInt() != 2 ||
+      grouped_brush_geometry.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      grouped_brush_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("brush-falloff")) {
+    return fail("grouped brush serialization should retain raster payloads and source-truth metadata");
   }
   if (mixed_mask_array.at(1).toObject().value(QStringLiteral("constraints")).toObject().value(QStringLiteral("luminanceSamples")).toArray().size() != 1) {
     return fail("luminance range serialization should retain sampled patch constraints");
@@ -1503,6 +1928,35 @@ int main() {
   if (mixed_mask_document.value(QStringLiteral("maskSets")).toArray().size() != 1 ||
       mixed_mask_document.value(QStringLiteral("maskSets")).toArray().at(0).toObject().value(QStringLiteral("sources")).toArray().size() != 5) {
     return fail("structured recipe should serialize grouped contributor sources into one mask set");
+  }
+  const auto typed_mixed_sources =
+      photo_editor::desktop::typed_mask_source_models_from_stack(mixed_mask_state.mask_stack);
+  if (typed_mixed_sources.size() != 5 ||
+      typed_mixed_sources.at(0).metadata.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("source-resolution-alpha") ||
+      typed_mixed_sources.at(0).metadata.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      typed_mixed_sources.at(0).metadata.value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-mixed") ||
+      typed_mixed_sources.at(0).matte.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      typed_mixed_sources.at(0).matte.value(QStringLiteral("maskRasterHeight")).toInt() != 2 ||
+      typed_mixed_sources.at(0).matte.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      typed_mixed_sources.at(0).matte.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("brush-falloff") ||
+      typed_mixed_sources.at(1).metadata.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      typed_mixed_sources.at(1).matte.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      typed_mixed_sources.at(3).metadata.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("vector-geometry") ||
+      typed_mixed_sources.at(3).metadata.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      typed_mixed_sources.at(4).metadata.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      typed_mixed_sources.at(4).matte.value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      typed_mixed_sources.at(4).matte.value(QStringLiteral("maskRasterHeight")).toInt() != 2) {
+    return fail("typed mask source model should expose source class, coordinate space, raster, sampling, softness, and revision metadata");
   }
 
   const auto reparsed_mixed_masks =
@@ -1554,6 +2008,32 @@ int main() {
       !almost_equal(reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("depthSamples")).toList().first().toMap().value(QStringLiteral("depthMean")).toDouble(), 0.71) ||
       reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("depthData")).toByteArray() != QByteArray::fromHex("001080ff")) {
     return fail("structured recipe should round-trip brush, range, lasso, and depth mask data");
+  }
+  if (reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("source-resolution-alpha") ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-mixed") ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("maskRasterHeight")).toInt() != 2 ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      reparsed_mixed_masks.mask_stack.at(0).toMap().value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("brush-falloff") ||
+      reparsed_mixed_masks.mask_stack.at(1).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      reparsed_mixed_masks.mask_stack.at(1).toMap().value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("analytic") ||
+      reparsed_mixed_masks.mask_stack.at(3).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("vector-geometry") ||
+      reparsed_mixed_masks.mask_stack.at(3).toMap().value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-normalized") ||
+      reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("analytic-range-rule") ||
+      reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("maskRasterWidth")).toInt() != 2 ||
+      reparsed_mixed_masks.mask_stack.at(4).toMap().value(QStringLiteral("maskRasterHeight")).toInt() != 2) {
+    return fail("structured recipe should round-trip source-truth metadata for every mixed mask source class");
   }
 
   EditRecipeState subject_mask_state;
@@ -1890,6 +2370,52 @@ int main() {
       normalized_malformed_subject.contains(QStringLiteral("segmentationHeight"))) {
     return fail("mask normalization should discard malformed segmentation payloads");
   }
+  QVariantMap malformed_brush_mask = brush_mask;
+  malformed_brush_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff"));
+  malformed_brush_mask.insert(QStringLiteral("segmentationWidth"), 2);
+  malformed_brush_mask.insert(QStringLiteral("segmentationHeight"), 2);
+  malformed_brush_mask.insert(QStringLiteral("rasterSchemaVersion"), 9);
+  const auto normalized_malformed_brush =
+      photo_editor::desktop::normalized_mask_definition(malformed_brush_mask, 1);
+  if (normalized_malformed_brush.contains(QStringLiteral("segmentationData")) ||
+      normalized_malformed_brush.contains(QStringLiteral("segmentationWidth")) ||
+      normalized_malformed_brush.contains(QStringLiteral("segmentationHeight")) ||
+      normalized_malformed_brush.contains(QStringLiteral("rasterSchemaVersion")) ||
+      normalized_malformed_brush.value(QStringLiteral("brushPoints")).toList().isEmpty()) {
+    return fail("brush mask normalization should discard malformed raster payloads without losing vector stroke truth");
+  }
+  QVariantMap malformed_alpha_mask = alpha_mask;
+  malformed_alpha_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff"));
+  malformed_alpha_mask.insert(QStringLiteral("segmentationWidth"), 2);
+  malformed_alpha_mask.insert(QStringLiteral("segmentationHeight"), 2);
+  malformed_alpha_mask.insert(QStringLiteral("rasterSchemaVersion"), 9);
+  const auto normalized_malformed_alpha =
+      photo_editor::desktop::normalized_mask_definition(malformed_alpha_mask, 1);
+  if (normalized_malformed_alpha.contains(QStringLiteral("segmentationData")) ||
+      normalized_malformed_alpha.contains(QStringLiteral("segmentationWidth")) ||
+      normalized_malformed_alpha.contains(QStringLiteral("segmentationHeight")) ||
+      normalized_malformed_alpha.contains(QStringLiteral("rasterSchemaVersion")) ||
+      normalized_malformed_alpha.value(QStringLiteral("alphaSourcePath")).toString() !=
+          QStringLiteral("/tmp/matte.png")) {
+    return fail("alpha mask normalization should discard malformed source-resolution alpha bytes without stale dimensions");
+  }
+  QVariantMap mismatched_cleanup_subject = subject_mask;
+  mismatched_cleanup_subject.insert(
+      QStringLiteral("generatedMaskCleanupSourceData"),
+      QByteArray::fromHex("ff"));
+  mismatched_cleanup_subject.insert(QStringLiteral("generatedMaskCleanupSourceWidth"), 2);
+  mismatched_cleanup_subject.insert(QStringLiteral("generatedMaskCleanupSourceHeight"), 2);
+  const auto normalized_mismatched_cleanup =
+      photo_editor::desktop::normalized_mask_definition(mismatched_cleanup_subject, 1);
+  if (normalized_mismatched_cleanup.value(QStringLiteral("segmentationData")).toByteArray() !=
+          QByteArray::fromHex("00ff7f3f") ||
+      normalized_mismatched_cleanup.value(QStringLiteral("segmentationWidth")).toInt() != 2 ||
+      normalized_mismatched_cleanup.value(QStringLiteral("segmentationHeight")).toInt() != 2 ||
+      normalized_mismatched_cleanup.contains(QStringLiteral("generatedMaskCleanupSourceData")) ||
+      normalized_mismatched_cleanup.contains(QStringLiteral("generatedMaskCleanupSourceWidth")) ||
+      normalized_mismatched_cleanup.contains(QStringLiteral("generatedMaskCleanupSourceHeight"))) {
+    return fail("generated mask normalization should discard stale cleanup alpha data that does not match the final raster");
+  }
   if (!photo_editor::desktop::valid_segmentation_payload(QByteArray(4, '\0'), 2, 2)) {
     return fail("mask payload validation should accept matching bounded payload dimensions");
   }
@@ -2172,6 +2698,7 @@ int main() {
   remove_object_mask.insert(QStringLiteral("name"), QStringLiteral("Remove Object"));
   remove_object_mask.insert(QStringLiteral("kind"), QStringLiteral("object"));
   remove_object_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  remove_object_mask.insert(QStringLiteral("sourceImageRevision"), QStringLiteral("asset-rev-retouch"));
   remove_object_mask.insert(QStringLiteral("removeStrength"), 100.0);
   remove_object_mask.insert(QStringLiteral("segmentationData"), QByteArray::fromHex("ff00"));
   remove_object_mask.insert(QStringLiteral("segmentationWidth"), 2);
@@ -2243,8 +2770,22 @@ int main() {
                                           .toObject()
                                           .value(QStringLiteral("geometry"))
                                           .toObject();
-  if (remove_object_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject().value(QStringLiteral("toolRole")).toString() !=
+  const auto remove_object_serialized =
+      remove_object_document.value(QStringLiteral("maskStack")).toArray().at(0).toObject();
+  if (remove_object_serialized.value(QStringLiteral("toolRole")).toString() !=
           QStringLiteral("retouch") ||
+      remove_object_serialized.value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("retouch-patch-mask") ||
+      remove_object_serialized.value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      remove_object_serialized.value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-retouch") ||
+      remove_object_geometry.value(QStringLiteral("maskRasterWidth")).toInt() != 7 ||
+      remove_object_geometry.value(QStringLiteral("maskRasterHeight")).toInt() != 9 ||
+      remove_object_geometry.value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      remove_object_geometry.value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("alpha-hard-edge") ||
       remove_object_document.value(QStringLiteral("retouchStack")).toArray().size() != 1 ||
       remove_object_document.value(QStringLiteral("retouchStack")).toArray().at(0).toObject().value(QStringLiteral("retouchOrder")).toInt() != 1 ||
       remove_object_geometry.value(QStringLiteral("inpaintPatchData")).toString().isEmpty() ||
@@ -2279,6 +2820,18 @@ int main() {
       photo_editor::desktop::parse_edit_recipe_json(QString::fromUtf8(QJsonDocument(remove_object_document).toJson(QJsonDocument::Compact)));
   if (reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("toolRole")).toString() !=
           QStringLiteral("retouch") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("maskSourceClass")).toString() !=
+          QStringLiteral("retouch-patch-mask") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("maskCoordinateSpace")).toString() !=
+          QStringLiteral("source-pixels") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("sourceImageRevision")).toString() !=
+          QStringLiteral("asset-rev-retouch") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("maskRasterWidth")).toInt() != 7 ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("maskRasterHeight")).toInt() != 9 ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("alphaSamplingMode")).toString() !=
+          QStringLiteral("nearest-source-pixel") ||
+      reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("softnessMode")).toString() !=
+          QStringLiteral("alpha-hard-edge") ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("retouchOrder")).toInt() != 1 ||
       reparsed_remove_object.mask_stack.at(0).toMap().value(QStringLiteral("inpaintPatchData")).toByteArray() !=
           QByteArray("patch-png") ||

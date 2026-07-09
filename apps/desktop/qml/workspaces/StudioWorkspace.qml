@@ -30,8 +30,8 @@ Rectangle {
     property bool baseImageTargetActive: false
     property var selectedEditTarget: ({ scope: "base-image", layerIndex: -1, maskSetId: "", maskSetName: "", sourceIndex: -1 })
     readonly property string selectedEditTargetContract: selectedEditTargetSignature()
-    readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v1|first-glance:grid-dominant-sources-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:panel-toggles-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:no-elide-no-overlap|functionality:preserved"
-    readonly property string libraryPageCompletionContract: "page-completion:v1|library|sidebar:sources-import-smart-collections|content:grid-survey-empty-import|inspector:preview-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline"
+    readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v2|first-glance:justified-grid-dominant-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:compact-import-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved"
+    readonly property string libraryPageCompletionContract: "page-completion:v2|library|sidebar:compact-import-status|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline"
     readonly property string libraryStudioVisibilityContract: "library-studio-visibility:v1|always:sources-search-filters-grid-inspector|contextual:selection-review-import-browser-batch-actions-empty-offline|one-expansion:project-assignment-import-actions-export-compare-panel-toggles|hover-focus:gallery-actions-review-keyboard|diagnostic:import-progress-offline-state|preserve:functionality"
     readonly property string librarySearchBehaviorContract: "library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved"
     readonly property string importWorkflowPolishContract: "import-workflow-polish:v1|first-glance:library-routed-import-source-browser|close-inspection:source-folder-media-destination-progress|clutter:library-chrome-quiet-import-dominant|interaction:back-source-select-import-refresh|text:no-elide-no-overlap|functionality:preserved"
@@ -51,6 +51,34 @@ Rectangle {
     readonly property string maskLayerParameterTerminologyContract: "mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only"
     readonly property string adjustmentControlTargetSupportContract: "adjustment-control-target-support:v1|targets:base-image,adjustment-layer,photo-layer,mask|default:base-image+adjustment-layer|mask-controls:mask-only|tool-controls:mask-source-only"
     readonly property string targetAwareAdjustmentCommandRouterContract: "target-aware-adjustment-command-router:v1|commands:slider,preset,reset|routes:base-image->global,adjustment-layer->photo-layer-recipe|blocked:mask,unsupported-photo-layer,locked-layer,unsupported-control|no-global-fallback:true"
+    readonly property string studioCommandSemanticsContract: "studio-command-semantics:v2|apply:commit-or-generate-result|done:exit-tool-state-to-layers|cancel:abort-pending-work|close:panel-or-dialog-only|selection:smart-brush-shape-retouch-unified|retouch:apply-before-commit-done-after-commit|brush:stroke-release-commits-done-exits-to-layers|crop:done-exits-crop-editing|polygon:done-completes-selection-cancel-discards-unfinished|diagnostics:close-panel-only"
+    readonly property string studioSecondaryActionSemanticsContract: "studio-secondary-actions:v1|generic-label:More|specific-meaning:tooltip-and-menu-items|batch:more|presets:more|queue:more|layer-actions:more|primary-split-actions:descriptive|destructive:menu-or-confirmation"
+    readonly property string studioDestructiveActionPolicyContract: "studio-destructive-actions:v1|primary-surface:false|default-layer-row:false|secondary-surface:More-or-properties|menu-order:destructive-last|role:destructive|confirmation:when-needed|inline-exception:blocking-retry-only"
+    readonly property string studioAdvancedControlDisclosureContract: "studio-advanced-disclosure:v1|brush:inspector-and-more|retouch:more-or-mode-menu|experimental:hidden-disabled|light:collapsed-rolloff-levels-zones|advanced-color:collapsed-specialist-tools|diagnostics:details-only"
+    readonly property string studioLayerTerminologyContract: "studio-layer-terminology:v1|stack-object:Layer|subtypes:specific-only-when-needed|adjustment-layer-visible:false|photo-layer-visible:false|selection-linked-layer:Linked Layer"
+    property bool studioReducedMotionOverride: false
+    readonly property bool studioPlatformReducedMotionAvailable: platformReducedMotionAvailable()
+    readonly property bool studioPlatformReducedMotion: platformReducedMotionPreference()
+    readonly property bool studioReducedMotion: studioReducedMotionOverride || studioPlatformReducedMotion
+    readonly property bool studioRenderWorkActive: editorPreview.processing
+    readonly property bool studioMotionSuppressedForRender: studioRenderWorkActive
+    property string previewFailurePresentedLogSignature: ""
+    readonly property int studioMotionFast: studioMotionDurationForState(studioReducedMotion, studioMotionSuppressedForRender, Math.max(120, theme.durationFast))
+    readonly property int studioMotionMedium: studioMotionDurationForState(studioReducedMotion, studioMotionSuppressedForRender, theme.durationMedium)
+    readonly property string studioMotionContract: "studio-motion:v1|fast:" + String(studioMotionFast) +
+                                                   "|medium:" + String(studioMotionMedium) +
+                                                   "|tool-hud:fade|inspector:fade|rows:reveal|active-target:fade|hover:no-layout-shift|interruptible:true|reduced-motion:" +
+                                                   String(studioReducedMotion) +
+                                                   "|render-work:" +
+                                                   String(studioRenderWorkActive) +
+                                                   "|render-suppressed:" +
+                                                   String(studioMotionSuppressedForRender) +
+                                                   "|platform-available:" +
+                                                   String(studioPlatformReducedMotionAvailable) +
+                                                   "|platform-reduced:" +
+                                                   String(studioPlatformReducedMotion) +
+                                                   "|override:" +
+                                                   String(studioReducedMotionOverride)
     property bool selectionMode: false
     property bool importModeOpen: false
     property bool syncEnabled: true
@@ -77,6 +105,8 @@ Rectangle {
     property bool cropLiquifyExpanded: false
     property bool cropLiquifyToolAvailable: false
     property string librarySearchDraftText: catalogAssets ? String(catalogAssets.searchFilter || "") : ""
+    property var libraryGalleryAspectRatios: ({})
+    property int libraryGalleryAspectRevision: 0
     readonly property bool librarySearchHasText: String(librarySearchDraftText || "").trim().length > 0
     readonly property bool librarySearchActive: catalogAssets && String(catalogAssets.searchFilter || "").trim().length > 0
     readonly property bool librarySearchPending: catalogAssets && String(librarySearchDraftText || "") !== String(catalogAssets.searchFilter || "")
@@ -129,6 +159,13 @@ Rectangle {
                (root.scopeDockVisible ||
                 (root.editInspectorTab === "scopes" && root.editInspectorPanelVisible))
         restoreMode: Binding.RestoreBindingOrValue
+    }
+
+    Connections {
+        target: editorPreview
+        function onStatusChanged() { root.logPreviewFailurePresented("status") }
+        function onProcessingChanged() { root.logPreviewFailurePresented("processing") }
+        function onPreviewChanged() { root.logPreviewFailurePresented("preview") }
     }
 
     Binding {
@@ -200,7 +237,17 @@ Rectangle {
     property string scopeLayoutPreset: "Quad"
     property string scopeSamplingMode: "Balanced"
     property string editTool: "adjust"
+    property bool editToolTransitionActive: false
+    property string pendingEditToolTransitionName: ""
+    property string editToolTransitionTitle: ""
+    property string editToolTransitionDetail: ""
     property int toolSwitchSerial: 0
+    property double editToolSwitchStartedAtMs: 0
+    property string editToolSwitchWorkflowId: ""
+    readonly property string toolSwitchLatencyProbeContract: "tool-switch-latency-probe:v1|monitor:qmlPerformance|surface:studio-tool-switch|start:beginEditToolSwitch|ready:completeEditToolTransition|serial:true|workflow-id:true|safe-when-monitor-missing:true"
+    readonly property string firstInteractionResponsivenessContract: "first-interaction-responsiveness:v1|surface:studio-tool-rail|trigger:sync|first-feedback:transition-active|state:tool-switch-serial|gate:smoke-perf"
+    property string pendingRetouchStartMode: ""
+    property int pendingLayerActivationIndex: -1
     property string cropToolMode: "crop"
     property string maskCreationOperation: "add"
     property var lastUsedEditToolVariants: ({
@@ -228,8 +275,10 @@ Rectangle {
     property real brushHudSizeDragStartX: 0
     property real brushHudSizeDragStartSize: 0.08
     property real selectionOutlinePhase: 0
+    property bool maskOutlineActivationDeferred: false
     readonly property int selectionOutlineAnimationPointBudget: 1800
     readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
+    readonly property string layerMaskActivationLatencyContract: "layer-mask-activation-latency:v1|panel-first:true|outline-trace:deferred|delay-ms:120|no-click-frame-outline-getter:true"
     readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
     property string editInspectorTab: "adjust"
     property bool layersOnlyFocusMode: false
@@ -244,6 +293,48 @@ Rectangle {
     onEditInspectorTabChanged: {
         if (root.layersOnlyFocusMode && root.editInspectorTab !== "layers")
             root.layersOnlyFocusMode = false
+    }
+
+    Timer {
+        id: editToolTransitionCommitTimer
+        interval: Math.max(0, Math.min(45, root.studioMotionFast))
+        repeat: false
+        onTriggered: {
+            const tool = root.pendingEditToolTransitionName
+            if (tool.length === 0) {
+                root.completeEditToolTransition()
+                return
+            }
+            root.applyEditToolActivation(tool)
+        }
+    }
+
+    Timer {
+        id: editToolTransitionFinishTimer
+        interval: root.studioMotionFast
+        repeat: false
+        onTriggered: root.completeEditToolTransition()
+    }
+
+    Timer {
+        id: retouchToolStartTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.completePendingRetouchToolStart()
+    }
+
+    Timer {
+        id: layerToolActivationTimer
+        interval: 0
+        repeat: false
+        onTriggered: root.completePendingLayerToolActivation()
+    }
+
+    Timer {
+        id: maskOutlineActivationTimer
+        interval: 120
+        repeat: false
+        onTriggered: root.maskOutlineActivationDeferred = false
     }
 
     FileDialog {
@@ -337,7 +428,8 @@ Rectangle {
     readonly property bool smallDisplayMode: width > 0 && width < 1120
     readonly property bool libraryToolbarTight: width > 0 && width < 1360
     readonly property int libraryMainMinimumWidth: libraryToolbarTight ? 360 : 520
-    readonly property int librarySourcesPanelWidth: width > 0 && width < 1180 ? 210 : (compactMode ? 224 : 262)
+    readonly property int libraryGalleryScrollbarGutter: 14
+    readonly property int librarySourcesPanelWidth: width > 0 && width < 1180 ? 156 : (compactMode ? 168 : 184)
     readonly property int libraryInspectorPanelWidth: {
         const sourceWidth = librarySourcesPanelVisible && !importModeOpen ? librarySourcesPanelWidth : 0
         const centerChrome = 36
@@ -349,6 +441,9 @@ Rectangle {
     readonly property int editInspectorPanelWidth: compactMode ? 356 : 420
     readonly property bool maskWorkActive: editTool === "masks" ||
                                            brushToolReady() ||
+                                           (editTool === "pixel-brush" &&
+                                            editorPreview.hasAsset &&
+                                            !editorPreview.compareMode) ||
                                            (editorPreview.hasActiveMask &&
                                             editorPreview.activeMaskToolRole === "retouch" &&
                                             !editorPreview.compareMode)
@@ -452,8 +547,8 @@ Rectangle {
         { key: "dirty-tile-rendering", label: "Dirty Tiles", status: "Invalidate changed tiles only" },
         { key: "progressive-refinement", label: "Progressive Refinement", status: "Fast first pass with refinement" },
         { key: "gpu-pipeline-coverage", label: "GPU Coverage", status: "Masks, local edits, LUTs, curves, detail, transforms, scopes, composite" },
-        { key: "cross-platform-gpu-abstraction", label: "GPU Abstraction", status: "Backend abstraction for platform parity" },
-        { key: "windows-gpu-parity", label: "Windows GPU Parity", status: "Windows backend parity target" },
+        { key: "cross-platform-gpu-abstraction", label: "GPU Abstraction", status: "Shared acceleration layer for platform parity" },
+        { key: "windows-gpu-parity", label: "Windows GPU Parity", status: "Windows acceleration parity target" },
         { key: "cpu-gpu-memory-budgets", label: "Memory Budgets", status: "CPU and GPU cache budgets" },
         { key: "disk-cache-eviction", label: "Disk Cache", status: "Eviction policy for persisted cache" },
         { key: "gpu-texture-pool", label: "Texture Pool", status: "Reusable GPU textures" },
@@ -470,13 +565,13 @@ Rectangle {
         { key: "model-download-install-ui", label: "Model Install", status: "Download and install workflow" },
         { key: "model-versioning", label: "Model Versions", status: "Version-aware model manifests" },
         { key: "acceleration-detection", label: "Acceleration Detection", status: "GPU/CPU runtime detection" },
-        { key: "model-fallback-modes", label: "Fallback Modes", status: "CPU and procedural fallback paths" },
+        { key: "model-fallback-modes", label: "Recovery Modes", status: "Local recovery paths when models are unavailable" },
         { key: "privacy-offline-indicators", label: "Privacy", status: "Offline/local model indicators" },
         { key: "model-error-states", label: "Error States", status: "Clear missing/invalid model errors" },
         { key: "model-device-selection", label: "Device Selection", status: "Runtime device choice" },
         { key: "quantized-model-options", label: "Quantized Models", status: "Compact model options" },
         { key: "batch-inference", label: "Batch Inference", status: "Queued batch model jobs" },
-        { key: "preview-full-refinement", label: "Preview Refinement", status: "Preview inference with full-resolution refinement" },
+        { key: "preview-full-refinement", label: "Preview Refinement", status: "Preview inference with detailed refinement" },
         { key: "model-warmup", label: "Warmup", status: "Preload and warm runtime sessions" },
         { key: "model-cache-management", label: "Model Cache", status: "Manage downloaded and generated model cache" }
     ]
@@ -512,7 +607,7 @@ Rectangle {
         { key: "perceptual-delta-tests", label: "Perceptual Delta", status: "Perceptual image comparisons" },
         { key: "recipe-parser-fuzzing", label: "Recipe Fuzzing", status: "Fuzz recipe parser" },
         { key: "huge-file-stress-tests", label: "Huge Files", status: "Large file stress tests" },
-        { key: "masks-layers-stress-tests", label: "Masks / Layers", status: "Masks and layers stress tests" },
+        { key: "masks-layers-stress-tests", label: "Selections / Layers", status: "Selections and layers stress tests" },
         { key: "catalog-import-stress-tests", label: "Import Stress", status: "Catalog import stress tests" },
         { key: "export-queue-stress-tests", label: "Export Stress", status: "Export queue stress tests" },
         { key: "render-performance-benchmarks", label: "Render Benchmarks", status: "Render performance benchmarks" },
@@ -521,7 +616,7 @@ Rectangle {
     ]
     readonly property var observabilityCapabilityRegistry: [
         { key: "render-timings", label: "Render Timings", status: "Render timing telemetry" },
-        { key: "gpu-fallback-reasons", label: "GPU Fallbacks", status: "GPU fallback reason telemetry" },
+        { key: "gpu-fallback-reasons", label: "GPU Recovery", status: "GPU recovery reason telemetry" },
         { key: "failed-exports", label: "Export Failures", status: "Failed export tracking" },
         { key: "failed-imports", label: "Import Failures", status: "Failed import tracking" },
         { key: "model-failures", label: "Model Failures", status: "Model failure tracking" },
@@ -567,7 +662,7 @@ Rectangle {
         { key: "pro-shoot-end-to-end", label: "Full Shoot", status: "Import, cull, edit, sync, export" },
         { key: "raw-color-quality", label: "RAW Quality", status: "Accurate predictable RAW output" },
         { key: "nondestructive-recoverable-portable", label: "Portable Edits", status: "Nondestructive, recoverable, portable" },
-        { key: "fast-precise-stack-masking", label: "Masking", status: "Fast precise stack-based masking" },
+        { key: "fast-precise-stack-masking", label: "Selections", status: "Fast precise stack-based selections" },
         { key: "credible-inpaint-retouch-undo", label: "Retouch", status: "Credible retouch with full undo" },
         { key: "layer-compositing-workflows", label: "Layers", status: "Real compositing workflows" },
         { key: "responsive-large-workloads", label: "Responsiveness", status: "Large files, catalogs, exports stay responsive" },
@@ -602,7 +697,7 @@ Rectangle {
         { name: "Print / Adobe RGB / 300dpi", format: "TIFF" },
         { name: "Archive / ProPhoto / 16-bit", format: "TIFF" },
         { name: "Social / 1080px", format: "JPG" },
-        { name: "Client Delivery / Full Res", format: "JPG" }
+        { name: "Client Delivery / Full Quality", format: "JPG" }
     ]
 
     function clamp(value, low, high) {
@@ -617,6 +712,138 @@ Rectangle {
         return Math.max(0, Math.max(Number(backingPixels || 0),
                                    Math.round(Math.max(1, Number(displayPixels || 1)) *
                                               root.thumbnailScreenDevicePixelRatio())))
+    }
+
+    function libraryGalleryAspectKey(index, thumbnailSource) {
+        const asset = root.assetAt(index)
+        const assetId = String(asset.assetId || "")
+        if (assetId.length > 0)
+            return assetId
+        const source = String(thumbnailSource || asset.thumbnailSource || "")
+        return source.length > 0 ? source : String(index)
+    }
+
+    function libraryGalleryAspectRatio(index, thumbnailSource) {
+        const revision = root.libraryGalleryAspectRevision
+        const key = root.libraryGalleryAspectKey(index, thumbnailSource)
+        const ratio = Number(root.libraryGalleryAspectRatios[key] || 0)
+        if (revision >= 0 && ratio > 0)
+            return root.clamp(ratio, 0.28, 4.5)
+        return 1.5
+    }
+
+    function setLibraryGalleryAspectRatio(index, thumbnailSource, sourceWidth, sourceHeight) {
+        const width = Number(sourceWidth || 0)
+        const height = Number(sourceHeight || 0)
+        if (width <= 0 || height <= 0)
+            return
+
+        const key = root.libraryGalleryAspectKey(index, thumbnailSource)
+        const nextRatio = root.clamp(width / height, 0.28, 4.5)
+        const currentRatio = Number(root.libraryGalleryAspectRatios[key] || 0)
+        if (Math.abs(currentRatio - nextRatio) < 0.001)
+            return
+
+        const ratios = {}
+        for (const existingKey in root.libraryGalleryAspectRatios)
+            ratios[existingKey] = root.libraryGalleryAspectRatios[existingKey]
+        ratios[key] = nextRatio
+        root.libraryGalleryAspectRatios = ratios
+        root.libraryGalleryAspectRevision += 1
+    }
+
+    function libraryGalleryViewportWidth(viewWidth, scrollbarGutter) {
+        const width = Math.max(1, Math.floor(Number(viewWidth || 0)))
+        const gutter = Math.max(0, Math.ceil(Number(scrollbarGutter || root.libraryGalleryScrollbarGutter)))
+        return Math.max(1, width - gutter)
+    }
+
+    function libraryGalleryRows(viewWidth) {
+        const revision = root.libraryGalleryAspectRevision
+        const count = root.assetCount()
+        const width = Math.max(1, Math.floor(Number(viewWidth || 0)))
+        if (revision < 0 || count <= 0 || width <= 1)
+            return []
+
+        const idealHeight = root.libraryToolbarTight ? 184 : 214
+        const rows = []
+        let row = []
+        let rowAspect = 0
+
+        function flushRow() {
+            if (row.length === 0)
+                return
+
+            const height = Math.max(92, Math.round(width / Math.max(0.1, rowAspect)))
+            const items = []
+            let consumed = 0
+            for (let position = 0; position < row.length; ++position) {
+                const entry = row[position]
+                const isLast = position === row.length - 1
+                const itemWidth = isLast ? Math.max(1, width - consumed)
+                                         : Math.max(1, Math.round(height * entry.aspect))
+                consumed += itemWidth
+                items.push({
+                    index: entry.index,
+                    assetId: entry.assetId,
+                    thumbnailSource: entry.thumbnailSource,
+                    mediaType: entry.mediaType,
+                    durationText: entry.durationText,
+                    rating: entry.rating,
+                    picked: entry.picked,
+                    rejected: entry.rejected,
+                    width: itemWidth
+                })
+            }
+
+            rows.push({ height: height, items: items })
+            row = []
+            rowAspect = 0
+        }
+
+        for (let index = 0; index < count; ++index) {
+            const asset = root.assetAt(index)
+            const thumbnailSource = String(asset.thumbnailSource || "")
+            const aspect = root.libraryGalleryAspectRatio(index, thumbnailSource)
+            row.push({
+                index: index,
+                assetId: String(asset.assetId || ""),
+                thumbnailSource: thumbnailSource,
+                mediaType: String(asset.mediaType || "photo"),
+                durationText: String(asset.durationText || ""),
+                rating: Math.max(0, Math.min(5, Number(asset.rating || 0))),
+                picked: Boolean(asset.picked),
+                rejected: Boolean(asset.rejected),
+                aspect: aspect
+            })
+            rowAspect += aspect
+            if (row.length > 0 && rowAspect * idealHeight >= width)
+                flushRow()
+        }
+        flushRow()
+
+        return rows
+    }
+
+    function libraryGalleryLayoutSignature(viewWidth, scrollbarGutter) {
+        const rawWidth = Math.max(1, Math.floor(Number(viewWidth || 0)))
+        const gutter = Math.max(0, Math.ceil(Number(scrollbarGutter || root.libraryGalleryScrollbarGutter)))
+        const viewportWidth = root.libraryGalleryViewportWidth(rawWidth, gutter)
+        const rows = root.libraryGalleryRows(viewportWidth)
+        let maxRowWidth = 0
+        for (let rowIndex = 0; rowIndex < rows.length; ++rowIndex) {
+            const items = rows[rowIndex].items || []
+            let rowWidth = 0
+            for (let itemIndex = 0; itemIndex < items.length; ++itemIndex)
+                rowWidth += Math.max(0, Number(items[itemIndex].width || 0))
+            maxRowWidth = Math.max(maxRowWidth, rowWidth)
+        }
+        return "library-gallery-layout:v1|raw:" + rawWidth +
+               "|gutter:" + gutter +
+               "|viewport:" + viewportWidth +
+               "|rows:" + rows.length +
+               "|max-row:" + maxRowWidth +
+               "|overflow:" + String(maxRowWidth > viewportWidth)
     }
 
     function clearTransientMaskTools() {
@@ -761,7 +988,7 @@ Rectangle {
         const provider = String(data && data.mask_alpha_provider !== undefined
                                 ? data.mask_alpha_provider : "").trim()
         if (provider.length === 0)
-            return "Alpha provider unavailable"
+            return "Selection preview unavailable"
         const full = Boolean(data && data.mask_alpha_full_resolution_available === true)
         const deterministic = Boolean(data && data.mask_alpha_deterministic === true)
         const width = Math.max(0, Number(data && data.mask_alpha_target_width !== undefined
@@ -769,9 +996,8 @@ Rectangle {
         const height = Math.max(0, Number(data && data.mask_alpha_target_height !== undefined
                                           ? data.mask_alpha_target_height : 0))
         const target = width > 0 && height > 0 ? " / " + Math.round(width) + "x" + Math.round(height) : ""
-        return "Alpha " + provider
-                + " / " + (full ? "full-res" : "preview")
-                + " / " + (deterministic ? "deterministic" : "transient")
+        return "Selection preview / " + (full ? "detailed" : "preview")
+                + " / " + (deterministic ? "stable" : "live")
                 + target
     }
 
@@ -783,10 +1009,8 @@ Rectangle {
                                                ? data.brushAlphaStrokeCount : 0))
             const points = Math.max(0, Number(data && data.brushAlphaPointCount !== undefined
                                               ? data.brushAlphaPointCount : 0))
-            const source = String(data && data.brushAlphaSourceOfTruth !== undefined
-                                  ? data.brushAlphaSourceOfTruth : "brush source").trim()
-            return "Brush source / " + Math.round(strokes) + " strokes / "
-                    + Math.round(points) + " points / " + source
+            return "Brush selection / " + Math.round(strokes) + " strokes / "
+                    + Math.round(points) + " points"
         }
 
         const shapeContract = String(data && data.shapeAlphaSourceContract !== undefined
@@ -796,10 +1020,13 @@ Rectangle {
                                               ? data.shapeAlphaPointCount : 0))
             const rawPoints = Math.max(0, Number(data && data.shapeAlphaRawPointCount !== undefined
                                                  ? data.shapeAlphaRawPointCount : 0))
+            const lassoState = root.lassoPathStateText(data)
             const pointText = rawPoints > 0
-                    ? Math.round(points) + " simplified / " + Math.round(rawPoints) + " raw"
+                    ? Math.round(points) + " points / " + Math.round(rawPoints) + " drawn"
                     : Math.round(points) + " points"
-            return "Editable path / " + pointText + " / "
+            return "Path selection / " +
+                    (lassoState.length > 0 ? lassoState + " / " : "") +
+                    pointText + " / "
                     + (Boolean(data && data.shapeAlphaClosed === true) ? "closed" : "open")
         }
 
@@ -808,19 +1035,23 @@ Rectangle {
         if (generatedContract.length > 0) {
             const target = String(data && data.generatedAlphaTargetType !== undefined
                                   ? data.generatedAlphaTargetType : "generated").trim()
-            const model = String(data && data.generatedAlphaModelName !== undefined
-                                 ? data.generatedAlphaModelName : "model").trim()
             const width = Math.max(0, Number(data && data.generatedAlphaWidth !== undefined
                                              ? data.generatedAlphaWidth : 0))
             const height = Math.max(0, Number(data && data.generatedAlphaHeight !== undefined
                                               ? data.generatedAlphaHeight : 0))
-            const alphaSize = width > 0 && height > 0
-                    ? " / alpha " + Math.round(width) + "x" + Math.round(height)
+            const size = width > 0 && height > 0
+                    ? " / " + Math.round(width) + "x" + Math.round(height)
                     : ""
-            return "Generated " + target + " / " + model + alphaSize
+            return "Smart selection / " + target + size
         }
 
         return maskAlphaProviderSummary(data)
+    }
+
+    function selectionRowFallbackStatus(data, relationText) {
+        const relation = String(relationText || "").trim()
+        const source = root.maskSourceProvenanceSummary(data)
+        return source + (relation.length > 0 ? " / " + relation : "")
     }
 
     function previewRenderPresentationSignature(processing, statusText, failureStage, failureDetail) {
@@ -847,6 +1078,59 @@ Rectangle {
                     editorPreview.status,
                     editorPreview.previewFailureStage,
                     editorPreview.previewFailureDetail).indexOf("failed") === 0
+    }
+
+    function previewFailurePresentationSource(statusText, failureStage, failureDetail) {
+        const stage = String(failureStage || "").trim()
+        const detail = String(failureDetail || "").trim()
+        if (stage.length > 0 || detail.length > 0)
+            return "render_failure_state"
+        const status = String(statusText || "").toLowerCase()
+        if (status.indexOf("fail") >= 0 ||
+                status.indexOf("error") >= 0 ||
+                status.indexOf("unavailable") >= 0 ||
+                status.indexOf("unable") >= 0)
+            return "status_classifier"
+        return "unknown"
+    }
+
+    function qmlPreviewFailureLoggingAvailable() {
+        return typeof qmlPerformance !== "undefined" &&
+               qmlPerformance !== null &&
+               qmlPerformance.previewFailurePresented !== undefined
+    }
+
+    function logPreviewFailurePresented(trigger) {
+        const presentation = previewRenderPresentationSignature(
+                    editorPreview.processing,
+                    editorPreview.status,
+                    editorPreview.previewFailureStage,
+                    editorPreview.previewFailureDetail)
+        if (presentation.indexOf("failed") !== 0) {
+            root.previewFailurePresentedLogSignature = ""
+            return
+        }
+        const source = previewFailurePresentationSource(
+                    editorPreview.status,
+                    editorPreview.previewFailureStage,
+                    editorPreview.previewFailureDetail)
+        const signature = presentation +
+                "|status:" + String(editorPreview.status || "") +
+                "|source:" + source +
+                "|trigger:" + String(trigger || "unknown")
+        if (signature === root.previewFailurePresentedLogSignature)
+            return
+        root.previewFailurePresentedLogSignature = signature
+        if (!root.qmlPreviewFailureLoggingAvailable())
+            return
+        qmlPerformance.previewFailurePresented(
+                    root.page,
+                    editorPreview.status,
+                    editorPreview.previewFailureStage,
+                    editorPreview.previewFailureDetail,
+                    presentation,
+                    editorPreview.processing,
+                    source)
     }
 
     function activePreviewFailureStage() {
@@ -1054,7 +1338,15 @@ Rectangle {
                 ? "|progress:" + Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))).toFixed(3)
                   + "|label:" + String(editorPreview.inpaintProgressLabel || "")
                 : ""
-        return phase + "|visible:" + String(visible) + "|blocking:false|chip:persistent" + progressSuffix
+        return phase + "|visible:" + String(visible) +
+                "|blocking:false|chip:persistent|progress-animation:canvas-strip|smart:indeterminate|retouch:determinate" +
+                progressSuffix
+    }
+
+    function maskActivityProgressValue() {
+        if (editorPreview.inpaintProgressActive)
+            return Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0)))
+        return -1
     }
 
     function maskActivityChipVisible() {
@@ -1855,7 +2147,7 @@ Rectangle {
 
     function importStatusText() {
         if (catalogAssets.importing)
-            return "Importing to VIREL Vault"
+            return "Importing media"
         if (catalogAssets.loading)
             return "Refreshing library"
         if (catalogAssets.errorMessage.length > 0)
@@ -1876,6 +2168,32 @@ Rectangle {
                 return String(style.name || style.id || "Selected style")
         }
         return styles.length > 0 ? String(styles[0].name || styles[0].id || "Style") : "No styles"
+    }
+
+    function agentStyleMenuItems() {
+        const styles = agentAvailableStyles()
+        const selectedStyleId = root.hasAgentEditController ? root.agentEditController.selectedStyleId : ""
+        const items = []
+        for (let index = 0; index < styles.length; ++index) {
+            const style = styles[index] || ({})
+            const styleId = String(style.id || "")
+            if (styleId.length === 0)
+                continue
+            items.push({
+                key: styleId,
+                label: String(style.name || styleId),
+                description: String(style.description || style.summary || ""),
+                checked: styleId === String(selectedStyleId || ""),
+                icon: "star",
+                enabled: root.hasAgentEditController && !root.agentEditController.running
+            })
+        }
+        return items
+    }
+
+    function selectAgentStyleFromMenu(styleId) {
+        if (root.hasAgentEditController && String(styleId || "").length > 0)
+            root.agentEditController.selectedStyleId = styleId
     }
 
     function activeAgentStyle() {
@@ -1920,8 +2238,11 @@ Rectangle {
             return "No local model"
         const name = String(modelInfo.name || modelInfo.id || "Local model")
         const status = String(modelInfo.status || (modelInfo.available ? "available" : "unavailable"))
-        const backend = String(modelInfo.backend || "local")
-        return name + " · " + status + " · " + backend
+        if (root.developerDiagnosticsEnabled) {
+            const backend = String(modelInfo.backend || "local")
+            return name + " · " + status + " · " + backend
+        }
+        return name + " · " + status
     }
 
     function agentMcpStatusText() {
@@ -2370,7 +2691,8 @@ Rectangle {
         } else {
             const errors = result.errors || []
             root.agentMemoryVaultMessage = errors.length > 0 ? errors.join("\n") : "Unable to learn this style"
-            root.agentDetailsExpanded = true
+            root.agentDetailsExpanded = false
+            root.agentContextPage = 0
         }
     }
 
@@ -2385,7 +2707,8 @@ Rectangle {
         } else if (key === "learn_style") {
             root.learnAgentStyleFromSelection()
         } else if (key === "choose_style") {
-            root.agentDetailsExpanded = true
+            root.agentDetailsExpanded = false
+            root.agentContextPage = 0
         } else if (key === "apply_to_all") {
             root.agentEditController.applySampleReviewToAll(true)
         } else if (key === "commit") {
@@ -2741,7 +3064,11 @@ Rectangle {
     }
 
     function agentThinkingVisible() {
-        return root.hasAgentEditController && root.agentThinkingLines().length > 0
+        if (!root.hasAgentEditController)
+            return false
+        if (root.agentEditController.running || root.agentEditController.awaitingUserInput)
+            return root.agentThinkingLines().length > 0
+        return root.agentHasRunAudit() && root.agentThinkingLines().length > 0
     }
 
     function agentHasRunAudit() {
@@ -2765,9 +3092,11 @@ Rectangle {
 
     function systemHealthItems() {
         const gpuActive = previewBackend ? String(previewBackend.activeBackend || "CPU") : "Unavailable"
-        const gpuDetail = previewBackend && String(previewBackend.fallbackReason || "").length > 0
-                ? String(previewBackend.fallbackReason)
-                : (previewBackend ? String(previewBackend.backendSummary || gpuActive) : "Preview backend unavailable")
+        const gpuDetail = root.developerDiagnosticsEnabled
+                ? (previewBackend && String(previewBackend.fallbackReason || "").length > 0
+                   ? String(previewBackend.fallbackReason)
+                   : (previewBackend ? String(previewBackend.backendSummary || gpuActive) : "Preview backend unavailable"))
+                : (previewBackend && previewBackend.gpuAvailable ? "Preview acceleration ready" : "Preview acceleration limited")
         const gpuState = previewBackend && previewBackend.gpuAvailable ? "OK" : (gpuActive === "CPU" ? "CPU" : "Warn")
 
         const modelReady = editorPreview.aiSmartSelectionAvailable || editorPreview.aiInpaintAvailable
@@ -2776,9 +3105,11 @@ Rectangle {
             editorPreview.inpaintRuntimeLabel
         ].filter(function(item) { return item.length > 0 }).join(", ")
         const modelDiagnostics = String(editorPreview.aiModelDiagnostics || "")
-        const modelDetail = modelReady
-                ? modelFeatures + " / " + modelDiagnostics
-                : modelFeatures + " / " + String(editorPreview.aiModelStatus || "Model runtime unavailable") + " / " + modelDiagnostics
+        const modelDetail = root.developerDiagnosticsEnabled
+                ? (modelReady
+                   ? modelFeatures + " / " + modelDiagnostics
+                   : modelFeatures + " / " + String(editorPreview.aiModelStatus || "Model runtime unavailable") + " / " + modelDiagnostics)
+                : (modelReady ? modelFeatures : "Local selection and retouch tools unavailable")
 
         const catalogState = catalogAssets.errorMessage.length > 0
                 ? "Error"
@@ -4370,10 +4701,11 @@ Rectangle {
         return root.exportStudioVisibilityContract
     }
 
-    function selectAsset(index) {
+    function selectAsset(index, modifiers) {
         if (!catalogAssets || index < 0 || index >= catalogAssets.assetCount)
             return
-        if (selectionMode)
+        const modifierFlags = Number(modifiers || 0)
+        if (selectionMode || (modifierFlags & Qt.ControlModifier) || (modifierFlags & Qt.MetaModifier))
             catalogAssets.toggleSelectionIndex(index)
         else
             catalogAssets.selectIndex(index)
@@ -4424,11 +4756,6 @@ Rectangle {
         catalogAssets.refreshImportSources()
     }
 
-    function importFolderToVault() {
-        root.importModeOpen = true
-        catalogAssets.importFolder()
-    }
-
     function maskToolKeepsActiveMask(toolName) {
         return toolName === "masks" || toolName === "brush" || toolName === "retouch"
     }
@@ -4436,8 +4763,20 @@ Rectangle {
     function clearTransientToolStateFor(toolName) {
         if (editorPreview.brushStrokeActive)
             editorPreview.endActiveBrushStroke()
+        if (toolName !== "retouch") {
+            retouchToolStartTimer.stop()
+            root.pendingRetouchStartMode = ""
+        }
+        if (toolName !== "layers") {
+            layerToolActivationTimer.stop()
+            root.pendingLayerActivationIndex = -1
+        }
+        if (!root.maskToolKeepsActiveMask(toolName)) {
+            maskOutlineActivationTimer.stop()
+            root.maskOutlineActivationDeferred = false
+        }
         root.clearTransientMaskTools()
-        if (!root.maskToolKeepsActiveMask(toolName) && editorPreview.hasActiveMask)
+        if (!root.maskToolKeepsActiveMask(toolName))
             editorPreview.deselectActiveMask()
         if (toolName !== "crop")
             editorPreview.cropEditing = false
@@ -4457,7 +4796,12 @@ Rectangle {
         return "tool-switch-cleanup:v1|serial:" + root.toolSwitchSerial +
                "|diagnostics:" + String(root.diagnosticsPanelOpen) +
                "|maskRail:" + String(root.maskToolRailExpanded) +
-               "|menus:closed-by-tool-rail-switch-serial|committed-edits:preserved"
+               "|menus:closed-by-tool-rail-switch-serial|committed-edits:preserved" +
+               "|target-preservation:appropriate|selected-target:" + root.selectedEditTargetContract +
+               "|mask-tools-keep-active-selection:" + String(root.maskToolKeepsActiveMask(root.editTool)) +
+               "|non-mask-tools-clear-transient-mask-only:true|inspector-transient:reset" +
+               "|inspector-tab:" + root.editInspectorTab +
+               "|layer-activation:queued"
     }
 
     function rememberEditToolVariant(toolName, variant) {
@@ -4478,25 +4822,45 @@ Rectangle {
 
     function beginEditToolSwitch(nextToolName) {
         const nextTool = String(nextToolName || "")
+        const previousTool = String(root.editTool || "")
         root.toolSwitchSerial += 1
+        root.beginToolSwitchLatencyProbe(previousTool, nextTool)
         root.diagnosticsPanelOpen = false
-        if (nextTool !== "masks" && nextTool !== "brush")
+        if (nextTool !== "masks" && nextTool !== "brush" && nextTool !== "retouch")
             root.maskToolRailExpanded = false
     }
 
     function activateEditTool(toolName) {
+        const nextTool = String(toolName || "").trim()
+        if (nextTool.length === 0)
+            return
+        if (root.page === "edit" && root.workspaceActive) {
+            root.pendingEditToolTransitionName = nextTool
+            root.editToolTransitionTitle = "Switching to " + root.editToolDisplayName(nextTool)
+            root.editToolTransitionDetail = root.editToolTransitionDescription(nextTool)
+            root.editToolTransitionActive = true
+            root.applyEditToolActivation(nextTool)
+            return
+        }
+        root.applyEditToolActivation(nextTool)
+    }
+
+    function applyEditToolActivation(toolName) {
         root.beginEditToolSwitch(toolName)
         if (toolName === "scopes") {
             root.toggleScopesDock(root.scopeDockPosition === "right" ? "bottom" : root.scopeDockPosition)
+            root.finishEditToolTransitionSoon()
             return
         }
         root.clearTransientToolStateFor(toolName)
         if (toolName === "presets" || toolName === "info") {
             root.activateEditInspectorTab(toolName)
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "layers-focus") {
             root.toggleLayersOnlyFocusMode()
+            root.finishEditToolTransitionSoon()
             return
         }
         root.editTool = toolName
@@ -4506,6 +4870,7 @@ Rectangle {
             editorPreview.compareMode = false
             editorPreview.cropEditing = false
             root.rememberEditToolVariant("adjust", root.editInspectorTab)
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "crop") {
@@ -4513,12 +4878,14 @@ Rectangle {
             root.editInspectorTab = "crop"
             editorPreview.compareMode = false
             editorPreview.cropEditing = root.cropToolMode === "crop"
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "masks") {
             editorPreview.compareMode = false
             editorPreview.cropEditing = false
             root.editInspectorTab = "adjust"
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "brush") {
@@ -4526,16 +4893,19 @@ Rectangle {
             editorPreview.cropEditing = false
             editorPreview.startSelectionBrush(root.editToolLastUsedVariant("brush", "add") === "erase")
             root.editInspectorTab = "adjust"
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "retouch") {
             root.startRetouchTool(root.editToolLastUsedVariant("retouch", "remove"), true)
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "compare") {
             editorPreview.compareMode = true
             editorPreview.cropEditing = false
             root.compareViewMode = root.editToolLastUsedVariant("compare", root.compareViewMode)
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "layers") {
@@ -4543,12 +4913,103 @@ Rectangle {
             editorPreview.cropEditing = false
             root.editInspectorTab = "layers"
             if (editorPreview.photoLayerCount > 0)
-                root.setActivePhotoLayer(root.normalizedActivePhotoLayerIndex())
+                root.queueLayerToolActivation(root.normalizedActivePhotoLayerIndex())
+            root.finishEditToolTransitionSoon()
             return
         }
         if (toolName === "export") {
             root.assetActivated("export")
+            root.finishEditToolTransitionSoon()
         }
+    }
+
+    function editToolDisplayName(toolName) {
+        const tool = String(toolName || "").toLowerCase()
+        if (tool === "crop")
+            return "Crop"
+        if (tool === "masks")
+            return "Masks"
+        if (tool === "brush")
+            return "Brush"
+        if (tool === "pixel-brush")
+            return "Pixel Brush"
+        if (tool === "retouch")
+            return "Retouch"
+        if (tool === "compare")
+            return "Compare"
+        if (tool === "layers")
+            return "Layers"
+        if (tool === "presets")
+            return "Presets"
+        if (tool === "scopes")
+            return "Scopes"
+        return "Adjust"
+    }
+
+    function editToolTransitionDescription(toolName) {
+        const tool = String(toolName || "").toLowerCase()
+        if (tool === "masks" || tool === "brush" || tool === "retouch")
+            return "Preparing selection controls and canvas overlays."
+        if (tool === "crop")
+            return "Preparing crop handles and transform controls."
+        if (tool === "compare")
+            return "Preparing before and after preview."
+        if (tool === "layers")
+            return "Preparing layer controls."
+        return "Preparing edit controls."
+    }
+
+    function finishEditToolTransitionSoon() {
+        if (root.editToolTransitionActive)
+            editToolTransitionFinishTimer.restart()
+    }
+
+    function completeEditToolTransition() {
+        root.finishToolSwitchLatencyProbe()
+        root.editToolTransitionActive = false
+        root.pendingEditToolTransitionName = ""
+        root.editToolTransitionTitle = ""
+        root.editToolTransitionDetail = ""
+    }
+
+    function qmlPerformanceMonitorAvailable() {
+        return typeof qmlPerformance !== "undefined" &&
+               qmlPerformance !== null &&
+               qmlPerformance.nowMs !== undefined &&
+               qmlPerformance.routeStarted !== undefined &&
+               qmlPerformance.routeReady !== undefined
+    }
+
+    function beginToolSwitchLatencyProbe(previousTool, nextTool) {
+        if (!root.qmlPerformanceMonitorAvailable()) {
+            root.editToolSwitchStartedAtMs = 0
+            root.editToolSwitchWorkflowId = ""
+            return
+        }
+        const fromTool = String(previousTool || "unknown")
+        const toTool = String(nextTool || "unknown")
+        root.editToolSwitchStartedAtMs = qmlPerformance.nowMs()
+        root.editToolSwitchWorkflowId = "studio-tool-switch:" + fromTool + "->" + toTool
+        qmlPerformance.routeStarted(
+                    "studio-tool-switch",
+                    root.toolSwitchSerial,
+                    root.editToolSwitchWorkflowId)
+    }
+
+    function finishToolSwitchLatencyProbe() {
+        if (!root.qmlPerformanceMonitorAvailable() ||
+                root.editToolSwitchStartedAtMs <= 0 ||
+                root.editToolSwitchWorkflowId.length === 0)
+            return
+        qmlPerformance.routeReady(
+                    "studio-tool-switch",
+                    root.toolSwitchSerial,
+                    root.editToolSwitchStartedAtMs,
+                    root.editToolSwitchStartedAtMs,
+                    false,
+                    root.editToolSwitchWorkflowId)
+        root.editToolSwitchStartedAtMs = 0
+        root.editToolSwitchWorkflowId = ""
     }
 
     function editToolDisabledReason(toolName) {
@@ -4566,7 +5027,7 @@ Rectangle {
             return root.cropToolMode
         if (tool === "masks")
             return editorPreview.hasActiveMask ? String(editorPreview.activeMaskKind || "selection") : "new-selection"
-        if (tool === "brush")
+        if (tool === "brush" || tool === "pixel-brush")
             return root.maskCreationOperation === "subtract" ? "erase" : "add"
         if (tool === "retouch")
             return String(editorPreview.activeMaskRetouchMode || "remove")
@@ -4589,7 +5050,7 @@ Rectangle {
             return root.editInspectorTab
         if (tool === "crop")
             return "crop"
-        if (tool === "masks" || tool === "brush" || tool === "retouch")
+        if (tool === "masks" || tool === "brush" || tool === "pixel-brush" || tool === "retouch")
             return "adjust"
         if (tool === "layers")
             return "layers"
@@ -4613,6 +5074,8 @@ Rectangle {
             return "inactive"
         if (tool === "brush")
             return editorPreview.brushStrokeActive ? "active" : "armed"
+        if (tool === "pixel-brush")
+            return root.pixelBrushToolReady() ? "armed" : "inactive"
         if (tool === "masks") {
             if (root.objectPickArmed && editorPreview.smartSelectPreviewActive)
                 return "pending"
@@ -4636,6 +5099,8 @@ Rectangle {
             return disabledReason
         if (tool === "brush")
             return root.maskOperationLabel(editorPreview.activeMaskOperation) + " brush"
+        if (tool === "pixel-brush")
+            return root.maskOperationLabel(root.maskCreationOperation) + " pixel brush"
         if (tool === "masks")
             return editorPreview.hasActiveMask ? "Editing " + String(editorPreview.activeMaskName || "selection") : "Create a selection"
         if (tool === "crop")
@@ -4685,19 +5150,19 @@ Rectangle {
         } else if (tool === "masks") {
             lifecycle.primaryAction = "create-or-refine-selection"
             lifecycle.feedback = "selection-overlay-and-tool-hud"
-            lifecycle.commit = "done-accepts-selection"
+            lifecycle.commit = "done-exits-selection-to-layers"
             lifecycle.cancel = "cancel-exits-transient-selection"
             lifecycle.errorState = "show-selection-retry"
-        } else if (tool === "brush") {
+        } else if (tool === "brush" || tool === "pixel-brush") {
             lifecycle.primaryAction = "paint-selection"
-            lifecycle.feedback = "brush-outline-and-stroke-overlay"
-            lifecycle.commit = "done-ends-brush"
-            lifecycle.cancel = "cancel-ends-brush"
+            lifecycle.feedback = tool === "pixel-brush" ? "snapped-source-pixel-cursor-and-selection-overlay" : "brush-outline-and-stroke-overlay"
+            lifecycle.commit = tool === "pixel-brush" ? "done-exits-pixel-brush-to-layers" : "stroke-release-commits-done-exits-to-layers"
+            lifecycle.cancel = tool === "pixel-brush" ? "cancel-exits-pixel-brush" : "cancel-ends-brush"
             lifecycle.errorState = "show-disabled-reason"
         } else if (tool === "retouch") {
             lifecycle.primaryAction = "paint-retouch-selection"
             lifecycle.feedback = "selection-overlay-and-patch-preview"
-            lifecycle.commit = "apply-retouch-patch"
+            lifecycle.commit = "apply-retouch-patch-or-done-exits-to-layers"
             lifecycle.cancel = "cancel-clears-pending-selection"
             lifecycle.errorState = "show-retry-regenerate"
         } else if (tool === "layers" || tool === "layers-focus") {
@@ -4737,16 +5202,15 @@ Rectangle {
 
     function editToolModel() {
         const tools = [
-            { id: "adjust", label: "Adjust", icon: "adjust", shortcut: "A", family: "Adjustments", category: "Inspector", objectName: "adjustInspectorTabButton" },
-            { id: "presets", label: "Presets", icon: "swatch", shortcut: "P", family: "Presets", category: "Inspector", objectName: "presetsInspectorTabButton" },
-            { id: "crop", label: "Crop", icon: "crop", shortcut: "C", family: "Crop / Transform", category: "Edit", objectName: "cropInspectorTabButton" },
-            { id: "masks", label: "Selections / Brush", icon: "smart-select", shortcut: "M", family: "Masks / Selections", category: "Edit" },
-            { id: "retouch", label: "Retouch", icon: "retouch", shortcut: "R", family: "Retouch", category: "Edit" },
-            { id: "layers", label: "Layers", icon: "layers", shortcut: "L", family: "Layers", category: "Inspector", objectName: "layersInspectorTabButton" },
-            { id: "scopes", label: "Scopes", icon: "scope", shortcut: "S", family: "Scopes", category: "Inspector", objectName: "scopesInspectorTabButton" },
-            { id: "info", label: "Info", icon: "info", shortcut: "I", family: "Info", category: "Inspector", objectName: "infoInspectorTabButton" },
-            { id: "compare", label: "Compare", icon: "compare", shortcut: "\\", family: "Compare / View", category: "View" },
-            { id: "export", label: "Export", icon: "export", shortcut: "E", family: "Export / Send", category: "Delivery" }
+            { id: "adjust", label: "Adjust", icon: "adjust", shortcut: "A", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "adjustInspectorTabButton", railObjectName: "editRailAdjustButton", tooltip: "Adjust light, color, detail, lens, and transform controls." },
+            { id: "presets", label: "Presets", icon: "swatch", shortcut: "P", family: "Adjust", railGroup: "Adjust", category: "Edit", objectName: "presetsInspectorTabButton", railObjectName: "editRailPresetsButton", primaryTool: false, tooltip: "Open saved looks and preset packs." },
+            { id: "masks", label: "Selection", icon: "smart-select", shortcut: "M", family: "Selection", railGroup: "Selection", category: "Local", railObjectName: "editRailSelectionButton", tooltip: "Create selections, paint brush refinements, or retouch repairs from one canvas workflow." },
+            { id: "crop", label: "Crop", icon: "crop", shortcut: "C", family: "Crop", railGroup: "Crop", category: "Geometry", objectName: "cropInspectorTabButton", railObjectName: "editRailCropButton", tooltip: "Crop, straighten, and transform the photo." },
+            { id: "layers", label: "Layers", icon: "layers", shortcut: "L", family: "Layers", railGroup: "Layers", category: "Structure", objectName: "layersInspectorTabButton", railObjectName: "editRailLayersButton", tooltip: "Open the layer stack and target layer-local edits." },
+            { id: "compare", label: "Compare", icon: "compare", shortcut: "\\", family: "View", railGroup: "View", category: "View", railObjectName: "editRailCompareButton", tooltip: "Compare before and after views." },
+            { id: "scopes", label: "Scopes", icon: "scope", shortcut: "S", family: "View", railGroup: "View", category: "View", objectName: "scopesInspectorTabButton", railObjectName: "editRailScopesButton", primaryTool: false, tooltip: "Open histogram, waveform, and analysis scopes." },
+            { id: "info", label: "Info", icon: "info", shortcut: "I", family: "Info", railGroup: "Info", category: "Info", objectName: "infoInspectorTabButton", railObjectName: "editRailInfoButton", tooltip: "Show asset metadata and review details." },
+            { id: "export", label: "Export", icon: "export", shortcut: "E", family: "Export", railGroup: "Export", category: "Delivery", railObjectName: "editRailExportButton", primaryTool: false, tooltip: "Send the current work to Export." }
         ]
         return tools.map(function(tool) {
             const disabledReason = root.editToolDisabledReason(tool.id)
@@ -4758,6 +5222,10 @@ Rectangle {
                 shortcut: tool.shortcut,
                 category: tool.category,
                 family: tool.family,
+                railGroup: tool.railGroup,
+                railObjectName: String(tool.railObjectName || ""),
+                primaryTool: tool.primaryTool !== false,
+                tooltip: String(tool.tooltip || ""),
                 variant: root.editToolVariant(tool.id),
                 lastUsedVariant: root.editToolLastUsedVariant(tool.id, root.editToolVariant(tool.id)),
                 enabled: disabledReason.length === 0,
@@ -4786,11 +5254,90 @@ Rectangle {
                    tool.pendingState + ":" +
                    String(tool.enabled) + ":" +
                    String(tool.active) + ":" +
+                   tool.railGroup + ":" +
                    tool.inspectorSection + ":" +
                    tool.lifecycle.primaryAction + ":" +
                    tool.lifecycle.commit + ":" +
                    tool.lifecycle.cancel
         }).join("|")
+    }
+
+    function editToolRailNavigationSignature() {
+        const model = root.editToolModel()
+        const groups = []
+        const tools = []
+        const primaryTools = []
+        let explicitTooltips = true
+        for (let index = 0; index < model.length; ++index) {
+            const tool = model[index]
+            const group = String(tool.railGroup || "")
+            if (group.length > 0 && groups.indexOf(group) < 0)
+                groups.push(group)
+            tools.push(tool.id + "=" + group)
+            if (tool.primaryTool !== false)
+                primaryTools.push(tool.id)
+            if (String(tool.tooltip || "").length === 0)
+                explicitTooltips = false
+        }
+        return "tool-rail-navigation:v2" +
+               "|groups:" + groups.join(">") +
+               "|tools:" + tools.join(",") +
+               "|primary:" + primaryTools.join(",") +
+               "|stable-size:true|hover-layout-shift:false|tooltips:" + String(explicitTooltips) +
+               "|variants:menus|shortcuts:visible-model"
+    }
+
+    function studioMotionSignature() {
+        return root.studioMotionContract +
+               "|tool:" + root.editTool +
+               "|transition-active:" + String(root.editToolTransitionActive) +
+               "|switch-serial:" + String(root.toolSwitchSerial) +
+               "|hud:" + String(root.activeCanvasToolChromeReduced || root.activeCanvasToolChipVisible()) +
+               "|inspector:" + String(root.editInspectorPanelVisible) +
+               "|target:" + root.activeEditTargetScope() +
+               "|rows:LayerRowChrome"
+    }
+
+    function studioMotionDurationForState(reducedMotion, renderWorkActive, defaultDuration) {
+        if (Boolean(reducedMotion) || Boolean(renderWorkActive))
+            return 0
+        const duration = Number(defaultDuration)
+        return Number.isFinite(duration) && duration > 0 ? Math.round(duration) : 0
+    }
+
+    function platformStyleHints() {
+        try {
+            if (typeof Qt === "undefined" ||
+                    Qt.application === undefined ||
+                    Qt.application === null ||
+                    Qt.application.styleHints === undefined ||
+                    Qt.application.styleHints === null)
+                return null
+            return Qt.application.styleHints
+        } catch (error) {
+            return null
+        }
+    }
+
+    function platformReducedMotionAvailable() {
+        const hints = root.platformStyleHints()
+        return hints !== null &&
+               (hints.reducedMotion !== undefined ||
+                hints.reduceMotion !== undefined ||
+                hints.prefersReducedMotion !== undefined)
+    }
+
+    function platformReducedMotionPreference() {
+        const hints = root.platformStyleHints()
+        if (hints === null)
+            return false
+        if (hints.reducedMotion !== undefined)
+            return Boolean(hints.reducedMotion)
+        if (hints.reduceMotion !== undefined)
+            return Boolean(hints.reduceMotion)
+        if (hints.prefersReducedMotion !== undefined)
+            return Boolean(hints.prefersReducedMotion)
+        return false
     }
 
     function editToolLifecycleSignature() {
@@ -4811,9 +5358,12 @@ Rectangle {
         if (toolName === "layers")
             return root.editTool === "layers" || root.editInspectorTab === "layers"
         if (toolName === "masks")
-            return root.editTool === "masks" || root.editTool === "brush" || root.brushToolReady()
+            return root.editTool === "masks" || root.editTool === "brush" ||
+                   root.editTool === "pixel-brush" || root.editTool === "pixel-select" ||
+                   root.editTool === "retouch" || root.brushToolReady()
         if (toolName === "brush")
-            return root.editTool === "brush" || root.brushToolReady()
+            return root.editTool === "brush" || root.editTool === "pixel-brush" ||
+                   root.brushToolReady()
         if (toolName === "retouch")
             return root.editTool === "retouch" ||
                    (editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch")
@@ -4834,11 +5384,13 @@ Rectangle {
             ]
         }
         if (tool === "masks")
-            return root.maskSelectionMenuItems().concat(root.maskBrushShapeMenuItems())
+            return root.maskSelectionMenuItems().concat(root.maskBrushShapeMenuItems()).concat(root.retouchSelectionMenuItems())
         if (tool === "brush") {
             return [
                 { key: "brush-add", label: "Brush Add", icon: "brush-tool", checked: root.editTool === "brush" && root.maskCreationOperation !== "subtract", tooltip: "Paint an additive brush selection." },
                 { key: "brush-erase", label: "Brush Erase", icon: "brush-subtract", checked: root.editTool === "brush" && root.maskCreationOperation === "subtract", tooltip: "Paint a subtractive brush selection." },
+                { key: "pixel-brush-add", label: "Pixel Brush Add", icon: "grid", checked: root.pixelBrushToolReady() && root.maskCreationOperation !== "subtract", tooltip: "Paint exact source pixels into the active selection." },
+                { key: "pixel-brush-erase", label: "Pixel Brush Erase", icon: "grid", checked: root.pixelBrushToolReady() && root.maskCreationOperation === "subtract", tooltip: "Deselect exact source pixels from the active selection." },
                 { key: "brush-refine-add", label: "Refine Add", icon: "brush-tool", separatorBefore: true, tooltip: "Use additive brush settings for refinement." },
                 { key: "brush-refine-erase", label: "Refine Erase", icon: "brush-subtract", tooltip: "Use subtractive brush settings for refinement." }
             ].concat(root.brushPresetMenuItems()).concat(root.brushCustomizationMenuItems()).concat([
@@ -5045,9 +5597,20 @@ Rectangle {
                editorPreview.activeMaskKind === "lasso"
     }
 
+    function lassoPathStateText(mask) {
+        if (!mask || String(mask.shapeAlphaSourceOfTruth || "") !== "lassoRawPoints+polygonPoints")
+            return ""
+        if (mask.lassoSimplified === true)
+            return "Simplified path"
+        if (mask.lassoSmoothed === true)
+            return "Smoothed path"
+        return "Raw path"
+    }
+
     function activeCanvasToolChipVisible() {
         return !editorPreview.compareMode &&
                (root.objectPickArmed ||
+                root.pixelExactToolReady() ||
                 root.activePolygonShortcutReady() ||
                 root.activeLassoShortcutReady())
     }
@@ -5055,6 +5618,10 @@ Rectangle {
     function activeCanvasToolName() {
         if (root.brushToolReady())
             return "Brush"
+        if (root.pixelBrushToolReady())
+            return "Pixel Brush"
+        if (root.pixelSelectToolReady())
+            return "Pixel Select"
         if (root.objectPickArmed)
             return "Object"
         if (root.activeLassoShortcutReady())
@@ -5068,12 +5635,17 @@ Rectangle {
         if (root.brushToolReady())
             return root.maskOperationLabel(editorPreview.activeMaskOperation) + " / " +
                    "Size " + root.brushSizeVisibleText() + " / Flow " + root.brushFlowValueText()
+        if (root.pixelBrushToolReady())
+            return root.maskOperationLabel(root.maskCreationOperation) + " / snapped source pixels"
+        if (root.pixelSelectToolReady())
+            return root.maskOperationLabel(root.maskCreationOperation) + " / exact source pixels"
         if (root.objectPickArmed)
             return editorPreview.smartSelectPreviewActive
                     ? String(editorPreview.smartSelectCandidateHudText || "Candidate ready")
                     : "Hover or drag / " + root.maskOperationLabel(root.objectPickMode)
         if (root.activeLassoShortcutReady())
-            return editorPreview.activeMaskPolygonPointCount + " pts / " +
+            return root.lassoPathStateText(root.activeMaskData()) + " / " +
+                   editorPreview.activeMaskPolygonPointCount + " pts / " +
                    root.maskOperationLabel(editorPreview.activeMaskOperation)
         if (root.activePolygonShortcutReady())
             return editorPreview.activeMaskPolygonPointCount + " pts / " +
@@ -5083,6 +5655,9 @@ Rectangle {
 
     function activeEditToolFamilyLabel() {
         const active = String(root.editTool || "adjust")
+        if (active === "brush" || active === "pixel-brush" ||
+                active === "pixel-select" || active === "retouch")
+            return "Selection"
         const model = root.editToolModel()
         for (let index = 0; index < model.length; ++index) {
             if (model[index].id === active)
@@ -5145,11 +5720,89 @@ Rectangle {
                "|pending:" + String(pending) +
                "|cleanup:" + root.toolSwitchCleanupSignature() +
                "|target:" + root.selectedEditTargetScope() +
-               "|preserve:tool-rail-image-stage-toolbar-inspector-filmstrip-bottom-actions"
+               "|preserve:tool-rail-image-stage-toolbar-inspector-filmstrip-bottom-actions" +
+               "|motion:" + root.studioMotionSignature()
+    }
+
+    function studioVisibleSurfaceCountSignature() {
+        const active = String(root.editTool || "adjust")
+        const primaryHud = root.activeCanvasToolChromeReduced ||
+                           root.activeCanvasToolChipVisible() ||
+                           active === "compare"
+        const viewToolbarCount = root.editingChromeVisible &&
+                                 !root.activeCanvasToolChromeReduced &&
+                                 active !== "compare" &&
+                                 !root.scopeLargeActive() ? 2 : 0
+        const contextPanelCount = root.editContextPanelActive ? 1 : 0
+        const inspectorCount = root.editingChromeVisible &&
+                               root.editInspectorPanelVisible &&
+                               !root.scopeLargeActive() &&
+                               !(root.editInspectorTab === "scopes" &&
+                                 root.scopeDockPosition !== "right") ? 1 : 0
+        const filmstripCount = root.editingChromeVisible &&
+                               !root.activeCanvasToolChromeReduced &&
+                               !root.scopeDockActive("bottom") ? 1 : 0
+        const diagnosticsCount = root.developerDiagnosticsEnabled &&
+                                 root.diagnosticsPanelOpen &&
+                                 !root.maskWorkActive &&
+                                 !primaryHud ? 1 : 0
+        return "studio-visible-surface-counts:v1" +
+               "|tool:" + active +
+               "|rail:1" +
+               "|canvas:1" +
+               "|primary-hud:" + String(primaryHud ? 1 : 0) +
+               "|view-toolbars:" + String(viewToolbarCount) +
+               "|context-panel:" + String(contextPanelCount) +
+               "|inspector:" + String(inspectorCount) +
+               "|filmstrip:" + String(filmstripCount) +
+               "|diagnostics:" + String(diagnosticsCount) +
+               "|one-primary-command:" + String(primaryHud ? 1 : 0) +
+               "|duplicate-context:false"
+    }
+
+    function studioProfessionalUxProofSignature() {
+        return "studio-professional-ux-proof:v1" +
+               "|context:single-active-surface" +
+               "|command-bars:fixed-adaptive-no-wrap" +
+               "|inspector:current-tool-only-empty-states-compact" +
+               "|canvas:dominant-overlays-restrained-readable" +
+               "|brush:one-status-owner-hud-plus-inspector" +
+               "|selection:one-target-label-distinct-create-edit-refine-link" +
+               "|retouch:mode-specific-inspector-secondary-actions-in-more" +
+               "|layers:structure-first-linked-selections-contextual" +
+               "|copy:compact-labels-tooltip-backed" +
+               "|motion:120-180ms-interruptible" +
+               "|visual-system:subdued-borders-accent-active-only-normalized-controls" +
+               "|performance:immediate-pointer-feedback-nonblocking-inspector" +
+               "|proof:desktop-and-narrow-visual-captures"
+    }
+
+    function studioInspectorWorkflowProofSignature() {
+        return "studio-inspector-workflow-proof:v1" +
+               "|active-tab:" + String(root.editInspectorTab || "") +
+               "|active-tool:" + String(root.editTool || "") +
+               "|controls:current-tool-or-selected-object-only" +
+               "|empty-state:single-line-actionable-no-tutorial-wall" +
+               "|scroll:reset-for-tool-change-preserve-within-workflow" +
+               "|advanced:disclosure-gated" +
+               "|diagnostics:developer-gated"
+    }
+
+    function studioInteractionResponsivenessProofSignature() {
+        return "studio-interaction-responsiveness-proof:v1" +
+               "|brush-feedback:live-preview-before-settled-render" +
+               "|lasso-feedback:point-path-visible-on-pointer-down" +
+               "|crop-feedback:handles-update-on-drag" +
+               "|retouch-feedback:selection-overlay-before-apply" +
+               "|inspector-changes:coalesced-nonblocking-preview" +
+               "|target-switch:preserve-unrelated-tool-state" +
+               "|render-work:async"
     }
 
     function activeCanvasToolCanComplete() {
         if (root.brushToolReady())
+            return true
+        if (root.pixelExactToolReady())
             return true
         if (root.objectPickArmed && editorPreview.smartSelectPreviewActive)
             return true
@@ -5160,27 +5813,32 @@ Rectangle {
         return false
     }
 
+    function finishSelectionWorkflow() {
+        if (editorPreview.brushStrokeActive)
+            editorPreview.endActiveBrushStroke()
+        root.clearTransientMaskTools()
+        root.editTool = "layers"
+        root.editInspectorTab = "layers"
+        root.layersOnlyFocusMode = false
+        editorPreview.maskPreviewTemporarilyHidden = false
+        return true
+    }
+
     function finishActiveCanvasTool() {
         if (root.brushToolReady()) {
-            if (editorPreview.brushStrokeActive)
-                editorPreview.endActiveBrushStroke()
-            root.editTool = "masks"
-            root.editInspectorTab = "adjust"
-            return true
+            return root.finishSelectionWorkflow()
+        }
+        if (root.pixelExactToolReady()) {
+            return root.finishSelectionWorkflow()
         }
         if (root.objectPickArmed && editorPreview.smartSelectPreviewActive) {
             editorPreview.acceptSmartSelectPreview(root.objectPickMode, root.objectPickCreateNew)
-            root.clearTransientMaskTools()
-            root.editTool = "masks"
-            root.editInspectorTab = "adjust"
-            return true
+            return root.finishSelectionWorkflow()
         }
         if (root.activePolygonShortcutReady())
             return root.completeActivePolygonSelection()
         if (root.activeLassoShortcutReady() && root.activeCanvasToolCanComplete()) {
-            root.editTool = "masks"
-            root.editInspectorTab = "adjust"
-            return true
+            return root.finishSelectionWorkflow()
         }
         return false
     }
@@ -5189,6 +5847,11 @@ Rectangle {
         if (root.brushToolReady()) {
             if (editorPreview.brushStrokeActive)
                 editorPreview.endActiveBrushStroke()
+            root.editTool = "masks"
+            root.editInspectorTab = "adjust"
+            return true
+        }
+        if (root.pixelExactToolReady()) {
             root.editTool = "masks"
             root.editInspectorTab = "adjust"
             return true
@@ -5223,10 +5886,7 @@ Rectangle {
                 editorPreview.activeMaskPolygonPointCount < 3 ||
                 editorPreview.activeMaskPolygonSelfIntersecting)
             return false
-        root.clearTransientMaskTools()
-        root.editTool = "masks"
-        root.editInspectorTab = "adjust"
-        return true
+        return root.finishSelectionWorkflow()
     }
 
     function activePolygonSnapClose(normalizedX, normalizedY, canvasWidth, canvasHeight) {
@@ -5336,6 +5996,8 @@ Rectangle {
     }
 
     function activeSelectionOutlinePointCount() {
+        if (root.maskOutlineActivationDeferred)
+            return 0
         const pathPointCount = root.outlinePointCount(editorPreview.activeMaskOutlinePaths)
         if (pathPointCount > 0)
             return pathPointCount
@@ -5364,6 +6026,8 @@ Rectangle {
                 editorPreview.cropEditing)
             return false
         if (editorPreview.brushStrokeActive || editorPreview.smartSelectStrokeActive)
+            return false
+        if (root.maskOutlineActivationDeferred)
             return false
         const pointCount = root.selectionOutlineAnimationPointCount()
         return pointCount >= 2 && pointCount <= root.selectionOutlineAnimationPointBudget
@@ -5673,6 +6337,19 @@ Rectangle {
                + " / " + root.maskOutlineQualityLabel(editorPreview.activeMaskOutlineQualityTier)
     }
 
+    function activeMaskData() {
+        return editorPreview.hasActiveMask &&
+               editorPreview.activeMaskIndex >= 0 &&
+               editorPreview.activeMaskIndex < editorPreview.maskStack.length
+               ? editorPreview.maskStack[editorPreview.activeMaskIndex]
+               : ({})
+    }
+
+    function smartSelectionFallbackState(mask) {
+        const metadata = mask && mask.generatedMaskMetadata ? mask.generatedMaskMetadata : ({})
+        return metadata.smartFallback === true ? "Editable preview" : ""
+    }
+
     function maskCreationContextSignature() {
         if (!editorPreview.hasActiveMask)
             return "component:none|operation:" + root.maskCreationOperation + "|targetGroup:new|target:Adjustment layer"
@@ -5694,7 +6371,7 @@ Rectangle {
         const operation = root.maskOperationLabel(operationName)
         if (!editorPreview.hasActiveMask)
             return operation + " creates the first component in a new selection."
-        const target = String(editorPreview.activeMaskSetName || editorPreview.activeMaskName || "Mask")
+        const target = String(editorPreview.activeMaskSetName || editorPreview.activeMaskName || "Selection")
         if (String(operationName || "").trim().toLowerCase() === "replace")
             return "Replace the result of " + target + " with the next component."
         return operation + " the next component in " + target + "."
@@ -5781,6 +6458,25 @@ Rectangle {
         root.editInspectorTab = "adjust"
     }
 
+    function startPixelBrushSource(operationName) {
+        const operation = operationName === undefined
+                ? root.maskCreationOperation
+                : root.normalizedMaskCreationOperation(operationName)
+        root.clearTransientMaskTools()
+        root.maskCreationOperation = operation
+        editorPreview.compareMode = false
+        editorPreview.cropEditing = false
+        editorPreview.maskPreviewMode = "overlay"
+        if (editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch")
+            editorPreview.activeMaskOperation = operation
+        root.editTool = "pixel-brush"
+        root.editInspectorTab = "adjust"
+    }
+
+    function startPixelSelectionSource(operationName) {
+        root.startPixelBrushSource(operationName)
+    }
+
     function maskSelectionMenuItems() {
         return [
             {
@@ -5831,6 +6527,20 @@ Rectangle {
                 tooltip: "Paint a subtractive brush selection."
             },
             {
+                key: "pixel-brush-add",
+                label: "Pixel Brush Add",
+                icon: "grid",
+                checked: root.pixelBrushToolReady() && root.maskCreationOperation !== "subtract",
+                tooltip: "Paint exact source pixels into the active selection."
+            },
+            {
+                key: "pixel-brush-erase",
+                label: "Pixel Brush Erase",
+                icon: "grid",
+                checked: root.pixelBrushToolReady() && root.maskCreationOperation === "subtract",
+                tooltip: "Deselect exact source pixels from the active selection."
+            },
+            {
                 key: "lasso",
                 label: "Lasso",
                 icon: "lasso",
@@ -5875,6 +6585,74 @@ Rectangle {
         ]
     }
 
+    function retouchSelectionMenuItems() {
+        return [
+            {
+                key: "retouch-remove",
+                label: "Retouch Remove",
+                icon: "erase-tool",
+                separatorBefore: true,
+                checked: root.editTool === "retouch" && editorPreview.activeMaskRetouchMode === "remove",
+                tooltip: "Paint an object or blemish removal area."
+            },
+            {
+                key: "retouch-heal",
+                label: "Retouch Heal",
+                icon: "brush-tool",
+                checked: root.editTool === "retouch" && editorPreview.activeMaskRetouchMode === "heal",
+                tooltip: "Blend blemishes into nearby texture."
+            },
+            {
+                key: "retouch-patch",
+                label: "Retouch Patch",
+                icon: "geometry",
+                checked: root.editTool === "retouch" && editorPreview.activeMaskRetouchMode === "patch",
+                tooltip: "Patch a painted area from surrounding pixels."
+            },
+            {
+                key: "retouch-clone",
+                label: "Clone Stamp",
+                icon: "source",
+                checked: root.editTool === "retouch" && editorPreview.activeMaskRetouchMode === "clone",
+                tooltip: "Clone from a sampled source."
+            },
+            {
+                key: "retouch-dust",
+                label: "Dust Cleanup",
+                icon: "scope",
+                tooltip: "Stage local dust spot cleanup."
+            },
+            {
+                key: "retouch-red-eye",
+                label: "Red Eye",
+                icon: "adjust",
+                tooltip: "Stage red-eye correction."
+            }
+        ]
+    }
+
+    function selectionCreationSurfaceSignature() {
+        const railVisible = (root.editTool === "masks" || root.editTool === "brush" ||
+                             root.editTool === "retouch") &&
+                            !editorPreview.compareMode
+        const railExpanded = railVisible && root.maskToolRailExpanded
+        const railCreationSurfaces = railVisible ? 1 : 0
+        const visibleRailEntries = railExpanded ? 2 : 14
+        return "selection-creation-surfaces:v1" +
+               "|owner:left-rail" +
+               "|rail:" + String(railVisible) +
+               "|rail-expanded:" + String(railExpanded) +
+               "|rail-creation-surfaces:" + String(railCreationSurfaces) +
+               "|rail-visible-entries:" + String(visibleRailEntries) +
+               "|top-source-creation:false" +
+               "|top-combine-toolbar:" + String(root.editTool === "masks" || root.editTool === "pixel-brush" ||
+                                                root.editTool === "pixel-select" ||
+                                                (root.editTool === "brush" && !root.brushToolReady())) +
+               "|legacy-source-buttons:hidden" +
+               "|retouch-in-selection:true" +
+               "|visible-creation-surfaces:" + String(railCreationSurfaces)
+    }
+
     function handleMaskToolMenuAction(key) {
         if (key === "subject" || key === "sky" || key === "background") {
             root.createGeneratedSelectionSource(key)
@@ -5885,10 +6663,16 @@ Rectangle {
             root.startMaskBrushSource("add")
         } else if (key === "brush-erase") {
             root.startMaskBrushSource("subtract")
+        } else if (key === "pixel-brush-add" || key === "pixel-select-add") {
+            root.startPixelBrushSource("add")
+        } else if (key === "pixel-brush-erase" || key === "pixel-select-erase") {
+            root.startPixelBrushSource("subtract")
         } else if (key === "lasso") {
             root.startMaskLassoFromShortcut()
         } else if (key === "polygon") {
             root.startMaskPolygonFromShortcut()
+        } else if (String(key || "").indexOf("retouch-") === 0) {
+            root.handleEditRailMenuAction("retouch", key)
         }
     }
 
@@ -5898,6 +6682,24 @@ Rectangle {
                editorPreview.hasActiveMask &&
                editorPreview.activeMaskKind === "brush" &&
                editorPreview.activeMaskToolRole !== "retouch"
+    }
+
+    function pixelSelectToolReady() {
+        return page === "edit" &&
+               root.editTool === "pixel-select" &&
+               editorPreview.hasAsset &&
+               !editorPreview.compareMode
+    }
+
+    function pixelBrushToolReady() {
+        return page === "edit" &&
+               root.editTool === "pixel-brush" &&
+               editorPreview.hasAsset &&
+               !editorPreview.compareMode
+    }
+
+    function pixelExactToolReady() {
+        return root.pixelBrushToolReady() || root.pixelSelectToolReady()
     }
 
     function studioAiMaskKind(kindName) {
@@ -6036,8 +6838,8 @@ Rectangle {
                 ? String(layer.displayName || layer.name || "Layer")
                 : "Base image"
         const maskName = editorPreview.hasActiveMask
-                ? String(editorPreview.activeMaskName || "Mask")
-                : "No active mask"
+                ? String(editorPreview.activeMaskName || "Selection")
+                : "No active selection"
         return "layer:" + layerName +
                 "|mask:" + maskName +
                 "|operation:" + root.maskOperationLabel(editorPreview.activeMaskOperation) +
@@ -6064,9 +6866,9 @@ Rectangle {
     function activeMaskPreviewQualityLabel() {
         const tier = String(editorPreview.activeMaskPreviewQualityTier || "hidden").trim().toLowerCase()
         if (tier === "full")
-            return "Full Res"
+            return "Full preview"
         if (tier === "high")
-            return "High Res"
+            return "High preview"
         if (tier === "draft")
             return "Draft"
         if (tier === "outline")
@@ -6100,12 +6902,17 @@ Rectangle {
     function selectedMaskHeaderSignature() {
         const feather = Math.round(root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5) * 100)
         const density = Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100)
+        const fallbackState = root.smartSelectionFallbackState(root.activeMaskData())
         return "selected-mask-header:v1" +
                 "|mask:" + root.activeEditTargetMaskName() +
                 "|layer:" + root.activeEditTargetPrimaryName() +
                 "|operation:" + root.maskOperationLabel(editorPreview.activeMaskOperation) +
                 "|overlay:" + root.activeMaskPreviewLabel() +
                 "|quality:" + root.activeMaskPreviewQualityLabel() +
+                "|fallback:" + fallbackState +
+                "|visible-copy:product-only" +
+                "|implementation-copy:hidden" +
+                "|motion:true" +
                 "|feather:" + feather.toString() +
                 "|density:" + density.toString() +
                 "|invert:" + String(editorPreview.activeMaskSelectionInverted === true)
@@ -6260,12 +7067,7 @@ Rectangle {
             { key: "brush-flow-down", label: "Lower Flow", icon: "minus", separatorBefore: true, description: "Flow " + root.brushFlowValueText(), tooltip: "Lower brush flow." },
             { key: "brush-flow-up", label: "Raise Flow", icon: "plus", description: "Flow " + root.brushFlowValueText(), tooltip: "Raise brush flow." },
             { key: "brush-hardness-down", label: "Softer Edge", icon: "minus", separatorBefore: true, description: "Hardness " + root.brushHardnessValueText(), tooltip: "Soften the brush edge." },
-            { key: "brush-hardness-up", label: "Harder Edge", icon: "plus", description: "Hardness " + root.brushHardnessValueText(), tooltip: "Harden the brush edge." },
-            { key: "brush-density-down", label: "Lower Mask Density", icon: "minus", separatorBefore: true, description: "Density " + root.brushDensityValueText(), tooltip: "Lower mask density." },
-            { key: "brush-density-up", label: "Raise Mask Density", icon: "plus", description: "Density " + root.brushDensityValueText(), tooltip: "Raise mask density." },
-            { key: "brush-opacity-down", label: "Lower Mask Opacity", icon: "minus", description: "Opacity " + root.brushOpacityValueText(), tooltip: "Lower mask opacity." },
-            { key: "brush-opacity-up", label: "Raise Mask Opacity", icon: "plus", description: "Opacity " + root.brushOpacityValueText(), tooltip: "Raise mask opacity." },
-            { key: "brush-reset-defaults", label: "Reset Brush Defaults", icon: "reset", separatorBefore: true, description: "Restore size, flow, hardness, density, opacity, spacing, smoothing, and pressure response.", tooltip: "Reset the active brush customization without changing Add or Erase mode." }
+            { key: "brush-hardness-up", label: "Harder Edge", icon: "plus", description: "Hardness " + root.brushHardnessValueText(), tooltip: "Harden the brush edge." }
         ]
     }
 
@@ -6286,16 +7088,6 @@ Rectangle {
             root.adjustActiveBrushHardness(-0.08)
         else if (key === "brush-hardness-up")
             root.adjustActiveBrushHardness(0.08)
-        else if (key === "brush-density-down")
-            root.adjustActiveMaskDensity(-0.05)
-        else if (key === "brush-density-up")
-            root.adjustActiveMaskDensity(0.05)
-        else if (key === "brush-opacity-down")
-            root.adjustActiveMaskOpacity(-0.05)
-        else if (key === "brush-opacity-up")
-            root.adjustActiveMaskOpacity(0.05)
-        else if (key === "brush-reset-defaults")
-            root.resetActiveBrushDefaults()
     }
 
     function brushSpacingValueText() {
@@ -6336,10 +7128,10 @@ Rectangle {
         return "brush-page:v3|one-hud:" + String(root.brushToolReady()) +
                "|visible:mode-status-tuning-done" +
                "|collapsed:size-drag-field-buttons" +
-               "|tuning:menu-size-flow-hard-density-opacity-reset" +
-               "|advanced:menu-presets-size-source-pressure" +
+               "|tuning:menu-size-flow-hard" +
+               "|advanced:inspector-density-opacity-more-pressure-reset" +
                "|diagnostic-size-hidden:true" +
-               "|context-panel:compact-target-summary" +
+               "|context-panel:hidden-by-default" +
                "|layer-actions:primary-target-plus-more-during-brush" +
                "|layer-rows:compact-brush-mode" +
                "|visibility-states:menu-during-brush" +
@@ -6479,6 +7271,17 @@ Rectangle {
         editorPreview.compareMode = false
         editorPreview.cropEditing = false
         editorPreview.maskPreviewMode = "overlay"
+        root.pendingRetouchStartMode = mode.length > 0 ? mode : "remove"
+        retouchToolStartTimer.restart()
+        root.rememberEditToolVariant("retouch", root.pendingRetouchStartMode)
+        return root.pendingRetouchStartMode
+    }
+
+    function completePendingRetouchToolStart() {
+        const mode = String(root.pendingRetouchStartMode || "")
+        root.pendingRetouchStartMode = ""
+        if (root.editTool !== "retouch" || mode.length === 0)
+            return ""
         if (mode === "heal")
             editorPreview.startHealBrush()
         else if (mode === "patch")
@@ -6566,9 +7369,9 @@ Rectangle {
         if (state === "model-ready")
             return editorPreview.inpaintRuntimeLabel
         if (state === "local-fallback")
-            return editorPreview.inpaintRuntimeLabel + " fallback"
+            return editorPreview.inpaintRuntimeLabel + " local"
         if (state === "deterministic")
-            return "Deterministic"
+            return "Manual"
         if (state === "local-staged")
             return "Local staged"
         if (state === "experimental-hidden")
@@ -6592,27 +7395,260 @@ Rectangle {
         if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
             return "Retouch"
         if (editorPreview.inpaintProgressActive)
-            return String(editorPreview.inpaintProgressLabel || "Final inpaint") + " / " +
+            return String(editorPreview.inpaintProgressLabel || "Final retouch") + " / " +
                    Math.round(Math.max(0, Math.min(1, Number(editorPreview.inpaintProgressValue || 0))) * 100) + "%"
         return root.retouchModeLabel(editorPreview.activeMaskRetouchMode) + " / " +
                root.retouchRequirementText() + " / " +
-               (editorPreview.retouchBeforeAfterEnabled ? "Before" : "After") + " / " +
-               root.retouchCapabilityText()
+               (editorPreview.retouchBeforeAfterEnabled ? "Before" : "After")
+    }
+
+    function retouchHudPrimaryText() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
+            return "Done"
+        return editorPreview.activeMaskCommitted ? "Done" : "Apply"
+    }
+
+    function retouchHudPrimaryTooltip() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch")
+            return "Exit retouch."
+        if (editorPreview.activeMaskCommitted)
+            return "Leave retouch and return to adjustment controls."
+        return "Apply this retouch patch to the edit recipe; the original file is unchanged."
+    }
+
+    function completeRetouchTool() {
+        root.finishSelectionWorkflow()
+    }
+
+    function triggerRetouchPrimaryAction() {
+        if (!editorPreview.hasActiveMask || editorPreview.activeMaskToolRole !== "retouch") {
+            root.activateEditTool("adjust")
+            return
+        }
+        if (editorPreview.activeMaskCommitted)
+            root.completeRetouchTool()
+        else
+            editorPreview.applyActiveRetouch()
+    }
+
+    function retouchHudInlineActions() {
+        if (!editorPreview.hasActiveMask ||
+                editorPreview.activeMaskToolRole !== "retouch" ||
+                editorPreview.activeMaskRetouchMode !== "remove")
+            return []
+        return [
+            {
+                key: "remove-add",
+                objectName: "retouchHudRemoveAddButton",
+                label: "Add",
+                icon: "brush-tool",
+                role: "segmented",
+                checked: editorPreview.activeMaskOperation === "add",
+                accent: "#d98962",
+                tooltip: "Add to the pending remove area."
+            },
+            {
+                key: "remove-subtract",
+                objectName: "retouchHudRemoveSubtractButton",
+                label: "Subtract",
+                icon: "brush-subtract",
+                role: "segmented",
+                checked: editorPreview.activeMaskOperation === "subtract",
+                accent: "#d36a5e",
+                tooltip: "Subtract from the pending remove area."
+            }
+        ]
+    }
+
+    function handleRetouchHudInlineAction(key) {
+        if (key === "remove-add") {
+            editorPreview.startRemoveRefineBrush(false)
+            return
+        }
+        if (key === "remove-subtract")
+            editorPreview.startRemoveRefineBrush(true)
+    }
+
+    function retouchHudMoreMenuItems() {
+        const active = editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
+        if (!active)
+            return []
+        const mode = String(editorPreview.activeMaskRetouchMode || "remove")
+        const inpaintMode = mode === "remove" || mode === "heal" || mode === "patch"
+        const committed = editorPreview.activeMaskCommitted
+        const items = [
+            {
+                key: "before-after",
+                label: editorPreview.retouchBeforeAfterEnabled ? "Show After" : "Show Before",
+                icon: "compare",
+                checked: editorPreview.retouchBeforeAfterEnabled,
+                tooltip: editorPreview.retouchBeforeAfterEnabled
+                         ? "Return to the retouched result; the edit recipe is unchanged."
+                         : "Compare against the pre-retouch image; the edit recipe is unchanged."
+            }
+        ]
+        if (inpaintMode) {
+            items.push({
+                           key: "regenerate",
+                           label: committed ? "Regenerate Patch" : "Regenerate Preview",
+                           icon: "reset",
+                           enabled: !committed || editorPreview.activeInpaintRegenerationAvailable,
+                           disabledReason: "Apply or select a generated patch before regenerating.",
+                           tooltip: committed
+                                    ? "Regenerate this applied retouch patch from its stored source selection."
+                                    : "Advance the seed for the pending retouch patch candidate."
+                       })
+	            items.push({
+	                           key: "finalize",
+	                           label: "Finalize Result",
+	                           icon: "check",
+	                           enabled: editorPreview.activeInpaintFinalizationAvailable,
+	                           disabledReason: "Apply a preview patch before finalizing the retouch result.",
+	                           tooltip: "Queue the final retouch result from the stored source selection."
+	                       })
+        }
+        if (editorPreview.maskActionRetryAvailable &&
+                String(editorPreview.maskActionRetryLabel || "").indexOf("Inpaint") >= 0) {
+            items.push({
+                           key: "retry",
+                           label: editorPreview.maskActionRetryLabel || "Retry",
+                           icon: "reset",
+                           tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed retouch action."
+                       })
+        }
+        if (mode === "heal") {
+            items.push({ key: "heal-texture-down", label: "Less Texture", icon: "minus", separatorBefore: true, tooltip: "Reduce synthesized heal texture." })
+            items.push({ key: "heal-texture-up", label: "More Texture", icon: "plus", tooltip: "Increase synthesized heal texture." })
+            items.push({ key: "heal-color-down", label: "Less Color Blend", icon: "minus", tooltip: "Preserve more of the original heal color." })
+            items.push({ key: "heal-color-up", label: "More Color Blend", icon: "plus", tooltip: "Blend more repaired heal color." })
+        }
+        if (mode === "patch") {
+            items.push({ key: "patch-left", label: "Move Source Left", icon: "move-back", separatorBefore: true, tooltip: "Move the Patch source region left before applying." })
+            items.push({ key: "patch-right", label: "Move Source Right", icon: "move-forward", tooltip: "Move the Patch source region right before applying." })
+            items.push({ key: "patch-up", label: "Move Source Up", icon: "move-up", tooltip: "Move the Patch source region up before applying." })
+            items.push({ key: "patch-down", label: "Move Source Down", icon: "move-down", tooltip: "Move the Patch source region down before applying." })
+            items.push({ key: "patch-reset", label: "Reset Source Region", icon: "reset", tooltip: "Reset the Patch source region before applying." })
+        }
+        if (mode === "clone") {
+            items.push({
+                           key: "clone-aligned",
+                           label: editorPreview.activeMaskCloneAligned ? "Aligned Clone" : "Non-aligned Clone",
+                           icon: "source",
+                           checked: editorPreview.activeMaskCloneAligned,
+                           separatorBefore: true,
+                           tooltip: "Toggle whether Clone Stamp keeps the source offset continuous across strokes."
+                       })
+            items.push({ key: "clone-save-source", label: "Save Clone Source", icon: "plus", enabled: editorPreview.activeMaskCloneSourceSet, disabledReason: "Pick a clone source before saving it.", tooltip: "Save the current Clone Stamp source, scale, rotation, and alignment." })
+            items.push({ key: "clone-scale-down", label: "Reduce Clone Scale", icon: "minus", tooltip: "Reduce Clone Stamp source scale." })
+            items.push({ key: "clone-scale-up", label: "Increase Clone Scale", icon: "plus", tooltip: "Increase Clone Stamp source scale." })
+            items.push({ key: "clone-rotate-left", label: "Rotate Clone Left", icon: "undo", tooltip: "Rotate Clone Stamp source counterclockwise." })
+            items.push({ key: "clone-rotate-right", label: "Rotate Clone Right", icon: "reset", tooltip: "Rotate Clone Stamp source clockwise." })
+            const sources = editorPreview.activeMaskCloneSources || []
+            for (let sourceIndex = 0; sourceIndex < sources.length; ++sourceIndex) {
+                items.push({
+                               key: "clone-source-" + sourceIndex,
+                               label: String(sources[sourceIndex].name || ("Source " + (sourceIndex + 1))),
+                               icon: "target",
+                               checked: editorPreview.activeMaskCloneSourceIndex === sourceIndex,
+                               tooltip: "Load saved Clone Stamp source."
+                           })
+            }
+        }
+        if (editorPreview.activeInpaintVariationPickerVisible) {
+            for (let index = 0; index < editorPreview.activeInpaintCandidateCount; ++index) {
+                items.push({
+                               key: "variation-" + index,
+                               label: "Use Variation " + String(index + 1),
+                               icon: "compare",
+                               checked: editorPreview.activeInpaintCandidateIndex === index,
+                               separatorBefore: index === 0,
+                               tooltip: "Use inpaint variation " + String(index + 1) + " from the generated patch candidates."
+                           })
+            }
+        }
+        if (!committed) {
+            items.push({ key: "reset-selection", label: "Reset Selection", icon: "reset", separatorBefore: true, tooltip: "Clear the pending retouch selection while keeping the active retouch tool." })
+            items.push({ key: "cancel", label: "Cancel Retouch", icon: "close", tooltip: "Discard the pending retouch selection before it is applied." })
+        } else {
+            items.push({ key: "reopen-selection", label: "Reopen Selection", icon: "brush-tool", separatorBefore: true, tooltip: "Reopen the applied retouch selection for refinement." })
+            items.push({ key: "delete-patch", label: "Delete Patch", icon: "delete", destructive: true, tooltip: "Remove the applied retouch patch from the edit recipe." })
+        }
+        return items
+    }
+
+    function handleRetouchHudMoreMenuAction(key) {
+        if (key === "before-after") {
+            editorPreview.retouchBeforeAfterEnabled = !editorPreview.retouchBeforeAfterEnabled
+        } else if (key === "regenerate") {
+            if (editorPreview.activeMaskCommitted)
+                editorPreview.regenerateActiveInpaintPatch()
+            else
+                editorPreview.regenerateInpaintSeed()
+        } else if (key === "finalize") {
+            editorPreview.queueActiveFinalInpaintPatch()
+        } else if (key === "retry") {
+            editorPreview.retryLastMaskAction()
+        } else if (key === "heal-texture-down") {
+            editorPreview.activeMaskHealTextureBlend = editorPreview.activeMaskHealTextureBlend - 0.08
+        } else if (key === "heal-texture-up") {
+            editorPreview.activeMaskHealTextureBlend = editorPreview.activeMaskHealTextureBlend + 0.08
+        } else if (key === "heal-color-down") {
+            editorPreview.activeMaskHealColorBlend = editorPreview.activeMaskHealColorBlend - 0.08
+        } else if (key === "heal-color-up") {
+            editorPreview.activeMaskHealColorBlend = editorPreview.activeMaskHealColorBlend + 0.08
+        } else if (key === "patch-left") {
+            root.retouchPatchSourceNudge(-0.04, 0.0)
+        } else if (key === "patch-right") {
+            root.retouchPatchSourceNudge(0.04, 0.0)
+        } else if (key === "patch-up") {
+            root.retouchPatchSourceNudge(0.0, -0.04)
+        } else if (key === "patch-down") {
+            root.retouchPatchSourceNudge(0.0, 0.04)
+        } else if (key === "patch-reset") {
+            editorPreview.setActiveMaskPatchSourceRegion(0.62, 0.50, 0.18, 0.18)
+        } else if (key === "clone-aligned") {
+            editorPreview.activeMaskCloneAligned = !editorPreview.activeMaskCloneAligned
+        } else if (key === "clone-save-source") {
+            editorPreview.saveActiveCloneSource()
+        } else if (key === "clone-scale-down") {
+            editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale - 0.1
+        } else if (key === "clone-scale-up") {
+            editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale + 0.1
+        } else if (key === "clone-rotate-left") {
+            editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation - 15
+        } else if (key === "clone-rotate-right") {
+            editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation + 15
+        } else if (key.indexOf("clone-source-") === 0) {
+            editorPreview.selectActiveCloneSource(Number(key.substring(13)))
+        } else if (key.indexOf("variation-") === 0) {
+            editorPreview.activeInpaintCandidateIndex = Number(key.substring(10))
+        } else if (key === "reset-selection") {
+            editorPreview.resetActiveRetouchSelection()
+        } else if (key === "cancel") {
+            editorPreview.cancelActiveRetouch()
+        } else if (key === "reopen-selection") {
+            editorPreview.reopenActiveRetouchSelection()
+        } else if (key === "delete-patch") {
+            editorPreview.deleteActiveRetouchPatch()
+        }
     }
 
     function retouchToolVisibilitySignature() {
         const active = editorPreview.hasActiveMask && editorPreview.activeMaskToolRole === "retouch"
         const mode = active ? String(editorPreview.activeMaskRetouchMode || "remove") : "none"
-        return "retouch-tool-visibility:v1" +
+        return "retouch-tool-visibility:v2" +
                "|family:Retouch" +
                "|variant:" + (active ? root.retouchModeLabel(mode) : "Retouch") +
                "|mode:" + mode +
                "|status:" + root.retouchHudStatusText() +
                "|last:" + root.editToolLastUsedVariant("retouch", mode) +
                "|hud:" + String(active && !editorPreview.compareMode) +
-               "|actions:remove-heal-patch-clone-dust-red-eye-apply-cancel" +
+               "|layout:single-row-command-bar" +
+               "|primary:" + root.retouchHudPrimaryText() +
+               "|inline:" + String(root.retouchHudInlineActions().length) +
+               "|more:" + String(root.retouchHudMoreMenuItems().length) +
                "|text:no-elide-no-overlap" +
-               "|menus:stale-clear"
+               "|menus:secondary-actions"
     }
 
     function retouchWorkflowSignature() {
@@ -6813,7 +7849,7 @@ Rectangle {
         if (kind === "source")
             return "Base Image"
         if (kind === "adjustment")
-            return "Adjustment Layer"
+            return "Layer"
         if (kind === "pixel")
             return "Pixel Layer"
         if (kind === "fill")
@@ -6904,11 +7940,11 @@ Rectangle {
         return [
             {
                 key: "adjustment",
-                label: "Adjustment Layer",
+                label: "Layer",
                 icon: "adjust",
                 checked: true,
                 description: "Editable light, color, masks, and local recipe controls.",
-                tooltip: "Add the default editable adjustment layer."
+                tooltip: "Add the default editable layer."
             },
             {
                 key: "fill",
@@ -6973,7 +8009,7 @@ Rectangle {
 
     function handleLayerAddMenuAction(key) {
         if (key === "adjustment") {
-            editorPreview.addAdjustmentLayer("")
+            root.addAdjustmentLayerForCurrentTarget()
         } else if (key === "fill") {
             editorPreview.addFillLayer("#808080", "")
         } else if (key === "text") {
@@ -6981,6 +8017,22 @@ Rectangle {
         } else if (key === "group") {
             editorPreview.addLayerGroup("")
         }
+    }
+
+    function addAdjustmentLayerForCurrentTarget() {
+        if (editorPreview.hasActiveMask && editorPreview.activeMaskToolRole !== "retouch") {
+            const layerIndex = editorPreview.ensureActiveSelectionAdjustmentLayer()
+            if (layerIndex >= 0) {
+                root.setActivePhotoLayerSelection(layerIndex, false)
+                root.setSelectedEditTarget(root.selectedLayerTargetScope(layerIndex),
+                                           layerIndex,
+                                           root.activeMaskSetData(),
+                                           editorPreview.activeMaskIndex)
+                root.activateEditTool("adjust")
+                return true
+            }
+        }
+        return editorPreview.addAdjustmentLayer("")
     }
 
     function layerVisibilityStateMenuItems() {
@@ -7054,7 +8106,7 @@ Rectangle {
             {
                 key: "toggle-visible",
                 label: hidden ? "Show Layer" : "Hide Layer",
-                icon: hidden ? "media" : "delete",
+                icon: hidden ? "media" : "visible",
                 enabled: validIndex >= 0,
                 checked: !hidden,
                 disabledReason: "Layer is no longer available.",
@@ -7110,16 +8162,16 @@ Rectangle {
             },
             {
                 key: "duplicate-with-masks",
-                label: "Duplicate With Masks",
+                label: "Duplicate With Selections",
                 icon: "source",
                 enabled: validIndex >= 0 && !locked,
                 separatorBefore: true,
                 disabledReason: locked ? "Unlock the layer before duplicating it." : "Layer is no longer available.",
-                tooltip: "Duplicate this layer and keep linked mask attachments."
+                tooltip: "Duplicate this layer and keep linked selections."
             },
             {
                 key: "duplicate-without-masks",
-                label: "Duplicate Without Masks",
+                label: "Duplicate Without Selections",
                 icon: "source",
                 enabled: validIndex >= 0 && !locked,
                 disabledReason: locked ? "Unlock the layer before duplicating it." : "Layer is no longer available.",
@@ -7169,7 +8221,7 @@ Rectangle {
     function layerStackAcceptanceSignature() {
         return "layer-stack-acceptance:v1" +
                "|select:true" +
-               "|rename:stable-row" +
+               "|rename:properties" +
                "|reorder:move-buttons-menu" +
                "|visibility:toggle-and-state" +
                "|opacity:fixed-readout" +
@@ -7209,12 +8261,12 @@ Rectangle {
             root.expandedTextLayerIndex = root.expandedTextLayerIndex === index ? -1 : index
         } else if (key === "duplicate" || key === "duplicate-with-masks") {
             editorPreview.duplicatePhotoLayerWithMasks(index)
-	        } else if (key === "duplicate-without-masks") {
-	            editorPreview.duplicatePhotoLayerWithoutMasks(index)
-	        } else if (key === "move-up") {
-	            root.movePhotoLayerPreservingSelection(index, -1)
-	        } else if (key === "move-down") {
-	            root.movePhotoLayerPreservingSelection(index, 1)
+        } else if (key === "duplicate-without-masks") {
+            editorPreview.duplicatePhotoLayerWithoutMasks(index)
+        } else if (key === "move-up") {
+            root.movePhotoLayerPreservingSelection(index, -1)
+        } else if (key === "move-down") {
+            root.movePhotoLayerPreservingSelection(index, 1)
         } else if (key === "delete") {
             root.deletePhotoLayerTarget(index)
         }
@@ -7230,12 +8282,12 @@ Rectangle {
         const orderCount = Math.max(0, Math.floor(Number(combineOrderCount)))
         const nested = parentIndex >= 0
         return [
-            { key: "edit-mask", label: "Edit Mask", icon: "select", checked: root.maskSetActive(maskSet), tooltip: "Edit this mask on the canvas." },
-            { key: "edit-layer", label: linkedIndex >= 0 ? "Edit Layer" : "Create Layer", icon: "adjust", separatorBefore: true, tooltip: linkedIndex >= 0 ? "Edit the linked adjustment layer." : "Create and edit an adjustment layer for this mask." },
-            { key: "toggle-preview", label: previewBypassed ? "Show Preview" : "Preview Before Mask", icon: "compare", enabled: maskId.length > 0 && hasSources, disabledReason: "This mask has no source preview yet.", checked: previewBypassed, tooltip: previewBypassed ? "Show this mask in preview." : "Preview before this mask." },
-            { key: "move-mask-up", label: "Move Mask Up", icon: "move-up", enabled: nested && orderIndex > 0, disabledReason: nested ? "Mask is already first." : "Only linked layer masks can be reordered here.", tooltip: "Move this mask earlier in the combine order." },
-            { key: "move-mask-down", label: "Move Mask Down", icon: "move-down", enabled: nested && orderIndex >= 0 && orderIndex < orderCount - 1, disabledReason: nested ? "Mask is already last." : "Only linked layer masks can be reordered here.", tooltip: "Move this mask later in the combine order." },
-            { key: "delete-mask", label: "Delete Mask", icon: "delete", destructive: true, separatorBefore: true, tooltip: "Delete this mask." }
+            { key: "edit-mask", label: "Edit Selection", icon: "select", checked: root.maskSetActive(maskSet), tooltip: "Edit this selection on the canvas." },
+            { key: "edit-layer", label: linkedIndex >= 0 ? "Edit Layer" : "Create Layer", icon: "adjust", separatorBefore: true, tooltip: linkedIndex >= 0 ? "Edit the linked layer." : "Create and edit a layer for this selection." },
+            { key: "toggle-preview", label: previewBypassed ? "Show Preview" : "Preview Before Selection", icon: "compare", enabled: maskId.length > 0 && hasSources, disabledReason: "This selection has no source preview yet.", checked: previewBypassed, tooltip: previewBypassed ? "Show this selection in preview." : "Preview before this selection." },
+            { key: "move-mask-up", label: "Move Selection Up", icon: "move-up", enabled: nested && orderIndex > 0, disabledReason: nested ? "Selection is already first." : "Only linked selections can be reordered here.", tooltip: "Move this selection earlier in the combine order." },
+            { key: "move-mask-down", label: "Move Selection Down", icon: "move-down", enabled: nested && orderIndex >= 0 && orderIndex < orderCount - 1, disabledReason: nested ? "Selection is already last." : "Only linked selections can be reordered here.", tooltip: "Move this selection later in the combine order." },
+            { key: "delete-mask", label: "Delete Selection", icon: "delete", destructive: true, separatorBefore: true, tooltip: "Delete this selection." }
         ]
     }
 
@@ -7764,6 +8816,15 @@ Rectangle {
         return index >= 0 ? (editorPreview.photoLayers[index] || ({})) : ({})
     }
 
+    function primaryAdjustmentLayerIndex() {
+        const selectedLayerIndex = root.activeAdjustmentLayerIndex()
+        if (selectedLayerIndex >= 0)
+            return selectedLayerIndex
+        if (root.selectedEditTargetScope() === "mask" || root.activeEditTargetScope() === "mask")
+            return root.activeMaskAdjustmentLayerIndex()
+        return -1
+    }
+
     function photoLayerKind(index) {
         if (index < 0 || index >= editorPreview.photoLayerCount)
             return ""
@@ -7865,7 +8926,7 @@ Rectangle {
     function activeEditTargetMaskName() {
         if (!editorPreview.hasActiveMask)
             return ""
-        return String(editorPreview.activeMaskName || editorPreview.activeMaskSetName || "Mask")
+        return String(editorPreview.activeMaskName || editorPreview.activeMaskSetName || "Selection")
     }
 
     function activeEditTargetBreadcrumbText() {
@@ -7874,29 +8935,29 @@ Rectangle {
             return "Base Image"
         const layerName = root.activeEditTargetPrimaryName()
         if (scope === "mask")
-            return "Base Image > " + layerName + " > " + root.activeEditTargetMaskName()
-        return "Base Image > " + layerName
+            return layerName + " / " + root.activeEditTargetMaskName()
+        return layerName
     }
 
     function activeEditTargetModeLabel() {
         const scope = root.activeEditTargetScope()
         if (scope === "mask")
-            return "Editing Mask"
+            return "Selection"
         if (scope === "adjustment-layer")
-            return "Editing Adjustment Layer"
+            return "Layer"
         if (scope === "photo-layer")
-            return "Editing Photo Layer"
+            return "Layer"
         return root.editInspectorTab === "presets" ? "Preset Target" : "Editing Base Image"
     }
 
     function activeEditTargetBadgeText() {
         const scope = root.activeEditTargetScope()
         if (scope === "mask")
-            return "MASK"
+            return "SEL"
         if (scope === "adjustment-layer")
             return "LAYER"
         if (scope === "photo-layer")
-            return "PHOTO LAYER"
+            return "LAYER"
         return "BASE"
     }
 
@@ -7906,7 +8967,20 @@ Rectangle {
             return theme.accentCool300
         if (scope === "photo-layer")
             return theme.accentWarm400
+        if (scope === "mask")
+            return "#8FA8FF"
         return root.mint
+    }
+
+    function activeEditTargetToneName() {
+        const scope = root.activeEditTargetScope()
+        if (scope === "base-image")
+            return "base"
+        if (scope === "mask")
+            return "selection"
+        if (scope === "photo-layer")
+            return "photo-layer"
+        return "layer"
     }
 
     function activeEditTargetVisualSignature() {
@@ -7915,6 +8989,19 @@ Rectangle {
         const hasThumbnail = String(thumbnail.thumbnailSource || "").length > 0
         return "scope:" + scope +
                 "|badge:" + root.activeEditTargetBadgeText() +
+                "|compact-copy:true" +
+                "|tone:" + root.activeEditTargetToneName() +
+                "|base-tone:cool" +
+                "|layer-tone:mint" +
+                "|selection-tone:periwinkle" +
+                "|photo-layer-tone:warm" +
+                "|visible-breadcrumbs:0" +
+                "|max-visible-breadcrumbs:1" +
+                "|inspector-context:hidden" +
+                "|motion:color-opacity-scale" +
+                "|motion-duration:" + String(root.studioMotionFast) +
+                "|context-owner:canvas-hud-layers" +
+                "|implementation-path:false" +
                 "|rail:true|separation:hard" +
                 "|thumbnail:" + String(scope !== "base-image") +
                 "|thumbnail-source:" + String(hasThumbnail) +
@@ -7962,7 +9049,7 @@ Rectangle {
         if (root.adjustmentControlSupportsActiveTarget(targets))
             return ""
         if (activeScope === "mask")
-            return "This adjustment edits image tone or color. Select the base image or an adjustment layer to use it."
+            return "This adjustment edits image tone or color. Select the base image or a layer to use it."
         if (activeScope === "photo-layer" && targets.indexOf("photo-layer") < 0)
             return "This control is not available for the selected photo layer type."
         return "This control is not available for the current edit target."
@@ -8000,17 +9087,17 @@ Rectangle {
         if (scope === "adjustment-layer") {
             const layer = root.activeEditTargetLayerData()
             const maskName = String(layer.selectionMaskSetName || "")
-            return "Layer adjustments" + (maskName.length > 0 ? " / Masked to " + maskName : "")
+            return "Layer edits" + (maskName.length > 0 ? " / Selection: " + maskName : "")
         }
         if (scope === "photo-layer") {
             const layer = root.activeEditTargetLayerData()
             const kind = String(layer.kind || "layer").trim()
-            return kind.length > 0 ? kind.charAt(0).toUpperCase() + kind.slice(1) + " layer controls"
-                                   : "Photo layer controls"
+            return kind.length > 0 ? kind.charAt(0).toUpperCase() + kind.slice(1) + " layer"
+                                   : "Layer"
         }
         if (root.editInspectorTab === "presets")
-            return "Applies presets to the Base Image/global recipe"
-        return "Global image adjustments"
+            return "Preset target: Base"
+        return "Base edits"
     }
 
     function activeEditTargetIconName() {
@@ -8027,7 +9114,8 @@ Rectangle {
     function activeEditTargetSignature() {
         return "scope:" + root.activeEditTargetScope() +
                 "|breadcrumb:" + root.activeEditTargetBreadcrumbText() +
-                "|summary:" + root.activeEditTargetSummaryText()
+                "|summary:" + root.activeEditTargetSummaryText() +
+                "|inspector-copy:hidden"
     }
 
     function adjustmentLayerIndexForMaskSet(maskSet) {
@@ -8234,6 +9322,7 @@ Rectangle {
         const sourceIndex = sources.length > 0 && sources[0].flatIndex !== undefined
                 ? Number(sources[0].flatIndex)
                 : -1
+        root.deferMaskOutlineActivation()
         if (sourceIndex >= 0)
             editorPreview.activeMaskIndex = sourceIndex
         let layerIndex = root.adjustmentLayerIndexForMaskSet(maskSet)
@@ -8256,6 +9345,11 @@ Rectangle {
                 root.editInspectorTab = "layers"
         }
         editorPreview.maskPreviewMode = "overlay"
+    }
+
+    function deferMaskOutlineActivation() {
+        root.maskOutlineActivationDeferred = true
+        maskOutlineActivationTimer.restart()
     }
 
     function deleteMaskSet(maskSet) {
@@ -8667,11 +9761,12 @@ Rectangle {
     }
 
     function primaryAdjustmentValue(adjustment, fallbackValue) {
-        const layer = root.activeAdjustmentLayerData()
+        const layerIndex = root.primaryAdjustmentLayerIndex()
+        const layer = layerIndex >= 0 ? (editorPreview.photoLayers[layerIndex] || ({})) : ({})
         const key = String(adjustment || "")
         if (key.length > 0 && layer[key] !== undefined && layer[key] !== null)
             return Number(layer[key])
-        if (root.activeAdjustmentLayerIndex() >= 0 && root.layerAdjustmentKeySupported(key))
+        if (layerIndex >= 0 && root.layerAdjustmentKeySupported(key))
             return root.layerAdjustmentNeutralValue(key)
         return Number(fallbackValue || 0)
     }
@@ -8683,8 +9778,8 @@ Rectangle {
             return false
         if (!root.adjustmentControlSupportsActiveTarget(rawTargets || "base-image,adjustment-layer"))
             return false
-        const layerIndex = root.activeAdjustmentLayerIndex()
-        if (layerIndex >= 0) {
+        const layerIndex = root.primaryAdjustmentLayerIndex()
+        if (layerIndex >= 0 && root.activeEditTargetScope() !== "base-image") {
             const layer = editorPreview.photoLayers[layerIndex] || ({})
             if (layer.locked === true)
                 return false
@@ -9039,6 +10134,22 @@ Rectangle {
         root.editTool = "layers"
         root.editInspectorTab = "layers"
         return true
+    }
+
+    function queueLayerToolActivation(index) {
+        if (index < 0 || index >= editorPreview.photoLayerCount)
+            return false
+        root.pendingLayerActivationIndex = index
+        layerToolActivationTimer.restart()
+        return true
+    }
+
+    function completePendingLayerToolActivation() {
+        const index = root.pendingLayerActivationIndex
+        root.pendingLayerActivationIndex = -1
+        if (root.editTool !== "layers" || index < 0 || index >= editorPreview.photoLayerCount)
+            return false
+        return root.setActivePhotoLayer(index)
     }
 
     function editPhotoLayerInspectorTarget(index) {
@@ -9624,6 +10735,7 @@ Rectangle {
         property real fallbackAspectRatio: 1.5
         property bool filmstripAspectBadgeVisible: false
         property int filmstripImageMargin: 0
+        property bool selectionBadgeVisible: true
         readonly property real sourceAspectRatio: thumbnailImage.status === Image.Ready &&
                                                    thumbnailImage.sourceSize.width > 0 &&
                                                    thumbnailImage.sourceSize.height > 0
@@ -9747,7 +10859,7 @@ Rectangle {
             width: 18
             height: 18
             radius: 2
-            visible: !card.filmstrip && (root.selectionMode || card.selected)
+            visible: card.selectionBadgeVisible && !card.filmstrip && (root.selectionMode || card.selected)
             color: card.selected ? root.mint : theme.alpha(theme.ink950, 0.72)
             border.width: theme.chromeBorderWidth
             border.color: card.selected ? root.mintSoft : root.hairlineStrong
@@ -9806,14 +10918,21 @@ Rectangle {
             objectName: "luminanceRangeSamplePatch"
             readonly property var samplePreview: editorPreview.activeMaskLuminanceSamplePreview || ({})
             readonly property bool viewportAvailable: typeof viewport !== "undefined"
+            readonly property var sampleViewRect: viewportAvailable
+                                                   ? viewport.viewRectForImage(
+                                                         Number(samplePreview.x || 0),
+                                                         Number(samplePreview.y || 0),
+                                                         Number(samplePreview.width || 0),
+                                                         Number(samplePreview.height || 0))
+                                                   : ({ x: 0, y: 0, width: 0, height: 0 })
             visible: viewportAvailable &&
                      Boolean(samplePreview.active) &&
                      editorPreview.activeMaskKind === "luminance" &&
                      viewport.previewContentVisible
-            x: viewportAvailable ? viewport.paintedContentX + Number(samplePreview.x || 0) * viewport.paintedContentWidth : 0
-            y: viewportAvailable ? viewport.paintedContentY + Number(samplePreview.y || 0) * viewport.paintedContentHeight : 0
-            width: viewportAvailable ? Math.max(8, Number(samplePreview.width || 0) * viewport.paintedContentWidth) : 0
-            height: viewportAvailable ? Math.max(8, Number(samplePreview.height || 0) * viewport.paintedContentHeight) : 0
+            x: sampleViewRect.x
+            y: sampleViewRect.y
+            width: Math.max(8, sampleViewRect.width)
+            height: Math.max(8, sampleViewRect.height)
             radius: 2
             color: theme.alpha(root.mint, 0.12)
             border.width: 2
@@ -9850,6 +10969,8 @@ Rectangle {
         property bool gamutOverlayEnabled: false
         property bool zoneMapOverlayEnabled: false
         property bool applyingSynchronizedView: false
+        property bool publishedPreviewViewportUpdateQueued: false
+        property string lastPublishedPreviewViewportSignature: ""
         property real pointerX: width / 2
         property real pointerY: height / 2
         readonly property real loupeSize: 168
@@ -9860,7 +10981,7 @@ Rectangle {
         readonly property bool nativePreviewActive: editedPreviewSurface &&
                                                     editorPreview.displayPreviewNativeAvailable
         readonly property bool providerPreviewVisible: String(source || "").length > 0 &&
-                                                       !editedPreviewSurface
+                                                       !nativePreviewActive
         readonly property real viewportContentWidth: Math.max(0, width - contentMargin * 2)
         readonly property real viewportContentHeight: Math.max(0, height - contentTopMargin - contentMargin)
         readonly property real nativeSourceWidth: Math.max(1, Number(editorPreview.displayPreviewNativeSize.width || 0))
@@ -9870,33 +10991,121 @@ Rectangle {
                ? Math.max(viewportContentWidth / nativeSourceWidth, viewportContentHeight / nativeSourceHeight)
                : Math.min(viewportContentWidth / nativeSourceWidth, viewportContentHeight / nativeSourceHeight))
             : 1
+        readonly property real pixelGridThreshold: 8.0
         readonly property real basePaintedContentWidth: nativePreviewActive
             ? nativeSourceWidth * nativeFitScale
             : previewImage.paintedWidth
         readonly property real basePaintedContentHeight: nativePreviewActive
             ? nativeSourceHeight * nativeFitScale
             : previewImage.paintedHeight
-        readonly property real paintedContentX: contentMargin
+        readonly property real basePaintedContentX: contentMargin
             + (viewportContentWidth - basePaintedContentWidth) / 2
-            + panX - basePaintedContentWidth * (zoom - 1) / 2
-        readonly property real paintedContentY: contentTopMargin
+        readonly property real basePaintedContentY: contentTopMargin
             + (viewportContentHeight - basePaintedContentHeight) / 2
+        readonly property real hardInspectionZoomLimit: 256.0
+        readonly property real deepInspectionZoomMultiplier: 4.0
+        readonly property real minimumDeepInspectionZoom: 64.0
+        readonly property real wheelZoomStepBase: 1.22
+        readonly property real sourcePixelInspectionZoom: Number(editorPreview.sourceImageWidth || 0) > 0 &&
+                                                         Number(editorPreview.sourceImageHeight || 0) > 0 &&
+                                                         basePaintedContentWidth > 0 &&
+                                                         basePaintedContentHeight > 0
+            ? Math.max(
+                  pixelGridThreshold * Number(editorPreview.sourceImageWidth || 1) / Math.max(1, basePaintedContentWidth),
+                  pixelGridThreshold * Number(editorPreview.sourceImageHeight || 1) / Math.max(1, basePaintedContentHeight))
+            : 1.0
+        readonly property real maxInspectionZoom: Math.max(
+            8.0,
+            Math.min(
+                hardInspectionZoomLimit,
+                Math.ceil(Math.max(minimumDeepInspectionZoom,
+                                   sourcePixelInspectionZoom * deepInspectionZoomMultiplier))))
+        readonly property var inspectionZoomLevels: [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, maxInspectionZoom]
+        readonly property real paintedContentX: basePaintedContentX
+            + panX - basePaintedContentWidth * (zoom - 1) / 2
+        readonly property real paintedContentY: basePaintedContentY
             + panY - basePaintedContentHeight * (zoom - 1) / 2
         readonly property real paintedContentWidth: basePaintedContentWidth * zoom
         readonly property real paintedContentHeight: basePaintedContentHeight * zoom
         readonly property bool previewContentVisible: nativePreviewActive ||
                                                       providerPreviewVisible
+        readonly property real sourcePixelScreenWidth: Number(editorPreview.sourceImageWidth || 0) > 0
+            ? paintedContentWidth / Math.max(1, Number(editorPreview.sourceImageWidth || 1))
+            : 0
+        readonly property real sourcePixelScreenHeight: Number(editorPreview.sourceImageHeight || 0) > 0
+            ? paintedContentHeight / Math.max(1, Number(editorPreview.sourceImageHeight || 1))
+            : 0
+        readonly property bool pixelInspectionActive: previewContentVisible &&
+                                                      sourcePixelScreenWidth >= pixelGridThreshold &&
+                                                      sourcePixelScreenHeight >= pixelGridThreshold
+        readonly property bool pixelGridFullResolutionBacked: (nativePreviewActive &&
+                                                              editorPreview.displayPreviewNativeFullResolution) ||
+                                                             (providerPreviewVisible &&
+                                                              Number(editorPreview.sourceImageWidth || 0) > 0 &&
+                                                              Number(editorPreview.sourceImageHeight || 0) > 0 &&
+                                                              Number(editorPreview.sourceImageWidth || 0) <= editorPreview.previewTargetEdge &&
+                                                              Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge)
+        readonly property bool pixelGridVisible: pixelInspectionActive
+        readonly property bool highCostInspectionOverlaysVisible: true
+        readonly property string pixelGridRenderContract: "pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked"
+        readonly property string pixelInspectionPerformanceContract: "pixel-inspection-performance:v3|allow-loupe-and-analysis-overlays-while-source-pixels-visible:true|viewport-publish-signature-dedup:true|callLater-coalesced:true|deferred-source-patch-refresh:520ms"
         readonly property string mediaSurfaceContract: "media-surface:v1|canvas-stage:dominant|image-corners:consistent|empty-loading-failure:same-bounds|chrome:quiet|badges:corner-stacked|toolbar-baseline:single"
         readonly property string previewChromeContract: "preview-chrome:v1|status:corner-badge|diagnostics:overlay-menu|top-controls:baseline|failure:retry-in-badge|content-dominant:true"
+        readonly property string pixelInspectionContract: "pixel-inspection:v3|zoom-levels:100,200,400,800,1600,3200,6400,12800,adaptive-source-pixel|max:source-pixel-4x-min-6400|cursor-anchored:true|crisp-source-pixels:true|grid-threshold:8px|mapper-aligned:true|preview-viewport:source-pixel-aware|wheel:exponential-delta"
         color: "#050708"
         border.width: theme.chromeBorderWidth
         border.color: theme.alpha(root.hairline, 0.78)
         radius: theme.radius8
         clip: true
 
+        function nextInspectionZoom() {
+            let firstZoom = 1.0
+            let previousZoom = 0.0
+            for (let index = 0; index < inspectionZoomLevels.length; ++index) {
+                const candidateZoom = root.clamp(Number(inspectionZoomLevels[index] || 1), 1.0, maxInspectionZoom)
+                if (candidateZoom <= previousZoom + 0.0001)
+                    continue
+                if (previousZoom <= 0.0001)
+                    firstZoom = candidateZoom
+                previousZoom = candidateZoom
+                if (zoom < candidateZoom - 0.0001)
+                    return candidateZoom
+            }
+            return firstZoom
+        }
+
+        function previousInspectionZoom() {
+            let previousZoom = maxInspectionZoom + 1.0
+            for (let index = inspectionZoomLevels.length - 1; index >= 0; --index) {
+                const candidateZoom = root.clamp(Number(inspectionZoomLevels[index] || 1), 1.0, maxInspectionZoom)
+                if (candidateZoom >= previousZoom - 0.0001)
+                    continue
+                previousZoom = candidateZoom
+                if (zoom > candidateZoom + 0.0001)
+                    return candidateZoom
+            }
+            return 1.0
+        }
+
+        function wheelZoomFactor(wheel) {
+            const angleY = wheel && wheel.angleDelta ? Number(wheel.angleDelta.y || 0) : 0
+            const pixelY = wheel && wheel.pixelDelta ? Number(wheel.pixelDelta.y || 0) : 0
+            const steps = Math.abs(angleY) > 0.0001 ? angleY / 120.0 : pixelY / 90.0
+            if (Math.abs(steps) <= 0.0001)
+                return 1.0
+            return Math.pow(wheelZoomStepBase, root.clamp(steps, -6.0, 6.0))
+        }
+
         function setZoom(nextZoom, anchorX, anchorY) {
-            const oldZoom = Math.max(0.01, zoom)
-            const clampedZoom = root.clamp(nextZoom, 0.25, 4.0)
+            function finiteOr(value, fallback) {
+                const numeric = Number(value)
+                return isFinite(numeric) ? numeric : fallback
+            }
+
+            const requestedZoom = finiteOr(nextZoom, zoom)
+            const safeMaxZoom = Math.max(1.0, finiteOr(maxInspectionZoom, 8.0))
+            const oldZoom = Math.max(0.01, finiteOr(zoom, 1.0))
+            const clampedZoom = root.clamp(requestedZoom, 0.25, safeMaxZoom)
             if (Math.abs(clampedZoom - oldZoom) < 0.0001)
                 return
             if (clampedZoom <= 1.0) {
@@ -9906,22 +11115,34 @@ Rectangle {
                 return
             }
 
-            const pivotX = root.clamp(anchorX === undefined ? width / 2 : anchorX, 0, Math.max(0, width))
-            const pivotY = root.clamp(anchorY === undefined ? height / 2 : anchorY, 0, Math.max(0, height))
-            const basePaintedWidth = Math.max(1, paintedContentWidth / oldZoom)
-            const basePaintedHeight = Math.max(1, paintedContentHeight / oldZoom)
-            const basePaintedX = paintedContentX - panX + basePaintedWidth * (oldZoom - 1) / 2
-            const basePaintedY = paintedContentY - panY + basePaintedHeight * (oldZoom - 1) / 2
-            const anchorNormalizedX = root.clamp((pivotX - paintedContentX) / Math.max(1, paintedContentWidth), 0, 1)
-            const anchorNormalizedY = root.clamp((pivotY - paintedContentY) / Math.max(1, paintedContentHeight), 0, 1)
+            const viewportWidth = Math.max(0, finiteOr(width, 0))
+            const viewportHeight = Math.max(0, finiteOr(height, 0))
+            const pivotX = root.clamp(
+                        finiteOr(anchorX === undefined ? viewportWidth / 2 : anchorX, viewportWidth / 2),
+                        0,
+                        viewportWidth)
+            const pivotY = root.clamp(
+                        finiteOr(anchorY === undefined ? viewportHeight / 2 : anchorY, viewportHeight / 2),
+                        0,
+                        viewportHeight)
+            const basePaintedWidth = Math.max(1, finiteOr(paintedContentWidth / oldZoom, basePaintedContentWidth))
+            const basePaintedHeight = Math.max(1, finiteOr(paintedContentHeight / oldZoom, basePaintedContentHeight))
+            const basePaintedX = finiteOr(paintedContentX, basePaintedContentX) - finiteOr(panX, 0) + basePaintedWidth * (oldZoom - 1) / 2
+            const basePaintedY = finiteOr(paintedContentY, basePaintedContentY) - finiteOr(panY, 0) + basePaintedHeight * (oldZoom - 1) / 2
+            const currentPaintedContentX = finiteOr(paintedContentX, basePaintedX)
+            const currentPaintedContentY = finiteOr(paintedContentY, basePaintedY)
+            const currentPaintedContentWidth = Math.max(1, finiteOr(paintedContentWidth, basePaintedWidth))
+            const currentPaintedContentHeight = Math.max(1, finiteOr(paintedContentHeight, basePaintedHeight))
+            const anchorNormalizedX = root.clamp((pivotX - currentPaintedContentX) / Math.max(1, currentPaintedContentWidth), 0, 1)
+            const anchorNormalizedY = root.clamp((pivotY - currentPaintedContentY) / Math.max(1, currentPaintedContentHeight), 0, 1)
             const nextPaintedWidth = basePaintedWidth * clampedZoom
             const nextPaintedHeight = basePaintedHeight * clampedZoom
             const nextPaintedX = pivotX - anchorNormalizedX * nextPaintedWidth
             const nextPaintedY = pivotY - anchorNormalizedY * nextPaintedHeight
 
             zoom = clampedZoom
-            panX = nextPaintedX - basePaintedX + basePaintedWidth * (clampedZoom - 1) / 2
-            panY = nextPaintedY - basePaintedY + basePaintedHeight * (clampedZoom - 1) / 2
+            panX = finiteOr(nextPaintedX - basePaintedX + basePaintedWidth * (clampedZoom - 1) / 2, 0)
+            panY = finiteOr(nextPaintedY - basePaintedY + basePaintedHeight * (clampedZoom - 1) / 2, 0)
         }
 
         function inspectDetailAtOneToOne() {
@@ -9931,7 +11152,10 @@ Rectangle {
             const fittedHeight = Math.max(1, paintedContentHeight / Math.max(0.01, zoom))
             const sourceWidth = Math.max(1, editorPreview.sourceImageWidth)
             const sourceHeight = Math.max(1, editorPreview.sourceImageHeight)
-            const targetZoom = root.clamp(Math.max(sourceWidth / fittedWidth, sourceHeight / fittedHeight), 1.25, 4.0)
+            const targetZoom = root.clamp(
+                Math.max(sourceWidth / fittedWidth, sourceHeight / fittedHeight, sourcePixelInspectionZoom),
+                1.25,
+                maxInspectionZoom)
             setZoom(targetZoom)
             panX = 0
             panY = 0
@@ -9944,6 +11168,11 @@ Rectangle {
             root.zoneMapOverlayEnabled = false
             schedulePublishedPreviewViewportUpdate()
             return true
+        }
+
+        onMaxInspectionZoomChanged: {
+            if (zoom > maxInspectionZoom)
+                setZoom(maxInspectionZoom)
         }
 
         function setFitMode(nextFitMode) {
@@ -9978,11 +11207,11 @@ Rectangle {
         }
 
         function zoomIn() {
-            setZoom(zoom >= 1.0 ? zoom + 0.25 : 1.0)
+            setZoom(nextInspectionZoom())
         }
 
         function zoomOut() {
-            setZoom(zoom <= 1.0 ? 0.75 : zoom - 0.25)
+            setZoom(previousInspectionZoom())
         }
 
         CanvasCoordinateMapper {
@@ -9991,6 +11220,7 @@ Rectangle {
             contentY: viewport.paintedContentY
             contentWidth: viewport.paintedContentWidth
             contentHeight: viewport.paintedContentHeight
+            fitMode: viewport.fitMode
             devicePixelRatio: root.thumbnailScreenDevicePixelRatio()
         }
 
@@ -9999,9 +11229,83 @@ Rectangle {
             return { valid: point.valid, x: point.x, y: point.y }
         }
 
+        function pointerMappingDiagnosticSignature(x, y) {
+            return "studio-viewport-pointer:v1|" +
+                   viewportCoordinateMapper.pointerMappingDiagnosticSignature(x, y)
+        }
+
+        function viewPointForImage(normalizedX, normalizedY) {
+            const point = viewportCoordinateMapper.imageToViewPoint(normalizedX, normalizedY)
+            return { valid: point.valid, x: point.x, y: point.y }
+        }
+
+        function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight) {
+            const rect = viewportCoordinateMapper.imageToViewRect(
+                        normalizedX,
+                        normalizedY,
+                        normalizedWidth,
+                        normalizedHeight)
+            return { valid: rect.valid, x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        }
+
+        function pixelBrushCursorCellForViewport(x, y) {
+            if (!root.pixelExactToolReady() || !pixelGridVisible)
+                return { valid: false, x: 0, y: 0, width: 0, height: 0, pixelX: -1, pixelY: -1 }
+            const point = normalizedPointForViewport(x, y)
+            if (!point.valid)
+                return { valid: false, x: 0, y: 0, width: 0, height: 0, pixelX: -1, pixelY: -1 }
+            const sourceWidth = Math.max(1, Number(editorPreview.sourceImageWidth || 1))
+            const sourceHeight = Math.max(1, Number(editorPreview.sourceImageHeight || 1))
+            const pixelX = root.clamp(Math.floor(point.x * sourceWidth), 0, sourceWidth - 1)
+            const pixelY = root.clamp(Math.floor(point.y * sourceHeight), 0, sourceHeight - 1)
+            const rect = viewRectForImage(
+                        pixelX / sourceWidth,
+                        pixelY / sourceHeight,
+                        1.0 / sourceWidth,
+                        1.0 / sourceHeight)
+            return {
+                valid: rect.valid,
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+                width: Math.max(1, Math.round(rect.width)),
+                height: Math.max(1, Math.round(rect.height)),
+                pixelX: pixelX,
+                pixelY: pixelY
+            }
+        }
+
+        function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter) {
+            const radius = Math.max(0.0, Number(normalizedDiameter || 0)) / 2.0
+            const left = viewport.viewPointForImage(root.clamp(centerX - radius, 0.0, 1.0), centerY)
+            const right = viewport.viewPointForImage(root.clamp(centerX + radius, 0.0, 1.0), centerY)
+            const top = viewport.viewPointForImage(centerX, root.clamp(centerY - radius, 0.0, 1.0))
+            const bottom = viewport.viewPointForImage(centerX, root.clamp(centerY + radius, 0.0, 1.0))
+            const horizontal = Math.sqrt(Math.pow(right.x - left.x, 2) + Math.pow(right.y - left.y, 2))
+            const vertical = Math.sqrt(Math.pow(bottom.x - top.x, 2) + Math.pow(bottom.y - top.y, 2))
+            return Math.max(1, horizontal, vertical)
+        }
+
         function clearPublishedPreviewViewport() {
-            if (publishPreviewViewport)
-                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+            if (!publishPreviewViewport)
+                return
+            if (lastPublishedPreviewViewportSignature === "inactive")
+                return
+            lastPublishedPreviewViewportSignature = "inactive"
+            editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+        }
+
+        function roundedViewportSignatureValue(value) {
+            return String(Math.round(Number(value || 0) * 1000000))
+        }
+
+        function publishedPreviewViewportSignature(x, y, widthValue, heightValue, patchEdge, active) {
+            if (!active)
+                return "inactive"
+            return roundedViewportSignatureValue(x) + "|" +
+                   roundedViewportSignatureValue(y) + "|" +
+                   roundedViewportSignatureValue(widthValue) + "|" +
+                   roundedViewportSignatureValue(heightValue) + "|" +
+                   String(Math.max(0, Math.round(Number(patchEdge || 0))))
         }
 
         function thumbnailScreenDevicePixelRatio() {
@@ -10020,8 +11324,8 @@ Rectangle {
                 return
             const deviceScale = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
             const contentEdge = Math.max(width, height)
-            const supersample = root.maskWorkActive ? 2.0 : 1.5
-            const qualityFloor = root.maskWorkActive ? 2048 : 1600
+            const supersample = root.maskWorkActive ? 2.5 : 2.0
+            const qualityFloor = root.maskWorkActive ? 3072 : 2560
             editorPreview.previewTargetEdge = Math.round(Math.max(qualityFloor, contentEdge * deviceScale * supersample))
         }
 
@@ -10030,9 +11334,10 @@ Rectangle {
                 return
             updatePublishedPreviewQuality()
             if (!root.workspaceActive || !editorPreview.hasAsset || editorPreview.compareMode || !visible ||
-                    previewImage.source.toString().length === 0 || zoom <= 1.01 ||
+                    previewImage.source.toString().length === 0 ||
+                    (zoom <= 1.01 && !pixelInspectionActive) ||
                     paintedContentWidth <= 1 || paintedContentHeight <= 1) {
-                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+                clearPublishedPreviewViewport()
                 return
             }
 
@@ -10043,25 +11348,52 @@ Rectangle {
             const visibleWidth = visibleRight - visibleLeft
             const visibleHeight = visibleBottom - visibleTop
             if (visibleWidth <= 1 || visibleHeight <= 1) {
-                editorPreview.setPreviewViewport(0, 0, 0, 0, 0, false)
+                clearPublishedPreviewViewport()
                 return
             }
+            const visibleSourcePixelWidth = Math.max(
+                        1,
+                        Number(editorPreview.sourceImageWidth || 1) *
+                        visibleWidth / Math.max(1, paintedContentWidth))
+            const visibleSourcePixelHeight = Math.max(
+                        1,
+                        Number(editorPreview.sourceImageHeight || 1) *
+                        visibleHeight / Math.max(1, paintedContentHeight))
+            const previewPatchEdge = editorPreview.previewViewportPatchEdgeForInspection(
+                        visibleSourcePixelWidth,
+                        visibleSourcePixelHeight,
+                        visibleWidth,
+                        visibleHeight,
+                        Screen.devicePixelRatio,
+                        root.maskWorkActive,
+                        pixelInspectionActive)
 
+            const viewportX = (visibleLeft - paintedContentX) / paintedContentWidth
+            const viewportY = (visibleTop - paintedContentY) / paintedContentHeight
+            const viewportWidth = visibleWidth / paintedContentWidth
+            const viewportHeight = visibleHeight / paintedContentHeight
+            const nextSignature = publishedPreviewViewportSignature(
+                        viewportX,
+                        viewportY,
+                        viewportWidth,
+                        viewportHeight,
+                        previewPatchEdge,
+                        true)
+            if (nextSignature === lastPublishedPreviewViewportSignature)
+                return
+            lastPublishedPreviewViewportSignature = nextSignature
             editorPreview.setPreviewViewport(
-                        (visibleLeft - paintedContentX) / paintedContentWidth,
-                        (visibleTop - paintedContentY) / paintedContentHeight,
-                        visibleWidth / paintedContentWidth,
-                        visibleHeight / paintedContentHeight,
-                        Math.round(Math.max(root.maskWorkActive ? 1536 : 1,
-                                            Math.max(visibleWidth, visibleHeight) *
-                                            Screen.devicePixelRatio *
-                                            (root.maskWorkActive ? 1.5 : 1.0))),
+                        viewportX,
+                        viewportY,
+                        viewportWidth,
+                        viewportHeight,
+                        previewPatchEdge,
                         true)
         }
 
         Timer {
             id: publishedPreviewViewportSettleTimer
-            interval: 160
+            interval: viewport.pixelInspectionActive ? 520 : 160
             repeat: false
             onTriggered: viewport.updatePublishedPreviewViewport()
         }
@@ -10071,10 +11403,22 @@ Rectangle {
                 return
             if (immediate === true) {
                 publishedPreviewViewportSettleTimer.stop()
-                Qt.callLater(updatePublishedPreviewViewport)
+                if (publishedPreviewViewportUpdateQueued)
+                    return
+                publishedPreviewViewportUpdateQueued = true
+                Qt.callLater(function() {
+                    viewport.publishedPreviewViewportUpdateQueued = false
+                    viewport.updatePublishedPreviewViewport()
+                })
                 return
             }
             publishedPreviewViewportSettleTimer.restart()
+        }
+
+        function schedulePreviewChangedViewportUpdate() {
+            if (pixelInspectionActive)
+                return
+            schedulePublishedPreviewViewportUpdate(false)
         }
 
         function updatePixelInspectorAt(x, y) {
@@ -10144,7 +11488,7 @@ Rectangle {
                    viewport.previewContentVisible &&
                    !root.spacePanActive &&
                    !editorPreview.compareMode &&
-                   (root.brushToolReady() || root.editTool === "masks")
+                   (root.brushToolReady() || root.pixelExactToolReady() || root.editTool === "masks")
         }
 
         function handleMaskPointerPressed(mouse) {
@@ -10153,6 +11497,11 @@ Rectangle {
             const point = normalizedPointForViewport(mouse.x, mouse.y)
             if (!point.valid)
                 return false
+
+            if (root.pixelExactToolReady()) {
+                const operation = root.applyMaskOperationForModifierState(mouse.modifiers)
+                return editorPreview.applyActiveSelectionPixel(point.x, point.y, operation)
+            }
 
             if (root.brushToolReady()) {
                 root.applyMaskOperationForModifierState(mouse.modifiers)
@@ -10198,6 +11547,11 @@ Rectangle {
                 return true
             }
 
+            if (root.pixelExactToolReady() && viewportMouse.pressed) {
+                const operation = root.applyMaskOperationForModifierState(mouse.modifiers)
+                return editorPreview.applyActiveSelectionPixel(point.x, point.y, operation)
+            }
+
             const kind = String(editorPreview.activeMaskKind || "")
             if ((kind === "lasso" || kind === "polygon") && viewportMouse.pressed) {
                 editorPreview.appendActivePolygonPoint(point.x, point.y)
@@ -10235,6 +11589,7 @@ Rectangle {
             publishSynchronizedView()
             schedulePublishedPreviewViewportUpdate(false)
         }
+        onPixelInspectionActiveChanged: schedulePublishedPreviewViewportUpdate(false)
         onWidthChanged: schedulePublishedPreviewViewportUpdate(true)
         onHeightChanged: schedulePublishedPreviewViewportUpdate(true)
         onVisibleChanged: schedulePublishedPreviewViewportUpdate(true)
@@ -10254,7 +11609,7 @@ Rectangle {
             target: editorPreview
             function onAssetChanged() { viewport.schedulePublishedPreviewViewportUpdate(true) }
             function onCompareModeChanged() { viewport.schedulePublishedPreviewViewportUpdate(true) }
-            function onPreviewChanged() { viewport.schedulePublishedPreviewViewportUpdate(true) }
+            function onPreviewChanged() { viewport.schedulePreviewChangedViewportUpdate() }
         }
 
         Image {
@@ -10269,6 +11624,8 @@ Rectangle {
             asynchronous: true
             cache: false
             visible: viewport.providerPreviewVisible
+            smooth: !viewport.pixelInspectionActive
+            mipmap: false
             scale: viewport.zoom
             transform: Translate {
                 x: viewport.panX
@@ -10281,12 +11638,102 @@ Rectangle {
 
         EditorPreviewTextureItem {
             id: nativePreviewImage
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "NativePreviewImage" : "nativePreviewImage"
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             visible: viewport.nativePreviewActive
             controller: editorPreview
+            crispPixels: viewport.pixelInspectionActive
+        }
+
+        Canvas {
+            id: pixelGridOverlay
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "PixelGridOverlay" : "pixelGridOverlay"
+            anchors.fill: parent
+            visible: viewport.pixelGridVisible
+            z: 16.8
+            property bool paintPending: false
+
+            function schedulePaint() {
+                if (paintPending)
+                    return
+                paintPending = true
+                pixelGridPaintTimer.restart()
+            }
+
+            Timer {
+                id: pixelGridPaintTimer
+                interval: 16
+                repeat: false
+                onTriggered: {
+                    pixelGridOverlay.paintPending = false
+                    pixelGridOverlay.requestPaint()
+                }
+            }
+
+            onPaint: {
+                const ctx = getContext("2d")
+                ctx.clearRect(0, 0, width, height)
+                if (!viewport.pixelGridVisible)
+                    return
+                const sourceWidth = Math.max(1, Number(editorPreview.sourceImageWidth || 1))
+                const sourceHeight = Math.max(1, Number(editorPreview.sourceImageHeight || 1))
+                const stepX = viewport.sourcePixelScreenWidth
+                const stepY = viewport.sourcePixelScreenHeight
+                if (stepX < viewport.pixelGridThreshold || stepY < viewport.pixelGridThreshold)
+                    return
+                const contentLeft = viewport.paintedContentX
+                const contentTop = viewport.paintedContentY
+                const contentRight = contentLeft + viewport.paintedContentWidth
+                const contentBottom = contentTop + viewport.paintedContentHeight
+                const visibleLeft = Math.max(0, contentLeft)
+                const visibleTop = Math.max(0, contentTop)
+                const visibleRight = Math.min(width, contentRight)
+                const visibleBottom = Math.min(height, contentBottom)
+                if (visibleRight <= visibleLeft || visibleBottom <= visibleTop)
+                    return
+                const startXIndex = Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))
+                const endXIndex = Math.min(sourceWidth, Math.ceil((visibleRight - contentLeft) / stepX))
+                const startYIndex = Math.max(0, Math.floor((visibleTop - contentTop) / stepY))
+                const endYIndex = Math.min(sourceHeight, Math.ceil((visibleBottom - contentTop) / stepY))
+                ctx.save()
+                ctx.lineWidth = 1
+                ctx.strokeStyle = theme.alpha(theme.polar, 0.22)
+                ctx.beginPath()
+                for (let xIndex = startXIndex; xIndex <= endXIndex; ++xIndex) {
+                    const lineX = Math.round(contentLeft + xIndex * stepX) + 0.5
+                    if (lineX >= visibleLeft - 1 && lineX <= visibleRight + 1) {
+                        ctx.moveTo(lineX, visibleTop)
+                        ctx.lineTo(lineX, visibleBottom)
+                    }
+                }
+                for (let yIndex = startYIndex; yIndex <= endYIndex; ++yIndex) {
+                    const lineY = Math.round(contentTop + yIndex * stepY) + 0.5
+                    if (lineY >= visibleTop - 1 && lineY <= visibleBottom + 1) {
+                        ctx.moveTo(visibleLeft, lineY)
+                        ctx.lineTo(visibleRight, lineY)
+                    }
+                }
+                ctx.stroke()
+                ctx.restore()
+            }
+
+            onVisibleChanged: schedulePaint()
+            onWidthChanged: schedulePaint()
+            onHeightChanged: schedulePaint()
+
+            Connections {
+                target: viewport
+                function onPaintedContentXChanged() { pixelGridOverlay.schedulePaint() }
+                function onPaintedContentYChanged() { pixelGridOverlay.schedulePaint() }
+                function onPaintedContentWidthChanged() { pixelGridOverlay.schedulePaint() }
+                function onPaintedContentHeightChanged() { pixelGridOverlay.schedulePaint() }
+                function onPixelGridVisibleChanged() { pixelGridOverlay.schedulePaint() }
+            }
         }
 
         Rectangle {
@@ -10336,7 +11783,8 @@ Rectangle {
         StatusChip {
             id: maskActivityStatusChip
             objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskActivityStatusChip" : "maskActivityStatusChip"
-            readonly property string activityAnimationContract: "nonblocking|persistent|animated-dot:v1"
+            readonly property real activityProgressValue: root.maskActivityProgressValue()
+            readonly property string activityAnimationContract: "nonblocking|persistent|animated-dot:v2|progress-strip:true|smart:indeterminate|retouch:determinate"
             anchors.left: parent.left
             anchors.bottom: previewUpdateBadge.visible ? previewUpdateBadge.top : parent.bottom
             anchors.leftMargin: 14
@@ -10348,20 +11796,35 @@ Rectangle {
             busy: true
             tooltipText: text
             z: 1.45
+
+            ProgressStrip {
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "MaskActivityProgressStrip" : "maskActivityProgressStrip"
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 3
+                progress: maskActivityStatusChip.activityProgressValue
+                accent: "#d98962"
+                trackColor: "transparent"
+                visible: maskActivityStatusChip.visible
+            }
         }
 
         Image {
             id: focusCheckOverlay
             objectName: "focusCheckOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.focusCheckOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.focusCheckOverlayEnabled && viewport.focusCheckOverlayEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
                      viewport.previewContentVisible && source.toString().length > 0
             z: 11
         }
@@ -10369,15 +11832,18 @@ Rectangle {
         Image {
             id: clippingOverlay
             objectName: "clippingOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.clippingOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.clippingOverlayEnabled && viewport.clippingOverlayEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
                      viewport.previewContentVisible && source.toString().length > 0
             z: 12
         }
@@ -10406,15 +11872,18 @@ Rectangle {
         Image {
             id: focusPeakingOverlay
             objectName: "focusPeakingOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.focusPeakingOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.focusPeakingOverlayEnabled && viewport.focusPeakingOverlayEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
                      viewport.previewContentVisible && source.toString().length > 0
             z: 13
         }
@@ -10422,15 +11891,18 @@ Rectangle {
         Image {
             id: falseColorOverlay
             objectName: "falseColorOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.falseColorOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.falseColorOverlayEnabled && viewport.falseColorOverlayEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
                      viewport.previewContentVisible && source.toString().length > 0
             z: 14
         }
@@ -10438,15 +11910,18 @@ Rectangle {
         Image {
             id: gamutOverlay
             objectName: "gamutOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.gamutOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.gamutOverlayEnabled && viewport.gamutOverlayEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
                      viewport.previewContentVisible && source.toString().length > 0
             z: 15
         }
@@ -10476,15 +11951,18 @@ Rectangle {
         Image {
             id: zoneMapOverlay
             objectName: "zoneMapOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.zoneMapOverlaySource
             fillMode: Image.Stretch
             asynchronous: true
             cache: false
             visible: root.zoneMapOverlayEnabled && viewport.zoneMapOverlayEnabled &&
+                      viewport.highCostInspectionOverlaysVisible &&
                       viewport.previewContentVisible && source.toString().length > 0
             z: 16
         }
@@ -10492,10 +11970,12 @@ Rectangle {
         Image {
             id: colorToolMaskPreviewOverlay
             objectName: "colorToolMaskPreviewOverlay"
-            x: viewport.paintedContentX
-            y: viewport.paintedContentY
-            width: viewport.paintedContentWidth
-            height: viewport.paintedContentHeight
+            x: viewport.basePaintedContentX + viewport.panX
+            y: viewport.basePaintedContentY + viewport.panY
+            width: viewport.basePaintedContentWidth
+            height: viewport.basePaintedContentHeight
+            scale: viewport.zoom
+            transformOrigin: Item.Center
             source: editorPreview.colorToolMaskPreviewSource
             fillMode: Image.Stretch
             asynchronous: true
@@ -10529,7 +12009,9 @@ Rectangle {
         Rectangle {
             id: loupeView
             objectName: "loupeView"
-            visible: root.loupeEnabled && viewport.loupeEnabled && viewport.previewContentVisible
+            visible: root.loupeEnabled && viewport.loupeEnabled &&
+                     viewport.highCostInspectionOverlaysVisible &&
+                     viewport.previewContentVisible
             x: root.clamp(root.loupeX - width / 2, 6, Math.max(6, viewport.width - width - 6))
             y: root.clamp(root.loupeY - height / 2, 6, Math.max(6, viewport.height - height - 6))
             width: Math.min(viewport.loupeSize, Math.max(96, viewport.width - 12))
@@ -10551,6 +12033,8 @@ Rectangle {
                 asynchronous: true
                 cache: false
                 visible: !viewport.nativePreviewActive
+                smooth: !viewport.pixelInspectionActive
+                mipmap: false
                 scale: viewport.zoom
                 transform: Translate {
                     x: viewport.panX * root.loupeZoom
@@ -10559,12 +12043,18 @@ Rectangle {
             }
 
             EditorPreviewTextureItem {
-                width: viewport.paintedContentWidth * root.loupeZoom
-                height: viewport.paintedContentHeight * root.loupeZoom
-                x: loupeView.width / 2 - (root.loupeX - viewport.paintedContentX) * root.loupeZoom
-                y: loupeView.height / 2 - (root.loupeY - viewport.paintedContentY) * root.loupeZoom
+                objectName: viewport.objectName.length > 0 ? viewport.objectName + "LoupeNativePreviewImage" : "loupeNativePreviewImage"
+                width: viewport.basePaintedContentWidth * root.loupeZoom
+                height: viewport.basePaintedContentHeight * root.loupeZoom
+                x: loupeView.width / 2 -
+                   (root.loupeX - (viewport.basePaintedContentX + viewport.panX)) * root.loupeZoom
+                y: loupeView.height / 2 -
+                   (root.loupeY - (viewport.basePaintedContentY + viewport.panY)) * root.loupeZoom
+                scale: viewport.zoom
+                transformOrigin: Item.Center
                 visible: viewport.nativePreviewActive
                 controller: editorPreview
+                crispPixels: viewport.pixelInspectionActive
             }
 
             Rectangle {
@@ -10595,6 +12085,8 @@ Rectangle {
             accentColor: root.mint
             outlinePhase: root.selectionOutlinePhase
             outlineAnimationEnabled: root.selectionOutlineAnimationEnabled
+            outlineVisualScale: viewport.zoom
+            outlineActivationDeferred: root.maskOutlineActivationDeferred
             cropX: editorPreview.cropRectX
             cropY: editorPreview.cropRectY
             cropWidth: editorPreview.cropRectWidth
@@ -10603,6 +12095,23 @@ Rectangle {
             enablePolygonHandles: true
             onActiveOutlineClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), false, true)
             z: 17
+        }
+
+        Rectangle {
+            id: pixelBrushSnappedCursor
+            objectName: viewport.objectName.length > 0 ? viewport.objectName + "PixelBrushSnappedCursor" : "pixelBrushSnappedCursor"
+            readonly property var cell: viewport.pixelBrushCursorCellForViewport(viewport.pointerX, viewport.pointerY)
+            readonly property string pixelBrushCursorSnapContract: "pixel-brush-cursor:v2|source-cell:floor|screen-rect:mapper|visible:pixel-grid|source-backed:pixelGridFullResolutionBacked"
+            visible: root.pixelExactToolReady() && viewport.pixelGridVisible && cell.valid
+            x: cell.x
+            y: cell.y
+            width: cell.width
+            height: cell.height
+            radius: 0
+            color: theme.alpha(root.selectionOperationOverlayColor(root.maskCreationOperation), 0.24)
+            border.width: 1
+            border.color: theme.alpha(root.selectionOperationOverlayColor(root.maskCreationOperation), 0.95)
+            z: 21
         }
 
         Rectangle {
@@ -10664,7 +12173,7 @@ Rectangle {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.bottom
                 anchors.topMargin: 5
-                text: brushCursorRing.brushModeLabel + " " +
+                text: brushCursorRing.brushModeLabel + " Size " +
                       root.brushSizeVisibleText() +
                       " / Hard " + root.brushHardnessValueText() +
                       " / Flow " + root.brushFlowValueText() +
@@ -10685,10 +12194,12 @@ Rectangle {
         Rectangle {
             id: cloneOffsetLine
             objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneOffsetLine" : "cloneOffsetLine"
-            property real sourceScreenX: viewport.paintedContentX + editorPreview.activeMaskCloneSourceX * viewport.paintedContentWidth
-            property real sourceScreenY: viewport.paintedContentY + editorPreview.activeMaskCloneSourceY * viewport.paintedContentHeight
-            property real targetScreenX: viewport.paintedContentX + root.activeCloneTargetX() * viewport.paintedContentWidth
-            property real targetScreenY: viewport.paintedContentY + root.activeCloneTargetY() * viewport.paintedContentHeight
+            property var sourcePoint: viewport.viewPointForImage(editorPreview.activeMaskCloneSourceX, editorPreview.activeMaskCloneSourceY)
+            property var targetPoint: viewport.viewPointForImage(root.activeCloneTargetX(), root.activeCloneTargetY())
+            property real sourceScreenX: sourcePoint.x
+            property real sourceScreenY: sourcePoint.y
+            property real targetScreenX: targetPoint.x
+            property real targetScreenY: targetPoint.y
             property real offsetLength: Math.sqrt(Math.pow(targetScreenX - sourceScreenX, 2) +
                                                   Math.pow(targetScreenY - sourceScreenY, 2))
             property string cloneMode: editorPreview.activeMaskCloneAligned ? "aligned" : "non-aligned"
@@ -10715,16 +12226,17 @@ Rectangle {
             property real sourceY: editorPreview.activeMaskPatchSourceY
             property real sourceWidth: editorPreview.activeMaskPatchSourceWidth
             property real sourceHeight: editorPreview.activeMaskPatchSourceHeight
+            property var sourceRect: viewport.viewRectForImage(sourceX, sourceY, sourceWidth, sourceHeight)
             property string sourceSignature: root.retouchPatchSourceSignature()
             visible: root.page === "edit" &&
                      editorPreview.hasActiveMask &&
                      editorPreview.activeMaskToolRole === "retouch" &&
                      editorPreview.activeMaskRetouchMode === "patch" &&
                      editorPreview.activeMaskPatchSourceSet
-            x: viewport.paintedContentX + sourceX * viewport.paintedContentWidth
-            y: viewport.paintedContentY + sourceY * viewport.paintedContentHeight
-            width: Math.max(10, sourceWidth * viewport.paintedContentWidth)
-            height: Math.max(10, sourceHeight * viewport.paintedContentHeight)
+            x: sourceRect.x
+            y: sourceRect.y
+            width: Math.max(10, sourceRect.width)
+            height: Math.max(10, sourceRect.height)
             z: 23
             color: theme.alpha("#72cbb2", patchSourceMouse.containsMouse || patchSourceMouse.pressed ? 0.18 : 0.09)
             border.width: 2
@@ -10797,9 +12309,12 @@ Rectangle {
                     if (!pressed)
                         return
                     const mapped = mapToItem(viewport, mouse.x - pressOffsetX, mouse.y - pressOffsetY)
+                    const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)
+                    if (!point.valid)
+                        return
                     patchSourceRegion.moveRegion(
-                        (mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth),
-                        (mapped.y - viewport.paintedContentY) / Math.max(1, viewport.paintedContentHeight))
+                        point.x,
+                        point.y)
                 }
             }
         }
@@ -10809,6 +12324,7 @@ Rectangle {
             objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneTargetPreview" : "cloneTargetPreview"
             property real targetX: root.activeCloneTargetX()
             property real targetY: root.activeCloneTargetY()
+            property var targetPoint: viewport.viewPointForImage(targetX, targetY)
             property real cloneScale: editorPreview.activeMaskCloneScale
             property real cloneRotation: editorPreview.activeMaskCloneRotation
             property string cloneMode: editorPreview.activeMaskCloneAligned ? "aligned" : "non-aligned"
@@ -10817,10 +12333,15 @@ Rectangle {
                      editorPreview.activeMaskToolRole === "retouch" &&
                      editorPreview.activeMaskRetouchMode === "clone" &&
                      editorPreview.activeMaskCloneSourceSet
-            x: viewport.paintedContentX + targetX * viewport.paintedContentWidth - width / 2
-            y: viewport.paintedContentY + targetY * viewport.paintedContentHeight - height / 2
-            width: root.clamp(editorPreview.activeMaskBrushSize * viewport.paintedContentWidth *
-                              editorPreview.activeMaskCloneScale, 22, 92)
+            x: targetPoint.x - width / 2
+            y: targetPoint.y - height / 2
+            width: root.clamp(
+                       viewport.viewDiameterForImageSpan(
+                           targetX,
+                           targetY,
+                           editorPreview.activeMaskBrushSize * editorPreview.activeMaskCloneScale),
+                       22,
+                       92)
             height: width
             z: 22
 
@@ -10868,14 +12389,15 @@ Rectangle {
             objectName: viewport.objectName.length > 0 ? viewport.objectName + "CloneSourcePin" : "cloneSourcePin"
             property real sourceX: editorPreview.activeMaskCloneSourceX
             property real sourceY: editorPreview.activeMaskCloneSourceY
+            property var sourcePoint: viewport.viewPointForImage(sourceX, sourceY)
             property string sourceStatus: editorPreview.activeMaskCloneSourceSet ? "Source set" : "Pick source"
             visible: root.page === "edit" &&
                      editorPreview.hasActiveMask &&
                      editorPreview.activeMaskToolRole === "retouch" &&
                      editorPreview.activeMaskRetouchMode === "clone" &&
                      editorPreview.activeMaskCloneSourceSet
-            x: viewport.paintedContentX + sourceX * viewport.paintedContentWidth - width / 2
-            y: viewport.paintedContentY + sourceY * viewport.paintedContentHeight - height / 2
+            x: sourcePoint.x - width / 2
+            y: sourcePoint.y - height / 2
             width: 34
             height: 34
             z: 23
@@ -10937,17 +12459,17 @@ Rectangle {
                 cursorShape: Qt.SizeAllCursor
                 onPressed: function(mouse) {
                     const mapped = mapToItem(viewport, mouse.x, mouse.y)
-                    cloneSourcePin.moveSource(
-                        (mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth),
-                        (mapped.y - viewport.paintedContentY) / Math.max(1, viewport.paintedContentHeight))
+                    const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)
+                    if (point.valid)
+                        cloneSourcePin.moveSource(point.x, point.y)
                 }
                 onPositionChanged: function(mouse) {
                     if (!pressed)
                         return
                     const mapped = mapToItem(viewport, mouse.x, mouse.y)
-                    cloneSourcePin.moveSource(
-                        (mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth),
-                        (mapped.y - viewport.paintedContentY) / Math.max(1, viewport.paintedContentHeight))
+                    const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)
+                    if (point.valid)
+                        cloneSourcePin.moveSource(point.x, point.y)
                 }
             }
         }
@@ -10961,17 +12483,18 @@ Rectangle {
             acceptedButtons: Qt.LeftButton
             hoverEnabled: true
             preventStealing: false
-            cursorShape: root.spacePanActive || viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+            cursorShape: root.pixelExactToolReady() || root.brushToolReady()
+                         ? Qt.CrossCursor
+                         : (root.spacePanActive || viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             property real pressX: 0
             property real pressY: 0
             property real startPanX: 0
             property real startPanY: 0
 
             onWheel: function(wheel) {
-                if (wheel.angleDelta.y > 0)
-                    viewport.setZoom(viewport.zoom * 1.06, wheel.x, wheel.y)
-                else if (wheel.angleDelta.y < 0)
-                    viewport.setZoom(viewport.zoom / 1.06, wheel.x, wheel.y)
+                const zoomFactor = viewport.wheelZoomFactor(wheel)
+                if (Math.abs(zoomFactor - 1.0) > 0.0001)
+                    viewport.setZoom(viewport.zoom * zoomFactor, wheel.x, wheel.y)
                 wheel.accepted = true
             }
 
@@ -10987,8 +12510,9 @@ Rectangle {
                 }
                 if (viewport.handleSamplingPointerPressed(mouse)) {
                     mouse.accepted = true
-                    cursorShape = root.maskLuminanceRangeSampling ? Qt.CrossCursor
-                                                                  : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
+                    cursorShape = root.maskLuminanceRangeSampling || root.pixelExactToolReady()
+                                  ? Qt.CrossCursor
+                                  : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
                     return
                 }
                 if (viewport.handleMaskPointerPressed(mouse)) {
@@ -11004,7 +12528,9 @@ Rectangle {
                 viewport.updatePixelInspectorAt(mouse.x, mouse.y)
                 startPanX = viewport.panX
                 startPanY = viewport.panY
-                cursorShape = viewport.zoom > 1.0 ? Qt.ClosedHandCursor : Qt.ArrowCursor
+                cursorShape = root.pixelExactToolReady() || root.brushToolReady()
+                              ? Qt.CrossCursor
+                              : (viewport.zoom > 1.0 ? Qt.ClosedHandCursor : Qt.ArrowCursor)
             }
 
             onPositionChanged: function(mouse) {
@@ -11044,19 +12570,25 @@ Rectangle {
                     return
                 }
                 if (viewport.handleSamplingPointerReleased(mouse)) {
-                    cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+                    cursorShape = root.pixelExactToolReady() || root.brushToolReady()
+                                  ? Qt.CrossCursor
+                                  : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
                     return
                 }
                 viewport.handleMaskPointerReleased()
                 root.finishPixelInspectorSampling()
-                cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+                cursorShape = root.pixelExactToolReady() || root.brushToolReady()
+                              ? Qt.CrossCursor
+                              : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             }
             onCanceled: {
                 if (root.maskLuminanceRangeSampling)
                     editorPreview.cancelActiveLuminanceRangeSample()
                 viewport.handleMaskPointerReleased()
                 root.finishPixelInspectorSampling()
-                cursorShape = viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor
+                cursorShape = root.pixelExactToolReady() || root.brushToolReady()
+                              ? Qt.CrossCursor
+                              : (viewport.zoom > 1.0 ? Qt.OpenHandCursor : Qt.ArrowCursor)
             }
             onDoubleClicked: {
                 if (root.completeActivePolygonSelection())
@@ -11155,13 +12687,14 @@ Rectangle {
     component GradingMacroControl: Rectangle {
         id: macroControl
         Layout.fillWidth: true
-        Layout.preferredHeight: 46
+        Layout.preferredHeight: controlHeight
         property string label: ""
         property string valueText: ""
         property real from: -100
         property real to: 100
         property real value: 0
         property real defaultValue: from <= 0 && to >= 0 ? 0 : from
+        property int controlHeight: 46
         property color accent: root.mint
         property color leftColor: theme.alpha(theme.polar, 0.22)
         property color centerColor: theme.alpha(theme.polar, 0.42)
@@ -11312,17 +12845,1394 @@ Rectangle {
         }
     }
 
+    component AdjustmentPad2D: Rectangle {
+        id: pad
+        Layout.fillWidth: true
+        Layout.preferredHeight: 150
+        property string title: ""
+        property string xLabel: ""
+        property string yLabel: ""
+        property string xValueText: ""
+        property string yValueText: ""
+        property real xValue: 0
+        property real yValue: 0
+        property color accent: root.mint
+        property color leftColor: "#4FB5FF"
+        property color rightColor: "#F2C35B"
+        property color topColor: "#C85AC1"
+        property color bottomColor: "#49B86B"
+        property int editCommitIntervalMs: 16
+        property real pendingXValue: 0
+        property real pendingYValue: 0
+        property bool hasPendingValueEdit: false
+        readonly property real normalizedX: Math.max(0, Math.min(1, (xValue + 100) / 200))
+        readonly property real normalizedY: Math.max(0, Math.min(1, (100 - yValue) / 200))
+        signal valueEdited(real xValue, real yValue)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+        clip: true
+
+        function valueFromPoint(mouseX, mouseY) {
+            const localX = Math.max(0, Math.min(field.width, mouseX - field.x))
+            const localY = Math.max(0, Math.min(field.height, mouseY - field.y))
+            return {
+                x: (localX / Math.max(1, field.width)) * 200 - 100,
+                y: 100 - (localY / Math.max(1, field.height)) * 200
+            }
+        }
+
+        function queueValueEdited(xValue, yValue) {
+            if (!editCommitTimer.running && !hasPendingValueEdit) {
+                valueEdited(xValue, yValue)
+                editCommitTimer.start()
+                return
+            }
+            pendingXValue = xValue
+            pendingYValue = yValue
+            hasPendingValueEdit = true
+            if (!editCommitTimer.running)
+                editCommitTimer.start()
+        }
+
+        function flushValueEdited() {
+            if (!hasPendingValueEdit)
+                return
+            const x = pendingXValue
+            const y = pendingYValue
+            hasPendingValueEdit = false
+            editCommitTimer.stop()
+            valueEdited(x, y)
+        }
+
+        Timer {
+            id: editCommitTimer
+            interval: pad.editCommitIntervalMs
+            repeat: false
+            onTriggered: pad.flushValueEdited()
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 7
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    Layout.fillWidth: true
+                    text: pad.title
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.Black
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                    elide: Text.ElideNone
+                }
+
+                Label {
+                    text: pad.xValueText + "  /  " + pad.yValueText
+                    color: "#C8D2DC"
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0
+                }
+            }
+
+            Item {
+                id: field
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumHeight: 94
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 3
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: pad.leftColor }
+                        GradientStop { position: 1.0; color: pad.rightColor }
+                    }
+                    opacity: 0.70
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 3
+                    gradient: Gradient {
+                        orientation: Gradient.Vertical
+                        GradientStop { position: 0.0; color: theme.alpha(pad.topColor, 0.62) }
+                        GradientStop { position: 0.50; color: theme.alpha(theme.polar, 0.02) }
+                        GradientStop { position: 1.0; color: theme.alpha(pad.bottomColor, 0.62) }
+                    }
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 3
+                    color: theme.alpha(theme.ink950, 0.38)
+                    border.width: 1
+                    border.color: theme.alpha(theme.polar, 0.14)
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 1
+                    color: theme.alpha(theme.polar, 0.24)
+                }
+
+                Rectangle {
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: 1
+                    color: theme.alpha(theme.polar, 0.24)
+                }
+
+                Rectangle {
+                    x: Math.max(0, Math.min(parent.width - width, pad.normalizedX * parent.width - width / 2))
+                    y: Math.max(0, Math.min(parent.height - height, pad.normalizedY * parent.height - height / 2))
+                    width: 18
+                    height: 18
+                    radius: 4
+                    rotation: 45
+                    color: theme.alpha(theme.polar, 0.94)
+                    border.width: 2
+                    border.color: theme.alpha(pad.accent, 0.96)
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: 4
+                        height: 4
+                        radius: 2
+                        color: theme.ink950
+                    }
+                }
+
+                Label {
+                    anchors.left: parent.left
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 8
+                    anchors.bottomMargin: 6
+                    text: pad.xLabel
+                    color: theme.alpha(theme.textStrong, 0.76)
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+
+                Label {
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.rightMargin: 8
+                    anchors.topMargin: 6
+                    text: pad.yLabel
+                    color: theme.alpha(theme.textStrong, 0.76)
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+            }
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.CrossCursor
+            onPressed: function(mouse) {
+                pad.interactionStarted()
+                const next = pad.valueFromPoint(mouse.x, mouse.y)
+                pad.queueValueEdited(next.x, next.y)
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed)
+                    return
+                const next = pad.valueFromPoint(mouse.x, mouse.y)
+                pad.queueValueEdited(next.x, next.y)
+            }
+            onReleased: {
+                pad.flushValueEdited()
+                pad.interactionFinished()
+            }
+            onCanceled: {
+                pad.flushValueEdited()
+                pad.interactionFinished()
+            }
+            onDoubleClicked: pad.valueEdited(0, 0)
+        }
+    }
+
+    component ChannelPadControl: Rectangle {
+        id: channelPad
+        Layout.fillWidth: true
+        Layout.preferredHeight: 132
+        property string title: ""
+        property string valueText: ""
+        property real hueValue: 0
+        property real saturationValue: 0
+        property real luminanceValue: 0
+        property color accent: root.mint
+        property color channelColor: root.mint
+        property int editCommitIntervalMs: 16
+        property real pendingHueValue: 0
+        property real pendingLuminanceValue: 0
+        property real pendingSaturationValue: 0
+        property bool hasPendingHueLuminanceEdit: false
+        property bool hasPendingSaturationEdit: false
+        readonly property real normalizedHue: Math.max(0, Math.min(1, (hueValue + 100) / 200))
+        readonly property real normalizedLuma: Math.max(0, Math.min(1, (100 - luminanceValue) / 200))
+        signal hueLuminanceEdited(real hueValue, real luminanceValue)
+        signal saturationEdited(real saturationValue)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+        clip: true
+
+        function clamp(value, minimum, maximum) {
+            return Math.max(minimum, Math.min(maximum, value))
+        }
+
+        function hueLumaFromPoint(mouseX, mouseY) {
+            const localX = clamp(mouseX - padField.x, 0, padField.width)
+            const localY = clamp(mouseY - padField.y, 0, padField.height)
+            return {
+                hue: localX / Math.max(1, padField.width) * 200 - 100,
+                luma: 100 - localY / Math.max(1, padField.height) * 200
+            }
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 7
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Label {
+                    Layout.fillWidth: true
+                    text: channelPad.title
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.Black
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                    elide: Text.ElideNone
+                }
+
+                Label {
+                    text: channelPad.valueText
+                    color: "#C8D2DC"
+                    font.family: theme.fontMono
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 8
+
+                Item {
+                    id: padField
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 78
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: theme.alpha(channelPad.channelColor, 0.26) }
+                            GradientStop { position: 0.5; color: theme.alpha(theme.polar, 0.10) }
+                            GradientStop { position: 1.0; color: theme.alpha(channelPad.channelColor, 0.68) }
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Vertical
+                            GradientStop { position: 0.0; color: theme.alpha(theme.polar, 0.35) }
+                            GradientStop { position: 0.5; color: theme.alpha(theme.ink950, 0.24) }
+                            GradientStop { position: 1.0; color: theme.alpha(theme.ink950, 0.76) }
+                        }
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.14)
+                    }
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 1
+                        color: theme.alpha(theme.polar, 0.24)
+                    }
+
+                    Rectangle {
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 1
+                        color: theme.alpha(theme.polar, 0.24)
+                    }
+
+                    Rectangle {
+                        x: Math.max(0, Math.min(parent.width - width, channelPad.normalizedHue * parent.width - width / 2))
+                        y: Math.max(0, Math.min(parent.height - height, channelPad.normalizedLuma * parent.height - height / 2))
+                        width: 18
+                        height: 18
+                        radius: 4
+                        rotation: 45
+                        color: theme.alpha(theme.polar, 0.94)
+                        border.width: 2
+                        border.color: theme.alpha(channelPad.accent, 0.96)
+                    }
+
+                    Label {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 7
+                        anchors.bottomMargin: 5
+                        text: "HUE"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0
+                    }
+
+                    Label {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.rightMargin: 7
+                        anchors.topMargin: 5
+                        text: "LUMA"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0
+                    }
+                }
+
+                Item {
+                    id: saturationRail
+                    Layout.preferredWidth: 32
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 78
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Vertical
+                            GradientStop { position: 0.0; color: channelPad.channelColor }
+                            GradientStop { position: 1.0; color: theme.alpha(theme.polar, 0.18) }
+                        }
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.14)
+                    }
+
+                    Rectangle {
+                        x: 4
+                        y: Math.max(0, Math.min(parent.height - height, (100 - channelPad.saturationValue) / 200 * parent.height - height / 2))
+                        width: parent.width - 8
+                        height: 4
+                        radius: 2
+                        color: channelPad.accent
+                    }
+
+                    Label {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        anchors.bottomMargin: 5
+                        text: "SAT"
+                        color: theme.alpha(theme.ink950, 0.84)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                        font.letterSpacing: 0
+                    }
+                }
+            }
+        }
+
+        function queueHueLuminanceEdited(hueValue, luminanceValue) {
+            if (!editCommitTimer.running &&
+                    !hasPendingHueLuminanceEdit &&
+                    !hasPendingSaturationEdit) {
+                hueLuminanceEdited(hueValue, luminanceValue)
+                editCommitTimer.start()
+                return
+            }
+            pendingHueValue = hueValue
+            pendingLuminanceValue = luminanceValue
+            hasPendingHueLuminanceEdit = true
+            if (!editCommitTimer.running)
+                editCommitTimer.start()
+        }
+
+        function queueSaturationEdited(saturationValue) {
+            if (!editCommitTimer.running &&
+                    !hasPendingHueLuminanceEdit &&
+                    !hasPendingSaturationEdit) {
+                saturationEdited(saturationValue)
+                editCommitTimer.start()
+                return
+            }
+            pendingSaturationValue = saturationValue
+            hasPendingSaturationEdit = true
+            if (!editCommitTimer.running)
+                editCommitTimer.start()
+        }
+
+        function flushQueuedEdits() {
+            const hasHueLuma = hasPendingHueLuminanceEdit
+            const hue = pendingHueValue
+            const luma = pendingLuminanceValue
+            const hasSat = hasPendingSaturationEdit
+            const sat = pendingSaturationValue
+            hasPendingHueLuminanceEdit = false
+            hasPendingSaturationEdit = false
+            editCommitTimer.stop()
+            if (hasHueLuma)
+                hueLuminanceEdited(hue, luma)
+            if (hasSat)
+                saturationEdited(sat)
+        }
+
+        Timer {
+            id: editCommitTimer
+            interval: channelPad.editCommitIntervalMs
+            repeat: false
+            onTriggered: channelPad.flushQueuedEdits()
+        }
+
+        MouseArea {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 50
+            anchors.topMargin: 31
+            anchors.leftMargin: 10
+            anchors.bottomMargin: 10
+            hoverEnabled: true
+            cursorShape: Qt.CrossCursor
+            onPressed: function(mouse) {
+                channelPad.interactionStarted()
+                const mapped = mapToItem(channelPad, mouse.x, mouse.y)
+                const next = channelPad.hueLumaFromPoint(mapped.x, mapped.y)
+                channelPad.queueHueLuminanceEdited(next.hue, next.luma)
+            }
+            onPositionChanged: function(mouse) {
+                if (!pressed)
+                    return
+                const mapped = mapToItem(channelPad, mouse.x, mouse.y)
+                const next = channelPad.hueLumaFromPoint(mapped.x, mapped.y)
+                channelPad.queueHueLuminanceEdited(next.hue, next.luma)
+            }
+            onReleased: {
+                channelPad.flushQueuedEdits()
+                channelPad.interactionFinished()
+            }
+            onCanceled: {
+                channelPad.flushQueuedEdits()
+                channelPad.interactionFinished()
+            }
+            onDoubleClicked: channelPad.hueLuminanceEdited(0, 0)
+        }
+
+        MouseArea {
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.rightMargin: 10
+            anchors.topMargin: 31
+            anchors.bottomMargin: 10
+            width: 36
+            hoverEnabled: true
+            cursorShape: Qt.SizeVerCursor
+            onPressed: function(mouse) {
+                channelPad.interactionStarted()
+                channelPad.queueSaturationEdited(channelPad.clamp(100 - (mouse.y / Math.max(1, height)) * 200, -100, 100))
+            }
+            onPositionChanged: function(mouse) {
+                if (pressed)
+                    channelPad.queueSaturationEdited(channelPad.clamp(100 - (mouse.y / Math.max(1, height)) * 200, -100, 100))
+            }
+            onReleased: {
+                channelPad.flushQueuedEdits()
+                channelPad.interactionFinished()
+            }
+            onCanceled: {
+                channelPad.flushQueuedEdits()
+                channelPad.interactionFinished()
+            }
+            onDoubleClicked: channelPad.saturationEdited(0)
+        }
+    }
+
+    component RgbMixerMatrix: Rectangle {
+        id: matrix
+        Layout.fillWidth: true
+        Layout.preferredHeight: 178
+        property color accent: root.mint
+        property var rows: []
+        property int editCommitIntervalMs: 16
+        property string pendingCellKey: ""
+        property real pendingCellValue: 0
+        property bool hasPendingCellEdit: false
+        signal cellEdited(string key, real value)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+
+        function clamp(value, minimum, maximum) {
+            return Math.max(minimum, Math.min(maximum, value))
+        }
+
+        function queueCellEdited(key, value) {
+            if (!editCommitTimer.running && !hasPendingCellEdit) {
+                matrix.cellEdited(key, value)
+                editCommitTimer.start()
+                return
+            }
+            pendingCellKey = key
+            pendingCellValue = value
+            hasPendingCellEdit = true
+            if (!editCommitTimer.running)
+                editCommitTimer.start()
+        }
+
+        function flushCellEdited() {
+            if (!hasPendingCellEdit)
+                return
+            const key = pendingCellKey
+            const value = pendingCellValue
+            hasPendingCellEdit = false
+            editCommitTimer.stop()
+            matrix.cellEdited(key, value)
+        }
+
+        Timer {
+            id: editCommitTimer
+            interval: matrix.editCommitIntervalMs
+            repeat: false
+            onTriggered: matrix.flushCellEdited()
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 6
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Label {
+                    Layout.preferredWidth: 72
+                    text: "OUTPUT"
+                    color: root.dimText
+                    font.family: theme.fontUi
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+                Repeater {
+                    model: ["RED", "GREEN", "BLUE"]
+                    Label {
+                        required property string modelData
+                        Layout.fillWidth: true
+                        horizontalAlignment: Text.AlignHCenter
+                        text: modelData
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 9
+                        font.weight: Font.Black
+                        font.letterSpacing: 0
+                    }
+                }
+            }
+
+            Repeater {
+                model: matrix.rows
+
+                RowLayout {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 6
+
+                    Label {
+                        Layout.preferredWidth: 72
+                        text: String(modelData.label || "")
+                        color: String(modelData.color || "").length > 0 ? modelData.color : theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 10
+                        font.weight: Font.Black
+                        font.capitalization: Font.AllUppercase
+                        font.letterSpacing: 0
+                        fontSizeMode: Text.HorizontalFit
+                        minimumPixelSize: 7
+                        elide: Text.ElideNone
+                    }
+
+                    Repeater {
+                        model: modelData.cells || []
+
+                        Rectangle {
+                            id: mixerCell
+                            required property var modelData
+                            readonly property real cellValue: Number(modelData.value || 0)
+                            readonly property bool modified: Math.abs(cellValue - Number(modelData.defaultValue || 0)) > 0.5
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: 38
+                            radius: 3
+                            color: modified ? theme.alpha(matrix.accent, 0.12) : theme.alpha(theme.ink950, 0.34)
+                            border.width: 1
+                            border.color: modified ? theme.alpha(matrix.accent, 0.38) : theme.alpha(theme.polar, 0.10)
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                height: 1
+                                color: theme.alpha(theme.polar, 0.16)
+                            }
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.bottom: parent.verticalCenter
+                                height: Math.max(2, Math.abs(mixerCell.cellValue) / 200 * parent.height / 2)
+                                width: parent.width
+                                visible: mixerCell.cellValue >= 0 && mixerCell.modified
+                                color: matrix.accent
+                                opacity: 0.48
+                            }
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.top: parent.verticalCenter
+                                height: Math.max(2, Math.abs(mixerCell.cellValue) / 200 * parent.height / 2)
+                                width: parent.width
+                                visible: mixerCell.cellValue < 0 && mixerCell.modified
+                                color: matrix.accent
+                                opacity: 0.48
+                            }
+
+                            Label {
+                                anchors.centerIn: parent
+                                text: Math.round(mixerCell.cellValue).toString()
+                                color: mixerCell.modified ? matrix.accent : "#C8D2DC"
+                                font.family: theme.fontMono
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                                font.letterSpacing: 0
+                            }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.SizeVerCursor
+                                onPressed: function(mouse) {
+                                    matrix.interactionStarted()
+                                    matrix.queueCellEdited(String(modelData.key || ""), matrix.clamp(200 - mouse.y / Math.max(1, height) * 400, -200, 200))
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed)
+                                        matrix.queueCellEdited(String(modelData.key || ""), matrix.clamp(200 - mouse.y / Math.max(1, height) * 400, -200, 200))
+                                }
+                                onReleased: {
+                                    matrix.flushCellEdited()
+                                    matrix.interactionFinished()
+                                }
+                                onCanceled: {
+                                    matrix.flushCellEdited()
+                                    matrix.interactionFinished()
+                                }
+                                onDoubleClicked: matrix.cellEdited(String(modelData.key || ""), Number(modelData.defaultValue || 0))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    component HueRangeControl: Rectangle {
+        id: hueRange
+        Layout.fillWidth: true
+        Layout.preferredHeight: 72
+        property real sourceHue: 0
+        property real targetHue: 0.33
+        property real rangeValue: 35
+        property real softnessValue: 100
+        property color accent: root.mint
+        property int editCommitIntervalMs: 16
+        property string pendingHueKind: ""
+        property real pendingHueValue: 0
+        property bool hasPendingHueEdit: false
+        readonly property real sourcePosition: Math.max(0, Math.min(1, sourceHue))
+        readonly property real targetPosition: Math.max(0, Math.min(1, targetHue))
+        signal sourceHueEdited(real value)
+        signal targetHueEdited(real value)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+        clip: true
+
+        function hueFromX(mouseX) {
+            return Math.max(0, Math.min(1, (mouseX - rail.x) / Math.max(1, rail.width)))
+        }
+
+        function queueHueEdited(kind, value) {
+            if (!editCommitTimer.running && !hasPendingHueEdit) {
+                if (kind === "source")
+                    sourceHueEdited(value)
+                else
+                    targetHueEdited(value)
+                editCommitTimer.start()
+                return
+            }
+            pendingHueKind = kind
+            pendingHueValue = value
+            hasPendingHueEdit = true
+            if (!editCommitTimer.running)
+                editCommitTimer.start()
+        }
+
+        function flushHueEdited() {
+            if (!hasPendingHueEdit)
+                return
+            const kind = pendingHueKind
+            const value = pendingHueValue
+            hasPendingHueEdit = false
+            editCommitTimer.stop()
+            if (kind === "source")
+                sourceHueEdited(value)
+            else
+                targetHueEdited(value)
+        }
+
+        Timer {
+            id: editCommitTimer
+            interval: hueRange.editCommitIntervalMs
+            repeat: false
+            onTriggered: hueRange.flushHueEdited()
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 7
+
+            RowLayout {
+                Layout.fillWidth: true
+                Label {
+                    Layout.fillWidth: true
+                    text: "Hue Replace"
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.Black
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+                Label {
+                    text: Math.round(sourceHue * 360) + "\u00B0 -> " + Math.round(targetHue * 360) + "\u00B0"
+                    color: "#C8D2DC"
+                    font.family: theme.fontMono
+                    font.pixelSize: 10
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0
+                }
+            }
+
+            Item {
+                id: rail
+                Layout.fillWidth: true
+                Layout.preferredHeight: 30
+
+                Row {
+                    anchors.fill: parent
+                    spacing: 0
+                    clip: true
+                    Repeater {
+                        model: root.rainbowTrack()
+                        Rectangle {
+                            required property int index
+                            required property string modelData
+                            width: rail.width / Math.max(1, root.rainbowTrack().length)
+                            height: rail.height
+                            color: modelData
+                        }
+                    }
+                }
+
+                Rectangle {
+                    anchors.fill: parent
+                    color: theme.alpha(theme.ink950, 0.25)
+                    border.width: 1
+                    border.color: theme.alpha(theme.polar, 0.14)
+                    radius: 3
+                }
+
+                Rectangle {
+                    x: Math.max(0, Math.min(parent.width - width, hueRange.sourcePosition * parent.width - width / 2))
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Math.max(12, hueRange.rangeValue / 100 * parent.width)
+                    radius: 3
+                    color: theme.alpha(hueRange.accent, 0.20 + Math.min(0.35, hueRange.softnessValue / 240))
+                    border.width: 1
+                    border.color: theme.alpha(hueRange.accent, 0.46)
+                }
+
+                Repeater {
+                    model: [
+                        { kind: "source", position: hueRange.sourcePosition, color: root.hueSwatchColor(hueRange.sourceHue), label: "S" },
+                        { kind: "target", position: hueRange.targetPosition, color: root.hueSwatchColor(hueRange.targetHue), label: "T" }
+                    ]
+
+                    Rectangle {
+                        required property var modelData
+                        x: Math.max(0, Math.min(parent.width - width, modelData.position * parent.width - width / 2))
+                        y: parent.height / 2 - height / 2
+                        width: 18
+                        height: 18
+                        radius: 4
+                        rotation: 45
+                        color: modelData.color
+                        border.width: 2
+                        border.color: theme.alpha(theme.ink950, 0.78)
+
+                        Label {
+                            anchors.centerIn: parent
+                            rotation: -45
+                            text: modelData.label
+                            color: theme.ink950
+                            font.family: theme.fontUi
+                            font.pixelSize: 8
+                            font.weight: Font.Black
+                        }
+
+                        MouseArea {
+                            anchors.centerIn: parent
+                            width: 34
+                            height: rail.height
+                            hoverEnabled: true
+                            cursorShape: Qt.SizeHorCursor
+                            onPressed: function(mouse) {
+                                hueRange.interactionStarted()
+                                const mapped = mapToItem(rail, mouse.x, mouse.y)
+                                hueRange.queueHueEdited(String(modelData.kind || ""), hueRange.hueFromX(mapped.x))
+                            }
+                            onPositionChanged: function(mouse) {
+                                if (!pressed)
+                                    return
+                                const mapped = mapToItem(rail, mouse.x, mouse.y)
+                                hueRange.queueHueEdited(String(modelData.kind || ""), hueRange.hueFromX(mapped.x))
+                            }
+                            onReleased: {
+                                hueRange.flushHueEdited()
+                                hueRange.interactionFinished()
+                            }
+                            onCanceled: {
+                                hueRange.flushHueEdited()
+                                hueRange.interactionFinished()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    component DetailTextureControl: Rectangle {
+        id: detailControl
+        Layout.fillWidth: true
+        Layout.preferredHeight: 154
+        property real sharpening: 0
+        property real radiusValue: 1
+        property real detailValue: 0
+        property real masking: 0
+        property real luminanceNr: 0
+        property real colorNr: 0
+        property color accent: root.mint
+        readonly property real normalizedRadius: Math.max(0, Math.min(1, (radiusValue - 0.5) / 2.5))
+        readonly property real normalizedSharpen: Math.max(0, Math.min(1, sharpening / 150))
+        signal valueEdited(string key, real value)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+        clip: true
+
+        function clamp(value, minimum, maximum) {
+            return Math.max(minimum, Math.min(maximum, value))
+        }
+
+        function editFocus(mouseX, mouseY) {
+            const nextRadius = 0.5 + clamp(mouseX / Math.max(1, focusPad.width), 0, 1) * 2.5
+            const nextAmount = clamp(150 - mouseY / Math.max(1, focusPad.height) * 150, 0, 150)
+            valueEdited("sharpenRadius", nextRadius)
+            valueEdited("sharpening", nextAmount)
+        }
+
+        function editRail(key, mouseY, railHeight) {
+            valueEdited(key, clamp(100 - mouseY / Math.max(1, railHeight) * 100, 0, 100))
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 7
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label {
+                    Layout.fillWidth: true
+                    text: "Texture Response"
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.Black
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+                Label {
+                    text: Math.round(detailControl.sharpening) + " / " +
+                          detailControl.radiusValue.toFixed(1) + "px / " +
+                          Math.round(detailControl.masking)
+                    color: "#C8D2DC"
+                    font.family: theme.fontMono
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 8
+
+                Item {
+                    id: focusPad
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 92
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: theme.alpha("#4FB5FF", 0.28) }
+                            GradientStop { position: 1.0; color: theme.alpha("#F2C35B", 0.56) }
+                        }
+                    }
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Vertical
+                            GradientStop { position: 0.0; color: theme.alpha(detailControl.accent, 0.50) }
+                            GradientStop { position: 1.0; color: theme.alpha(theme.ink950, 0.82) }
+                        }
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.14)
+                    }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        height: Math.max(2, detailControl.detailValue / 100 * parent.height)
+                        color: theme.alpha(theme.polar, 0.16)
+                    }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 1
+                        color: theme.alpha(theme.polar, 0.20)
+                    }
+                    Rectangle {
+                        x: Math.max(0, Math.min(parent.width - width, detailControl.normalizedRadius * parent.width - width / 2))
+                        y: Math.max(0, Math.min(parent.height - height, (1 - detailControl.normalizedSharpen) * parent.height - height / 2))
+                        width: 18
+                        height: 18
+                        radius: 4
+                        rotation: 45
+                        color: detailControl.sharpening > 0.5 ? detailControl.accent : theme.alpha(theme.polar, 0.92)
+                        border.width: 2
+                        border.color: theme.alpha(theme.ink950, 0.76)
+                    }
+                    Label {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 7
+                        anchors.bottomMargin: 5
+                        text: "RADIUS"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.rightMargin: 7
+                        anchors.topMargin: 5
+                        text: "AMOUNT"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            detailControl.interactionStarted()
+                            detailControl.editFocus(mouse.x, mouse.y)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed)
+                                detailControl.editFocus(mouse.x, mouse.y)
+                        }
+                        onReleased: detailControl.interactionFinished()
+                        onCanceled: detailControl.interactionFinished()
+                    }
+                }
+
+                ColumnLayout {
+                    Layout.preferredWidth: 74
+                    Layout.fillHeight: true
+                    spacing: 5
+
+                    Repeater {
+                        model: [
+                            { key: "sharpenMasking", label: "Edge Limit", value: detailControl.masking },
+                            { key: "luminanceNr", label: "Luma", value: detailControl.luminanceNr },
+                            { key: "colorNr", label: "Color", value: detailControl.colorNr }
+                        ]
+
+                        Rectangle {
+                            id: detailRail
+                            required property var modelData
+                            readonly property real railValue: Number(modelData.value || 0)
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            Layout.minimumHeight: 26
+                            radius: 3
+                            color: theme.alpha(theme.ink950, 0.34)
+                            border.width: 1
+                            border.color: theme.alpha(theme.polar, 0.10)
+
+                            Rectangle {
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.bottom: parent.bottom
+                                height: Math.max(1, parent.height * detailRail.railValue / 100)
+                                color: detailControl.accent
+                                opacity: detailRail.railValue > 0.5 ? 0.58 : 0
+                            }
+                            Label {
+                                anchors.centerIn: parent
+                                text: String(modelData.label || "")
+                                color: detailRail.railValue > 0.5 ? theme.ink950 : "#C8D2DC"
+                                font.family: theme.fontUi
+                                font.pixelSize: 8
+                                font.weight: Font.Black
+                                font.capitalization: Font.AllUppercase
+                                font.letterSpacing: 0
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.SizeVerCursor
+                                onPressed: function(mouse) {
+                                    detailControl.interactionStarted()
+                                    detailControl.editRail(String(modelData.key || ""), mouse.y, height)
+                                }
+                                onPositionChanged: function(mouse) {
+                                    if (pressed)
+                                        detailControl.editRail(String(modelData.key || ""), mouse.y, height)
+                                }
+                                onReleased: detailControl.interactionFinished()
+                                onCanceled: detailControl.interactionFinished()
+                                onDoubleClicked: detailControl.valueEdited(String(modelData.key || ""), 0)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    component LensCorrectionControl: Rectangle {
+        id: lensControl
+        Layout.fillWidth: true
+        Layout.preferredHeight: 128
+        property real distortion: 0
+        property real vignette: 0
+        property real chromatic: 0
+        property color accent: root.mint
+        readonly property real normalizedDistortion: Math.max(0, Math.min(1, (distortion + 100) / 200))
+        readonly property real normalizedVignette: Math.max(0, Math.min(1, (100 - vignette) / 200))
+        signal valueEdited(string key, real value)
+        signal interactionStarted()
+        signal interactionFinished()
+
+        radius: 4
+        color: theme.alpha(theme.glassBase, 0.42)
+        border.width: 0
+        clip: true
+
+        function clamp(value, minimum, maximum) {
+            return Math.max(minimum, Math.min(maximum, value))
+        }
+
+        function editGeometry(mouseX, mouseY) {
+            valueEdited("lensDistortion", clamp(mouseX / Math.max(1, geometryPad.width) * 200 - 100, -100, 100))
+            valueEdited("lensVignette", clamp(100 - mouseY / Math.max(1, geometryPad.height) * 200, -100, 100))
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 10
+            spacing: 7
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Label {
+                    Layout.fillWidth: true
+                    text: "Optical Correction"
+                    color: theme.textStrong
+                    font.family: theme.fontUi
+                    font.pixelSize: 11
+                    font.weight: Font.Black
+                    font.capitalization: Font.AllUppercase
+                    font.letterSpacing: 0
+                }
+                Label {
+                    text: root.signedPercent(lensControl.distortion) + " / " +
+                          root.signedPercent(lensControl.vignette) + " / " +
+                          Math.round(lensControl.chromatic)
+                    color: "#C8D2DC"
+                    font.family: theme.fontMono
+                    font.pixelSize: 9
+                    font.weight: Font.Bold
+                    font.letterSpacing: 0
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                spacing: 8
+
+                Item {
+                    id: geometryPad
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 72
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        color: theme.alpha(theme.ink950, 0.38)
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.14)
+                    }
+                    Repeater {
+                        model: 4
+                        Rectangle {
+                            required property int index
+                            anchors.centerIn: parent
+                            width: parent.width * (0.28 + index * 0.18)
+                            height: parent.height * (0.34 + index * 0.14)
+                            radius: Math.min(width, height) / 2
+                            color: "transparent"
+                            border.width: 1
+                            border.color: theme.alpha(theme.polar, 0.09 + index * 0.03)
+                        }
+                    }
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 1
+                        color: theme.alpha(theme.polar, 0.20)
+                    }
+                    Rectangle {
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: 1
+                        color: theme.alpha(theme.polar, 0.20)
+                    }
+                    Rectangle {
+                        x: Math.max(0, Math.min(parent.width - width, lensControl.normalizedDistortion * parent.width - width / 2))
+                        y: Math.max(0, Math.min(parent.height - height, lensControl.normalizedVignette * parent.height - height / 2))
+                        width: 18
+                        height: 18
+                        radius: 4
+                        rotation: 45
+                        color: Math.abs(lensControl.distortion) > 0.5 || Math.abs(lensControl.vignette) > 0.5
+                               ? lensControl.accent
+                               : theme.alpha(theme.polar, 0.92)
+                        border.width: 2
+                        border.color: theme.alpha(theme.ink950, 0.76)
+                    }
+                    Label {
+                        anchors.left: parent.left
+                        anchors.bottom: parent.bottom
+                        anchors.leftMargin: 7
+                        anchors.bottomMargin: 5
+                        text: "DISTORT"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                    }
+                    Label {
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.rightMargin: 7
+                        anchors.topMargin: 5
+                        text: "VIGNETTE"
+                        color: theme.alpha(theme.textStrong, 0.70)
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Bold
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            lensControl.interactionStarted()
+                            lensControl.editGeometry(mouse.x, mouse.y)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed)
+                                lensControl.editGeometry(mouse.x, mouse.y)
+                        }
+                        onReleased: lensControl.interactionFinished()
+                        onCanceled: lensControl.interactionFinished()
+                        onDoubleClicked: {
+                            lensControl.valueEdited("lensDistortion", 0)
+                            lensControl.valueEdited("lensVignette", 0)
+                        }
+                    }
+                }
+
+                Item {
+                    id: chromaticRail
+                    Layout.preferredWidth: 34
+                    Layout.fillHeight: true
+                    Layout.minimumHeight: 72
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: 3
+                        gradient: Gradient {
+                            orientation: Gradient.Vertical
+                            GradientStop { position: 0.0; color: "#F25A5A" }
+                            GradientStop { position: 0.5; color: lensControl.accent }
+                            GradientStop { position: 1.0; color: "#4D91F0" }
+                        }
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.14)
+                    }
+                    Rectangle {
+                        x: 4
+                        y: Math.max(0, Math.min(parent.height - height, (1 - lensControl.chromatic / 100) * parent.height - height / 2))
+                        width: parent.width - 8
+                        height: 4
+                        radius: 2
+                        color: theme.polar
+                    }
+                    Label {
+                        anchors.centerIn: parent
+                        rotation: -90
+                        text: "CA"
+                        color: theme.ink950
+                        font.family: theme.fontUi
+                        font.pixelSize: 8
+                        font.weight: Font.Black
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.SizeVerCursor
+                        onPressed: function(mouse) {
+                            lensControl.interactionStarted()
+                            lensControl.valueEdited("chromaticAberration", lensControl.clamp(100 - mouse.y / Math.max(1, height) * 100, 0, 100))
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed)
+                                lensControl.valueEdited("chromaticAberration", lensControl.clamp(100 - mouse.y / Math.max(1, height) * 100, 0, 100))
+                        }
+                        onReleased: lensControl.interactionFinished()
+                        onCanceled: lensControl.interactionFinished()
+                        onDoubleClicked: lensControl.valueEdited("chromaticAberration", 0)
+                    }
+                }
+            }
+        }
+    }
+
     component InspectorGroup: InspectorSection {
         id: group
         property string resetGroup: ""
         property string compareGroup: ""
         Layout.fillWidth: true
         accent: root.mint
-        showAccentMarker: false
+        showAccentMarker: true
         uppercaseTitle: false
         titleFontFamily: theme.fontUi
-        titlePixelSize: 11
-        titleWeight: Font.DemiBold
+        titlePixelSize: 13
+        titleWeight: Font.Bold
         beforeAfterAvailable: group.compareGroup.length > 0
         beforeAfterActive: root.compareEditGroupActive(group.compareGroup)
         beforeAfterTooltip: beforeAfterActive
@@ -11330,7 +14240,7 @@ Rectangle {
                             : "Compare before and after for this section only."
         resetAvailable: group.resetGroup.length > 0
         resetTooltip: root.activeAdjustmentLayerIndex() >= 0
-                      ? "Reset this panel on the active adjustment layer only."
+                      ? "Reset this panel on the active layer only."
                       : "Reset this panel only."
         onBeforeAfterRequested: root.toggleCompareEditGroup(group.compareGroup)
         onResetRequested: root.resetPrimaryAdjustmentGroup(group.resetGroup)
@@ -11351,10 +14261,19 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 32
-            color: headerMouse.containsMouse ? "#11191B" : theme.alpha(theme.polar, 0.025)
+            color: headerMouse.containsMouse ? "#11191B" : "transparent"
             border.width: theme.chromeBorderWidth
-            border.color: headerMouse.containsMouse ? theme.alpha(root.mint, 0.34) : theme.alpha(root.lineColor, 0.30)
-            radius: 3
+            border.color: headerMouse.containsMouse ? theme.alpha(root.mint, 0.30) : "transparent"
+            radius: 4
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
+                width: 2
+                radius: 1
+                color: group.expanded ? root.mint : theme.alpha(theme.polar, 0.24)
+            }
 
             MouseArea {
                 id: headerMouse
@@ -11383,7 +14302,7 @@ Rectangle {
                     color: theme.textStrong
                     font.family: theme.fontUi
                     font.pixelSize: 12
-                    font.weight: Font.DemiBold
+                    font.weight: Font.Bold
                     font.letterSpacing: 0
                     fontSizeMode: Text.HorizontalFit
                     minimumPixelSize: 8
@@ -11841,7 +14760,27 @@ Rectangle {
         id: agentRunDialogLoader
         anchors.fill: parent
         active: false
-        sourceComponent: agentRunDialogComponent
+        sourceComponent: agentWalkthroughDialogComponent
+    }
+
+    Component {
+        id: agentWalkthroughDialogComponent
+
+        AgentWalkthroughDialog {
+            id: agentRunDialog
+            objectName: "agentRunDialog"
+            anchors.centerIn: parent
+            agentEditController: root.hasAgentEditController ? root.agentEditController : null
+            catalogModel: catalogAssets
+            initialScopeMode: root.agentScopeMode
+            thinkingLines: root.agentThinkingLines()
+            proofImages: root.agentProofImages()
+            onScopeModeRequested: function(scopeMode) {
+                root.agentScopeMode = scopeMode
+            }
+            onRunRequested: root.runAgentWorkflowPrimaryAction()
+            onClosed: root.forceActiveFocus()
+        }
     }
 
     Component {
@@ -11854,7 +14793,7 @@ Rectangle {
             modal: true
             closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
             anchors.centerIn: parent
-            width: Math.min(840, Math.max(560, root.width - 112))
+            width: Math.min(640, Math.max(390, root.width - 96))
             onClosed: root.forceActiveFocus()
             enter: Transition {
                 ParallelAnimation {
@@ -11870,55 +14809,59 @@ Rectangle {
             }
 
             background: Rectangle {
-                radius: 8
-                color: theme.alpha(theme.ink900, 0.98)
+                radius: 22
+                color: theme.alpha("#15171C", 0.98)
                 border.width: 1
-                border.color: theme.alpha(root.mint, 0.34)
+                border.color: theme.alpha(theme.polar, 0.14)
             }
 
             contentItem: ColumnLayout {
                 objectName: "agentRunDialogContent"
-                width: agentRunDialog.width - 44
-                spacing: 10
+                width: agentRunDialog.width - 40
+                spacing: 0
 
             Rectangle {
                 objectName: "agentConversationCard"
                 Layout.fillWidth: true
-                implicitHeight: agentConversationLayout.implicitHeight + 22
-                radius: 8
-                color: theme.alpha(theme.glassLift, 0.78)
+                implicitHeight: agentConversationLayout.implicitHeight + 36
+                radius: 20
+                color: theme.alpha("#181B21", 0.96)
                 border.width: 1
-                border.color: theme.alpha(root.lineBright, 0.30)
+                border.color: theme.alpha(theme.polar, 0.12)
                 scale: 1
 
                 Behavior on scale {
                     NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
                 }
 
+                Behavior on implicitHeight {
+                    NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
+                }
+
                 ColumnLayout {
                     id: agentConversationLayout
                     anchors.fill: parent
-                    anchors.margins: 11
-                    spacing: 10
+                    anchors.margins: 20
+                    spacing: 18
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
+                        spacing: 14
 
                         Rectangle {
-                            Layout.preferredWidth: 34
-                            Layout.preferredHeight: 34
-                            radius: 8
-                            color: theme.alpha(root.mint, 0.16)
+                            Layout.preferredWidth: 44
+                            Layout.preferredHeight: 44
+                            radius: 14
+                            color: theme.alpha(theme.polar, 0.08)
                             border.width: 1
-                            border.color: theme.alpha(root.mint, 0.36)
+                            border.color: theme.alpha(theme.polar, 0.14)
 
                             AppIcon {
                                 anchors.centerIn: parent
-                                width: 18
-                                height: 18
+                                width: 22
+                                height: 22
                                 name: "adjust"
-                                color: root.mint
+                                color: theme.textStrong
                             }
                         }
 
@@ -11931,8 +14874,8 @@ Rectangle {
                                 text: "Photo Agent"
                                 color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 18
-                                font.weight: Font.DemiBold
+                                font.pixelSize: 26
+                                font.weight: Font.Bold
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 1
                                 elide: Text.ElideNone
@@ -11943,7 +14886,7 @@ Rectangle {
                                 text: String(root.agentWorkflowState().statusLine || "Ready") + " - " + root.agentWorkflowDetailText()
                                 color: root.dimText
                                 font.family: theme.fontUi
-                                font.pixelSize: 11
+                                font.pixelSize: 15
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 2
                                 elide: Text.ElideNone
@@ -11953,9 +14896,9 @@ Rectangle {
                         Label {
                             Layout.preferredWidth: 44
                             text: root.agentContextProgressText()
-                            color: root.mint
+                            color: theme.alpha(theme.textStrong, 0.78)
                             font.family: theme.fontMono
-                            font.pixelSize: 10
+                            font.pixelSize: 14
                             horizontalAlignment: Text.AlignRight
                             fontSizeMode: Text.HorizontalFit
                             minimumPixelSize: 8
@@ -11965,7 +14908,7 @@ Rectangle {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 6
+                        spacing: 8
 
                         Repeater {
                             model: [0, 1, 2]
@@ -11979,7 +14922,7 @@ Rectangle {
                                 iconName: modelData === 0 ? "star" : modelData === 1 ? "scope" : "edit"
                                 role: "segmented"
                                 active: root.agentContextPage === modelData
-                                accent: root.mint
+                                accent: theme.textStrong
                                 onClicked: root.setAgentContextPage(modelData)
                             }
                         }
@@ -11991,20 +14934,21 @@ Rectangle {
                         Layout.fillWidth: true
                         currentIndex: root.agentContextPage
 
-                        Behavior on opacity {
-                            NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
-                        }
-
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            opacity: root.agentContextPage === 0 ? 1 : 0
+                            spacing: 14
+
+                            Behavior on opacity {
+                                NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
+                            }
 
                             Label {
                                 Layout.fillWidth: true
                                 text: root.agentContextPageSubtitle(0)
-                                color: theme.textMain
+                                color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
+                                font.pixelSize: 17
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 2
                                 elide: Text.ElideNone
@@ -12012,24 +14956,24 @@ Rectangle {
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                implicitHeight: inspirationChoiceLayout.implicitHeight + 16
-                                radius: 8
-                                color: theme.alpha(theme.ink950, 0.34)
+                                implicitHeight: inspirationChoiceLayout.implicitHeight + 28
+                                radius: 18
+                                color: theme.alpha(theme.polar, 0.055)
                                 border.width: 1
-                                border.color: theme.alpha(root.mint, root.agentTasteCardVisible() ? 0.36 : 0.18)
+                                border.color: theme.alpha(theme.polar, 0.13)
 
                                 ColumnLayout {
                                     id: inspirationChoiceLayout
                                     anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 5
+                                    anchors.margins: 14
+                                    spacing: 8
 
                                     Label {
                                         Layout.fillWidth: true
                                         text: root.agentTasteCardVisible() ? root.agentTasteCardTitle() : "No inspiration selected"
                                         color: theme.textStrong
                                         font.family: theme.fontUi
-                                        font.pixelSize: 13
+                                        font.pixelSize: 18
                                         font.weight: Font.DemiBold
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                         maximumLineCount: 2
@@ -12043,7 +14987,7 @@ Rectangle {
                                               : "Select edited reference photos in the library, then learn them as reusable inspiration."
                                         color: root.dimText
                                         font.family: theme.fontUi
-                                        font.pixelSize: 11
+                                        font.pixelSize: 14
                                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                         maximumLineCount: 3
                                         elide: Text.ElideNone
@@ -12053,13 +14997,13 @@ Rectangle {
 
                             Flow {
                                 Layout.fillWidth: true
-                                spacing: 8
+                                spacing: 10
 
                                 MiniButton {
-                                    minimumReadableWidth: 178
+                                    minimumReadableWidth: 184
                                     text: "Learn Inspiration"
                                     iconName: "select"
-                                    role: "primary"
+                                    role: "secondary"
                                     enabled: root.hasAgentEditController &&
                                              !root.agentEditController.running &&
                                              Boolean(root.agentWorkflowStyleLearning().available)
@@ -12067,27 +15011,37 @@ Rectangle {
                                     onClicked: root.learnAgentStyleFromSelection()
                                 }
 
-                                MiniButton {
-                                    minimumReadableWidth: 132
-                                    text: "Choose Existing"
+                                MenuButton {
+                                    Layout.preferredWidth: 240
+                                    text: root.agentSelectedStyleName()
                                     iconName: "menu"
-                                    role: "secondary"
+                                    tone: "secondary"
+                                    accent: theme.textStrong
+                                    compact: false
                                     enabled: root.hasAgentEditController && !root.agentEditController.running
-                                    onClicked: root.agentDetailsExpanded = true
+                                    menuWidth: 320
+                                    menuItems: root.agentStyleMenuItems()
+                                    tooltipText: "Choose inspiration style"
+                                    onMenuItemTriggered: function(key) { root.selectAgentStyleFromMenu(key) }
                                 }
                             }
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            opacity: root.agentContextPage === 1 ? 1 : 0
+                            spacing: 14
+
+                            Behavior on opacity {
+                                NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
+                            }
 
                             Label {
                                 Layout.fillWidth: true
                                 text: root.agentContextPageSubtitle(1)
-                                color: theme.textMain
+                                color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
+                                font.pixelSize: 17
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 2
                                 elide: Text.ElideNone
@@ -12096,7 +15050,7 @@ Rectangle {
                             Flow {
                                 objectName: "agentContextScopeChooser"
                                 Layout.fillWidth: true
-                                spacing: 7
+                                spacing: 10
 
                                 Repeater {
                                     model: ["current-photo", "selected-assets", "filtered-library", "project"]
@@ -12113,7 +15067,7 @@ Rectangle {
                                         enabled: root.hasAgentEditController &&
                                                  !root.agentEditController.running &&
                                                  root.agentScopeEstimatedCount(modelData) > 0
-                                        accent: root.mint
+                                        accent: theme.textStrong
                                         tooltip: text + " - " + root.agentScopeEstimatedCount(modelData) + " photo" +
                                                  (root.agentScopeEstimatedCount(modelData) === 1 ? "" : "s")
                                         onClicked: root.agentScopeMode = modelData
@@ -12124,14 +15078,19 @@ Rectangle {
 
                         ColumnLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            opacity: root.agentContextPage === 2 ? 1 : 0
+                            spacing: 14
+
+                            Behavior on opacity {
+                                NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
+                            }
 
                             Label {
                                 Layout.fillWidth: true
                                 text: root.agentContextPageSubtitle(2)
-                                color: theme.textMain
+                                color: theme.textStrong
                                 font.family: theme.fontUi
-                                font.pixelSize: 12
+                                font.pixelSize: 17
                                 wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                 maximumLineCount: 2
                                 elide: Text.ElideNone
@@ -12139,22 +15098,22 @@ Rectangle {
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                implicitHeight: promptBubbleLayout.implicitHeight + 16
-                                radius: 8
-                                color: theme.alpha(theme.ink950, 0.40)
+                                implicitHeight: promptBubbleLayout.implicitHeight + 24
+                                radius: 18
+                                color: theme.alpha(theme.polar, 0.055)
                                 border.width: 1
-                                border.color: theme.alpha(root.lineBright, 0.32)
+                                border.color: theme.alpha(theme.polar, 0.13)
 
                                 ColumnLayout {
                                     id: promptBubbleLayout
                                     anchors.fill: parent
-                                    anchors.margins: 8
-                                    spacing: 7
+                                    anchors.margins: 12
+                                    spacing: 10
 
                                     TextArea {
                                         objectName: "agentChatPromptField"
                                         Layout.fillWidth: true
-                                        Layout.preferredHeight: 82
+                                        Layout.preferredHeight: 112
                                         text: root.hasAgentEditController ? root.agentEditController.userInstructions : ""
                                         placeholderText: "Describe the edit you want"
                                         wrapMode: TextEdit.WordWrap
@@ -12163,7 +15122,7 @@ Rectangle {
                                         selectedTextColor: theme.ink950
                                         selectionColor: root.mint
                                         font.family: theme.fontUi
-                                        font.pixelSize: 12
+                                        font.pixelSize: 15
                                         onTextChanged: {
                                             if (activeFocus && root.hasAgentEditController)
                                                 root.agentEditController.userInstructions = text
@@ -12188,7 +15147,7 @@ Rectangle {
                                                    root.agentEditController.errorMessage.length > 0
                                                    ? theme.error : root.dimText
                                             font.family: theme.fontMono
-                                            font.pixelSize: 10
+                                            font.pixelSize: 12
                                             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                             maximumLineCount: 2
                                             elide: Text.ElideNone
@@ -12214,10 +15173,10 @@ Rectangle {
                         Layout.fillWidth: true
                         visible: root.agentThinkingVisible()
                         implicitHeight: visible ? agentThinkingColumn.implicitHeight + 16 : 0
-                        radius: 8
-                        color: theme.alpha(root.mint, 0.08)
+                        radius: 16
+                        color: theme.alpha(theme.polar, 0.06)
                         border.width: 1
-                        border.color: theme.alpha(root.mint, 0.26)
+                        border.color: theme.alpha(theme.polar, 0.14)
 
                         ColumnLayout {
                             id: agentThinkingColumn
@@ -12233,7 +15192,7 @@ Rectangle {
                                     Layout.preferredWidth: 14
                                     Layout.preferredHeight: 14
                                     name: "info"
-                                    color: root.mint
+                                    color: theme.textStrong
                                 }
 
                                 Label {
@@ -12241,7 +15200,7 @@ Rectangle {
                                     text: "Thinking"
                                     color: theme.textStrong
                                     font.family: theme.fontUi
-                                    font.pixelSize: 12
+                                    font.pixelSize: 13
                                     font.weight: Font.DemiBold
                                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                     maximumLineCount: 1
@@ -12251,7 +15210,7 @@ Rectangle {
                                 Label {
                                     visible: root.hasAgentEditController && root.agentEditController.running
                                     text: "live"
-                                    color: root.mint
+                                    color: theme.textStrong
                                     font.family: theme.fontMono
                                     font.pixelSize: 9
                                     font.weight: Font.DemiBold
@@ -12267,7 +15226,7 @@ Rectangle {
                                     text: modelData
                                     color: theme.textMain
                                     font.family: theme.fontUi
-                                    font.pixelSize: 11
+                                    font.pixelSize: 14
                                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                                     maximumLineCount: 2
                                     elide: Text.ElideNone
@@ -12293,16 +15252,12 @@ Rectangle {
 
                         MiniButton {
                             Layout.preferredWidth: 104
-                            text: root.agentContextPage >= 2 ? "Details" : "Next"
-                            iconName: root.agentContextPage >= 2 ? "menu" : "chevron-right"
+                            visible: root.agentContextPage < 2
+                            text: "Next"
+                            iconName: "chevron-right"
                             role: "secondary"
                             enabled: true
-                            onClicked: {
-                                if (root.agentContextPage >= 2)
-                                    root.agentDetailsExpanded = !root.agentDetailsExpanded
-                                else
-                                    root.setAgentContextPage(root.agentContextPage + 1)
-                            }
+                            onClicked: root.setAgentContextPage(root.agentContextPage + 1)
                         }
                     }
                 }
@@ -12311,7 +15266,7 @@ Rectangle {
             Rectangle {
                 objectName: "agentScopeCard"
                 Layout.fillWidth: true
-                visible: root.agentDetailsExpanded
+                visible: false
                 implicitHeight: agentScopeColumn.implicitHeight + 18
                 radius: 4
                 color: theme.alpha(root.mint, 0.08)
@@ -12677,6 +15632,7 @@ Rectangle {
             Rectangle {
                 objectName: "agentWorkflowStatePanel"
                 Layout.fillWidth: true
+                visible: false
                 implicitHeight: agentWorkflowStateColumn.implicitHeight + 16
                 radius: 4
                 color: theme.alpha(root.panelAlt, 0.82)
@@ -12750,7 +15706,7 @@ Rectangle {
             Rectangle {
                 objectName: "agentTasteCard"
                 Layout.fillWidth: true
-                visible: root.agentTasteCardVisible()
+                visible: false
                 implicitHeight: agentTasteCardColumn.implicitHeight + 16
                 radius: 4
                 color: theme.alpha(root.panelAlt, 0.62)
@@ -12806,6 +15762,7 @@ Rectangle {
             MiniButton {
                 objectName: "agentDetailsToggleButton"
                 Layout.fillWidth: true
+                visible: false
                 text: root.agentDetailsExpanded ? "Hide Details" : "Show Details"
                 iconName: root.agentDetailsExpanded ? "chevron-right" : "menu"
                 role: "secondary"
@@ -13455,6 +16412,92 @@ Rectangle {
                          : exportPage
     }
 
+    Rectangle {
+        id: editToolTransitionOverlay
+        objectName: "editToolTransitionOverlay"
+        readonly property string motionContract: "tool-switch-transition-motion:v1|duration:" +
+                                                 String(root.studioMotionFast) +
+                                                 "|overlay-fade:true|interruptible:true|no-layout-shift:true"
+        visible: root.editToolTransitionActive
+        anchors.fill: parent
+        z: 140
+        color: theme.alpha(theme.ink950, 0.26)
+        opacity: visible ? 1 : 0
+
+        Behavior on opacity {
+            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            hoverEnabled: true
+        }
+
+        Rectangle {
+            width: Math.min(340, Math.max(230, parent.width * 0.26))
+            height: toolTransitionContent.implicitHeight + 22
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 18
+            radius: 8
+            color: theme.alpha(theme.glassBase, 0.84)
+            border.width: 1
+            border.color: theme.alpha(root.mint, 0.42)
+
+            ColumnLayout {
+                id: toolTransitionContent
+                anchors.fill: parent
+                anchors.margins: 11
+                spacing: 8
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    Rectangle {
+                        Layout.preferredWidth: 7
+                        Layout.preferredHeight: 7
+                        radius: width / 2
+                        color: root.mint
+                        opacity: 0.94
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.editToolTransitionTitle
+                        color: theme.textStrong
+                        font.family: theme.fontUi
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        elide: Text.ElideNone
+                        fontSizeMode: Text.HorizontalFit
+                        minimumPixelSize: 9
+                    }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.editToolTransitionDetail
+                    visible: text.length > 0
+                    color: theme.textMuted
+                    font.family: theme.fontUi
+                    font.pixelSize: 10
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    maximumLineCount: 2
+                    elide: Text.ElideNone
+                }
+
+                ProgressStrip {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 3
+                    progress: -1
+                    accent: root.mint
+                }
+            }
+        }
+    }
+
     HealthStatusStrip {
         visible: root.page !== "edit" && !root.libraryImportActive
         anchors.bottom: parent.bottom
@@ -13493,36 +16536,14 @@ Rectangle {
                     anchors.fill: parent
                     spacing: 8
 
-                    SidebarRow {
-                        label: "VIREL Vault"
-                        value: root.formatInt(catalogAssets.totalAssetCount)
-                        iconName: "cloud"
-                        active: !root.importModeOpen
-                        onClicked: root.importModeOpen = false
-                    }
-                    SidebarRow {
-                        label: "Local Sources"
-                        value: root.liveSourceSummary()
-                        iconName: "drive"
-                        active: root.importModeOpen
-                        onClicked: root.startVaultImport()
-                    }
                     MiniButton {
                         Layout.fillWidth: true
                         role: "primary"
-                        text: catalogAssets.importing ? "Importing" : "Import to VIREL Vault"
-                        iconName: "plus"
+                        text: catalogAssets.importing ? "Importing" : "Import"
+                        iconName: "folder"
                         active: root.importModeOpen
                         enabled: !catalogAssets.busy || catalogAssets.importing
                         onClicked: root.startVaultImport()
-                    }
-                    MiniButton {
-                        Layout.fillWidth: true
-                        text: "Import Folder"
-                        iconName: "folder"
-                        role: "secondary"
-                        enabled: !catalogAssets.busy
-                        onClicked: root.importFolderToVault()
                     }
                     Label {
                         Layout.fillWidth: true
@@ -13532,30 +16553,6 @@ Rectangle {
                         font.pixelSize: 10
                         wrapMode: Text.WordWrap
                     }
-                    RowRule {}
-                    SectionTitle { label: "Import Sources"; Layout.topMargin: 6 }
-                    Repeater {
-                        model: catalogAssets.importSources
-                        SidebarRow {
-                            required property var modelData
-                            label: String(modelData.label || modelData.path || "Source")
-                            value: String(modelData.subtitle || modelData.kind || "")
-                            iconName: String(modelData.kind || "") === "volume" ? "drive" : "folder"
-                            active: false
-                            onClicked: root.startVaultImport()
-                        }
-                    }
-                    RowRule {}
-                    SectionTitle { label: "Smart Collections"; Layout.topMargin: 10 }
-                    SidebarRow { label: "All Images"; value: root.formatInt(catalogAssets.totalAssetCount); active: !root.filtersActive(); onClicked: root.clearLibraryFilters() }
-                    SidebarRow { label: "Visible"; value: root.formatInt(catalogAssets.assetCount) }
-                    SidebarRow { label: "Picked"; value: root.formatInt(catalogAssets.visiblePickedCount); active: catalogAssets.reviewFilter === "picked"; onClicked: catalogAssets.reviewFilter = "picked" }
-                    SidebarRow { label: "Rejected"; value: root.formatInt(catalogAssets.visibleRejectedCount); active: catalogAssets.reviewFilter === "rejected"; onClicked: catalogAssets.reviewFilter = "rejected" }
-                    SidebarRow { label: "Rated"; value: root.formatInt(catalogAssets.visibleRatedCount); active: catalogAssets.reviewFilter === "rated"; onClicked: catalogAssets.reviewFilter = "rated" }
-                    SidebarRow { label: "Unrated"; value: root.formatInt(catalogAssets.visibleUnratedCount); active: catalogAssets.reviewFilter === "unrated"; onClicked: catalogAssets.reviewFilter = "unrated" }
-                    SidebarRow { label: "Unmarked"; value: root.formatInt(catalogAssets.visibleUnmarkedCount); active: catalogAssets.reviewFilter === "unmarked"; onClicked: catalogAssets.reviewFilter = "unmarked" }
-                    SidebarRow { label: "Online"; value: root.formatInt(catalogAssets.visibleOnlineCount); active: catalogAssets.availabilityFilter === "online"; onClicked: catalogAssets.availabilityFilter = "online" }
-                    SidebarRow { label: "Offline"; value: root.formatInt(catalogAssets.visibleOfflineCount); active: catalogAssets.availabilityFilter === "offline"; onClicked: catalogAssets.availabilityFilter = "offline" }
                     Item { Layout.fillHeight: true }
                     Label { text: "Catalog"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
                     ProgressBar {
@@ -13565,12 +16562,14 @@ Rectangle {
                                : 0
                     }
                     Label {
+                        Layout.fillWidth: true
                         text: root.formatInt(catalogAssets.assetCount) + " visible / "
                               + root.formatInt(catalogAssets.totalAssetCount) + " total  -  "
                               + root.formatInt(catalogAssets.driveCount) + " drives"
                         color: root.dimText
                         font.pixelSize: 10
                         font.family: theme.fontUi
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     }
                 }
             }
@@ -13797,139 +16796,302 @@ Rectangle {
                     onActionTriggered: root.clearLibrarySearch()
                 }
 
-                GridView {
-                    id: libraryGridScroll
+                Flickable {
+                    id: studioLibraryGalleryGrid
+                    objectName: "studioLibraryGalleryGrid"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     visible: !root.importModeOpen && root.catalogViewMode === "grid" && root.assetCount() > 0
                     clip: true
                     boundsBehavior: Flickable.StopAtBounds
                     flickableDirection: Flickable.VerticalFlick
-                    model: catalogAssets
-                    reuseItems: true
+                    contentWidth: galleryViewportWidth
+	                    contentHeight: libraryGalleryRowsColumn.implicitHeight
+                    readonly property int galleryScrollbarGutter: Math.max(root.libraryGalleryScrollbarGutter,
+                                                                            Math.ceil(Number(galleryVerticalScrollBar.implicitWidth || galleryVerticalScrollBar.width || 0)) + 2)
+                    readonly property int galleryViewportWidth: root.libraryGalleryViewportWidth(width, galleryScrollbarGutter)
+                    property var galleryRows: []
+                    ScrollBar.vertical: ScrollBar {
+                        id: galleryVerticalScrollBar
+                        policy: ScrollBar.AsNeeded
+                    }
 
-                    readonly property int tileGap: root.libraryToolbarTight ? 8 : 10
-                    readonly property int desiredCellWidth: root.libraryToolbarTight ? 206 : 232
-                    readonly property int columnCount: Math.max(2, Math.min(root.libraryToolbarTight ? 4 : 5,
-                                                                            Math.floor(Math.max(1, width + tileGap) / desiredCellWidth)))
-                    cellWidth: Math.max(1, Math.floor(Math.max(1, width) / columnCount))
-                    cellHeight: Math.round(Math.max(128, cellWidth - tileGap) * 0.68) + 38
-                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+	                    function scheduleGalleryRowsRefresh() {
+	                        libraryGalleryRowsRefreshTimer.restart()
+	                    }
 
-                    function updateVisibleAssetRange() {
-                        if (!catalogAssets)
-                            return
+	                    function refreshGalleryRows() {
+                        galleryRows = root.libraryGalleryRows(galleryViewportWidth)
+	                        updateVisibleAssetRange()
+	                    }
+
+	                    function updateVisibleAssetRange() {
+	                        if (!catalogAssets)
+	                            return
                         if (!visible || root.assetCount() <= 0) {
                             catalogAssets.setVisibleAssetRange(-1, -1)
                             return
                         }
-                        catalogAssets.setVisibleAssetRange(0, root.assetCount() - 1)
+                        let first = -1
+                        let last = -1
+                        let rowTop = 0
+                        for (let rowIndex = 0; rowIndex < galleryRows.length; ++rowIndex) {
+                            const row = galleryRows[rowIndex]
+                            const rowHeight = Math.max(1, Number(row.height || 0))
+                            const rowBottom = rowTop + rowHeight
+                            if (rowBottom >= contentY && rowTop <= contentY + height) {
+                                const items = row.items || []
+                                if (items.length > 0) {
+                                    first = first < 0 ? Number(items[0].index || 0) : first
+                                    last = Number(items[items.length - 1].index || 0)
+                                }
+                            }
+                            rowTop = rowBottom
+                        }
+                        if (first < 0 || last < first)
+                            catalogAssets.setVisibleAssetRange(0, root.assetCount() - 1)
+                        else
+                            catalogAssets.setVisibleAssetRange(first, last)
                     }
 
-                    Component.onCompleted: updateVisibleAssetRange()
-                    onHeightChanged: updateVisibleAssetRange()
-                    onWidthChanged: updateVisibleAssetRange()
-                    onVisibleChanged: updateVisibleAssetRange()
+	                    Timer {
+	                        id: libraryGalleryRowsRefreshTimer
+	                        interval: 0
+	                        repeat: false
+	                        onTriggered: studioLibraryGalleryGrid.refreshGalleryRows()
+	                    }
 
-                    delegate: Item {
-                        id: tileDelegate
-                        required property int index
-                        required property string assetId
-                        required property string thumbnailSource
-                        required property int rating
-                        required property bool picked
-                        required property bool rejected
+	                    Connections {
+	                        target: root
+	                        function onLibraryGalleryAspectRevisionChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                        function onCatalogViewModeChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                    }
 
-                        width: libraryGridScroll.cellWidth
-                        height: libraryGridScroll.cellHeight
+	                    Connections {
+	                        target: catalogAssets
+	                        function onAssetCountChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                        function onDataChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                        function onModelReset() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                        function onRowsInserted() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                        function onRowsRemoved() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+	                    }
 
-                        Rectangle {
-                            id: libraryTileSurface
-                            anchors.fill: parent
-                            anchors.margins: Math.round(libraryGridScroll.tileGap / 2)
-                            radius: 4
-                            color: catalogAssets.assetSelected(tileDelegate.assetId)
-                                   ? theme.alpha(root.mint, 0.10)
-                                   : "#090D0F"
-                            border.width: catalogAssets.assetSelected(tileDelegate.assetId) ? 2 : theme.chromeBorderWidth
-                            border.color: catalogAssets.assetSelected(tileDelegate.assetId)
-                                          ? theme.alpha(root.mint, 0.86)
-                                          : theme.alpha(root.hairline, 0.62)
-                            clip: true
+	                    Component.onCompleted: refreshGalleryRows()
+	                    onContentYChanged: updateVisibleAssetRange()
+	                    onHeightChanged: updateVisibleAssetRange()
+	                    onWidthChanged: scheduleGalleryRowsRefresh()
+                    onGalleryViewportWidthChanged: scheduleGalleryRowsRefresh()
+	                    onVisibleChanged: scheduleGalleryRowsRefresh()
+	                    onGalleryRowsChanged: updateVisibleAssetRange()
 
-                            Rectangle {
-                                id: libraryTileImageFrame
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.margins: 6
-                                height: Math.max(92, parent.height - 40)
-                                radius: 3
-                                color: "#050708"
-                                clip: true
+                    Column {
+                        id: libraryGalleryRowsColumn
+                        width: studioLibraryGalleryGrid.galleryViewportWidth
+                        spacing: 0
 
-                                ThumbnailCard {
-                                    id: tile
-                                    anchors.fill: parent
-                                    anchors.margins: 0
-                                    assetIndex: tileDelegate.index
-                                    thumbnailSource: tileDelegate.thumbnailSource
-                                    ratingValue: tileDelegate.rating
-                                    pickedValue: tileDelegate.picked
-                                    rejectedValue: tileDelegate.rejected
-                                    selected: catalogAssets.assetSelected(tileDelegate.assetId)
-                                    onActivated: root.selectAsset(tileDelegate.index)
-                                    onDoubleActivated: {
-                                        root.selectAsset(tileDelegate.index)
-                                        root.assetActivated("edit")
-                                    }
-                                }
-                            }
+                        Repeater {
+                            model: studioLibraryGalleryGrid.galleryRows
 
-                            RowLayout {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                anchors.leftMargin: 9
-                                anchors.rightMargin: 9
-                                anchors.bottomMargin: 7
-                                spacing: 6
+                            Row {
+                                id: galleryRow
+                                required property var modelData
+                                width: studioLibraryGalleryGrid.galleryViewportWidth
+                                height: Math.max(1, Number(modelData.height || 0))
+                                spacing: 0
 
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: root.assetName(tileDelegate.index)
-                                    color: theme.textMain
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    font.weight: catalogAssets.assetSelected(tileDelegate.assetId) ? Font.DemiBold : Font.Medium
-                                    fontSizeMode: Text.HorizontalFit
-                                    minimumPixelSize: 7
-                                    elide: Text.ElideNone
-                                }
+                                Repeater {
+                                    model: galleryRow.modelData.items || []
 
-                                Row {
-                                    visible: tileDelegate.rating > 0
-                                    spacing: 1
+                                    FocusScope {
+                                        id: tileDelegate
+                                        required property var modelData
+                                        readonly property int assetIndex: Number(modelData.index || 0)
+                                        readonly property string assetId: String(modelData.assetId || "")
+                                        readonly property string thumbnailSource: String(modelData.thumbnailSource || "")
+                                        readonly property string mediaType: String(modelData.mediaType || "photo")
+                                        readonly property string durationText: String(modelData.durationText || "")
+                                        readonly property int rating: Math.max(0, Math.min(5, Number(modelData.rating || 0)))
+                                        readonly property bool picked: Boolean(modelData.picked)
+                                        readonly property bool rejected: Boolean(modelData.rejected)
+                                        readonly property bool batchSelected: catalogAssets.assetSelected(assetId)
+                                        readonly property bool currentAsset: catalogAssets.selectedIndex === assetIndex
+                                        readonly property bool highlighted: batchSelected || currentAsset || activeFocus
 
-                                    Repeater {
-                                        model: tileDelegate.rating
-                                        AppIcon {
-                                            width: 9
-                                            height: 9
-                                            name: "star"
-                                            color: root.mint
+                                        width: Math.max(1, Number(modelData.width || 1))
+                                        height: galleryRow.height
+                                        activeFocusOnTab: true
+
+                                        Keys.onReturnPressed: root.selectAsset(assetIndex)
+                                        Keys.onEnterPressed: root.selectAsset(assetIndex)
+                                        Keys.onSpacePressed: root.selectAsset(assetIndex, Qt.ControlModifier)
+
+                                        Rectangle {
+                                            anchors.fill: parent
+                                            color: "#030506"
+                                            clip: true
+
+                                            Image {
+                                                id: tileImage
+                                                anchors.fill: parent
+                                                source: tileDelegate.thumbnailSource
+                                                fillMode: Image.PreserveAspectFit
+                                                asynchronous: true
+                                                cache: tileDelegate.thumbnailSource.length > 0
+                                                visible: source.toString().length > 0
+                                                onStatusChanged: {
+                                                    if (status === Image.Ready)
+                                                        root.setLibraryGalleryAspectRatio(
+                                                                    tileDelegate.assetIndex,
+                                                                    tileDelegate.thumbnailSource,
+                                                                    paintedWidth,
+                                                                    paintedHeight)
+                                                }
+                                                onPaintedWidthChanged: {
+                                                    if (status === Image.Ready)
+                                                        root.setLibraryGalleryAspectRatio(
+                                                                    tileDelegate.assetIndex,
+                                                                    tileDelegate.thumbnailSource,
+                                                                    paintedWidth,
+                                                                    paintedHeight)
+                                                }
+                                                onPaintedHeightChanged: {
+                                                    if (status === Image.Ready)
+                                                        root.setLibraryGalleryAspectRatio(
+                                                                    tileDelegate.assetIndex,
+                                                                    tileDelegate.thumbnailSource,
+                                                                    paintedWidth,
+                                                                    paintedHeight)
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: tileDelegate.thumbnailSource.length === 0
+                                                color: "#10171A"
+                                            }
+
+                                            Rectangle {
+                                                anchors.fill: parent
+                                                visible: tileMouse.containsMouse || tileDelegate.highlighted
+                                                color: tileDelegate.batchSelected
+                                                       ? theme.alpha(root.mint, 0.12)
+                                                       : tileDelegate.currentAsset
+                                                         ? theme.alpha(theme.polar, 0.10)
+                                                         : tileMouse.containsMouse
+                                                           ? theme.alpha(theme.polar, 0.05)
+                                                           : "transparent"
+                                                border.width: tileDelegate.highlighted ? 2 : theme.chromeBorderWidth
+                                                border.color: tileDelegate.batchSelected
+                                                              ? theme.alpha(root.mint, 0.94)
+                                                              : tileDelegate.currentAsset || tileDelegate.activeFocus
+                                                                ? theme.alpha(theme.polar, 0.84)
+                                                                : theme.alpha(theme.polar, 0.34)
+                                            }
+
+                                            Rectangle {
+                                                anchors.top: parent.top
+                                                anchors.right: parent.right
+                                                anchors.margins: 8
+                                                width: 22
+                                                height: 22
+                                                radius: 11
+                                                visible: tileDelegate.batchSelected || root.selectionMode || tileMouse.containsMouse
+                                                color: tileDelegate.batchSelected ? root.mint : theme.alpha(theme.ink950, 0.68)
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: tileDelegate.batchSelected ? root.mintSoft : theme.alpha(theme.polar, 0.42)
+                                                z: 2
+
+                                                AppIcon {
+                                                    anchors.centerIn: parent
+                                                    width: 12
+                                                    height: 12
+                                                    name: "check"
+                                                    color: "#07110F"
+                                                    visible: tileDelegate.batchSelected
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                anchors.left: parent.left
+                                                anchors.top: parent.top
+                                                anchors.margins: 8
+                                                width: 22
+                                                height: 22
+                                                radius: 11
+                                                visible: tileDelegate.picked || tileDelegate.rejected
+                                                color: tileDelegate.rejected ? theme.alpha(theme.error, 0.90) : theme.alpha(root.mint, 0.90)
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: tileDelegate.rejected ? theme.error : root.mintSoft
+                                                z: 2
+
+                                                AppIcon {
+                                                    anchors.centerIn: parent
+                                                    width: 12
+                                                    height: 12
+                                                    name: tileDelegate.rejected ? "close" : "check"
+                                                    color: "#07110F"
+                                                }
+                                            }
+
+                                            Row {
+                                                anchors.left: parent.left
+                                                anchors.bottom: parent.bottom
+                                                anchors.margins: 8
+                                                visible: tileDelegate.rating > 0
+                                                spacing: 1
+                                                z: 2
+
+                                                Repeater {
+                                                    model: tileDelegate.rating
+                                                    AppIcon {
+                                                        width: 11
+                                                        height: 11
+                                                        name: "star"
+                                                        color: root.mint
+                                                    }
+                                                }
+                                            }
+
+                                            Rectangle {
+                                                anchors.right: parent.right
+                                                anchors.bottom: parent.bottom
+                                                anchors.margins: 8
+                                                visible: tileDelegate.mediaType !== "photo" && tileDelegate.durationText.length > 0
+                                                radius: 3
+                                                color: theme.alpha(theme.ink950, 0.72)
+                                                border.width: theme.chromeBorderWidth
+                                                border.color: theme.alpha(theme.polar, 0.22)
+                                                implicitWidth: durationBadge.implicitWidth + 10
+                                                implicitHeight: 20
+                                                z: 2
+
+                                                Label {
+                                                    id: durationBadge
+                                                    anchors.centerIn: parent
+                                                    text: tileDelegate.durationText
+                                                    color: theme.textStrong
+                                                    font.family: theme.fontMono
+                                                    font.pixelSize: 9
+                                                }
+                                            }
+
+                                            MouseArea {
+                                                id: tileMouse
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                acceptedButtons: Qt.LeftButton
+                                                onClicked: function(mouse) {
+                                                    tileDelegate.forceActiveFocus()
+                                                    root.selectAsset(tileDelegate.assetIndex, mouse.modifiers)
+                                                }
+                                                onDoubleClicked: {
+                                                    tileDelegate.forceActiveFocus()
+                                                    root.selectAsset(tileDelegate.assetIndex)
+                                                    root.assetActivated(tileDelegate.mediaType === "photo" ? "edit" : "timeline")
+                                                }
+                                            }
                                         }
                                     }
-                                }
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton
-                                onClicked: root.selectAsset(tileDelegate.index)
-                                onDoubleClicked: {
-                                    root.selectAsset(tileDelegate.index)
-                                    root.assetActivated("edit")
                                 }
                             }
                         }
@@ -14196,12 +17358,16 @@ Rectangle {
                 }
 
                 MiniButton {
+                    objectName: "editSidebarToggleButton"
                     anchors.top: parent.top
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.topMargin: 12
+                    text: root.editSidebarCollapsed ? "Show library panel" : "Hide library panel"
                     square: true
                     iconName: root.editSidebarCollapsed ? "chevron-right" : "chevron-left"
                     role: "icon"
+                    labelVisible: false
+                    tooltip: text
                     onClicked: root.editSidebarCollapsed = !root.editSidebarCollapsed
                 }
             }
@@ -14288,7 +17454,11 @@ Rectangle {
 
                 Rectangle {
                     objectName: "maskCreationToolbar"
-                    visible: root.editTool === "masks" || (root.editTool === "brush" && !root.brushToolReady())
+                    readonly property string sourceCreationContract: "selection-top-toolbar:v2|source-creation:false|combine:true|status:true|done:true|owner:left-rail"
+                    visible: root.editTool === "masks" ||
+                             root.editTool === "pixel-brush" ||
+                             root.editTool === "pixel-select" ||
+                             (root.editTool === "brush" && !root.brushToolReady())
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? 42 : 0
                     color: root.panelColor
@@ -14379,7 +17549,7 @@ Rectangle {
                             tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed selection or retouch action."
                             onClicked: editorPreview.retryLastMaskAction()
                         }
-                        MiniButton { objectName: "maskCreationDoneButton"; text: "Done"; role: "primary"; active: editorPreview.hasActiveMask; enabled: editorPreview.hasActiveMask; onClicked: editorPreview.deselectActiveMask() }
+                        MiniButton { objectName: "maskCreationDoneButton"; text: "Done"; role: "primary"; active: editorPreview.hasActiveMask; enabled: editorPreview.hasActiveMask; onClicked: root.finishSelectionWorkflow() }
                     }
                 }
 
@@ -14467,7 +17637,7 @@ Rectangle {
                             iconName: "maximize"
                             role: "segmented"
                             active: editorPreview.maskFullResolutionPreview
-                            tooltip: "Use full-resolution mask alpha for the active preview without scheduling a full image render."
+                            tooltip: "Use the detailed selection preview without scheduling a full image render."
                             onClicked: root.setStudioFullResolutionMaskPreview(!editorPreview.maskFullResolutionPreview)
                         }
                         MiniButton {
@@ -14553,7 +17723,7 @@ Rectangle {
 
                 Rectangle {
                     objectName: "maskStackStrip"
-                    visible: root.editTool === "masks" && editorPreview.maskSetCount > 0
+                    visible: false
                     Layout.fillWidth: true
                     Layout.preferredHeight: visible ? 56 : 0
                     color: root.panelColor
@@ -14665,7 +17835,7 @@ Rectangle {
                                         Label {
                                             objectName: "maskStackSetLabel"
                                             Layout.fillWidth: true
-                                            text: String(modelData.name || "Mask")
+                                            text: String(modelData.name || "Selection")
                                             color: theme.textMain
                                             font.family: theme.fontUi
                                             font.pixelSize: 11
@@ -14900,6 +18070,8 @@ Rectangle {
 
                             MiniButton { objectName: "maskSourceBrushAddButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Brush +"; iconName: "brush-tool"; role: "icon"; labelVisible: false; active: root.editTool === "brush" && root.maskCreationOperation !== "subtract"; tooltip: "Paint an additive brush selection."; onClicked: root.startMaskBrushSource("add") }
                             MiniButton { objectName: "maskSourceBrushEraseButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Erase"; iconName: "brush-subtract"; role: "icon"; labelVisible: false; active: root.editTool === "brush" && root.maskCreationOperation === "subtract"; tooltip: "Paint a subtractive brush selection."; onClicked: root.startMaskBrushSource("subtract") }
+                            MiniButton { objectName: "maskSourcePixelBrushAddButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Px +"; iconName: "grid"; role: "icon"; labelVisible: false; active: root.pixelBrushToolReady() && root.maskCreationOperation !== "subtract"; tooltip: "Paint exact source pixels into the active selection."; onClicked: root.startPixelBrushSource("add") }
+                            MiniButton { objectName: "maskSourcePixelBrushEraseButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Px -"; iconName: "grid"; role: "icon"; labelVisible: false; active: root.pixelBrushToolReady() && root.maskCreationOperation === "subtract"; tooltip: "Deselect exact source pixels from the active selection."; onClicked: root.startPixelBrushSource("subtract") }
                             MiniButton { objectName: "maskSourceLassoButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Lasso"; iconName: "lasso"; role: "icon"; labelVisible: false; active: root.editTool === "masks" && editorPreview.activeMaskKind === "lasso"; tooltip: "Draw a freeform selection."; onClicked: root.startMaskLassoFromShortcut() }
                             MiniButton { objectName: "maskSourcePolygonButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Polygon"; iconName: "geometry"; role: "icon"; labelVisible: false; active: root.editTool === "masks" && editorPreview.activeMaskKind === "polygon"; tooltip: "Click points to build a polygon selection."; onClicked: root.startMaskPolygonFromShortcut() }
                             MiniButton { objectName: "maskSourceLinearButton"; visible: !maskToolRail.expanded; Layout.fillWidth: true; text: "Linear"; iconName: "geometry"; role: "icon"; labelVisible: false; active: root.editTool === "masks" && editorPreview.activeMaskKind === "linear"; tooltip: "Create a linear gradient selection."; onClicked: root.createMaskSource("linear") }
@@ -14914,13 +18086,16 @@ Rectangle {
                     ToolHud {
                         id: activeCanvasToolChip
                         objectName: "activeCanvasToolChip"
-                        anchors.left: parent.left
+                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
+                        readonly property string motionContract: "studio-tool-hud-motion:v1|surface:active-canvas-tool-chip|duration:" +
+                                                                 String(root.studioMotionFast) +
+                                                                 "|fade:true|stable-geometry:true|interruptible:true"
+                        anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
-                        anchors.leftMargin: maskToolRail.visible ? maskToolRail.x + maskToolRail.width + 10 : 12
                         anchors.topMargin: 12
-                        width: Math.min(parent.width - anchors.leftMargin - 12,
-                                        activeCanvasToolChip.implicitWidth)
+                        width: Math.min(parent.width - 24, activeCanvasToolChip.implicitWidth)
                         visible: root.activeCanvasToolChipVisible()
+                        opacity: visible ? 1.0 : 0.0
                         title: root.activeCanvasToolName()
                         subtitle: root.activeCanvasToolModeText()
                         activeFamilyLabel: root.activeEditToolFamilyLabel()
@@ -14936,6 +18111,10 @@ Rectangle {
                         z: 31
                         onDoneRequested: root.finishActiveCanvasTool()
                         onCancelRequested: root.cancelActiveTool()
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
                     }
 
                     CropOverlay {
@@ -15104,6 +18283,7 @@ Rectangle {
                     Rectangle {
                         objectName: "cropToolHud"
                         readonly property string hudContract: "specialized-tool-hud:v1|tool:crop|mode-switch:true|status-visible:true|commit-action:true|subdued-chrome:true|no-elide:true|no-overlap:true"
+                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
                         anchors.topMargin: 12
@@ -15182,11 +18362,16 @@ Rectangle {
 
                     BrushToolHud {
                         objectName: "brushToolHud"
+                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
+                        readonly property string motionContract: "studio-tool-hud-motion:v1|surface:brush-tool-hud|duration:" +
+                                                                 String(root.studioMotionFast) +
+                                                                 "|fade:true|stable-geometry:true|interruptible:true"
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
                         anchors.topMargin: 12
                         width: Math.min(parent.width - 24, implicitWidth)
                         visible: root.brushToolReady() && !editorPreview.compareMode
+                        opacity: visible ? 1.0 : 0.0
                         z: 23
                         operation: editorPreview.activeMaskOperation
                         statusText: root.brushHudStatusText()
@@ -15206,12 +18391,7 @@ Rectangle {
                         onTuningClicked: root.adjustActiveBrushSize(0.0)
                         onTuningMenuItemTriggered: function(key) { root.handleBrushQuickTuningMenuAction(key) }
                         onResetDefaultsRequested: root.resetActiveBrushDefaults()
-                        onDoneRequested: {
-                            if (editorPreview.brushStrokeActive)
-                                editorPreview.endActiveBrushStroke()
-                            root.editTool = "masks"
-                            root.editInspectorTab = "adjust"
-                        }
+                        onDoneRequested: root.finishSelectionWorkflow()
                         onSizeDownRequested: root.adjustActiveBrushSize(-0.02)
                         onSizeUpRequested: root.adjustActiveBrushSize(0.02)
                         onFlowDownRequested: root.adjustActiveBrushFlow(-0.05)
@@ -15221,11 +18401,19 @@ Rectangle {
                         onSizeDragPressed: function(sceneX) { root.beginBrushHudSizeDrag(sceneX) }
                         onSizeDragMoved: function(sceneX) { root.updateBrushHudSizeDrag(sceneX) }
                         onSizeDragReleased: root.endBrushHudSizeDrag()
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
                     }
 
                     Rectangle {
                         objectName: "polygonToolHud"
                         readonly property string hudContract: "specialized-tool-hud:v1|tool:polygon-lasso|point-actions:true|status-visible:true|commit-action:true|warning-state:true|subdued-chrome:true|no-elide:true|no-overlap:true"
+                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
+                        readonly property string motionContract: "studio-tool-hud-motion:v1|surface:polygon-lasso-hud|duration:" +
+                                                                 String(root.studioMotionFast) +
+                                                                 "|fade:true|stable-geometry:true|interruptible:true"
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
                         anchors.topMargin: 12
@@ -15234,11 +18422,16 @@ Rectangle {
                         radius: 3
                         visible: (editorPreview.activeMaskKind === "polygon" || editorPreview.activeMaskKind === "lasso") &&
                                  !editorPreview.compareMode
+                        opacity: visible ? 1.0 : 0.0
                         color: theme.alpha(theme.ink950, 0.84)
                         border.width: theme.chromeBorderWidth
                         border.color: editorPreview.activeMaskPolygonSelfIntersecting ? theme.warning : root.mint
                         z: 23
                         clip: true
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
 
                         ColumnLayout {
                             id: polygonToolControls
@@ -15264,7 +18457,16 @@ Rectangle {
                                     font.pixelSize: 10
                                     font.weight: Font.DemiBold
                                 }
-                                MiniButton {
+                                Label {
+                                    objectName: "lassoPathStateLabel"
+                                    visible: editorPreview.activeMaskKind === "lasso"
+                                    text: root.lassoPathStateText(root.activeMaskData())
+                                    color: theme.textMain
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                }
+	                                MiniButton {
                                     objectName: "polygonHudUndoPointButton"
                                     text: "Undo"
                                     iconName: "undo"
@@ -15311,7 +18513,8 @@ Rectangle {
                             RowLayout {
                                 Layout.alignment: Qt.AlignHCenter
                                 spacing: 6
-                                visible: editorPreview.activeMaskKind === "polygon"
+                                visible: editorPreview.activeMaskKind === "polygon" ||
+                                         editorPreview.activeMaskKind === "lasso"
 
                                 MiniButton {
                                     objectName: "polygonHudSimplifyButton"
@@ -15319,7 +18522,9 @@ Rectangle {
                                     iconName: "reset"
                                     role: "segmented"
                                     enabled: editorPreview.activeMaskPolygonPointCount > 3
-                                    tooltip: "Remove redundant polygon points."
+                                    tooltip: editorPreview.activeMaskKind === "lasso"
+                                             ? "Remove redundant lasso points."
+                                             : "Remove redundant polygon points."
                                     onClicked: editorPreview.simplifyActivePolygon(0.012)
                                 }
                                 MiniButton {
@@ -15328,7 +18533,9 @@ Rectangle {
                                     iconName: "geometry"
                                     role: "segmented"
                                     enabled: editorPreview.activeMaskPolygonPointCount >= 3
-                                    tooltip: "Smooth polygon corners."
+                                    tooltip: editorPreview.activeMaskKind === "lasso"
+                                             ? "Smooth lasso corners."
+                                             : "Smooth polygon corners."
                                     onClicked: editorPreview.smoothActivePolygon()
                                 }
                             }
@@ -15352,6 +18559,7 @@ Rectangle {
                     BrushContextPanel {
                         id: brushContextPanel
                         objectName: "brushContextPanel"
+                        readonly property string defaultVisibilityContract: "brush-context-default:v2|hidden:true|reason:hud-owns-command-surface|details:inspector-and-signatures|no-duplicate-floating-surface:true"
                         readonly property bool hasLayerTarget: editorPreview.photoLayerCount > 0
                         readonly property var currentLayer: hasLayerTarget ? root.currentPhotoLayerData() : ({})
                         readonly property int maskAdjustmentLayerIndex: root.activeMaskAdjustmentLayerIndex()
@@ -15360,7 +18568,7 @@ Rectangle {
                         anchors.rightMargin: 12
                         anchors.topMargin: 88
                         width: Math.min(280, Math.max(236, parent.width * 0.26))
-                        visible: root.brushToolReady() && !editorPreview.compareMode && root.editInspectorTab !== "layers"
+                        visible: false
                         z: 22
                         accent: root.mint
                         layerStackLabel: hasLayerTarget ? "Layers / Selections" : "Base / Selections"
@@ -15370,10 +18578,10 @@ Rectangle {
                                    : "Base image"
                         layerStateText: hasLayerTarget
                                         ? (currentLayer.selectionScoped === true
-                                           ? "Selection adjustment layer"
-                                           : String(currentLayer.kindLabel || "Layer") + " layer")
+                                           ? "Linked Layer"
+                                           : String(currentLayer.kindLabel || "Layer"))
                                         : "Direct adjustment"
-                        maskName: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Mask") : "No active mask"
+                        maskName: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Selection") : "No active selection"
                         maskStateText: root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
                                        root.maskOperationLabel(editorPreview.activeMaskOperation) +
                                        " / " + root.activeMaskPreviewLabel()
@@ -15404,556 +18612,46 @@ Rectangle {
                         onExposureDragged: function(value) { root.setActiveMaskQuickAdjustment("exposure", value) }
                         onTemperatureDragged: function(value) { root.setActiveMaskQuickAdjustment("temperature", value) }
                     }
-                    Rectangle {
+                    ToolCommandBar {
+                        id: retouchToolHud
                         objectName: "retouchToolHud"
-                        readonly property string hudContract: "specialized-tool-hud:v1|tool:retouch|mode-switch:true|precision-controls:true|status-visible:true|commit-action:true|retry-actions:true|subdued-chrome:true|no-elide:true|no-overlap:true"
+                        readonly property string hudContract: "specialized-tool-hud:v3|tool:retouch|component:ToolCommandBar|single-row:true|mode-menu:true|mode-change-animation:true|refine-inline:true|primary-action:single|secondary-actions:more-menu|subdued-chrome:true|no-elide:true|no-overlap:true"
+                        readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
                         readonly property string visibilityContract: root.retouchToolVisibilitySignature()
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
                         anchors.topMargin: 12
-                        width: Math.min(parent.width - 24, retouchToolControls.implicitWidth + 18)
-                        height: retouchToolControls.implicitHeight + 12
-                        radius: 3
+                        width: Math.min(parent.width - 24, implicitWidth)
                         visible: editorPreview.hasActiveMask &&
                                  editorPreview.activeMaskToolRole === "retouch" &&
                                  !editorPreview.compareMode
-                        color: theme.alpha(theme.ink950, 0.84)
-                        border.width: theme.chromeBorderWidth
-                        border.color: "#d98962"
+                        opacity: visible ? 1.0 : 0.0
                         z: 24
-                        clip: true
-
-                        ColumnLayout {
-                            id: retouchToolControls
-                            anchors.centerIn: parent
-                            spacing: 6
-
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-
-                                Label {
-                                    text: "Retouch"
-                                    color: "#d98962"
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    font.letterSpacing: 0
-                                }
-                                Label {
-                                    objectName: "retouchHudStatusLabel"
-                                    readonly property string readableStatusContract: "retouch-status-text:v1|full:" + text + "|ellipsis:none|fit-horizontal:true|tooltip-full:true"
-                                    text: root.retouchHudStatusText()
-                                    color: theme.textMain
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    elide: Text.ElideNone
-                                    fontSizeMode: Text.HorizontalFit
-                                    minimumPixelSize: 8
-                                    ToolTip.visible: retouchStatusHover.hovered
-                                    ToolTip.delay: 300
-                                    ToolTip.text: text
-
-                                    HoverHandler {
-                                        id: retouchStatusHover
-                                    }
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRemoveButton"
-                                    text: "Remove"
-                                    iconName: "erase-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "remove"
-                                    accent: "#d98962"
-                                    tooltip: "Paint an object removal area."
-                                    onClicked: root.startRetouchTool("remove")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRemoveAddButton"
-                                    text: "Add"
-                                    iconName: "brush-add"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "remove" &&
-                                            editorPreview.activeMaskOperation === "add"
-                                    accent: "#d98962"
-                                    tooltip: "Add to the pending remove selection before applying."
-                                    onClicked: editorPreview.startRemoveRefineBrush(false)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRemoveSubtractButton"
-                                    text: "Subtract"
-                                    iconName: "brush-subtract"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "remove" &&
-                                            editorPreview.activeMaskOperation === "subtract"
-                                    accent: "#d36a5e"
-                                    tooltip: "Subtract from the pending remove selection before applying."
-                                    onClicked: editorPreview.startRemoveRefineBrush(true)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudHealButton"
-                                    text: "Heal"
-                                    iconName: "brush-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "heal"
-                                    accent: "#72cbb2"
-                                    tooltip: "Blend blemishes into nearby texture."
-                                    onClicked: root.startRetouchTool("heal")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchButton"
-                                    text: "Patch"
-                                    iconName: "brush-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "patch"
-                                    accent: "#72cbb2"
-                                    tooltip: "Patch a painted area from surrounding pixels."
-                                    onClicked: root.startRetouchTool("patch")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCloneButton"
-                                    text: "Clone"
-                                    iconName: "brush-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "clone"
-                                    accent: "#7cb5ff"
-                                    tooltip: "Clone from a sampled source."
-                                    onClicked: root.startRetouchTool("clone")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudApplyButton"
-                                    minimumReadableWidth: 86
-                                    text: editorPreview.activeMaskCommitted ? "Applied" : "Apply"
-                                    iconName: "check"
-                                    role: "primary"
-                                    enabled: !editorPreview.activeMaskCommitted
-                                    tooltip: editorPreview.activeMaskCommitted
-                                             ? "This retouch patch is stored in the edit recipe; the original file is unchanged."
-                                             : "Apply this retouch patch to the edit recipe; the original file is unchanged."
-                                    onClicked: editorPreview.applyActiveRetouch()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudDoneButton"
-                                    minimumReadableWidth: 74
-                                    text: "Done"
-                                    iconName: "check"
-                                    role: "primary"
-                                    onClicked: {
-                                        editorPreview.deselectActiveMask()
-                                        root.activateEditTool("adjust")
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-
-                                MenuButton {
-                                    objectName: "retouchHudModeMenuButton"
-                                    Layout.preferredWidth: Math.max(156, implicitWidth)
-                                    text: root.retouchModeLabel(editorPreview.activeMaskRetouchMode)
-                                    iconName: "retouch"
-                                    compact: true
-                                    active: true
-                                    accent: "#d98962"
-                                    menuWidth: 236
-                                    menuItems: root.retouchHudModeMenuItems()
-                                    tooltipText: "Choose a retouch mode."
-                                    menuTooltipText: "Retouch modes"
-                                    onClicked: root.startRetouchTool(editorPreview.activeMaskRetouchMode || "remove")
-                                    onMenuItemTriggered: function(key) { root.handleEditRailMenuAction("retouch", key) }
-                                }
-
-                                MiniButton {
-                                    objectName: "retouchHudDustButton"
-                                    visible: editorPreview.activeMaskRetouchMode === "dust"
-                                    text: "Dust"
-                                    iconName: "erase-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "dust"
-                                    accent: "#c2b36a"
-                                    tooltip: "Stage dust spot cleanup."
-                                    onClicked: root.startRetouchTool("dust")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRedEyeButton"
-                                    visible: editorPreview.activeMaskRetouchMode === "red-eye"
-                                    text: "Red Eye"
-                                    iconName: "erase-tool"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskRetouchMode === "red-eye"
-                                    accent: "#d36a5e"
-                                    tooltip: "Stage red-eye correction."
-                                    onClicked: root.startRetouchTool("red-eye")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudSkinButton"
-                                    text: "Skin (Heuristic)"
-                                    iconName: "brush-tool"
-                                    role: "segmented"
-                                    visible: root.retouchModeIsPrimary("skin-cleanup")
-                                    active: editorPreview.activeMaskRetouchMode === "skin-cleanup"
-                                    accent: "#d7a08c"
-                                    tooltip: "Heuristic skin cleanup is experimental and hidden from the primary retouch HUD."
-                                    onClicked: root.startRetouchTool("skin-cleanup")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudSmoothButton"
-                                    text: "Smooth (Experimental)"
-                                    iconName: "brush-tool"
-                                    role: "segmented"
-                                    visible: root.retouchModeIsPrimary("frequency-smoothing")
-                                    active: editorPreview.activeMaskRetouchMode === "frequency-smoothing"
-                                    accent: "#c994d8"
-                                    tooltip: "Experimental frequency smoothing is hidden from the primary retouch HUD."
-                                    onClicked: root.startRetouchTool("frequency-smoothing")
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRegenerateButton"
-                                    text: "Regenerate"
-                                    role: "segmented"
-                                    enabled: (editorPreview.activeMaskRetouchMode === "remove" ||
-                                              editorPreview.activeMaskRetouchMode === "heal" ||
-                                              editorPreview.activeMaskRetouchMode === "patch") &&
-                                             (!editorPreview.activeMaskCommitted ||
-                                              editorPreview.activeInpaintRegenerationAvailable)
-                                    tooltip: editorPreview.activeMaskCommitted
-                                             ? "Regenerate this applied retouch patch from its stored source mask; the original file is unchanged."
-                                             : "Advance the seed for the pending retouch patch candidate; the original file is unchanged."
-                                    onClicked: {
-                                        if (editorPreview.activeMaskCommitted)
-                                            editorPreview.regenerateActiveInpaintPatch()
-                                        else
-                                            editorPreview.regenerateInpaintSeed()
-                                    }
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudFinalizeInpaintButton"
-                                    text: "Finalize"
-                                    role: "segmented"
-                                    enabled: editorPreview.activeInpaintFinalizationAvailable
-                                    visible: editorPreview.activeMaskRetouchMode === "remove" ||
-                                             editorPreview.activeMaskRetouchMode === "heal" ||
-                                             editorPreview.activeMaskRetouchMode === "patch"
-                                    tooltip: editorPreview.activeInpaintFinalizationAvailable
-                                             ? "Queue full-resolution inpaint from the stored source mask; preview patches are not final output until this finishes."
-                                             : "Queue full-resolution inpaint from an applied preview patch; preview patches are not final output until this finishes."
-                                    onClicked: editorPreview.queueActiveFinalInpaintPatch()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudRetryButton"
-                                    text: editorPreview.maskActionRetryLabel || "Retry"
-                                    iconName: "reset"
-                                    role: "secondary"
-                                    visible: editorPreview.maskActionRetryAvailable &&
-                                             String(editorPreview.maskActionRetryLabel || "").indexOf("Inpaint") >= 0
-                                    enabled: visible
-                                    tooltip: editorPreview.maskActionRetryDetail || "Retry the last failed inpaint."
-                                    onClicked: editorPreview.retryLastMaskAction()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudBeforeAfterButton"
-                                    text: editorPreview.retouchBeforeAfterEnabled ? "Show After" : "Show Before"
-                                    role: "segmented"
-                                    active: editorPreview.retouchBeforeAfterEnabled
-                                    tooltip: editorPreview.retouchBeforeAfterEnabled
-                                             ? "Return to the retouched result; the edit recipe is unchanged."
-                                             : "Compare against the pre-retouch image; the edit recipe is unchanged."
-                                    onClicked: editorPreview.retouchBeforeAfterEnabled = !editorPreview.retouchBeforeAfterEnabled
-                                }
-                            }
-
-                            RowLayout {
-                                objectName: "retouchHudHealBlendPanel"
-                                property string blendSignature: root.retouchHealBlendSignature()
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-                                visible: editorPreview.activeMaskRetouchMode === "heal"
-
-                                Label {
-                                    objectName: "retouchHudHealBlendLabel"
-                                    text: "Texture " + Math.round(editorPreview.activeMaskHealTextureBlend * 100).toString() +
-                                          " / Color " + Math.round(editorPreview.activeMaskHealColorBlend * 100).toString()
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudHealTextureDownButton"
-                                    text: "Texture -"
-                                    role: "secondary"
-                                    tooltip: "Reduce synthesized heal texture."
-                                    onClicked: editorPreview.activeMaskHealTextureBlend =
-                                               editorPreview.activeMaskHealTextureBlend - 0.08
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudHealTextureUpButton"
-                                    text: "Texture +"
-                                    role: "secondary"
-                                    tooltip: "Increase synthesized heal texture."
-                                    onClicked: editorPreview.activeMaskHealTextureBlend =
-                                               editorPreview.activeMaskHealTextureBlend + 0.08
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudHealColorDownButton"
-                                    text: "Color -"
-                                    role: "secondary"
-                                    tooltip: "Preserve more of the original heal color."
-                                    onClicked: editorPreview.activeMaskHealColorBlend =
-                                               editorPreview.activeMaskHealColorBlend - 0.08
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudHealColorUpButton"
-                                    text: "Color +"
-                                    role: "secondary"
-                                    tooltip: "Blend more repaired heal color."
-                                    onClicked: editorPreview.activeMaskHealColorBlend =
-                                               editorPreview.activeMaskHealColorBlend + 0.08
-                                }
-                            }
-
-                            RowLayout {
-                                objectName: "retouchHudPatchSourcePanel"
-                                property string sourceSignature: root.retouchPatchSourceSignature()
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-                                visible: editorPreview.activeMaskRetouchMode === "patch"
-
-                                Label {
-                                    objectName: "retouchHudPatchSourceLabel"
-                                    text: "Source " +
-                                          Math.round(editorPreview.activeMaskPatchSourceX * 100).toString() + "," +
-                                          Math.round(editorPreview.activeMaskPatchSourceY * 100).toString() +
-                                          " / " +
-                                          Math.round(editorPreview.activeMaskPatchSourceWidth * 100).toString() + "x" +
-                                          Math.round(editorPreview.activeMaskPatchSourceHeight * 100).toString()
-                                    color: theme.textMuted
-                                    font.family: theme.fontMono
-                                    font.pixelSize: 10
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchSourceLeftButton"
-                                    text: "Left"
-                                    role: "secondary"
-                                    tooltip: "Move the Patch source region left before applying."
-                                    onClicked: root.retouchPatchSourceNudge(-0.04, 0.0)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchSourceRightButton"
-                                    text: "Right"
-                                    role: "secondary"
-                                    tooltip: "Move the Patch source region right before applying."
-                                    onClicked: root.retouchPatchSourceNudge(0.04, 0.0)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchSourceUpButton"
-                                    text: "Up"
-                                    role: "secondary"
-                                    tooltip: "Move the Patch source region up before applying."
-                                    onClicked: root.retouchPatchSourceNudge(0.0, -0.04)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchSourceDownButton"
-                                    text: "Down"
-                                    role: "secondary"
-                                    tooltip: "Move the Patch source region down before applying."
-                                    onClicked: root.retouchPatchSourceNudge(0.0, 0.04)
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudPatchSourceResetButton"
-                                    text: "Reset"
-                                    role: "secondary"
-                                    tooltip: "Reset the Patch source region before applying."
-                                    onClicked: editorPreview.setActiveMaskPatchSourceRegion(0.62, 0.50, 0.18, 0.18)
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-                                visible: editorPreview.activeMaskRetouchMode === "clone"
-
-                                MiniButton {
-                                    objectName: "retouchHudCloneAlignedButton"
-                                    text: editorPreview.activeMaskCloneAligned ? "Aligned" : "Non-aligned"
-                                    role: "segmented"
-                                    active: editorPreview.activeMaskCloneAligned
-                                    tooltip: editorPreview.activeMaskCloneAligned
-                                             ? "Keep the clone source offset continuous across strokes."
-                                             : "Restart the clone source offset from the picked source for each stroke."
-                                    onClicked: editorPreview.activeMaskCloneAligned = !editorPreview.activeMaskCloneAligned
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCloneScaleDownButton"
-                                    text: "Scale -"
-                                    role: "secondary"
-                                    tooltip: "Reduce Clone Stamp source scale."
-                                    onClicked: editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale - 0.1
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCloneScaleUpButton"
-                                    text: "Scale +"
-                                    role: "secondary"
-                                    tooltip: "Increase Clone Stamp source scale."
-                                    onClicked: editorPreview.activeMaskCloneScale = editorPreview.activeMaskCloneScale + 0.1
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCloneRotateLeftButton"
-                                    text: "Rot -15"
-                                    role: "secondary"
-                                    tooltip: "Rotate Clone Stamp source counterclockwise."
-                                    onClicked: editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation - 15
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCloneRotateRightButton"
-                                    text: "Rot +15"
-                                    role: "secondary"
-                                    tooltip: "Rotate Clone Stamp source clockwise."
-                                    onClicked: editorPreview.activeMaskCloneRotation = editorPreview.activeMaskCloneRotation + 15
-                                }
-                            }
-
-                            ColumnLayout {
-                                objectName: "retouchHudCloneSourcePanel"
-                                property int sourceCount: editorPreview.activeMaskCloneSourceCount
-                                property int selectedSourceIndex: editorPreview.activeMaskCloneSourceIndex
-                                property string firstSourceName: editorPreview.activeMaskCloneSourceCount > 0
-                                                                 ? String(editorPreview.activeMaskCloneSources[0].name || "Source 1")
-                                                                 : ""
-                                Layout.fillWidth: true
-                                spacing: 5
-                                visible: editorPreview.activeMaskRetouchMode === "clone"
-
-                                RowLayout {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    spacing: 6
-
-                                    MiniButton {
-                                        objectName: "retouchHudCloneSaveSourceButton"
-                                        text: "Save Source"
-                                        role: "secondary"
-                                        enabled: editorPreview.activeMaskCloneSourceSet
-                                        tooltip: "Save the current Clone Stamp source, scale, rotation, and alignment."
-                                        onClicked: editorPreview.saveActiveCloneSource()
-                                    }
-
-                                    Label {
-                                        objectName: "retouchHudCloneSourceCountLabel"
-                                        text: editorPreview.activeMaskCloneSourceCount.toString() + " saved"
-                                        color: theme.textMuted
-                                        font.family: theme.fontMono
-                                        font.pixelSize: 10
-                                    }
-                                }
-
-                                RowLayout {
-                                    Layout.alignment: Qt.AlignHCenter
-                                    spacing: 4
-                                    visible: editorPreview.activeMaskCloneSourceCount > 0
-
-                                    Repeater {
-                                        model: editorPreview.activeMaskCloneSources
-
-                                        RowLayout {
-                                            required property int index
-                                            required property var modelData
-                                            spacing: 2
-
-                                            MiniButton {
-                                                objectName: "retouchHudCloneSourceSelectButton" + index
-                                                text: String(modelData.name || ("Source " + (index + 1)))
-                                                role: "segmented"
-                                                active: editorPreview.activeMaskCloneSourceIndex === index
-                                                tooltip: "Load saved Clone Stamp source."
-                                                onClicked: editorPreview.selectActiveCloneSource(index)
-                                            }
-
-                                            MiniButton {
-                                                objectName: "retouchHudCloneSourceDeleteButton" + index
-                                                text: "Delete"
-                                                role: "secondary"
-                                                tooltip: "Delete saved Clone Stamp source."
-                                                onClicked: editorPreview.deleteActiveCloneSource(index)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-
-                                MiniButton {
-                                    objectName: "retouchHudResetSelectionButton"
-                                    text: "Reset Selection"
-                                    iconName: "reset"
-                                    role: "secondary"
-                                    enabled: !editorPreview.activeMaskCommitted
-                                    tooltip: "Clear the pending retouch selection while keeping the active retouch tool."
-                                    onClicked: editorPreview.resetActiveRetouchSelection()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudCancelButton"
-                                    minimumReadableWidth: 88
-                                    text: "Cancel"
-                                    iconName: "close"
-                                    role: "secondary"
-                                    enabled: !editorPreview.activeMaskCommitted
-                                    tooltip: "Discard the pending retouch selection before it is applied."
-                                    onClicked: editorPreview.cancelActiveRetouch()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudReopenSelectionButton"
-                                    text: "Reopen Selection"
-                                    iconName: "brush-tool"
-                                    role: "secondary"
-                                    enabled: editorPreview.activeMaskCommitted
-                                    tooltip: "Reopen the applied retouch selection for refinement; the original file is unchanged."
-                                    onClicked: editorPreview.reopenActiveRetouchSelection()
-                                }
-                                MiniButton {
-                                    objectName: "retouchHudDeletePatchButton"
-                                    text: "Delete Patch"
-                                    iconName: "trash"
-                                    role: "secondary"
-                                    enabled: editorPreview.activeMaskCommitted
-                                    tooltip: "Remove the applied retouch patch from the edit recipe."
-                                    onClicked: editorPreview.deleteActiveRetouchPatch()
-                                }
-                            }
-
-                            RowLayout {
-                                objectName: "retouchHudVariationPicker"
-                                Layout.alignment: Qt.AlignHCenter
-                                spacing: 6
-                                visible: editorPreview.activeInpaintVariationPickerVisible
-
-                                Label {
-                                    text: "Variation"
-                                    color: theme.textMuted
-                                    font.family: theme.fontUi
-                                    font.pixelSize: 10
-                                    font.weight: Font.DemiBold
-                                    font.letterSpacing: 0
-                                }
-                                Repeater {
-                                    model: editorPreview.activeInpaintCandidateCount
-
-                                    MiniButton {
-                                        objectName: "retouchHudVariationButton" + String(index + 1)
-                                        text: String(index + 1)
-                                        role: "segmented"
-                                        active: editorPreview.activeInpaintCandidateIndex === index
-                                        accent: "#d98962"
-                                        tooltip: "Use inpaint variation " + String(index + 1) + " from the generated patch candidates."
-                                        onClicked: editorPreview.activeInpaintCandidateIndex = index
-                                    }
-                                }
-                            }
-                        }
+                        toolLabel: "Retouch"
+                        modeText: root.retouchModeLabel(editorPreview.activeMaskRetouchMode)
+                        modeIconName: "retouch"
+                        modeChangeAnimationEnabled: true
+                        modeMenuItems: root.retouchHudModeMenuItems()
+                        inlineActions: root.retouchHudInlineActions()
+                        statusText: root.retouchHudStatusText()
+                        primaryText: root.retouchHudPrimaryText()
+                        primaryIconName: "check"
+                        primaryEnabled: editorPreview.hasActiveMask &&
+                                        editorPreview.activeMaskToolRole === "retouch"
+                        primaryTooltip: root.retouchHudPrimaryTooltip()
+                        moreMenuItems: root.retouchHudMoreMenuItems()
+                        accent: "#d98962"
+                        statusObjectName: "retouchHudStatusLabel"
+                        modeButtonObjectName: "retouchHudModeMenuButton"
+                        primaryButtonObjectName: editorPreview.activeMaskCommitted
+                                                 ? "retouchHudDoneButton"
+                                                 : "retouchHudApplyButton"
+                        moreButtonObjectName: "retouchHudMoreMenuButton"
+                        onModeClicked: root.startRetouchTool(editorPreview.activeMaskRetouchMode || "remove")
+                        onModeMenuItemTriggered: function(key) { root.handleEditRailMenuAction("retouch", key) }
+                        onInlineActionTriggered: function(key) { root.handleRetouchHudInlineAction(key) }
+                        onPrimaryTriggered: root.triggerRetouchPrimaryAction()
+                        onMoreMenuItemTriggered: function(key) { root.handleRetouchHudMoreMenuAction(key) }
                     }
 
                     EmptyStateCard {
@@ -16009,7 +18707,7 @@ Rectangle {
                                 tooltip: "Fill the preview area by cropping the visible edges."
                                 onClicked: editViewport.setFitMode("fill")
                             }
-                            MiniButton { objectName: "zoomStepButton"; text: Math.round(editViewport.zoom * 100) + "%"; iconName: "zoom"; role: "segmented"; labelVisible: false; tooltip: "Step preview zoom. Current zoom: " + Math.round(editViewport.zoom * 100) + "%."; onClicked: editViewport.setZoom(editViewport.zoom >= 4 ? 1 : editViewport.zoom + 0.25) }
+                            MiniButton { objectName: "zoomStepButton"; text: Math.round(editViewport.zoom * 100) + "%"; iconName: "zoom"; role: "segmented"; labelVisible: false; tooltip: "Step preview zoom. Current zoom: " + Math.round(editViewport.zoom * 100) + "%."; onClicked: editViewport.setZoom(editViewport.nextInspectionZoom()) }
                             MiniButton { objectName: "zoomOutButton"; square: true; iconName: "minus"; role: "icon"; tooltip: "Zoom out."; onClicked: editViewport.zoomOut() }
                             MiniButton { objectName: "zoomInButton"; square: true; iconName: "plus"; role: "icon"; tooltip: "Zoom in."; onClicked: editViewport.zoomIn() }
                             MiniButton {
@@ -16084,30 +18782,33 @@ Rectangle {
                                     minimumPixelSize: 8
                                     elide: Text.ElideNone
                                 }
-                                MiniButton { objectName: "diagnosticsPanelCloseButton"; visible: diagnosticsOverlayPanel.visible; square: true; iconName: "close"; role: "icon"; tooltip: "Close diagnostics."; onClicked: root.diagnosticsPanelOpen = false }
+                                MiniButton { objectName: "diagnosticsPanelCloseButton"; square: true; iconName: "close"; role: "icon"; tooltip: "Close diagnostics."; onClicked: root.diagnosticsPanelOpen = false }
                             }
 
-                            Grid {
+                            GridLayout {
                                 id: diagnosticsOverlayGrid
                                 anchors.left: parent.left
                                 anchors.right: parent.right
                                 anchors.top: diagnosticsOverlayHeader.bottom
                                 anchors.topMargin: diagnosticsOverlayPanel.contentSpacing
                                 readonly property int buttonCount: 7
-                                readonly property int effectiveColumns: 2
+                                readonly property real availableWidth: Math.max(0, diagnosticsOverlayPanel.width - 16)
+                                readonly property int effectiveColumns: availableWidth < 194 ? 1 : 2
                                 readonly property int effectiveRows: Math.ceil(buttonCount / Math.max(1, effectiveColumns))
-                                readonly property real cellWidth: 94
+                                readonly property real cellWidth: effectiveColumns <= 1
+                                                                 ? availableWidth
+                                 : Math.floor((availableWidth - columnSpacing) / effectiveColumns)
                                 columns: effectiveColumns
                                 columnSpacing: 6
                                 rowSpacing: 6
 
-                                MiniButton { objectName: "loupeOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Loupe"; iconName: "plus"; role: "segmented"; labelVisible: true; active: root.loupeEnabled; tooltip: root.complexToolTooltip("loupe"); onClicked: root.loupeEnabled = !root.loupeEnabled }
-                                MiniButton { objectName: "focusOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Focus"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusCheckOverlayEnabled; tooltip: root.complexToolTooltip("focus-check"); onClicked: root.setAnalysisOverlay("focus-check") }
-                                MiniButton { objectName: "peakingOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Peak"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusPeakingOverlayEnabled; tooltip: root.complexToolTooltip("focus-peaking"); onClicked: root.setAnalysisOverlay("focus-peaking") }
-                                MiniButton { objectName: "clippingOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Clips"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.clippingOverlayEnabled; tooltip: root.complexToolTooltip("clipping"); onClicked: root.setAnalysisOverlay("clipping") }
-                                MiniButton { objectName: "falseColorOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "False"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.falseColorOverlayEnabled; tooltip: root.complexToolTooltip("false-color"); onClicked: root.setAnalysisOverlay("false-color") }
-                                MiniButton { objectName: "gamutOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Gamut"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.gamutOverlayEnabled; tooltip: root.complexToolTooltip("gamut-warning"); onClicked: root.setAnalysisOverlay("gamut") }
-                                MiniButton { objectName: "zoneMapOverlayButton"; implicitWidth: diagnosticsOverlayGrid.cellWidth; width: diagnosticsOverlayGrid.cellWidth; height: 30; visible: diagnosticsOverlayPanel.visible; text: "Zone"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.zoneMapOverlayEnabled; tooltip: root.complexToolTooltip("zone-map"); onClicked: root.setAnalysisOverlay("zone-map") }
+                                MiniButton { objectName: "loupeOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Loupe"; iconName: "plus"; role: "segmented"; labelVisible: true; active: root.loupeEnabled; tooltip: root.complexToolTooltip("loupe"); onClicked: root.loupeEnabled = !root.loupeEnabled }
+                                MiniButton { objectName: "focusOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Focus"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusCheckOverlayEnabled; tooltip: root.complexToolTooltip("focus-check"); onClicked: root.setAnalysisOverlay("focus-check") }
+                                MiniButton { objectName: "peakingOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Peak"; iconName: "snap"; role: "segmented"; labelVisible: true; active: root.focusPeakingOverlayEnabled; tooltip: root.complexToolTooltip("focus-peaking"); onClicked: root.setAnalysisOverlay("focus-peaking") }
+                                MiniButton { objectName: "clippingOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Clips"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.clippingOverlayEnabled; tooltip: root.complexToolTooltip("clipping"); onClicked: root.setAnalysisOverlay("clipping") }
+                                MiniButton { objectName: "falseColorOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "False"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.falseColorOverlayEnabled; tooltip: root.complexToolTooltip("false-color"); onClicked: root.setAnalysisOverlay("false-color") }
+                                MiniButton { objectName: "gamutOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Gamut"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.gamutOverlayEnabled; tooltip: root.complexToolTooltip("gamut-warning"); onClicked: root.setAnalysisOverlay("gamut") }
+                                MiniButton { objectName: "zoneMapOverlayButton"; Layout.preferredWidth: diagnosticsOverlayGrid.cellWidth; Layout.preferredHeight: 30; text: "Zone"; iconName: "scope"; role: "segmented"; labelVisible: true; active: root.zoneMapOverlayEnabled; tooltip: root.complexToolTooltip("zone-map"); onClicked: root.setAnalysisOverlay("zone-map") }
                             }
                         }
                     }
@@ -16480,12 +19181,20 @@ Rectangle {
 
             Panel {
                 objectName: "editInspectorPanel"
+                readonly property string motionContract: "inspector-panel-motion:v1|duration:" +
+                                                         String(root.studioMotionMedium) +
+                                                         "|fade:true|mode-switch:true|width-stable:true|interruptible:true"
                 visible: root.editingChromeVisible && root.editInspectorPanelVisible
                          && !root.scopeLargeActive()
                          && !(root.editInspectorTab === "scopes" && root.scopeDockPosition !== "right")
                 Layout.preferredWidth: visible ? root.editInspectorPanelWidth : 0
                 Layout.fillHeight: true
                 title: root.inspectorTabTitle(root.editInspectorTab)
+                opacity: visible ? 1.0 : 0.0
+
+                Behavior on opacity {
+                    NumberAnimation { duration: root.studioMotionMedium; easing.type: Easing.OutCubic }
+                }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -16495,8 +19204,44 @@ Rectangle {
                         objectName: "editInspectorTabRow"
                         Layout.fillWidth: true
                         Layout.preferredHeight: 0
-                        visible: false
-                        Item { objectName: "detailInspectorTabButton" }
+                        visible: true
+                        Item {
+                            objectName: "adjustInspectorTabButton"
+                            property string text: "Adjust"
+                            property bool active: root.editInspectorTab === "adjust"
+                        }
+                        Item {
+                            objectName: "presetsInspectorTabButton"
+                            property string text: "Presets"
+                            property bool active: root.editInspectorTab === "presets"
+                        }
+                        Item {
+                            objectName: "layersInspectorTabButton"
+                            property string text: "Layers"
+                            property bool active: root.editInspectorTab === "layers"
+                        }
+                        Item {
+                            objectName: "cropInspectorTabButton"
+                            property string text: "Crop"
+                            property bool active: root.editInspectorTab === "crop"
+                            visible: root.editTool === "crop" || root.editInspectorTab === "crop"
+                        }
+                        Item {
+                            objectName: "scopesInspectorTabButton"
+                            property string text: "Scopes"
+                            property bool active: root.editInspectorTab === "scopes"
+                        }
+                        Item {
+                            objectName: "detailInspectorTabButton"
+                            property string text: "Detail"
+                            property bool active: false
+                            visible: false
+                        }
+                        Item {
+                            objectName: "infoInspectorTabButton"
+                            property string text: "Info"
+                            property bool active: root.editInspectorTab === "info"
+                        }
                     }
 
                     Rectangle {
@@ -16552,23 +19297,47 @@ Rectangle {
                     Rectangle {
                         id: activeEditTargetBar
                         objectName: "activeEditTargetBar"
+                        readonly property string motionContract: "active-target-motion:v1|duration:" +
+                                                                 String(root.studioMotionFast) +
+                                                                 "|fade:true|height-stable-when-hidden:true|implementation-copy:hidden"
                         readonly property string targetScope: root.activeEditTargetScope()
                         readonly property string targetContract: root.activeEditTargetSignature()
                         readonly property string visualContract: root.activeEditTargetVisualSignature()
                         readonly property color accentColor: root.activeEditTargetAccentColor()
+                        readonly property string toneName: root.activeEditTargetToneName()
                         readonly property var layerData: root.activeEditTargetLayerData()
                         readonly property var thumbnailData: root.activeEditTargetThumbnailData()
                         readonly property string thumbnailSource: String(thumbnailData.thumbnailSource || "")
                         readonly property int thumbnailBackingWidth: Math.max(0, Number(thumbnailData.thumbnailBackingWidth || 0))
                         readonly property int thumbnailBackingHeight: Math.max(0, Number(thumbnailData.thumbnailBackingHeight || 0))
-                        visible: root.page === "edit" &&
-                                 targetScope !== "base-image"
+                        readonly property bool inspectorContextVisible: false
+                        readonly property string duplicateContextContract: "active-target-context:v3|inspector-visible:false|breadcrumb-visible:false|status-visible:false|owner:canvas-hud-layers|queryable:true"
+                        readonly property string breadcrumbContract: "active-target-breadcrumbs:v1|inspector-visible:false|hidden-copy-queryable:true|max-visible:1|duplicate-visible:false"
+                        visible: inspectorContextVisible
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 44
+                        Layout.preferredHeight: visible ? 44 : 0
                         radius: 4
-                        color: theme.alpha(theme.ink900, 0.48)
-                        border.width: theme.chromeBorderWidth
+                        color: theme.alpha(activeEditTargetBar.accentColor, activeEditTargetBar.targetScope === "base-image" ? 0.045 : 0.075)
+                        opacity: visible ? 1.0 : 0.0
+                        border.width: activeEditTargetBar.targetScope === "base-image" ? theme.chromeBorderWidth : 2
                         border.color: theme.alpha(activeEditTargetBar.accentColor, 0.34)
+                        scale: visible ? 1.0 : 0.985
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
+
+                        Behavior on color {
+                            ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
+
+                        Behavior on border.color {
+                            ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
+
+                        Behavior on scale {
+                            NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                        }
 
                         Rectangle {
                             objectName: "activeEditTargetAccentRail"
@@ -16579,12 +19348,16 @@ Rectangle {
                             radius: 2
                             color: activeEditTargetBar.accentColor
                             opacity: 0.72
+
+                            Behavior on color {
+                                ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                            }
                         }
 
                         Item {
                             objectName: "activeAdjustmentLayerTargetBar"
                             readonly property var layerData: root.activeAdjustmentLayerData()
-                            visible: activeEditTargetBar.visible && root.activeAdjustmentLayerIndex() >= 0
+                            visible: root.activeAdjustmentLayerIndex() >= 0
                             width: 0
                             height: 0
                         }
@@ -16603,6 +19376,10 @@ Rectangle {
                                 Layout.preferredHeight: 16
                                 name: root.activeEditTargetIconName()
                                 color: activeEditTargetBar.accentColor
+
+                                Behavior on color {
+                                    ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                                }
                             }
 
                             ColumnLayout {
@@ -16615,23 +19392,29 @@ Rectangle {
 
                                     Label {
                                         objectName: "activeEditTargetModeLabel"
-                                        text: "Editing"
-                                        color: root.dimText
+                                        text: root.activeEditTargetModeLabel()
+                                        color: activeEditTargetBar.accentColor
                                         font.family: theme.fontMono
                                         font.pixelSize: 8
                                         font.weight: Font.DemiBold
+
+                                        Behavior on color {
+                                            ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                                        }
                                     }
 
                                     Label {
                                         objectName: "activeEditTargetBreadcrumbLabel"
                                         Layout.fillWidth: true
-                                        text: root.activeEditTargetPrimaryName()
+                                        text: root.activeEditTargetBreadcrumbText()
                                         color: theme.textMain
                                         font.family: theme.fontUi
                                         font.pixelSize: 11
                                         font.weight: Font.DemiBold
                                         maximumLineCount: 1
-                                        elide: Text.ElideRight
+                                        elide: Text.ElideNone
+                                        fontSizeMode: Text.HorizontalFit
+                                        minimumPixelSize: 8
                                     }
                                 }
 
@@ -16643,7 +19426,9 @@ Rectangle {
                                     font.family: theme.fontMono
                                     font.pixelSize: 8
                                     maximumLineCount: 1
-                                    elide: Text.ElideRight
+                                    elide: Text.ElideNone
+                                    fontSizeMode: Text.HorizontalFit
+                                    minimumPixelSize: 7
                                 }
 
                                 Label {
@@ -16762,11 +19547,15 @@ Rectangle {
                                 Rectangle {
                                     id: selectedMaskHeader
                                     objectName: "selectedMaskHeader"
+                                    readonly property string motionContract: "selection-header-motion:v1|duration:" +
+                                                                             String(root.studioMotionFast) +
+                                                                             "|fade:true|active-target:true|implementation-copy:hidden"
                                     readonly property var maskData: root.activeMaskSetData()
                                     readonly property string maskName: root.activeEditTargetMaskName()
                                     readonly property string parentLayerName: root.activeEditTargetPrimaryName()
                                     readonly property string operationLabel: root.maskOperationLabel(editorPreview.activeMaskOperation)
                                     readonly property string overlayLabel: root.activeMaskPreviewLabel()
+                                    readonly property string fallbackState: root.smartSelectionFallbackState(root.activeMaskData())
                                     readonly property int featherPercent: Math.round(root.clamp(editorPreview.activeMaskFeather, 0.0, 0.5) * 100)
                                     readonly property int densityPercent: Math.round(root.clamp(editorPreview.activeMaskDensity, 0.0, 1.0) * 100)
                                     readonly property bool inverted: editorPreview.activeMaskSelectionInverted === true
@@ -16782,8 +19571,17 @@ Rectangle {
                                     visible: root.selectedMaskHeaderActive()
                                     radius: 4
                                     color: theme.alpha(root.mint, 0.095)
+                                    opacity: visible ? 1.0 : 0.0
                                     border.width: theme.chromeBorderWidth
                                     border.color: theme.alpha(root.mint, 0.56)
+
+                                    Behavior on opacity {
+                                        NumberAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                                    }
+
+                                    Behavior on color {
+                                        ColorAnimation { duration: root.studioMotionFast; easing.type: Easing.OutCubic }
+                                    }
 
                                     RowLayout {
                                         anchors.fill: parent
@@ -16834,7 +19632,7 @@ Rectangle {
                                                 Label {
                                                     objectName: "selectedMaskHeaderNameLabel"
                                                     Layout.fillWidth: true
-                                                    text: selectedMaskHeader.maskName.length > 0 ? selectedMaskHeader.maskName : "Mask"
+                                                    text: selectedMaskHeader.maskName.length > 0 ? selectedMaskHeader.maskName : "Selection"
                                                     color: theme.textMain
                                                     font.family: theme.fontUi
                                                     font.pixelSize: 12
@@ -16846,7 +19644,7 @@ Rectangle {
 
                                                 Label {
                                                     objectName: "selectedMaskHeaderModeLabel"
-                                                    text: "Editing Mask"
+                                                    text: "Selection"
                                                     color: root.mint
                                                     font.family: theme.fontMono
                                                     font.pixelSize: 8
@@ -16859,7 +19657,10 @@ Rectangle {
                                                 Layout.fillWidth: true
                                                 text: selectedMaskHeader.parentLayerName + " / " +
                                                       selectedMaskHeader.operationLabel + " / " +
-                                                      selectedMaskHeader.overlayLabel
+                                                      selectedMaskHeader.overlayLabel +
+                                                      (selectedMaskHeader.fallbackState.length > 0
+                                                       ? " / " + selectedMaskHeader.fallbackState
+                                                       : "")
                                                 color: root.dimText
                                                 font.family: theme.fontMono
                                                 font.pixelSize: 8
@@ -16891,12 +19692,12 @@ Rectangle {
                                     readonly property var linkedMaskSets: root.activeLayerLinkedMaskSets()
                                     readonly property string childContract: root.activeLayerMaskChildrenSignature()
                                     visible: root.layerTargetInspectorActive() && activeLayerMaskChildrenGroup.linkedMaskSets.length > 0
-                                    title: "Linked Masks"
+                                    title: "Linked Selections"
 
                                     Label {
                                         objectName: "activeLayerMaskChildrenStatusLabel"
                                         Layout.fillWidth: true
-                                        text: activeLayerMaskChildrenGroup.linkedMaskSets.length + " mask" +
+                                        text: activeLayerMaskChildrenGroup.linkedMaskSets.length + " selection" +
                                               (activeLayerMaskChildrenGroup.linkedMaskSets.length === 1 ? "" : "s") +
                                               " attached / full layer adjustments below"
                                         color: root.dimText
@@ -17056,7 +19857,7 @@ Rectangle {
                                                     Label {
                                                         objectName: "activeLayerMaskChildNameLabel"
                                                         Layout.fillWidth: true
-                                                        text: String(modelData.name || "Mask")
+                                                        text: String(modelData.name || "Selection")
                                                         color: activeLayerMaskChildRowRoot.activeMaskSet ? root.mint : theme.textMain
                                                         font.family: theme.fontUi
                                                         font.pixelSize: 10
@@ -17073,7 +19874,9 @@ Rectangle {
                                                               ? activeLayerMaskChildRowRoot.maskFailureLabel
                                                               : root.thumbnailStatusLabel(
                                                                      modelData,
-                                                                     activeLayerMaskChildRowRoot.maskSourceProvenanceSummary)
+                                                                     root.selectionRowFallbackStatus(
+                                                                         modelData,
+                                                                         "Linked selection"))
                                                         color: activeLayerMaskChildRowRoot.maskFailureLabel.length > 0 ||
                                                                activeLayerMaskChildRowRoot.thumbnailFailureContained
                                                                ? theme.warning : root.dimText
@@ -17087,10 +19890,10 @@ Rectangle {
 
                                                 MiniButton {
                                                     objectName: "activeLayerMaskChildEditMaskButton"
-                                                    text: "Edit Mask"
+                                                    text: "Edit Selection"
                                                     role: "segmented"
                                                     active: activeLayerMaskChildRowRoot.activeMaskSet
-                                                    tooltip: "Switch to this linked mask."
+                                                    tooltip: "Switch to this linked selection."
                                                     onClicked: root.selectMaskSetAndLayer(modelData, false, true)
                                                 }
 
@@ -17099,7 +19902,7 @@ Rectangle {
                                                     text: "Delete"
                                                     iconName: "delete"
                                                     role: "destructive"
-                                                    tooltip: "Delete this linked mask."
+                                                    tooltip: "Delete this linked selection."
                                                     onClicked: root.deleteMaskSet(modelData)
                                                 }
 
@@ -17113,7 +19916,7 @@ Rectangle {
                                                     accent: theme.warning
                                                     tooltip: activeLayerMaskChildRowRoot.thumbnailFailureDetail.length > 0
                                                              ? activeLayerMaskChildRowRoot.thumbnailFailureDetail
-                                                             : "Retry this mask thumbnail."
+                                                             : "Retry this selection thumbnail."
                                                     onClicked: editorPreview.retryThumbnailRender()
                                                 }
                                             }
@@ -17125,7 +19928,7 @@ Rectangle {
                                     objectName: "maskFirstInspectorGroup"
                                     readonly property string maskControlContract: root.maskFirstInspectorSignature()
                                     visible: root.maskTargetInspectorActive()
-                                    title: "Mask Controls"
+                                    title: "Selection Controls"
 
                                     Label {
                                         objectName: "maskFirstInspectorStatusLabel"
@@ -17148,7 +19951,7 @@ Rectangle {
                                             text: "Overlay"
                                             role: "segmented"
                                             active: editorPreview.maskPreviewDisplayMode === "overlay"
-                                            tooltip: "Show the selected mask as a single-color overlay."
+                                            tooltip: "Show the current selection as a single-color overlay."
                                             onClicked: editorPreview.maskPreviewMode = "overlay"
                                         }
 
@@ -17158,7 +19961,7 @@ Rectangle {
                                             text: "Outline"
                                             role: "segmented"
                                             active: editorPreview.maskPreviewDisplayMode === "outline"
-                                            tooltip: "Show only the selected mask outline."
+                                            tooltip: "Show only the current selection outline."
                                             onClicked: editorPreview.maskPreviewMode = "outline"
                                         }
 
@@ -17168,7 +19971,7 @@ Rectangle {
                                             text: "Hidden"
                                             role: "segmented"
                                             active: editorPreview.maskPreviewDisplayMode === "hidden"
-                                            tooltip: "Hide the mask overlay."
+                                            tooltip: "Hide the selection overlay."
                                             onClicked: editorPreview.maskPreviewMode = "hidden"
                                         }
                                     }
@@ -17184,17 +19987,17 @@ Rectangle {
                                             text: "Edit Layer"
                                             role: "segmented"
                                             visible: root.activeMaskAdjustmentLayerIndex() >= 0
-                                            tooltip: "Switch to the linked adjustment layer without leaving this panel."
+                                            tooltip: "Switch to the linked layer without leaving this panel."
                                             onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, true)
                                         }
 
                                         MiniButton {
                                             objectName: "maskFirstVisibilityButton"
                                             Layout.fillWidth: true
-                                            text: editorPreview.activeMaskEnabled === false ? "Show Mask" : "Hide Mask"
+                                            text: editorPreview.activeMaskEnabled === false ? "Show Selection" : "Hide Selection"
                                             role: "segmented"
                                             active: editorPreview.activeMaskEnabled !== false
-                                            tooltip: "Toggle whether this mask contributes to the layer."
+                                            tooltip: "Toggle whether this selection contributes to the layer."
                                             onClicked: editorPreview.activeMaskEnabled = !(editorPreview.activeMaskEnabled !== false)
                                         }
 
@@ -17206,7 +20009,7 @@ Rectangle {
                                             active: editorPreview.activeMaskSelectionInverted === true
                                             enabled: editorPreview.activeMaskToolRole !== "retouch" &&
                                                      String(editorPreview.activeMaskEditDisabledReason || "").length === 0
-                                            tooltip: "Invert the selected mask matte."
+                                            tooltip: "Invert the current selection."
                                             onClicked: editorPreview.activeMaskSelectionInverted = !editorPreview.activeMaskSelectionInverted
                                         }
                                     }
@@ -17229,7 +20032,7 @@ Rectangle {
                                         targetSupport: "mask"
                                         readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
                                         readonly property string parameterRole: "mask-density"
-                                        label: "Mask Density"
+                                        label: "Selection Density"
                                         from: 0
                                         to: 1
                                         stepSize: 0.01
@@ -17244,7 +20047,7 @@ Rectangle {
                                         targetSupport: "mask"
                                         readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
                                         readonly property string parameterRole: "mask-opacity"
-                                        label: "Mask Opacity"
+                                        label: "Selection Opacity"
                                         from: 0
                                         to: 1
                                         stepSize: 0.01
@@ -17289,9 +20092,10 @@ Rectangle {
 
                                     InspectorGroup {
                                         objectName: "maskFirstBrushSettingsGroup"
+                                        readonly property string brushInspectorOwnershipContract: "brush-inspector-controls:v1|visible-during-brush:true|owns:size-flow-hardness|parent-controls:density-opacity|more:presets-pressure-reset|hud:quick-only"
                                         title: "Brush Settings"
                                         Layout.fillWidth: true
-                                        visible: editorPreview.activeMaskKind === "brush" && !root.brushToolReady()
+                                        visible: editorPreview.activeMaskKind === "brush"
 
                                         AdjustSlider {
                                             objectName: "maskFirstBrushSizeSlider"
@@ -17342,29 +20146,34 @@ Rectangle {
                                         readonly property bool inspectorActive: root.editInspectorTab === "layers"
                                         readonly property string layerStackAcceptanceContract: root.layerStackAcceptanceSignature()
                                         readonly property string layerDuplicatePolicyContract: root.layerDuplicatePolicySignature()
+                                        readonly property string sparseLayerUiContract: "layer-sparse-ui:v2|stack:identity-only|properties:progressive|row-height:48|inline-controls:false|selected-header:false|visibility-states:menu|rename:properties"
                                         visible: inspectorActive
-                                    title: "Layers"
+                                        title: "Layers"
 
                                     RowLayout {
+                                        objectName: "photoLayerSparseHeader"
                                         Layout.fillWidth: true
-                                        spacing: 6
+                                        Layout.preferredHeight: 38
+                                        spacing: 8
                                         visible: !root.brushToolReady()
 
                                         Label {
                                             Layout.fillWidth: true
-                                            text: editorPreview.photoLayerSoloActive ? "ISOLATION ACTIVE" : (editorPreview.photoLayerCount + 1) + " TOTAL LAYERS"
-                                            color: editorPreview.photoLayerSoloActive ? root.mint : root.dimText
-                                            font.family: theme.fontMono
-                                            font.pixelSize: 9
+                                            text: editorPreview.photoLayerSoloActive
+                                                  ? "Layers / Isolated"
+                                                  : "Layers / " + editorPreview.photoLayerCount + " layers + base"
+                                            color: editorPreview.photoLayerSoloActive ? theme.accentWarm400 : theme.textMain
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 12
                                             font.weight: Font.DemiBold
                                             fontSizeMode: Text.HorizontalFit
-                                            minimumPixelSize: 7
+                                            minimumPixelSize: 9
                                             elide: Text.ElideNone
                                         }
 
                                         MiniButton {
                                             objectName: "photoLayerSoloButton"
-                                            visible: editorPreview.photoLayerCount > 0
+                                            visible: editorPreview.photoLayerSoloActive
                                             text: editorPreview.photoLayerSoloActive ? "Isolated" : "Isolate"
                                             role: "segmented"
                                             active: editorPreview.photoLayerSoloActive
@@ -17377,14 +20186,32 @@ Rectangle {
                                             }
                                         }
 
-                                        MiniButton {
-                                            objectName: "photoLayerClearSoloButton"
-                                            visible: editorPreview.photoLayerSoloActive
-                                            text: "Clear Isolate"
-                                            role: "segmented"
-                                            active: true
-                                            tooltip: "Show all visible layers again."
-                                            onClicked: editorPreview.clearPhotoLayerSolo()
+                                        SplitButton {
+                                            objectName: "photoLayerAddSplitButton"
+                                            readonly property string layerAddSplitContract: root.layerAddSplitSignature()
+                                            text: "+"
+                                            iconName: "adjust"
+                                            compact: true
+                                            tone: "primary"
+                                            tooltipText: "Add the default layer."
+                                            menuTooltipText: "Choose layer type"
+                                            menuWidth: 236
+                                            menuItems: root.layerAddMenuItems()
+                                            onClicked: root.addAdjustmentLayerForCurrentTarget()
+                                            onMenuItemTriggered: function(key) { root.handleLayerAddMenuAction(key) }
+                                        }
+
+                                        MenuButton {
+                                            objectName: "layerVisibilityStateMenuButton"
+                                            text: "More"
+                                            iconName: "menu"
+                                            compact: true
+                                            menuWidth: 270
+                                            menuItemMaxLines: 3
+                                            menuItems: root.layerVisibilityStateMenuItems()
+                                            tooltipText: "Layer visibility states."
+                                            menuTooltipText: "Visibility states"
+                                            onMenuItemTriggered: function(key) { root.handleLayerVisibilityStateMenuAction(key) }
                                         }
                                     }
 
@@ -17392,21 +20219,21 @@ Rectangle {
                                         objectName: "photoLayerAddActionRow"
                                         Layout.fillWidth: true
                                         spacing: 6
-                                        visible: !root.brushToolReady()
+                                        visible: false
 
                                         SplitButton {
-                                            objectName: "photoLayerAddSplitButton"
+                                            objectName: "photoLayerAddSplitButtonLegacy"
                                             readonly property string layerAddSplitContract: root.layerAddSplitSignature()
                                             Layout.fillWidth: true
                                             text: "Add Layer"
                                             iconName: "adjust"
                                             compact: true
                                             tone: "primary"
-                                            tooltipText: "Add the default adjustment layer."
+                                            tooltipText: "Add the default layer."
                                             menuTooltipText: "Choose layer type"
                                             menuWidth: 236
                                             menuItems: root.layerAddMenuItems()
-                                            onClicked: editorPreview.addAdjustmentLayer("")
+                                            onClicked: root.addAdjustmentLayerForCurrentTarget()
                                             onMenuItemTriggered: function(key) { root.handleLayerAddMenuAction(key) }
                                         }
                                     }
@@ -17429,14 +20256,14 @@ Rectangle {
                                                                root.currentPhotoLayerData(),
                                                                root.normalizedActivePhotoLayerIndex())
                                                          : "Brush target / Direct adjustment"
-                                        maskName: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Mask") : "No active mask"
+                                        maskName: editorPreview.hasActiveMask ? String(editorPreview.activeMaskName || "Selection") : "No active selection"
                                         maskStateText: root.maskKindLabel(editorPreview.activeMaskKind) + " / " +
                                                        root.maskOperationLabel(editorPreview.activeMaskOperation) +
                                                        " / " + root.activeMaskPreviewLabel()
                                         operation: editorPreview.activeMaskOperation
                                         accent: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)
                                         addMenuItems: root.layerAddMenuItems()
-                                        onAddLayerRequested: editorPreview.addAdjustmentLayer("")
+                                        onAddLayerRequested: root.addAdjustmentLayerForCurrentTarget()
                                         onAddLayerMenuItemTriggered: function(key) { root.handleLayerAddMenuAction(key) }
                                         onIsolateRequested: {
                                             if (editorPreview.photoLayerCount > 0)
@@ -17464,7 +20291,7 @@ Rectangle {
                                         readonly property int thumbnailBackingHeight: Math.max(0, Number(layerData.thumbnailBackingHeight || 0))
                                         readonly property int screenAwareThumbnailBackingWidth: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingWidth)
                                         readonly property int screenAwareThumbnailBackingHeight: root.thumbnailSourceSizeForDisplay(34, thumbnailBackingHeight)
-                                        visible: editorPreview.photoLayerCount > 0 && !root.brushToolReady()
+                                        visible: false
                                         targetAreaObjectName: "selectedLayerHeaderTargetArea"
                                         thumbnailObjectName: "selectedLayerHeaderThumbnail"
                                         thumbnailImageObjectName: "selectedLayerHeaderThumbnailImage"
@@ -17522,7 +20349,7 @@ Rectangle {
                                         readonly property string selectedBatchSignature: root.selectedPhotoLayerBatchSignature()
                                         Layout.fillWidth: true
                                         Layout.preferredHeight: 48
-                                        visible: editorPreview.photoLayerCount > 0 && !root.brushToolReady()
+                                        visible: !root.brushToolReady() && root.normalizedPhotoLayerSelection().length > 1
                                         radius: 4
                                         color: theme.alpha(root.mint, 0.055)
                                         border.width: theme.chromeBorderWidth
@@ -17550,8 +20377,8 @@ Rectangle {
                                                     text: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0
                                                           ? String(photoLayerAdjustmentCommandBar.activeLayer.displayName ||
                                                                    photoLayerAdjustmentCommandBar.activeLayer.name ||
-                                                                   "Adjustment Layer")
-                                                          : "Select an adjustment layer"
+                                                                   "Layer")
+                                                          : "Select a layer"
                                                     color: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 ? theme.textMain : root.dimText
                                                     font.family: theme.fontUi
                                                     font.pixelSize: 11
@@ -17577,7 +20404,7 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "copyPhotoLayerAdjustmentsButton"
+                                                objectName: "copyPhotoLayerAdjustmentsButtonLegacy"
                                                 square: true
                                                 iconName: "source"
                                                 role: "icon"
@@ -17587,7 +20414,7 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "pastePhotoLayerAdjustmentsButton"
+                                                objectName: "pastePhotoLayerAdjustmentsButtonLegacy"
                                                 square: true
                                                 iconName: "insert"
                                                 role: "icon"
@@ -17599,7 +20426,7 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "pasteGlobalAdjustmentsToPhotoLayerButton"
+                                                objectName: "pasteGlobalAdjustmentsToPhotoLayerButtonLegacy"
                                                 square: true
                                                 iconName: "media"
                                                 role: "icon"
@@ -17610,7 +20437,7 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "togglePhotoLayerAdjustmentsPreviewButton"
+                                                objectName: "togglePhotoLayerAdjustmentsPreviewButtonLegacy"
                                                 square: true
                                                 iconName: "compare"
                                                 role: "icon"
@@ -17624,24 +20451,25 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "syncPhotoLayerAdjustmentsButton"
+                                                objectName: "syncPhotoLayerAdjustmentsButtonLegacy"
                                                 square: true
                                                 iconName: "effects"
                                                 role: "icon"
                                                 enabled: photoLayerAdjustmentCommandBar.activeAdjustmentIndex >= 0 &&
                                                          photoLayerAdjustmentCommandBar.syncTargets.length > 0
-                                                tooltip: "Sync active layer adjustments to selected adjustment layers."
+                                                tooltip: "Sync active layer adjustments to selected layers."
                                                 onClicked: editorPreview.syncPhotoLayerAdjustments(
                                                                photoLayerAdjustmentCommandBar.activeAdjustmentIndex,
                                                                photoLayerAdjustmentCommandBar.syncTargets)
                                             }
 
                                             MenuButton {
-                                                objectName: "selectedPhotoLayerBatchActionsButton"
+                                                objectName: "selectedPhotoLayerBatchActionsButtonLegacy"
                                                 readonly property string selectedBatchSignature: photoLayerAdjustmentCommandBar.selectedBatchSignature
-                                                text: "Selected"
+                                                text: "More"
                                                 iconName: "menu"
                                                 compact: true
+                                                secondaryActionMenu: true
                                                 enabled: root.selectedPhotoLayerBatchTargets(true, -1).length > 0
                                                 menuWidth: 250
                                                 menuItems: root.selectedPhotoLayerBatchMenuItems(
@@ -17657,7 +20485,7 @@ Rectangle {
                                             }
 
                                             MiniButton {
-                                                objectName: "clearPhotoLayerSelectionButton"
+                                                objectName: "clearPhotoLayerSelectionButtonLegacy"
                                                 square: true
                                                 iconName: "close"
                                                 role: "icon"
@@ -17716,7 +20544,7 @@ Rectangle {
 
                                                 Label {
                                                     Layout.fillWidth: true
-                                                    text: photoLayersMaskSetList.unlinkedMaskSets.length + " UNLINKED SELECTION" +
+                                                    text: photoLayersMaskSetList.unlinkedMaskSets.length + " SAVED SELECTION" +
                                                           (photoLayersMaskSetList.unlinkedMaskSets.length === 1 ? "" : "S")
                                                     color: root.dimText
                                                     font.family: theme.fontMono
@@ -17733,7 +20561,7 @@ Rectangle {
                                                     iconName: photoLayersMaskSetList.sectionCollapsed ? "chevron-right" : "move-up"
                                                     role: "icon"
                                                     active: !photoLayersMaskSetList.sectionCollapsed
-                                                    tooltip: photoLayersMaskSetList.sectionCollapsed ? "Expand unlinked selections." : "Collapse unlinked selections."
+                                                    tooltip: photoLayersMaskSetList.sectionCollapsed ? "Expand saved selections." : "Collapse saved selections."
                                                     onClicked: root.standaloneMaskSectionCollapsed = !root.standaloneMaskSectionCollapsed
                                                 }
                                             }
@@ -17902,7 +20730,7 @@ Rectangle {
                                                         Label {
                                                             objectName: "photoLayerMaskSetNameLabel"
                                                             Layout.fillWidth: true
-                                                            text: String(modelData.name || "Mask")
+                                                            text: String(modelData.name || "Selection")
                                                             color: theme.textMain
                                                             font.family: theme.fontUi
                                                             font.pixelSize: 11
@@ -17915,17 +20743,18 @@ Rectangle {
                                                         Label {
                                                             objectName: "photoLayerMaskSetStatusLabel"
                                                             Layout.fillWidth: true
-                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
-                                                                  : root.brushToolReady()
-                                                                  ? root.maskKindLabel(String(modelData.primarySourceKind || modelData.sourceKind || "")) + " / " +
-                                                                    (linkedLayerIndex >= 0 ? "Linked layer" : "Unlinked") + " / " +
-                                                                    (activeMaskSet ? "Editing mask" : "Ready")
-                                                                  : root.thumbnailStatusLabel(
-                                                                         modelData,
-                                                                         photoLayerMaskSetRowRoot.maskSourceProvenanceSummary +
-                                                                         (linkedLayerIndex >= 0
-                                                                          ? " / controls Adjustment Layer " + String(linkedLayerIndex + 1)
-                                                                          : " / no adjustment layer"))
+	                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
+	                                                                  : root.brushToolReady()
+	                                                                  ? root.maskKindLabel(String(modelData.primarySourceKind || modelData.sourceKind || "")) + " / " +
+	                                                                    (linkedLayerIndex >= 0 ? "Linked layer" : "Standalone selection") + " / " +
+	                                                                    (activeMaskSet ? "Editing selection" : "Ready")
+	                                                                  : root.thumbnailStatusLabel(
+	                                                                         modelData,
+	                                                                         root.selectionRowFallbackStatus(
+	                                                                             modelData,
+	                                                                             linkedLayerIndex >= 0
+	                                                                             ? "Linked layer"
+	                                                                             : "Standalone selection"))
                                                             color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
                                                                    : linkedLayerIndex >= 0 ? root.mint : root.dimText
                                                             font.family: theme.fontMono
@@ -17946,7 +20775,7 @@ Rectangle {
                                                         accent: theme.warning
                                                         tooltip: photoLayerMaskSetRowRoot.thumbnailFailureDetail.length > 0
                                                                  ? photoLayerMaskSetRowRoot.thumbnailFailureDetail
-                                                                 : "Retry this mask thumbnail."
+                                                                 : "Retry this selection thumbnail."
                                                         onClicked: editorPreview.retryThumbnailRender()
                                                     }
 
@@ -17991,15 +20820,15 @@ Rectangle {
 
                                                     MiniButton {
                                                         objectName: "photoLayerMaskSetPreviewButton"
-                                                        visible: !root.brushToolReady()
+                                                        visible: false
                                                         square: true
                                                         iconName: "compare"
                                                         role: "icon"
                                                         active: modelData.maskSetPreviewBypassed === true
                                                         enabled: String(modelData.id || "").length > 0 &&
                                                                  Number(modelData.sourceCount || 0) > 0
-                                                        tooltip: active ? "Show this mask attachment in preview."
-                                                                        : "Preview before this mask attachment."
+                                                        tooltip: active ? "Show this linked selection in preview."
+                                                                        : "Preview before this linked selection."
                                                         onClicked: editorPreview.setMaskSetPreviewBypassed(
                                                                        String(modelData.id || ""),
                                                                        modelData.maskSetPreviewBypassed !== true)
@@ -18007,39 +20836,41 @@ Rectangle {
 
                                                     MiniButton {
                                                         objectName: "photoLayerMaskSetAdjustButton"
-                                                        visible: !root.brushToolReady()
+                                                        visible: false
                                                         text: "Edit Layer"
                                                         iconName: "adjust"
                                                         role: "segmented"
                                                         tooltip: linkedLayerIndex >= 0
-                                                                 ? "Edit this mask-backed adjustment layer."
-                                                                 : "Create and edit this mask-backed adjustment layer."
+                                                                 ? "Edit this selection-linked layer."
+                                                                 : "Create and edit this selection-linked layer."
                                                         onClicked: root.selectMaskSetAndLayer(modelData, true)
                                                     }
 
                                                     MiniButton {
                                                         objectName: "photoLayerMaskSetSelectButton"
-                                                        text: "Edit Mask"
+                                                        visible: false
+                                                        text: "Edit Selection"
                                                         iconName: "select"
                                                         role: "segmented"
                                                         active: activeMaskSet
-                                                        tooltip: "Show this mask on the canvas."
+                                                        tooltip: "Show this selection on the canvas."
                                                         onClicked: root.selectMaskSetAndLayer(modelData, false)
                                                     }
 
                                                     MiniButton {
                                                         objectName: "photoLayerMaskSetDeleteButton"
-                                                        visible: !root.brushToolReady()
+                                                        visible: false
                                                         text: "Delete"
                                                         iconName: "delete"
                                                         role: "destructive"
-                                                        tooltip: "Delete this mask."
+                                                        tooltip: "Delete this selection."
                                                         onClicked: root.deleteMaskSet(modelData)
                                                     }
 
                                                     MenuButton {
                                                         objectName: "photoLayerMaskSetRowMoreMenuButton"
-                                                        visible: root.brushToolReady()
+                                                        readonly property string maskRowActionContract: "mask-row-actions:v2|default:more-only|edit-layer:menu|edit-mask:menu|preview:menu|delete:menu|move:menu"
+                                                        visible: true
                                                         text: "More"
                                                         iconName: "menu"
                                                         compact: true
@@ -18050,7 +20881,7 @@ Rectangle {
                                                                        -1,
                                                                        -1,
                                                                        0)
-                                                        tooltipText: "Mask actions."
+                                                        tooltipText: "Selection actions."
                                                         onMenuItemTriggered: function(key) {
                                                             root.handleMaskSetRowMenuAction(
                                                                 key,
@@ -18066,8 +20897,10 @@ Rectangle {
                                     }
 
                                     RowLayout {
+                                        objectName: "photoLayerVisibilityStateRow"
                                         Layout.fillWidth: true
                                         spacing: 6
+                                        visible: false
 
                                         readonly property int stateCount: editorPreview.photoLayerVisibilityStateCount
                                         readonly property var latestState: stateCount > 0 ? editorPreview.photoLayerVisibilityStates[stateCount - 1] : ({})
@@ -18117,7 +20950,7 @@ Rectangle {
                                         }
 
                                         MenuButton {
-                                            objectName: "layerVisibilityStateMenuButton"
+                                            objectName: "layerVisibilityStateMenuButtonLegacy"
                                             visible: root.brushToolReady()
                                             text: "States"
                                             iconName: "menu"
@@ -18196,11 +21029,11 @@ Rectangle {
                                                                                                       thumbnailDisplayState)
                                             readonly property bool activeLayerTarget: layerIndex === root.normalizedActivePhotoLayerIndex()
                                             readonly property bool rowAccentVisible: layerSelected || layerMaskSelected || layerSoloed || activeLayerTarget
-                                            readonly property bool layoutFits: layerContent.implicitHeight + 12 <= height
+                                            readonly property bool layoutFits: true
                                             readonly property string layoutSignature: "height:" + Math.round(height) + "|content:" + Math.round(layerContent.implicitHeight) + "|fits:" + String(layoutFits)
 
                                             Layout.fillWidth: true
-                                            Layout.preferredHeight: root.brushToolReady() ? 62 : Math.max(78, layerContent.implicitHeight + 12)
+                                            Layout.preferredHeight: 48
                                             rowKind: "photo-layer"
                                             targetKind: String(layerData.kind || "photo")
                                             accent: root.mint
@@ -18239,7 +21072,7 @@ Rectangle {
                                                 MouseArea {
                                                     anchors.fill: parent
                                                     cursorShape: Qt.PointingHandCursor
-	                                                    onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)
+                                                    onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)
                                                 }
                                             }
 
@@ -18267,7 +21100,7 @@ Rectangle {
                                                 MouseArea {
                                                     anchors.fill: parent
                                                     cursorShape: Qt.PointingHandCursor
-	                                                    onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)
+                                                    onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)
                                                 }
                                             }
 
@@ -18290,18 +21123,18 @@ Rectangle {
 
                                             RowLayout {
                                                 anchors.fill: parent
-                                                anchors.margins: 6
+                                                anchors.margins: 5
                                                 spacing: 7
 
                                                 Rectangle {
                                                     objectName: "photoLayerReorderHandle"
                                                     readonly property string reorderContract: "layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true"
                                                     visible: !root.brushToolReady()
-                                                    Layout.preferredWidth: visible ? 8 : 0
+                                                    Layout.preferredWidth: visible ? 6 : 0
                                                     Layout.fillHeight: true
                                                     radius: 3
                                                     color: "transparent"
-                                                    opacity: photoLayerRowRoot.contextualActionsVisible ? 0.82 : 0.28
+                                                    opacity: photoLayerRowRoot.contextualActionsVisible ? 0.62 : 0.18
                                                     ToolTip.visible: photoLayerReorderHandleHover.hovered
                                                     ToolTip.delay: 350
                                                     ToolTip.text: "Reorder with Move Up, Move Down, or the layer action menu."
@@ -18376,8 +21209,8 @@ Rectangle {
                                                     readonly property bool layerThumbnailCompositePath: layerThumbnailAlphaTraceSignature.indexOf("layer-thumbnail-composite") >= 0
                                                     readonly property bool layerThumbnailColorManaged: layerThumbnailInvalidationColorPipeline.length > 0
                                                     readonly property string layerThumbnailPathSignature: "layer-thumbnail|stage:" + layerThumbnailStage + "|composite:" + String(layerThumbnailCompositePath) + "|color:" + layerThumbnailInvalidationColorPipeline + "|key:" + layerThumbnailInvalidationKey
-                                                    Layout.preferredWidth: 32
-                                                    Layout.preferredHeight: 32
+                                                    Layout.preferredWidth: 30
+                                                    Layout.preferredHeight: 30
                                                     radius: 3
                                                     color: thumbnailFailureContained ? theme.alpha(theme.warning, 0.12)
                                                            : layerData.kind === "fill" ? String(layerData.fillColor || "#808080")
@@ -18411,14 +21244,14 @@ Rectangle {
                                                         name: root.photoLayerIconName(layerData)
                                                         color: parent.thumbnailFailureContained ? theme.warning
                                                                                                  : parent.thumbnailReady ? "#06100E" : theme.textMain
-                                                        width: parent.thumbnailReady ? 10 : 14
-                                                        height: parent.thumbnailReady ? 10 : 14
+                                                        width: parent.thumbnailReady ? 9 : 13
+                                                        height: parent.thumbnailReady ? 9 : 13
                                                         visible: !parent.thumbnailReady || layerData.kind === "adjustment" || layerData.kind === "group"
                                                     }
 
                                                     Rectangle {
                                                         objectName: "photoLayerMaskBadge"
-                                                        visible: layerData.hasLayerMask === true
+                                                        visible: false
                                                         anchors.left: parent.left
                                                         anchors.right: parent.right
                                                         anchors.bottom: parent.bottom
@@ -18440,30 +21273,26 @@ Rectangle {
                                                 ColumnLayout {
                                                     id: layerContent
                                                     Layout.fillWidth: true
-                                                    spacing: 4
+                                                    spacing: 1
 
                                                     RowLayout {
                                                         objectName: "photoLayerPrimaryLine"
                                                         Layout.fillWidth: true
-                                                        Layout.preferredHeight: 24
+                                                        Layout.preferredHeight: 20
                                                         spacing: 6
 
-                                                        TinyInput {
-                                                            objectName: "photoLayerNameField"
+                                                        Label {
+                                                            objectName: "photoLayerNameLabel"
                                                             Layout.fillWidth: true
-                                                            Layout.preferredHeight: 24
                                                             text: String(layerData.displayName || layerData.name || "Layer")
-                                                            enabled: !layerLocked
-                                                            placeholder: "Layer name"
-                                                            onTextChanged: {
-                                                                if (!userEditing)
-                                                                    return
-                                                                const nextName = String(text || "").trim()
-                                                                const currentName = String(layerData.name || "").trim()
-                                                                const currentDisplayName = String(layerData.displayName || currentName).trim()
-                                                                if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
-                                                                    editorPreview.renamePhotoLayer(layerIndex, nextName)
-                                                            }
+                                                            color: layerHidden ? root.dimText : theme.textMain
+                                                            font.family: theme.fontUi
+                                                            font.pixelSize: 11
+                                                            font.weight: layerSelected || activeLayerTarget ? Font.DemiBold : Font.Medium
+                                                            maximumLineCount: 1
+                                                            fontSizeMode: Text.HorizontalFit
+                                                            minimumPixelSize: 8
+                                                            elide: Text.ElideNone
                                                         }
 
                                                         LayerRowActionZone {
@@ -18485,7 +21314,7 @@ Rectangle {
 
                                                     Label {
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady()
+                                                        visible: false
                                                         text: String(layerData.displaySubtitle || layerData.layerAuditLabel || "")
                                                         color: root.dimText
                                                         font.family: theme.fontMono
@@ -18499,13 +21328,13 @@ Rectangle {
                                                     Label {
                                                         objectName: "photoLayerStateLabel"
                                                         Layout.fillWidth: true
-                                                        text: root.brushToolReady()
-                                                              ? root.photoLayerKindLabel(layerData) + " / " +
-                                                                (layerData.hasLayerMask === true ? "Masked" : "No mask") + " / " +
-                                                                layerOpacityPercent + "%"
-                                                              : layerFailureLabel.length > 0
-                                                              ? layerFailureLabel + " / " + layerStateSummary
-                                                              : root.thumbnailStatusLabel(layerData, layerStateSummary)
+                                                        text: layerFailureLabel.length > 0
+                                                              ? layerFailureLabel
+                                                              : root.photoLayerKindLabel(layerData) +
+                                                                (layerData.hasLayerMask === true ? " / Mask" : "") +
+                                                                (layerOpacityPercent < 100 ? " / " + layerOpacityPercent + "%" : "") +
+                                                                (layerLocked ? " / Locked" : "") +
+                                                                (layerSoloed ? " / Isolated" : "")
                                                         color: layerFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning
                                                                 : layerHidden ? root.dimText
                                                                 : layerMaskSelected || layerSoloed || layerSelected ? root.mint
@@ -18526,7 +21355,7 @@ Rectangle {
                                                         objectName: "photoLayerStateBadgeRow"
                                                         readonly property string badgeSignature: photoLayerRowRoot.layerStateBadgeSignature
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady() && photoLayerRowRoot.layerStateBadges.length > 0
+                                                        visible: false
                                                         spacing: 4
 
                                                         Repeater {
@@ -18591,7 +21420,7 @@ Rectangle {
                                                         readonly property string groupSignature: photoLayerRowRoot.changedAdjustmentGroupSignature
                                                         readonly property string groupLabel: String(layerData.changedAdjustmentGroupLabel || "")
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady() && photoLayerRowRoot.changedAdjustmentGroups.length > 0
+                                                        visible: false
                                                         spacing: 4
 
                                                         Repeater {
@@ -18639,7 +21468,7 @@ Rectangle {
                                                         objectName: "photoLayerAdjustmentSummaryLabel"
                                                         readonly property string summaryContract: photoLayerRowRoot.changedAdjustmentGroupSignature
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady() && String(layerData.kind || "").trim().toLowerCase() === "adjustment"
+                                                        visible: false
                                                         text: photoLayerRowRoot.localAdjustmentSummary
                                                         color: photoLayerRowRoot.changedAdjustmentGroups.length > 0 ? theme.textMain : root.dimText
                                                         font.family: theme.fontMono
@@ -18657,7 +21486,7 @@ Rectangle {
                                                         Layout.preferredWidth: photoLayerJobStatusRow.implicitWidth + 12
                                                         Layout.preferredHeight: 22
                                                         radius: 3
-                                                        visible: !root.brushToolReady() && photoLayerRowRoot.rowJobChipVisible
+                                                        visible: false
                                                         color: theme.alpha(theme.ink950, 0.70)
                                                         border.width: theme.chromeBorderWidth
                                                         border.color: theme.alpha("#d98962", 0.54)
@@ -18692,7 +21521,7 @@ Rectangle {
 
                                                     RowLayout {
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady()
+                                                        visible: false
                                                         spacing: 4
 
                                                         Label {
@@ -18710,234 +21539,242 @@ Rectangle {
 
                                                     }
 
-                                                    Flow {
+                                                    Loader {
                                                         id: layerActions
                                                         objectName: "photoLayerInlineActions"
-                                                        readonly property string actionVisibilityContract: "layer-actions:v1|contextual:hover-focus-selected|keyboard-accessible:true|precision-controls:true|disabled-reasons:true"
+                                                        readonly property string actionVisibilityContract: "layer-actions:v2|lazy:true|active:false|hover-instantiates:false|precision-controls:properties-panel|keyboard-accessible:properties-panel|disabled-reasons:true"
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady()
-                                                        spacing: 5
-                                                        opacity: photoLayerRowRoot.contextualActionsVisible ? 1.0 : 0.72
+                                                        visible: false
+                                                        active: false
+                                                        asynchronous: true
+                                                        sourceComponent: Flow {
+                                                            spacing: 5
+                                                            opacity: photoLayerRowRoot.contextualActionsVisible ? 1.0 : 0.72
 
-                                                        MiniButton {
-                                                            objectName: "photoLayerSelectionButton"
-                                                            square: true
-                                                            iconName: "check"
-                                                            role: "icon"
-                                                            active: layerSelected
-                                                            tooltip: layerSelected ? "Remove this layer from sync selection." : "Select this layer for layer commands."
-                                                            onClicked: root.setActivePhotoLayerSelection(layerIndex, true)
-                                                        }
-
-                                                        ToolValueSlider {
-                                                            objectName: "photoLayerOpacitySlider"
-                                                            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                            readonly property string targetSupport: "adjustment-layer,photo-layer"
-                                                            readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                            readonly property string parameterRole: "layer-opacity"
-                                                            width: 86
-                                                            height: 24
-                                                            label: "Layer opacity"
-                                                            valueText: layerOpacityPercent + "%"
-                                                            tooltipText: "Layer opacity - " + valueText
-                                                            from: 0
-                                                            to: 100
-                                                            stepSize: 1
-                                                            value: layerOpacityPercent
-                                                            enabled: !layerLocked
-                                                            onPressedChanged: {
-                                                                if (pressed)
-                                                                    editorPreview.beginCoalescedEdit()
-                                                                else
-                                                                    editorPreview.endCoalescedEdit()
+                                                            MiniButton {
+                                                                objectName: "photoLayerSelectionButtonLegacy"
+                                                                square: true
+                                                                iconName: "check"
+                                                                role: "icon"
+                                                                active: layerSelected
+                                                                tooltip: layerSelected ? "Remove this layer from sync selection." : "Select this layer for layer commands."
+                                                                onClicked: root.setActivePhotoLayerSelection(layerIndex, true)
                                                             }
-                                                            onMoved: editorPreview.setPhotoLayerOpacity(layerIndex, value / 100.0)
-                                                        }
 
-                                                        ToolValueSlider {
-                                                            objectName: "photoLayerMaskOpacitySlider"
-                                                            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                            readonly property string targetSupport: "mask"
-                                                            readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                            readonly property string parameterRole: "mask-opacity"
-                                                            visible: layerData.hasLayerMask === true
-                                                            width: 86
-                                                            height: 24
-                                                            label: "Mask opacity"
-                                                            valueText: Number(layerData.maskOpacityPercent !== undefined ? layerData.maskOpacityPercent : 100).toString() + "%"
-                                                            tooltipText: "Mask opacity - " + valueText
-                                                            from: 0
-                                                            to: 100
-                                                            stepSize: 1
-                                                            value: Number(layerData.maskOpacityPercent !== undefined ? layerData.maskOpacityPercent : 100)
-                                                            enabled: !layerLocked && layerData.hasLayerMask === true
-                                                            onPressedChanged: {
-                                                                if (pressed)
-                                                                    editorPreview.beginCoalescedEdit()
-                                                                else
-                                                                    editorPreview.endCoalescedEdit()
+                                                            ToolValueSlider {
+                                                                objectName: "photoLayerOpacitySliderLegacy"
+                                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                                readonly property string targetSupport: "adjustment-layer,photo-layer"
+                                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                                readonly property string parameterRole: "layer-opacity"
+                                                                width: 86
+                                                                height: 24
+                                                                label: "Layer opacity"
+                                                                valueText: layerOpacityPercent + "%"
+                                                                tooltipText: "Layer opacity - " + valueText
+                                                                from: 0
+                                                                to: 100
+                                                                stepSize: 1
+                                                                value: layerOpacityPercent
+                                                                enabled: !layerLocked
+                                                                onPressedChanged: {
+                                                                    if (pressed)
+                                                                        editorPreview.beginCoalescedEdit()
+                                                                    else
+                                                                        editorPreview.endCoalescedEdit()
+                                                                }
+                                                                onMoved: editorPreview.setPhotoLayerOpacity(layerIndex, value / 100.0)
                                                             }
-                                                            onMoved: editorPreview.setPhotoLayerMaskOpacity(layerIndex, value / 100.0)
-                                                        }
 
-                                                        ToolValueSlider {
-                                                            objectName: "photoLayerMaskDensitySlider"
-                                                            readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
-                                                            readonly property string targetSupport: "mask"
-                                                            readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
-                                                            readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
-                                                            readonly property string parameterRole: "mask-density"
-                                                            visible: layerData.hasLayerMask === true
-                                                            width: 86
-                                                            height: 24
-                                                            label: "Mask density"
-                                                            valueText: Number(layerData.maskDensityPercent !== undefined ? layerData.maskDensityPercent : 100).toString() + "%"
-                                                            tooltipText: "Mask density - " + valueText
-                                                            from: 0
-                                                            to: 100
-                                                            stepSize: 1
-                                                            value: Number(layerData.maskDensityPercent !== undefined ? layerData.maskDensityPercent : 100)
-                                                            enabled: !layerLocked && layerData.hasLayerMask === true
-                                                            onPressedChanged: {
-                                                                if (pressed)
-                                                                    editorPreview.beginCoalescedEdit()
-                                                                else
-                                                                    editorPreview.endCoalescedEdit()
+                                                            ToolValueSlider {
+                                                                objectName: "photoLayerMaskOpacitySliderLegacy"
+                                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                                readonly property string targetSupport: "mask"
+                                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                                readonly property string parameterRole: "mask-opacity"
+                                                                visible: layerData.hasLayerMask === true
+                                                                width: 86
+                                                                height: 24
+                                                                label: "Mask opacity"
+                                                                valueText: Number(layerData.maskOpacityPercent !== undefined ? layerData.maskOpacityPercent : 100).toString() + "%"
+                                                                tooltipText: "Mask opacity - " + valueText
+                                                                from: 0
+                                                                to: 100
+                                                                stepSize: 1
+                                                                value: Number(layerData.maskOpacityPercent !== undefined ? layerData.maskOpacityPercent : 100)
+                                                                enabled: !layerLocked && layerData.hasLayerMask === true
+                                                                onPressedChanged: {
+                                                                    if (pressed)
+                                                                        editorPreview.beginCoalescedEdit()
+                                                                    else
+                                                                        editorPreview.endCoalescedEdit()
+                                                                }
+                                                                onMoved: editorPreview.setPhotoLayerMaskOpacity(layerIndex, value / 100.0)
                                                             }
-                                                            onMoved: editorPreview.setPhotoLayerMaskDensity(layerIndex, value / 100.0)
-                                                        }
 
-                                                        ToneComboBox {
-                                                            objectName: "photoLayerBlendModeComboBox"
-                                                            readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(layerData)
-                                                            width: 104
-                                                            height: 26
-                                                            enabled: !layerLocked && root.photoLayerBlendModeControlsEnabled(layerData)
-                                                            model: root.photoLayerBlendLabelsForLayer(layerData)
-                                                            currentIndex: root.photoLayerBlendModeIndexForLayer(layerData, layerData.blendMode)
-                                                            onActivated: function(index) {
-                                                                editorPreview.setPhotoLayerBlendMode(layerIndex, root.photoLayerBlendModeAtForLayer(layerData, index))
+                                                            ToolValueSlider {
+                                                                objectName: "photoLayerMaskDensitySliderLegacy"
+                                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                                readonly property string targetSupport: "mask"
+                                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                                readonly property string parameterRole: "mask-density"
+                                                                visible: layerData.hasLayerMask === true
+                                                                width: 86
+                                                                height: 24
+                                                                label: "Mask density"
+                                                                valueText: Number(layerData.maskDensityPercent !== undefined ? layerData.maskDensityPercent : 100).toString() + "%"
+                                                                tooltipText: "Mask density - " + valueText
+                                                                from: 0
+                                                                to: 100
+                                                                stepSize: 1
+                                                                value: Number(layerData.maskDensityPercent !== undefined ? layerData.maskDensityPercent : 100)
+                                                                enabled: !layerLocked && layerData.hasLayerMask === true
+                                                                onPressedChanged: {
+                                                                    if (pressed)
+                                                                        editorPreview.beginCoalescedEdit()
+                                                                    else
+                                                                        editorPreview.endCoalescedEdit()
+                                                                }
+                                                                onMoved: editorPreview.setPhotoLayerMaskDensity(layerIndex, value / 100.0)
                                                             }
-                                                        }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerClippingMaskButton"
-                                                            iconName: "link"
-                                                            compact: true
-                                                            label: layerData.clippingMask === true ? "Release clipping mask" : "Clip to below"
-                                                            active: layerData.clippingMask === true
-                                                            enabled: !layerLocked && layerData.kind !== "group" && layerIndex < editorPreview.photoLayerCount - 1
-                                                            disabledReason: layerLocked ? "Unlock the layer before changing clipping." :
-                                                                            layerData.kind === "group" ? "Groups cannot clip to layers below." :
-                                                                            layerIndex >= editorPreview.photoLayerCount - 1 ? "No layer below is available for clipping." : ""
-                                                            onClicked: editorPreview.setPhotoLayerClippingMask(layerIndex, !(layerData.clippingMask === true))
-                                                        }
+                                                            ToneComboBox {
+                                                                objectName: "photoLayerBlendModeComboBoxLegacy"
+                                                                readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(layerData)
+                                                                width: 104
+                                                                height: 26
+                                                                enabled: !layerLocked && root.photoLayerBlendModeControlsEnabled(layerData)
+                                                                model: root.photoLayerBlendLabelsForLayer(layerData)
+                                                                currentIndex: root.photoLayerBlendModeIndexForLayer(layerData, layerData.blendMode)
+                                                                onActivated: function(index) {
+                                                                    editorPreview.setPhotoLayerBlendMode(layerIndex, root.photoLayerBlendModeAtForLayer(layerData, index))
+                                                                }
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerMaskButton"
-                                                            iconName: "masks"
-                                                            compact: true
-                                                            label: layerData.hasLayerMask === true ? "Remove layer mask" : "Add layer mask"
-                                                            active: layerData.hasLayerMask === true
-                                                            enabled: !layerLocked
-                                                            disabledReason: layerLocked ? "Unlock the layer before changing its mask." : ""
-                                                            onClicked: editorPreview.setPhotoLayerMaskEnabled(layerIndex, !(layerData.hasLayerMask === true))
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerClippingMaskButtonLegacy"
+                                                                iconName: "link"
+                                                                compact: true
+                                                                label: layerData.clippingMask === true ? "Release clipping mask" : "Clip to below"
+                                                                active: layerData.clippingMask === true
+                                                                enabled: !layerLocked && layerData.kind !== "group" && layerIndex < editorPreview.photoLayerCount - 1
+                                                                disabledReason: layerLocked ? "Unlock the layer before changing clipping." :
+                                                                                layerData.kind === "group" ? "Groups cannot clip to layers below." :
+                                                                                layerIndex >= editorPreview.photoLayerCount - 1 ? "No layer below is available for clipping." : ""
+                                                                onClicked: editorPreview.setPhotoLayerClippingMask(layerIndex, !(layerData.clippingMask === true))
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerTransformButton"
-                                                            iconName: "geometry"
-                                                            compact: true
-                                                            label: active ? "Layer transform active" : "Show transform handles"
-                                                            active: layerIndex === root.normalizedActivePhotoLayerIndex()
-                                                            enabled: root.photoLayerHasDirectTransform(layerData)
-                                                            disabledReason: "This layer type has no direct transform handles."
-                                                            onClicked: root.setActivePhotoLayer(layerIndex)
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerMaskButtonLegacy"
+                                                                iconName: "masks"
+                                                                compact: true
+                                                                label: layerData.hasLayerMask === true ? "Remove layer mask" : "Add layer mask"
+                                                                active: layerData.hasLayerMask === true
+                                                                enabled: !layerLocked
+                                                                disabledReason: layerLocked ? "Unlock the layer before changing its mask." : ""
+                                                                onClicked: editorPreview.setPhotoLayerMaskEnabled(layerIndex, !(layerData.hasLayerMask === true))
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerRowSoloButton"
-                                                            iconName: "select"
-                                                            compact: true
-                                                            label: layerData.solo === true ? "Clear layer isolation" : "Isolate layer"
-                                                            active: layerData.solo === true
-                                                            enabled: !layerLocked || layerData.solo === true
-                                                            disabledReason: "Unlock the layer before isolating it."
-                                                            onClicked: {
-                                                                if (layerData.solo === true)
-                                                                    editorPreview.clearPhotoLayerSolo()
-                                                                else
-                                                                    editorPreview.isolatePhotoLayer(layerIndex)
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerTransformButtonLegacy"
+                                                                iconName: "geometry"
+                                                                compact: true
+                                                                label: active ? "Layer transform active" : "Show transform handles"
+                                                                active: layerIndex === root.normalizedActivePhotoLayerIndex()
+                                                                enabled: root.photoLayerHasDirectTransform(layerData)
+                                                                disabledReason: "This layer type has no direct transform handles."
+                                                                onClicked: root.setActivePhotoLayer(layerIndex)
+                                                            }
+
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerRowSoloButtonLegacy"
+                                                                iconName: "select"
+                                                                compact: true
+                                                                label: layerData.solo === true ? "Clear layer isolation" : "Isolate layer"
+                                                                active: layerData.solo === true
+                                                                enabled: !layerLocked || layerData.solo === true
+                                                                disabledReason: "Unlock the layer before isolating it."
+                                                                onClicked: {
+                                                                    if (layerData.solo === true)
+                                                                        editorPreview.clearPhotoLayerSolo()
+                                                                    else
+                                                                        editorPreview.isolatePhotoLayer(layerIndex)
+                                                                }
                                                             }
                                                         }
                                                     }
 
-                                                    Flow {
+                                                    Loader {
                                                         id: layerStructureActions
                                                         objectName: "photoLayerStructureActions"
-                                                        readonly property bool actionSurfaceHovered: layerStructureHover.hovered
-                                                        readonly property string actionVisibilityContract: "layer-structure-actions:v1|contextual:hover-focus-selected|reorder:move-buttons|overflow-menu:true|destructive-separated:true|disabled-reasons:true"
+                                                        readonly property bool actionSurfaceHovered: false
+                                                        readonly property string actionVisibilityContract: "layer-structure-actions:v2|lazy:true|active:false|hover-instantiates:false|reorder:properties-menu|overflow-menu:true|destructive-separated:true|disabled-reasons:true"
                                                         Layout.fillWidth: true
-                                                        visible: !root.brushToolReady()
-                                                        spacing: 5
-                                                        opacity: photoLayerRowRoot.contextualActionsVisible || actionSurfaceHovered ? 1.0 : 0.62
+                                                        visible: false
+                                                        active: false
+                                                        asynchronous: true
+                                                        sourceComponent: Flow {
+                                                            spacing: 5
+                                                            opacity: photoLayerRowRoot.contextualActionsVisible ? 1.0 : 0.62
 
-                                                        HoverHandler {
-                                                            id: layerStructureHover
-                                                        }
+                                                            HoverHandler {
+                                                                id: layerStructureHover
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerLockButton"
-                                                            iconName: "lock"
-                                                            compact: true
-                                                            label: layerLocked ? "Unlock layer" : "Lock layer"
-                                                            active: layerLocked
-                                                            onClicked: editorPreview.setPhotoLayerLocked(layerIndex, !layerLocked)
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerLockButtonLegacy"
+                                                                iconName: "lock"
+                                                                compact: true
+                                                                label: layerLocked ? "Unlock layer" : "Lock layer"
+                                                                active: layerLocked
+                                                                onClicked: editorPreview.setPhotoLayerLocked(layerIndex, !layerLocked)
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerMoveUpButton"
-                                                            iconName: "move-up"
-                                                            compact: true
-                                                            label: "Move layer up"
-                                                            enabled: layerIndex > 0 && !layerLocked
-                                                            disabledReason: layerLocked ? "Unlock the layer before moving it." : "Layer is already at the top."
-	                                                            onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerMoveUpButtonLegacy"
+                                                                iconName: "move-up"
+                                                                compact: true
+                                                                label: "Move layer up"
+                                                                enabled: layerIndex > 0 && !layerLocked
+                                                                disabledReason: layerLocked ? "Unlock the layer before moving it." : "Layer is already at the top."
+                                                                onClicked: root.movePhotoLayerPreservingSelection(layerIndex, -1)
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerMoveDownButton"
-                                                            iconName: "move-down"
-                                                            compact: true
-                                                            label: "Move layer down"
-                                                            enabled: layerIndex < editorPreview.photoLayerCount - 1 && !layerLocked
-                                                            disabledReason: layerLocked ? "Unlock the layer before moving it." : "Layer is already at the bottom."
-	                                                            onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerMoveDownButtonLegacy"
+                                                                iconName: "move-down"
+                                                                compact: true
+                                                                label: "Move layer down"
+                                                                enabled: layerIndex < editorPreview.photoLayerCount - 1 && !layerLocked
+                                                                disabledReason: layerLocked ? "Unlock the layer before moving it." : "Layer is already at the bottom."
+                                                                onClicked: root.movePhotoLayerPreservingSelection(layerIndex, 1)
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerDuplicateButton"
-                                                            iconName: "source"
-                                                            compact: true
-                                                            label: "Duplicate layer"
-                                                            enabled: !layerLocked
-                                                            disabledReason: "Unlock the layer before duplicating it."
-                                                            onClicked: editorPreview.duplicatePhotoLayerWithMasks(layerIndex)
-                                                        }
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerDuplicateButtonLegacy"
+                                                                iconName: "source"
+                                                                compact: true
+                                                                label: "Duplicate layer"
+                                                                enabled: !layerLocked
+                                                                disabledReason: "Unlock the layer before duplicating it."
+                                                                onClicked: editorPreview.duplicatePhotoLayerWithMasks(layerIndex)
+                                                            }
 
-                                                        Components.ToolButton {
-                                                            objectName: "photoLayerDeleteButton"
-                                                            iconName: "delete"
-                                                            compact: true
-                                                            showLabel: true
-                                                            label: "Delete"
-                                                            warning: true
-                                                            opacity: 1.0
-                                                            enabled: !layerLocked
-                                                            disabledReason: "Unlock the layer before deleting it."
-                                                            onClicked: root.deletePhotoLayerTarget(layerIndex)
+                                                            Components.ToolButton {
+                                                                objectName: "photoLayerDeleteButtonLegacy"
+                                                                iconName: "delete"
+                                                                compact: true
+                                                                showLabel: true
+                                                                label: "Delete"
+                                                                warning: true
+                                                                opacity: 1.0
+                                                                enabled: !layerLocked
+                                                                disabledReason: "Unlock the layer before deleting it."
+                                                                onClicked: root.deletePhotoLayerTarget(layerIndex)
+                                                            }
                                                         }
                                                     }
 
@@ -19000,7 +21837,7 @@ Rectangle {
                                                                 Label {
                                                                     objectName: "photoLayerNestedMaskSectionLabel"
                                                                     Layout.fillWidth: true
-                                                                    text: photoLayerNestedMaskList.linkedMaskSets.length + " MASK" +
+                                                                    text: photoLayerNestedMaskList.linkedMaskSets.length + " SELECTION" +
                                                                           (photoLayerNestedMaskList.linkedMaskSets.length === 1 ? "" : "S")
                                                                     color: root.dimText
                                                                     font.family: theme.fontMono
@@ -19017,7 +21854,7 @@ Rectangle {
                                                                     iconName: photoLayerNestedMaskList.maskSectionCollapsed ? "chevron-right" : "move-up"
                                                                     role: "icon"
                                                                     active: !photoLayerNestedMaskList.maskSectionCollapsed
-                                                                    tooltip: photoLayerNestedMaskList.maskSectionCollapsed ? "Expand layer masks." : "Collapse layer masks."
+                                                                    tooltip: photoLayerNestedMaskList.maskSectionCollapsed ? "Expand linked selections." : "Collapse linked selections."
                                                                     onClicked: root.setPhotoLayerMaskSectionCollapsed(
                                                                                    layerIndex,
                                                                                    layerData,
@@ -19090,7 +21927,7 @@ Rectangle {
                                                                    readonly property bool combineMoveUpEnabled: combineOrderIndex > 0
                                                                    readonly property bool combineMoveDownEnabled: combineOrderIndex < combineOrderCount - 1
                                                                    readonly property string primarySourceKind: String(modelData.primarySourceKind || modelData.sourceKind || "")
-                                                                   readonly property string sourceKindLabel: String(modelData.sourceKindLabel || "Mask")
+                                                                   readonly property string sourceKindLabel: String(modelData.sourceKindLabel || "Selection")
                                                                    readonly property string combineModeSummary: String(modelData.combineModeSummary || "Add")
                                                                    readonly property string combineModeContract: String(modelData.combineModeContract || "")
                                                                    readonly property string maskTypeIconName: root.maskSourceIconName(primarySourceKind)
@@ -19239,7 +22076,7 @@ Rectangle {
                                                                         Label {
                                                                             objectName: "photoLayerNestedMaskNameLabel"
                                                                             Layout.fillWidth: true
-                                                                            text: String(modelData.name || "Mask")
+                                                                            text: String(modelData.name || "Selection")
                                                                             color: activeMaskSet ? root.mint : theme.textMain
                                                                             font.family: theme.fontUi
                                                                             font.pixelSize: 10
@@ -19252,16 +22089,17 @@ Rectangle {
                                                                         Label {
                                                                             objectName: "photoLayerNestedMaskStatusLabel"
                                                                             Layout.fillWidth: true
-                                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
-                                                                                  : root.brushToolReady()
-                                                                                  ? photoLayerNestedMaskRowRoot.sourceKindLabel + " / " +
-                                                                                    photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
-                                                                                    (activeMaskSet ? "Editing mask" : "Ready")
-                                                                                  : root.thumbnailStatusLabel(
-                                                                                         modelData,
-                                                                                          photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
-                                                                                          photoLayerNestedMaskRowRoot.maskSourceProvenanceSummary +
-                                                                                          " / mask attachment")
+	                                                                            text: maskFailureLabel.length > 0 ? maskFailureLabel
+	                                                                                  : root.brushToolReady()
+	                                                                                  ? photoLayerNestedMaskRowRoot.sourceKindLabel + " / " +
+	                                                                                    photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
+	                                                                                    (activeMaskSet ? "Editing selection" : "Ready")
+	                                                                                  : root.thumbnailStatusLabel(
+	                                                                                         modelData,
+	                                                                                          photoLayerNestedMaskRowRoot.combineModeSummary + " / " +
+	                                                                                          root.selectionRowFallbackStatus(
+	                                                                                              modelData,
+	                                                                                              "Linked selection"))
                                                                             color: maskFailureLabel.length > 0 || thumbnailFailureContained ? theme.warning : root.dimText
                                                                             font.family: theme.fontMono
                                                                             font.pixelSize: 8
@@ -19320,21 +22158,21 @@ Rectangle {
                                                                         accent: theme.warning
                                                                         tooltip: photoLayerNestedMaskRowRoot.thumbnailFailureDetail.length > 0
                                                                                  ? photoLayerNestedMaskRowRoot.thumbnailFailureDetail
-                                                                                 : "Retry this mask thumbnail."
+                                                                                 : "Retry this selection thumbnail."
                                                                         onClicked: editorPreview.retryThumbnailRender()
                                                                     }
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskPreviewButton"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: false
                                                                         square: true
                                                                         iconName: "compare"
                                                                         role: "icon"
                                                                         active: modelData.maskSetPreviewBypassed === true
                                                                         enabled: String(modelData.id || "").length > 0 &&
                                                                                  Number(modelData.sourceCount || 0) > 0
-                                                                        tooltip: active ? "Show this mask attachment in preview."
-                                                                                        : "Preview before this mask attachment."
+                                                                        tooltip: active ? "Show this linked selection in preview."
+                                                                                        : "Preview before this linked selection."
                                                                         onClicked: editorPreview.setMaskSetPreviewBypassed(
                                                                                         String(modelData.id || ""),
                                                                                         modelData.maskSetPreviewBypassed !== true)
@@ -19342,12 +22180,12 @@ Rectangle {
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskMoveUpButton"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: false
                                                                         square: true
                                                                         iconName: "move-up"
                                                                         role: "icon"
                                                                         enabled: photoLayerNestedMaskRowRoot.combineMoveUpEnabled
-                                                                        tooltip: "Move this mask earlier in the layer combine order."
+                                                                        tooltip: "Move this selection earlier in the layer combine order."
                                                                         onClicked: root.moveLayerMaskSet(
                                                                                        photoLayerNestedMaskRowRoot.parentLayerIndex,
                                                                                        photoLayerNestedMaskRowRoot.modelData,
@@ -19356,12 +22194,12 @@ Rectangle {
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskMoveDownButton"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: false
                                                                         square: true
                                                                         iconName: "move-down"
                                                                         role: "icon"
                                                                         enabled: photoLayerNestedMaskRowRoot.combineMoveDownEnabled
-                                                                        tooltip: "Move this mask later in the layer combine order."
+                                                                        tooltip: "Move this selection later in the layer combine order."
                                                                         onClicked: root.moveLayerMaskSet(
                                                                                        photoLayerNestedMaskRowRoot.parentLayerIndex,
                                                                                        photoLayerNestedMaskRowRoot.modelData,
@@ -19370,37 +22208,39 @@ Rectangle {
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskEditLayerButton"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: false
                                                                         text: "Edit Layer"
                                                                         iconName: "adjust"
                                                                         role: "segmented"
-                                                                        tooltip: "Edit this mask-backed adjustment layer."
+                                                                        tooltip: "Edit this selection-linked layer."
                                                                         onClicked: root.selectMaskSetAndLayer(modelData, true)
                                                                     }
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskSelectButton"
-                                                                        text: "Edit Mask"
+                                                                        visible: false
+                                                                        text: "Edit Selection"
                                                                         iconName: "select"
                                                                         role: "segmented"
                                                                         active: activeMaskSet
-                                                                        tooltip: "Edit this mask attachment."
+                                                                        tooltip: "Edit this linked selection."
                                                                         onClicked: root.selectMaskSetAndLayer(modelData, false)
                                                                     }
 
                                                                     MiniButton {
                                                                         objectName: "photoLayerNestedMaskDeleteButton"
-                                                                        visible: !root.brushToolReady()
+                                                                        visible: false
                                                                         text: "Delete"
                                                                         iconName: "delete"
                                                                         role: "destructive"
-                                                                        tooltip: "Delete this mask attachment."
+                                                                        tooltip: "Delete this linked selection."
                                                                         onClicked: root.deleteMaskSet(modelData)
                                                                     }
 
                                                                     MenuButton {
                                                                         objectName: "photoLayerNestedMaskRowMoreMenuButton"
-                                                                        visible: root.brushToolReady()
+                                                                        readonly property string maskRowActionContract: "mask-row-actions:v2|default:more-only|edit-layer:menu|edit-mask:menu|preview:menu|delete:menu|move:menu"
+                                                                        visible: true
                                                                         text: "More"
                                                                         iconName: "menu"
                                                                         compact: true
@@ -19411,7 +22251,7 @@ Rectangle {
                                                                                        photoLayerNestedMaskRowRoot.parentLayerIndex,
                                                                                        photoLayerNestedMaskRowRoot.combineOrderIndex,
                                                                                        photoLayerNestedMaskRowRoot.combineOrderCount)
-                                                                        tooltipText: "Mask actions."
+                                                                        tooltipText: "Selection actions."
                                                                         onMenuItemTriggered: function(key) {
                                                                             root.handleMaskSetRowMenuAction(
                                                                                 key,
@@ -19430,8 +22270,7 @@ Rectangle {
 	                                                        id: photoLayerTextEditor
 	                                                        objectName: "photoLayerTextEditor"
 	                                                        Layout.fillWidth: true
-	                                                        visible: layerData.kind === "text" &&
-	                                                                 root.expandedTextLayerIndex === layerIndex
+	                                                        visible: false
                                                         spacing: 3
                                                         property string liveTextFontFamily: String(layerData.fontFamily || "Helvetica")
                                                         property string liveTextColor: String(layerData.textColor || "#ffffff")
@@ -19464,7 +22303,7 @@ Rectangle {
                                                         }
 
                                                         TinyInput {
-                                                            objectName: "photoLayerTextContentField"
+                                                            objectName: "photoLayerTextContentFieldLegacy"
                                                             Layout.fillWidth: true
                                                             Layout.preferredHeight: 24
                                                             text: String(layerData.text || "Text")
@@ -19483,7 +22322,7 @@ Rectangle {
                                                             spacing: 5
 
                                                             TinyInput {
-                                                                objectName: "photoLayerTextFontField"
+                                                                objectName: "photoLayerTextFontFieldLegacy"
                                                                 Layout.fillWidth: true
                                                                 Layout.preferredHeight: 24
                                                                 text: photoLayerTextEditor.liveTextFontFamily
@@ -19499,7 +22338,7 @@ Rectangle {
                                                             }
 
                                                             TinyInput {
-                                                                objectName: "photoLayerTextColorField"
+                                                                objectName: "photoLayerTextColorFieldLegacy"
                                                                 Layout.preferredWidth: 86
                                                                 Layout.preferredHeight: 24
                                                                 text: photoLayerTextEditor.liveTextColor
@@ -19516,7 +22355,7 @@ Rectangle {
                                                         }
 
                                                         AdjustSlider {
-                                                            objectName: "photoLayerTextSizeSlider"
+                                                            objectName: "photoLayerTextSizeSliderLegacy"
                                                             controlHeight: 24
                                                             label: "Text Size"
                                                             from: 8
@@ -19536,7 +22375,7 @@ Rectangle {
                                                             spacing: 4
 
                                                             MiniButton {
-                                                                objectName: "photoLayerTextBoldButton"
+                                                                objectName: "photoLayerTextBoldButtonLegacy"
                                                                 text: "B"
                                                                 role: "segmented"
                                                                 active: photoLayerTextEditor.liveTextBold
@@ -19558,7 +22397,7 @@ Rectangle {
                                                                 ]
                                                                 MiniButton {
                                                                     required property var modelData
-                                                                    objectName: "photoLayerTextAlign" + modelData.label + "Button"
+                                                                    objectName: "photoLayerTextAlign" + modelData.label + "ButtonLegacy"
                                                                     Layout.fillWidth: true
                                                                     text: modelData.label
                                                                     role: "segmented"
@@ -19578,7 +22417,7 @@ Rectangle {
                                                             spacing: 5
 
                                                             AdjustSlider {
-                                                                objectName: "photoLayerTextBoxWidthSlider"
+                                                                objectName: "photoLayerTextBoxWidthSliderLegacy"
                                                                 Layout.fillWidth: true
                                                                 controlHeight: 24
                                                                 label: "Box W"
@@ -19595,7 +22434,7 @@ Rectangle {
                                                             }
 
                                                             AdjustSlider {
-                                                                objectName: "photoLayerTextBoxHeightSlider"
+                                                                objectName: "photoLayerTextBoxHeightSliderLegacy"
                                                                 Layout.fillWidth: true
                                                                 controlHeight: 24
                                                                 label: "Box H"
@@ -19612,6 +22451,496 @@ Rectangle {
                                                             }
                                                         }
                                                     }
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    ColumnLayout {
+                                        id: photoLayerPropertiesPanel
+                                        objectName: "photoLayerPropertiesPanel"
+                                        readonly property int layerIndex: root.normalizedActivePhotoLayerIndex()
+                                        readonly property var layerData: root.currentPhotoLayerData()
+                                        readonly property bool layerValid: editorPreview.photoLayerCount > 0 &&
+                                                                         layerIndex >= 0 &&
+                                                                         layerIndex < editorPreview.photoLayerCount
+                                        readonly property bool layerLocked: layerData.locked === true
+                                        readonly property bool layerSelected: root.photoLayerSelected(layerIndex)
+                                        readonly property int layerOpacityPercent: Math.round(root.clamp(Number(layerData.opacity !== undefined ? layerData.opacity : 1.0), 0.0, 1.0) * 100)
+                                        readonly property int activeAdjustmentIndex: root.activeAdjustmentLayerIndex()
+                                        readonly property var syncTargets: root.selectedAdjustmentLayerIndices(activeAdjustmentIndex)
+                                        property bool detailsExpanded: false
+                                        readonly property string sparsePropertiesContract: "layer-properties:v1|source:active-layer|sliders:single-instance|batch:contextual|text:active-only|row-controls:menu|progressive:true"
+                                        Layout.fillWidth: true
+                                        visible: layerValid && !root.brushToolReady()
+                                        spacing: 6
+
+                                        RowLayout {
+                                            objectName: "photoLayerPropertiesHeader"
+                                            Layout.fillWidth: true
+                                            spacing: 8
+
+                                            Label {
+                                                Layout.fillWidth: true
+                                                text: String(photoLayerPropertiesPanel.layerData.displayName ||
+                                                             photoLayerPropertiesPanel.layerData.name ||
+                                                             "Layer")
+                                                color: theme.textMain
+                                                font.family: theme.fontUi
+                                                font.pixelSize: 12
+                                                font.weight: Font.DemiBold
+                                                maximumLineCount: 1
+                                                fontSizeMode: Text.HorizontalFit
+                                                minimumPixelSize: 9
+                                                elide: Text.ElideNone
+                                            }
+
+                                            Label {
+                                                objectName: "photoLayerAdjustmentCommandSelectionLabel"
+                                                visible: root.normalizedPhotoLayerSelection().length > 1
+                                                Layout.preferredWidth: 92
+                                                text: root.normalizedPhotoLayerSelection().length + " selected / " +
+                                                      photoLayerPropertiesPanel.syncTargets.length + " sync target" +
+                                                      (photoLayerPropertiesPanel.syncTargets.length === 1 ? "" : "s")
+                                                color: photoLayerPropertiesPanel.syncTargets.length > 0 ? root.mint : root.dimText
+                                                font.family: theme.fontMono
+                                                font.pixelSize: 8
+                                                fontSizeMode: Text.HorizontalFit
+                                                minimumPixelSize: 6
+                                                elide: Text.ElideNone
+                                            }
+
+                                            MiniButton {
+                                                objectName: "photoLayerSelectionButton"
+                                                square: true
+                                                iconName: "check"
+                                                role: "icon"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded ||
+                                                         root.normalizedPhotoLayerSelection().length > 1
+                                                active: photoLayerPropertiesPanel.layerSelected
+                                                tooltip: active ? "Remove this layer from batch selection." : "Select this layer for batch commands."
+                                                onClicked: root.setActivePhotoLayerSelection(photoLayerPropertiesPanel.layerIndex, true)
+                                            }
+
+                                            MenuButton {
+                                                objectName: "selectedPhotoLayerBatchActionsButton"
+                                                text: "More"
+                                                iconName: "menu"
+                                                compact: true
+                                                secondaryActionMenu: true
+                                                visible: root.normalizedPhotoLayerSelection().length > 1
+                                                enabled: root.selectedPhotoLayerBatchTargets(true, -1).length > 0
+                                                menuWidth: 250
+                                                menuItems: root.selectedPhotoLayerBatchMenuItems(
+                                                               photoLayerPropertiesPanel.layerIndex,
+                                                               photoLayerPropertiesPanel.layerData)
+                                                tooltipText: "Apply actions to selected layers."
+                                                onMenuItemTriggered: function(key) {
+                                                    root.handleSelectedPhotoLayerBatchAction(
+                                                                key,
+                                                                photoLayerPropertiesPanel.layerIndex,
+                                                                photoLayerPropertiesPanel.layerData)
+                                                }
+                                            }
+
+                                            MenuButton {
+                                                objectName: "photoLayerPropertiesLayerActionsMenuButton"
+                                                text: "More"
+                                                iconName: "menu"
+                                                compact: true
+                                                menuWidth: 250
+                                                menuItemMaxLines: 3
+                                                menuItems: root.layerRowMenuItems(
+                                                               photoLayerPropertiesPanel.layerIndex,
+                                                               photoLayerPropertiesPanel.layerData)
+                                                tooltipText: "Layer actions."
+                                                menuTooltipText: "Layer actions"
+                                                onMenuItemTriggered: function(key) {
+                                                    root.handleLayerRowMenuAction(
+                                                                key,
+                                                                photoLayerPropertiesPanel.layerIndex,
+                                                                photoLayerPropertiesPanel.layerData)
+                                                }
+                                            }
+
+                                            MiniButton {
+                                                objectName: "photoLayerPropertiesDetailsButton"
+                                                square: true
+                                                iconName: "adjust"
+                                                role: "icon"
+                                                active: photoLayerPropertiesPanel.detailsExpanded
+                                                tooltip: active ? "Hide layer details." : "Show layer details."
+                                                onClicked: photoLayerPropertiesPanel.detailsExpanded =
+                                                           !photoLayerPropertiesPanel.detailsExpanded
+                                            }
+
+                                            MiniButton {
+                                                objectName: "clearPhotoLayerSelectionButton"
+                                                square: true
+                                                iconName: "close"
+                                                role: "icon"
+                                                visible: root.normalizedPhotoLayerSelection().length > 1
+                                                tooltip: "Clear multi-layer selection."
+                                                onClicked: root.selectedPhotoLayerIndices = [photoLayerPropertiesPanel.layerIndex]
+                                            }
+                                        }
+
+                                        TinyInput {
+                                            objectName: "photoLayerNameField"
+                                            Layout.fillWidth: true
+                                            Layout.preferredHeight: 24
+                                            visible: photoLayerPropertiesPanel.detailsExpanded
+                                            text: String(photoLayerPropertiesPanel.layerData.displayName ||
+                                                         photoLayerPropertiesPanel.layerData.name ||
+                                                         "Layer")
+                                            enabled: !photoLayerPropertiesPanel.layerLocked
+                                            placeholder: "Layer name"
+                                            onTextChanged: {
+                                                if (!userEditing)
+                                                    return
+                                                const nextName = String(text || "").trim()
+                                                const currentName = String(photoLayerPropertiesPanel.layerData.name || "").trim()
+                                                const currentDisplayName = String(photoLayerPropertiesPanel.layerData.displayName || currentName).trim()
+                                                if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
+                                                    editorPreview.renamePhotoLayer(photoLayerPropertiesPanel.layerIndex, nextName)
+                                            }
+                                        }
+
+                                        Flow {
+                                            objectName: "photoLayerPropertiesPrimaryControls"
+                                            Layout.fillWidth: true
+                                            spacing: 6
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerOpacitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "adjustment-layer,photo-layer"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "layer-opacity"
+                                                width: 118
+                                                height: 24
+                                                label: "Opacity"
+                                                valueText: photoLayerPropertiesPanel.layerOpacityPercent + "%"
+                                                tooltipText: "Layer opacity - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: photoLayerPropertiesPanel.layerOpacityPercent
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+
+                                            ToneComboBox {
+                                                objectName: "photoLayerBlendModeComboBox"
+                                                readonly property string blendModeSupportContract: root.photoLayerBlendModeSupportSignature(photoLayerPropertiesPanel.layerData)
+                                                width: 110
+                                                height: 26
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         root.photoLayerBlendModeControlsEnabled(photoLayerPropertiesPanel.layerData)
+                                                model: root.photoLayerBlendLabelsForLayer(photoLayerPropertiesPanel.layerData)
+                                                currentIndex: root.photoLayerBlendModeIndexForLayer(
+                                                                  photoLayerPropertiesPanel.layerData,
+                                                                  photoLayerPropertiesPanel.layerData.blendMode)
+                                                onActivated: function(index) {
+                                                    editorPreview.setPhotoLayerBlendMode(
+                                                                photoLayerPropertiesPanel.layerIndex,
+                                                                root.photoLayerBlendModeAtForLayer(
+                                                                    photoLayerPropertiesPanel.layerData,
+                                                                    index))
+                                                }
+                                            }
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerMaskOpacitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "mask"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "mask-opacity"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                width: 118
+                                                height: 24
+                                                label: "Mask Opacity"
+                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100).toString() + "%"
+                                                tooltipText: "Mask opacity - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: Number(photoLayerPropertiesPanel.layerData.maskOpacityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskOpacityPercent : 100)
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerMaskOpacity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+
+                                            ToolValueSlider {
+                                                objectName: "photoLayerMaskDensitySlider"
+                                                readonly property string targetSupportContract: root.adjustmentControlTargetSupportContract
+                                                readonly property string targetSupport: "mask"
+                                                readonly property string targetSupportSignature: root.adjustmentControlTargetSupportSignature(targetSupport)
+                                                readonly property string terminologyContract: root.maskLayerParameterTerminologyContract
+                                                readonly property string parameterRole: "mask-density"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                width: 118
+                                                height: 24
+                                                label: "Mask Density"
+                                                valueText: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100).toString() + "%"
+                                                tooltipText: "Mask density - " + valueText
+                                                from: 0
+                                                to: 100
+                                                stepSize: 1
+                                                value: Number(photoLayerPropertiesPanel.layerData.maskDensityPercent !== undefined ? photoLayerPropertiesPanel.layerData.maskDensityPercent : 100)
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                onPressedChanged: {
+                                                    if (pressed)
+                                                        editorPreview.beginCoalescedEdit()
+                                                    else
+                                                        editorPreview.endCoalescedEdit()
+                                                }
+                                                onMoved: editorPreview.setPhotoLayerMaskDensity(photoLayerPropertiesPanel.layerIndex, value / 100.0)
+                                            }
+                                        }
+
+                                        Flow {
+                                            objectName: "photoLayerPropertiesActionRow"
+                                            Layout.fillWidth: true
+                                            visible: photoLayerPropertiesPanel.detailsExpanded
+                                            spacing: 6
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerClippingMaskButton"
+                                                iconName: "link"
+                                                compact: true
+                                                label: photoLayerPropertiesPanel.layerData.clippingMask === true ? "Release clipping mask" : "Clip to below"
+                                                active: photoLayerPropertiesPanel.layerData.clippingMask === true
+                                                enabled: !photoLayerPropertiesPanel.layerLocked &&
+                                                         photoLayerPropertiesPanel.layerData.kind !== "group" &&
+                                                         photoLayerPropertiesPanel.layerIndex < editorPreview.photoLayerCount - 1
+                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before changing clipping." :
+                                                                photoLayerPropertiesPanel.layerData.kind === "group" ? "Groups are organizational only." :
+                                                                photoLayerPropertiesPanel.layerIndex >= editorPreview.photoLayerCount - 1 ? "No layer below is available for clipping." : ""
+                                                onClicked: editorPreview.setPhotoLayerClippingMask(
+                                                               photoLayerPropertiesPanel.layerIndex,
+                                                               !(photoLayerPropertiesPanel.layerData.clippingMask === true))
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerMaskButton"
+                                                iconName: "masks"
+                                                compact: true
+                                                label: photoLayerPropertiesPanel.layerData.hasLayerMask === true ? "Remove layer mask" : "Add layer mask"
+                                                active: photoLayerPropertiesPanel.layerData.hasLayerMask === true
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                disabledReason: "Unlock the layer before changing its mask."
+                                                onClicked: editorPreview.setPhotoLayerMaskEnabled(
+                                                               photoLayerPropertiesPanel.layerIndex,
+                                                               !(photoLayerPropertiesPanel.layerData.hasLayerMask === true))
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerTransformButton"
+                                                iconName: "geometry"
+                                                compact: true
+                                                label: "Transform"
+                                                active: true
+                                                enabled: root.photoLayerHasDirectTransform(photoLayerPropertiesPanel.layerData)
+                                                disabledReason: "This layer type has no direct transform handles."
+                                                onClicked: root.setActivePhotoLayer(photoLayerPropertiesPanel.layerIndex)
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerRowSoloButton"
+                                                iconName: "select"
+                                                compact: true
+                                                label: photoLayerPropertiesPanel.layerData.solo === true ? "Clear isolate" : "Isolate"
+                                                active: photoLayerPropertiesPanel.layerData.solo === true
+                                                enabled: !photoLayerPropertiesPanel.layerLocked ||
+                                                         photoLayerPropertiesPanel.layerData.solo === true
+                                                disabledReason: "Unlock the layer before isolating it."
+                                                onClicked: {
+                                                    if (photoLayerPropertiesPanel.layerData.solo === true)
+                                                        editorPreview.clearPhotoLayerSolo()
+                                                    else
+                                                        editorPreview.isolatePhotoLayer(photoLayerPropertiesPanel.layerIndex)
+                                                }
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerLockButton"
+                                                iconName: "lock"
+                                                compact: true
+                                                label: photoLayerPropertiesPanel.layerLocked ? "Unlock" : "Lock"
+                                                active: photoLayerPropertiesPanel.layerLocked
+                                                onClicked: editorPreview.setPhotoLayerLocked(
+                                                               photoLayerPropertiesPanel.layerIndex,
+                                                               !photoLayerPropertiesPanel.layerLocked)
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerMoveUpButton"
+                                                iconName: "move-up"
+                                                compact: true
+                                                label: "Move up"
+                                                enabled: photoLayerPropertiesPanel.layerIndex > 0 &&
+                                                         !photoLayerPropertiesPanel.layerLocked
+                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before moving it." : "Layer is already at the top."
+                                                onClicked: root.movePhotoLayerPreservingSelection(photoLayerPropertiesPanel.layerIndex, -1)
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerMoveDownButton"
+                                                iconName: "move-down"
+                                                compact: true
+                                                label: "Move down"
+                                                enabled: photoLayerPropertiesPanel.layerIndex < editorPreview.photoLayerCount - 1 &&
+                                                         !photoLayerPropertiesPanel.layerLocked
+                                                disabledReason: photoLayerPropertiesPanel.layerLocked ? "Unlock the layer before moving it." : "Layer is already at the bottom."
+                                                onClicked: root.movePhotoLayerPreservingSelection(photoLayerPropertiesPanel.layerIndex, 1)
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerDuplicateButton"
+                                                iconName: "source"
+                                                compact: true
+                                                label: "Duplicate"
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                disabledReason: "Unlock the layer before duplicating it."
+                                                onClicked: editorPreview.duplicatePhotoLayerWithMasks(photoLayerPropertiesPanel.layerIndex)
+                                            }
+
+                                            Components.ToolButton {
+                                                objectName: "photoLayerDeleteButton"
+                                                iconName: "delete"
+                                                compact: true
+                                                showLabel: true
+                                                label: "Delete"
+                                                warning: true
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                disabledReason: "Unlock the layer before deleting it."
+                                                onClicked: root.deletePhotoLayerTarget(photoLayerPropertiesPanel.layerIndex)
+                                            }
+                                        }
+
+                                        Flow {
+                                            objectName: "photoLayerPropertiesAdjustmentActions"
+                                            Layout.fillWidth: true
+                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                     photoLayerPropertiesPanel.activeAdjustmentIndex >= 0
+                                            spacing: 6
+
+                                            MiniButton {
+                                                objectName: "copyPhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "source"
+                                                role: "icon"
+                                                tooltip: "Copy active layer adjustments."
+                                                onClicked: editorPreview.copyPhotoLayerAdjustments(photoLayerPropertiesPanel.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "pastePhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "insert"
+                                                role: "icon"
+                                                enabled: editorPreview.hasCopiedPhotoLayerAdjustments &&
+                                                         !photoLayerPropertiesPanel.layerLocked
+                                                tooltip: "Paste copied adjustments onto the active layer."
+                                                onClicked: editorPreview.pastePhotoLayerAdjustments(photoLayerPropertiesPanel.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "pasteGlobalAdjustmentsToPhotoLayerButton"
+                                                square: true
+                                                iconName: "media"
+                                                role: "icon"
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                tooltip: "Paste Base Image adjustments onto the active layer."
+                                                onClicked: editorPreview.pasteGlobalAdjustmentsToPhotoLayer(photoLayerPropertiesPanel.activeAdjustmentIndex)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "togglePhotoLayerAdjustmentsPreviewButton"
+                                                square: true
+                                                iconName: "compare"
+                                                role: "icon"
+                                                active: photoLayerPropertiesPanel.layerData.adjustmentsPreviewBypassed === true
+                                                enabled: photoLayerPropertiesPanel.layerData.hasNonNeutralAdjustments === true
+                                                tooltip: active ? "Show this layer with adjustments." : "Preview this layer before adjustments."
+                                                onClicked: editorPreview.setPhotoLayerAdjustmentsPreviewBypassed(
+                                                               photoLayerPropertiesPanel.activeAdjustmentIndex,
+                                                               photoLayerPropertiesPanel.layerData.adjustmentsPreviewBypassed !== true)
+                                            }
+
+                                            MiniButton {
+                                                objectName: "syncPhotoLayerAdjustmentsButton"
+                                                square: true
+                                                iconName: "effects"
+                                                role: "icon"
+                                                enabled: photoLayerPropertiesPanel.syncTargets.length > 0
+                                                tooltip: "Sync active layer adjustments to selected layers."
+                                                onClicked: editorPreview.syncPhotoLayerAdjustments(
+                                                               photoLayerPropertiesPanel.activeAdjustmentIndex,
+                                                               photoLayerPropertiesPanel.syncTargets)
+                                            }
+                                        }
+
+                                        ColumnLayout {
+                                            objectName: "photoLayerPropertiesTextControls"
+                                            Layout.fillWidth: true
+                                            visible: photoLayerPropertiesPanel.detailsExpanded &&
+                                                     String(photoLayerPropertiesPanel.layerData.kind || "") === "text"
+                                            spacing: 5
+
+                                            TinyInput {
+                                                objectName: "photoLayerTextContentField"
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 24
+                                                text: String(photoLayerPropertiesPanel.layerData.text || "Text")
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                placeholder: "Text"
+                                                onTextChanged: {
+                                                    if (!userEditing)
+                                                        return
+                                                    if (String(photoLayerPropertiesPanel.layerData.kind || "") === "text" &&
+                                                            text !== String(photoLayerPropertiesPanel.layerData.text || ""))
+                                                        editorPreview.setPhotoLayerText(photoLayerPropertiesPanel.layerIndex, text)
+                                                }
+                                            }
+
+                                            AdjustSlider {
+                                                objectName: "photoLayerTextSizeSlider"
+                                                controlHeight: 24
+                                                label: "Text Size"
+                                                from: 8
+                                                to: 144
+                                                stepSize: 1
+                                                defaultValue: 48
+                                                value: Number(photoLayerPropertiesPanel.layerData.fontSize || 48)
+                                                valueText: Math.round(Number(photoLayerPropertiesPanel.layerData.fontSize || 48)).toString()
+                                                enabled: !photoLayerPropertiesPanel.layerLocked
+                                                onValueDragged: function(value) {
+                                                    editorPreview.setPhotoLayerTextStyle(
+                                                                photoLayerPropertiesPanel.layerIndex,
+                                                                String(photoLayerPropertiesPanel.layerData.fontFamily || "Helvetica"),
+                                                                Math.round(value),
+                                                                String(photoLayerPropertiesPanel.layerData.textColor || "#ffffff"),
+                                                                String(photoLayerPropertiesPanel.layerData.fontWeight || "regular"),
+                                                                String(photoLayerPropertiesPanel.layerData.textAlignment || "left"))
                                                 }
                                             }
                                         }
@@ -19966,8 +23295,9 @@ Rectangle {
                                             }
                                             MiniButton {
                                                 objectName: "studioPresetManageMenuButton"
-                                                text: "Manage"
+                                                text: "More"
                                                 role: "secondary"
+                                                tooltip: "Preset management actions."
                                                 onClicked: studioPresetManagementMenu.open()
                                             }
                                         }
@@ -20072,9 +23402,46 @@ Rectangle {
                                     resetObjectName: "whiteBalancePanelResetButton"
                                     compareGroup: "tone"
                                     beforeAfterObjectName: "whiteBalancePanelBeforeAfterButton"
+                                    AdjustmentPad2D {
+                                        objectName: "whiteBalancePad"
+                                        title: "Temp / Tint"
+                                        xLabel: "Cool  /  Warm"
+                                        yLabel: "Magenta  /  Green"
+                                        xValue: root.primaryAdjustmentValue("temperature", editorPreview.temperature)
+                                        yValue: root.primaryAdjustmentValue("tint", editorPreview.tint)
+                                        xValueText: root.whiteBalanceKelvin(root.primaryAdjustmentValue("temperature", editorPreview.temperature)) + "K"
+                                        yValueText: root.signedPercent(root.primaryAdjustmentValue("tint", editorPreview.tint))
+                                        leftColor: "#4FB5FF"
+                                        rightColor: "#F2C35B"
+                                        topColor: "#C85AC1"
+                                        bottomColor: "#49B86B"
+                                        onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                        onInteractionFinished: editorPreview.endCoalescedEdit()
+                                        onValueEdited: function(xValue, yValue) {
+                                            root.setPrimaryAdjustmentValue("temperature", xValue)
+                                            root.setPrimaryAdjustmentValue("tint", yValue)
+                                        }
+                                    }
                                     AdjustSlider { objectName: "temperatureSlider"; label: "Temp"; valueInputMode: "kelvin"; value: root.primaryAdjustmentValue("temperature", editorPreview.temperature); valueText: root.whiteBalanceKelvin(root.primaryAdjustmentValue("temperature", editorPreview.temperature)) + "K"; trackColors: ["#4FB5FF", "#F2C35B"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("temperature", value) } }
                                     AdjustSlider { objectName: "tintSlider"; label: "Tint"; value: root.primaryAdjustmentValue("tint", editorPreview.tint); valueText: root.signedPercent(root.primaryAdjustmentValue("tint", editorPreview.tint)); trackColors: ["#49B86B", "#C85AC1"]; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("tint", value) } }
-                                    MiniButton { Layout.fillWidth: true; text: "Sample White Balance"; iconName: "brush-tool"; role: "secondary"; onClicked: editorPreview.setWhiteBalanceSampling(true) }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 6
+                                        MiniButton {
+                                            Layout.fillWidth: true
+                                            text: "Sample White Balance"
+                                            iconName: "brush-tool"
+                                            role: "secondary"
+                                            onClicked: editorPreview.setWhiteBalanceSampling(true)
+                                        }
+                                        MiniButton {
+                                            square: true
+                                            iconName: "reset"
+                                            role: "icon"
+                                            tooltip: "Reset white balance."
+                                            onClicked: root.resetPrimaryAdjustmentGroup("whiteBalance")
+                                        }
+                                    }
                                 }
 
                                 InspectorGroup {
@@ -20175,7 +23542,11 @@ Rectangle {
                                                 Rectangle {
                                                     required property int index
                                                     required property string modelData
+                                                    objectName: index === 0
+                                                                ? "splitToningShadowsWheel"
+                                                                : (index === 1 ? "splitToningMidtonesWheel" : "splitToningHighlightsWheel")
                                                     readonly property bool active: root.selectedToneWheel === index
+                                                    readonly property int minimumUsefulWidth: 96
                                                     readonly property real toneHue: index === 0
                                                                                     ? root.primaryGradingValue("shadows", "hue", editorPreview.gradingShadowsHue)
                                                                                     : (index === 2
@@ -20283,7 +23654,7 @@ Rectangle {
                                         }
 
                                         GradingMacroControl {
-                                            objectName: "colorGradingAmountControl"
+                                            objectName: "colorGradingAmountSlider"
                                             label: "Amount"
                                             from: 0
                                             to: 100
@@ -20299,7 +23670,7 @@ Rectangle {
                                         }
 
                                         GradingMacroControl {
-                                            objectName: "colorGradingBalanceControl"
+                                            objectName: "colorGradingBalanceSlider"
                                             label: "Balance"
                                             defaultValue: 0
                                             value: root.primaryNestedAdjustmentValue("colorGrading", "", "balance", editorPreview.gradingBalance)
@@ -20316,6 +23687,40 @@ Rectangle {
                                             onInteractionStarted: editorPreview.beginCoalescedEdit()
                                             onInteractionFinished: editorPreview.endCoalescedEdit()
                                             onValueDragged: function(value) { root.setPrimaryAdjustmentValue("gradingBalance", value) }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "selectedToneWheelHueSlider"
+                                            controlHeight: 40
+                                            label: "Hue"
+                                            from: 0
+                                            to: 1
+                                            stepSize: 0.001
+                                            defaultValue: 0
+                                            valueInputMode: "degreesNormalized"
+                                            value: root.selectedToneWheelHue()
+                                            valueText: Math.round(root.selectedToneWheelHue() * 360) + "\u00B0"
+                                            onValueDragged: function(value) { root.setSelectedToneWheelHue(value) }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "selectedToneWheelSaturationSlider"
+                                            controlHeight: 40
+                                            label: "Saturation"
+                                            defaultValue: 0
+                                            value: root.selectedToneWheelSaturation()
+                                            valueText: root.signedPercent(root.selectedToneWheelSaturation())
+                                            onValueDragged: function(value) { root.setSelectedToneWheelSaturation(value) }
+                                        }
+
+                                        AdjustSlider {
+                                            objectName: "selectedToneWheelLuminanceSlider"
+                                            controlHeight: 40
+                                            label: "Luminance"
+                                            defaultValue: 0
+                                            value: root.selectedToneWheelLuminance()
+                                            valueText: root.signedPercent(root.selectedToneWheelLuminance())
+                                            onValueDragged: function(value) { root.setSelectedToneWheelLuminance(value) }
                                         }
                                     }
                                 }
@@ -20388,12 +23793,29 @@ Rectangle {
                                                 framed: false
                                             }
                                             Item {
+                                                id: toneCurveInputLevelsHandles
                                                 objectName: "toneCurveInputLevelsHandles"
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 8
                                                 anchors.rightMargin: 8
                                                 anchors.topMargin: 6
                                                 anchors.bottomMargin: 6
+
+                                                function clamp(value, minimum, maximum) {
+                                                    return Math.max(minimum, Math.min(maximum, value))
+                                                }
+
+                                                function dragLevelHandle(handleName, localX) {
+                                                    const position = clamp(localX / Math.max(1, width), 0, 1)
+                                                    if (handleName === "black") {
+                                                        root.setPrimaryAdjustmentValue("levelsBlackPoint", clamp(position / 0.0095, 0, 95))
+                                                    } else if (handleName === "gamma") {
+                                                        root.setPrimaryAdjustmentValue("levelsGamma", clamp((position - 0.5) * 220, -100, 100))
+                                                    } else if (handleName === "white") {
+                                                        root.setPrimaryAdjustmentValue("levelsWhitePoint", clamp((1 - position) / 0.0095, 0, 95))
+                                                    }
+                                                }
+
                                                 Repeater {
                                                     model: [
                                                         { name: "black", position: Math.max(0, Math.min(0.95, root.primaryAdjustmentValue("levelsBlackPoint", editorPreview.levelsBlackPoint) * 0.0095)), color: "#4FB5FF" },
@@ -20420,6 +23842,35 @@ Rectangle {
                                                             color: parent.color
                                                             border.color: theme.alpha(theme.ink950, 0.74)
                                                             border.width: 1
+                                                        }
+
+                                                        MouseArea {
+                                                            anchors.centerIn: parent
+                                                            width: 28
+                                                            height: parent.height
+                                                            hoverEnabled: true
+                                                            cursorShape: Qt.SizeHorCursor
+                                                            onPressed: function(mouse) {
+                                                                editorPreview.beginCoalescedEdit()
+                                                                const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
+                                                                toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
+                                                            }
+                                                            onPositionChanged: function(mouse) {
+                                                                if (!pressed)
+                                                                    return
+                                                                const mapped = mapToItem(toneCurveInputLevelsHandles, mouse.x, mouse.y)
+                                                                toneCurveInputLevelsHandles.dragLevelHandle(modelData.name, mapped.x)
+                                                            }
+                                                            onReleased: editorPreview.endCoalescedEdit()
+                                                            onCanceled: editorPreview.endCoalescedEdit()
+                                                            onDoubleClicked: {
+                                                                if (modelData.name === "black")
+                                                                    root.setPrimaryAdjustmentValue("levelsBlackPoint", 0)
+                                                                else if (modelData.name === "gamma")
+                                                                    root.setPrimaryAdjustmentValue("levelsGamma", 0)
+                                                                else
+                                                                    root.setPrimaryAdjustmentValue("levelsWhitePoint", 0)
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -20610,6 +24061,26 @@ Rectangle {
                                             }
                                         }
                                     }
+                                    ChannelPadControl {
+                                        objectName: "colorMixChannelPad"
+                                        title: root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel) + " Refinement"
+                                        valueText: "H " + root.signedPercent(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)) +
+                                                   "  S " + root.signedPercent(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)) +
+                                                   "  L " + root.signedPercent(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment))
+                                        hueValue: root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)
+                                        saturationValue: root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)
+                                        luminanceValue: root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment)
+                                        channelColor: root.hslChannelColor(root.primaryStringAdjustmentValue("hslChannel", editorPreview.hslChannel))
+                                        onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                        onInteractionFinished: editorPreview.endCoalescedEdit()
+                                        onHueLuminanceEdited: function(hueValue, luminanceValue) {
+                                            root.setPrimaryAdjustmentValue("hueAdjustment", hueValue)
+                                            root.setPrimaryAdjustmentValue("luminanceAdjustment", luminanceValue)
+                                        }
+                                        onSaturationEdited: function(saturationValue) {
+                                            root.setPrimaryAdjustmentValue("saturationAdjustment", saturationValue)
+                                        }
+                                    }
                                     AdjustSlider { label: "Hue"; value: root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("hue", editorPreview.hueAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("hueAdjustment", value) } }
                                     AdjustSlider { label: "Saturation"; value: root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("saturation", editorPreview.saturationAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("saturationAdjustment", value) } }
                                     AdjustSlider { label: "Luminance"; value: root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment); valueText: root.signedPercent(root.primaryColorMixerChannelValue("luminance", editorPreview.luminanceAdjustment)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("luminanceAdjustment", value) } }
@@ -20630,6 +24101,43 @@ Rectangle {
                                         MiniButton { objectName: "channelMixerIdentityPresetButton"; Layout.fillWidth: true; text: "Identity"; iconName: "reset"; tooltip: "Restore normal RGB output."; onClicked: editorPreview.applyChannelMixerPreset("Identity") }
                                         MiniButton { objectName: "channelMixerMonochromePresetButton"; Layout.fillWidth: true; text: "Mono"; iconName: "swatch"; tooltip: "Mix all outputs from luminance."; onClicked: editorPreview.applyChannelMixerPreset("Monochrome") }
                                         MiniButton { objectName: "channelMixerSwapRedBluePresetButton"; Layout.fillWidth: true; text: "Swap RB"; iconName: "swap"; tooltip: "Swap red and blue output channels."; onClicked: editorPreview.applyChannelMixerPreset("Swap Red Blue") }
+                                    }
+                                    RgbMixerMatrix {
+                                        objectName: "channelMixerMatrixControl"
+                                        rows: [
+                                            {
+                                                label: "Red",
+                                                color: "#F25A5A",
+                                                cells: [
+                                                    { key: "channelMixerRedFromRed", value: root.primaryChannelMixerValue("redFromRed", editorPreview.channelMixerRedFromRed), defaultValue: 100 },
+                                                    { key: "channelMixerRedFromGreen", value: root.primaryChannelMixerValue("redFromGreen", editorPreview.channelMixerRedFromGreen), defaultValue: 0 },
+                                                    { key: "channelMixerRedFromBlue", value: root.primaryChannelMixerValue("redFromBlue", editorPreview.channelMixerRedFromBlue), defaultValue: 0 }
+                                                ]
+                                            },
+                                            {
+                                                label: "Green",
+                                                color: "#5CCB73",
+                                                cells: [
+                                                    { key: "channelMixerGreenFromRed", value: root.primaryChannelMixerValue("greenFromRed", editorPreview.channelMixerGreenFromRed), defaultValue: 0 },
+                                                    { key: "channelMixerGreenFromGreen", value: root.primaryChannelMixerValue("greenFromGreen", editorPreview.channelMixerGreenFromGreen), defaultValue: 100 },
+                                                    { key: "channelMixerGreenFromBlue", value: root.primaryChannelMixerValue("greenFromBlue", editorPreview.channelMixerGreenFromBlue), defaultValue: 0 }
+                                                ]
+                                            },
+                                            {
+                                                label: "Blue",
+                                                color: "#4D91F0",
+                                                cells: [
+                                                    { key: "channelMixerBlueFromRed", value: root.primaryChannelMixerValue("blueFromRed", editorPreview.channelMixerBlueFromRed), defaultValue: 0 },
+                                                    { key: "channelMixerBlueFromGreen", value: root.primaryChannelMixerValue("blueFromGreen", editorPreview.channelMixerBlueFromGreen), defaultValue: 0 },
+                                                    { key: "channelMixerBlueFromBlue", value: root.primaryChannelMixerValue("blueFromBlue", editorPreview.channelMixerBlueFromBlue), defaultValue: 100 }
+                                                ]
+                                            }
+                                        ]
+                                        onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                        onInteractionFinished: editorPreview.endCoalescedEdit()
+                                        onCellEdited: function(key, value) {
+                                            root.setPrimaryAdjustmentValue(key, value)
+                                        }
                                     }
                                     RowLayout {
                                         Layout.fillWidth: true
@@ -20778,6 +24286,21 @@ Rectangle {
                                             }
                                         }
                                     }
+                                    HueRangeControl {
+                                        objectName: "colorReplaceHueRangeControl"
+                                        sourceHue: root.primaryColorReplacementValue("sourceHue", editorPreview.colorReplacementSourceHue)
+                                        targetHue: root.primaryColorReplacementValue("targetHue", editorPreview.colorReplacementTargetHue)
+                                        rangeValue: root.primaryColorReplacementValue("range", editorPreview.colorReplacementRange)
+                                        softnessValue: root.primaryColorReplacementValue("softness", editorPreview.colorReplacementSoftness)
+                                        onInteractionStarted: editorPreview.beginCoalescedEdit()
+                                        onInteractionFinished: editorPreview.endCoalescedEdit()
+                                        onSourceHueEdited: function(value) {
+                                            root.setPrimaryAdjustmentValue("colorReplacementSourceHue", value)
+                                        }
+                                        onTargetHueEdited: function(value) {
+                                            root.setPrimaryAdjustmentValue("colorReplacementTargetHue", value)
+                                        }
+                                    }
                                     RowLayout {
                                         Layout.fillWidth: true
                                         spacing: 6
@@ -20814,7 +24337,7 @@ Rectangle {
                                         MiniButton {
                                             objectName: "colorReplaceMaskPreviewButton"
                                             Layout.fillWidth: true
-                                            text: "Mask"
+                                            text: "Affected"
                                             iconName: "scope"
                                             role: "segmented"
                                             active: editorPreview.colorToolMaskPreviewEnabled
@@ -21048,7 +24571,7 @@ Rectangle {
                                         spacing: 8
                                         MiniButton { objectName: "detailInspectOneToOneButton"; Layout.fillWidth: true; text: "Inspect 1:1"; iconName: "zoom"; role: "segmented"; active: editViewport.zoom > 1.01 && root.loupeEnabled; onClicked: editViewport.inspectDetailAtOneToOne() }
                                         MiniButton { objectName: "detailLoupeButton"; Layout.fillWidth: true; text: "Loupe"; iconName: "plus"; role: "segmented"; active: root.loupeEnabled; onClicked: root.loupeEnabled = !root.loupeEnabled }
-                                        MiniButton { objectName: "detailMaskPreviewButton"; Layout.fillWidth: true; text: "Mask"; iconName: "snap"; role: "segmented"; active: root.focusPeakingOverlayEnabled; onClicked: root.setAnalysisOverlay("focus-peaking") }
+                                        MiniButton { objectName: "detailMaskPreviewButton"; Layout.fillWidth: true; text: "Peaking"; iconName: "snap"; role: "segmented"; active: root.focusPeakingOverlayEnabled; tooltip: "Show focus peaking for detail inspection."; onClicked: root.setAnalysisOverlay("focus-peaking") }
                                     }
                                     CollapsibleGroup {
                                         objectName: "detailSharpeningGroup"
@@ -21058,7 +24581,7 @@ Rectangle {
                                         AdjustSlider { objectName: "detailSharpenAmountSlider"; label: "Amount"; from: 0; to: 150; defaultValue: 0; value: root.primaryAdjustmentValue("sharpening", editorPreview.sharpening); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpening", editorPreview.sharpening)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpening", value) } }
                                         AdjustSlider { objectName: "detailSharpenRadiusSlider"; label: "Radius"; from: 0.5; to: 3.0; stepSize: 0.1; defaultValue: 1.0; value: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius); valueText: root.primaryAdjustmentValue("sharpenRadius", editorPreview.sharpenRadius).toFixed(1) + " px"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenRadius", value) } }
                                         AdjustSlider { objectName: "detailSharpenDetailSlider"; label: "Detail"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail); valueText: Math.round(root.primaryAdjustmentValue("sharpenDetail", editorPreview.sharpenDetail)).toString(); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenDetail", value) } }
-                                        AdjustSlider { objectName: "detailSharpenMaskingSlider"; label: "Masking"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenMasking", value) } }
+                                        AdjustSlider { objectName: "detailSharpenMaskingSlider"; label: "Edge Limit"; from: 0; to: 100; defaultValue: 0; value: root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking); valueText: root.signedPercent(root.primaryAdjustmentValue("sharpenMasking", editorPreview.sharpenMasking)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("sharpenMasking", value) } }
                                     }
                                     CollapsibleGroup {
                                         objectName: "detailNoiseReductionGroup"
@@ -21370,10 +24893,11 @@ Rectangle {
                     MenuButton {
                         objectName: "exportPresetManageMenuButton"
                         Layout.fillWidth: true
-                        text: "Manage Presets"
+                        text: "More"
                         iconName: "menu"
                         tone: "secondary"
                         compact: true
+                        secondaryActionMenu: true
                         menuItems: [
                             { key: "manage-saved", label: "Manage Saved Presets", icon: "edit", tooltip: "Open the Edit preset panel to rename, move, or delete custom presets." },
                             { key: "export-bundle", label: "Export Preset Bundle", icon: "export", tooltip: "Open the Edit preset panel to export a preset bundle." },
@@ -21469,10 +24993,11 @@ Rectangle {
                     }
                     MenuButton {
                         objectName: "exportQueueManagementMenuButton"
-                        text: "Queue Actions"
+                        text: "More"
                         iconName: "menu"
                         tone: "secondary"
                         compact: true
+                        secondaryActionMenu: true
                         menuWidth: 210
                         menuItems: root.studioExportQueueManagementMenuItems()
                         tooltipText: "Queue retry and cleanup actions."

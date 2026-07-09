@@ -1513,7 +1513,8 @@ bool MetalPipelineBackend::apply_detail_effects(
     double sharpen_detail,
     double sharpen_mask_strength,
     double luma_nr_strength,
-    double color_nr_strength) {
+    double color_nr_strength,
+    ColorAdjustmentTelemetry* telemetry) {
   if (!available() || pixels == nullptr || width <= 0 || height <= 0) {
     return false;
   }
@@ -1570,6 +1571,11 @@ bool MetalPipelineBackend::apply_detail_effects(
     if (!command_buffer) {
       return false;
     }
+    if (telemetry != nullptr) {
+      telemetry->gpu_cpu_to_gpu_bytes += static_cast<std::int64_t>(pixel_buffer_size);
+      telemetry->gpu_gpu_to_cpu_bytes += static_cast<std::int64_t>(pixel_buffer_size);
+      telemetry->gpu_command_buffer_count += 1;
+    }
 
     const auto dispatch_pipeline = [&](id<MTLComputePipelineState> pipeline,
                                        const std::vector<id<MTLBuffer>>& buffers,
@@ -1589,12 +1595,18 @@ bool MetalPipelineBackend::apply_detail_effects(
       MTLSize group_size = MTLSizeMake(thread_group_size, 1, 1);
       [encoder dispatchThreads:grid_size threadsPerThreadgroup:group_size];
       [encoder endEncoding];
+      if (telemetry != nullptr) {
+        telemetry->gpu_kernel_dispatch_count += 1;
+      }
     };
 
     const auto copy_buffer = [&](id<MTLBuffer> source, id<MTLBuffer> destination) {
       id<MTLBlitCommandEncoder> encoder = [command_buffer blitCommandEncoder];
       [encoder copyFromBuffer:source sourceOffset:0 toBuffer:destination destinationOffset:0 size:scalar_buffer_size];
       [encoder endEncoding];
+      if (telemetry != nullptr) {
+        telemetry->gpu_blit_count += 1;
+      }
     };
 
     const auto run_gaussian_blur = [&](id<MTLBuffer> source, id<MTLBuffer> output, int radius) {

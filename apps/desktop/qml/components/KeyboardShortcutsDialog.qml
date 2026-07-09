@@ -142,7 +142,7 @@ Dialog {
             title: "Masks",
             accent: theme.accentWarm300,
             items: [
-                { "keys": "Ctrl+Shift+M", "description": "Create a new selection and linked adjustment layer." },
+                { "keys": "Ctrl+Shift+M", "description": "Create a new selection and linked layer." },
                 { "keys": "Ctrl+Shift+A / S / I", "description": "Set the next selection operation to Add, Subtract, or Intersect." },
                 { "keys": "Ctrl+Shift+V", "description": "Invert the active mask." },
                 { "keys": "Ctrl+Shift+O", "description": "Show or hide the active mask color overlay." },

@@ -444,6 +444,11 @@ Column {
         return "Preview: Hidden"
     }
 
+    function smartSelectionFallbackState(mask) {
+        const metadata = mask && mask.generatedMaskMetadata ? mask.generatedMaskMetadata : ({})
+        return metadata.smartFallback === true ? "Editable preview" : ""
+    }
+
     function maskStateSummary(mask) {
         if (!mask)
             return "No active selection"
@@ -453,6 +458,9 @@ Column {
         parts.push((mask.invert || mask.selectionInvert) ? "Inverted" : "Normal")
         parts.push(root.maskPreviewQualityLabel(editorPreview.activeMaskPreviewQualityTier))
         parts.push(root.maskOutlineQualityLabel(editorPreview.activeMaskOutlineQualityTier))
+        const fallbackState = root.smartSelectionFallbackState(mask)
+        if (fallbackState.length > 0)
+            parts.push(fallbackState)
         if (!(mask.enabled !== false))
             parts.push("Off")
         if (mask.solo)

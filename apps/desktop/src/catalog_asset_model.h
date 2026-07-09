@@ -87,6 +87,9 @@ struct ThumbnailTaskResult final {
   QString file_path;
   QString recipe_json;
   QString thumbnail_source;
+  qint64 thumbnail_cache_bytes = 0;
+  int thumbnail_cache_entries = 0;
+  qint64 thumbnail_cache_probe_ms = 0;
   qint64 queue_wait_ms = 0;
   qint64 elapsed_ms = 0;
   QString queue_priority;

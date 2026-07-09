@@ -13,6 +13,7 @@ Button {
     property string tooltipText: ""
     property string tooltip: tooltipText
     property string disabledReason: ""
+    property string disabledFallbackReason: "Unavailable in the current state."
     property bool compact: false
     property bool showText: true
     property bool allowLabelWrap: false
@@ -32,10 +33,15 @@ Button {
     readonly property bool accentEdgeVisible: root.enabled && root.clippedShape && root.slashAccent &&
                                              !root.embedded && (root.primaryTone || root.dangerTone || root.active)
     readonly property bool accentBorderVisible: false
-    readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.tooltipText
+    readonly property string resolvedTooltipText: !root.enabled
+                                                  ? (root.disabledReason.length > 0
+                                                     ? root.disabledReason
+                                                     : root.disabledFallbackReason)
+                                                  : root.tooltipText
     readonly property string actionButtonContract: "action-button:v4|shared-component:true|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|mint-primary:true|slash-primary-only:true|rounded-secondary:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|primary-fit:true|optional-wrap:true|tooltip-full:true|minimum-px:9"
-    readonly property string disabledReasonContract: "disabled-reason:v1|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true"
+    readonly property string disabledReasonContract: "disabled-reason:v2|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true|fallback-reason:true"
+    readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
 
     Theme { id: theme }
 
@@ -59,6 +65,11 @@ Button {
     rightPadding: root.embedded ? theme.space6 : (compact ? theme.space6 + 1 : theme.space8 + 1)
     topPadding: compact ? theme.space4 : theme.space4 + 1
     bottomPadding: compact ? theme.space4 : theme.space4 + 1
+    opacity: root.enabled ? 1.0 : 0.74
+
+    Behavior on opacity {
+        NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+    }
 
     Accessible.description: root.resolvedTooltipText
     ToolTip.visible: root.hovered && (root.resolvedTooltipText.length > 0 || (root.showFullTextTooltip && contentLabel.visible && (contentLabel.truncated || contentLabel.contentWidth > contentLabel.width + 1)))

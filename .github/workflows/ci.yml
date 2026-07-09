@@ -337,12 +337,31 @@ jobs:
             --iterations 30 \
             --timeout 180
 
+      - name: Run app performance smoke suite
+        run: |
+          python3 scripts/perf/run-app-performance-suite.py \
+            --profile smoke \
+            --output-root "${RUNNER_TEMP}/photo-editor-app-suite" \
+            --corpus "${RUNNER_TEMP}/preview-synthetic-v1/manifest.json" \
+            --desktop-app build/dev-macos-debug/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor \
+            --preview-app build/dev-macos-debug/tests/preview_benchmark_driver \
+            --thumbnail-app build/dev-macos-debug/tests/thumbnail_benchmark_driver \
+            --timeout 120
+
       - name: Upload performance smoke artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: photo-editor-preview-perf-smoke
           path: ${{ runner.temp }}/photo-editor-perf
+          if-no-files-found: ignore
+
+      - name: Upload app performance smoke suite
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo-editor-app-perf-smoke-suite
+          path: ${{ runner.temp }}/photo-editor-app-suite
           if-no-files-found: ignore
 
       - name: Upload desktop visual proof artifacts

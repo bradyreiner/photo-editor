@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <vector>
 
 #include <QCoreApplication>
 #include <QColorSpace>
@@ -104,6 +106,68 @@ int max_channel_delta(const QImage& left, const QImage& right) {
     }
   }
   return max_delta;
+}
+
+struct PfmImage final {
+  int width = 0;
+  int height = 0;
+  std::vector<float> pixels;
+};
+
+bool read_pfm_image(const QString& path, PfmImage* image) {
+  QFile file(path);
+  if (image == nullptr || !file.open(QIODevice::ReadOnly)) {
+    return false;
+  }
+  const auto data = file.readAll();
+  qsizetype cursor = 0;
+  const auto read_line = [&]() -> QByteArray {
+    if (cursor >= data.size()) {
+      return {};
+    }
+    const auto start = cursor;
+    while (cursor < data.size() && data.at(cursor) != '\n') {
+      ++cursor;
+    }
+    const auto line = data.mid(start, cursor - start);
+    if (cursor < data.size() && data.at(cursor) == '\n') {
+      ++cursor;
+    }
+    return line;
+  };
+
+  if (read_line().trimmed() != QByteArrayLiteral("PF")) {
+    return false;
+  }
+  const auto dimensions = read_line().simplified().split(' ');
+  if (dimensions.size() != 2) {
+    return false;
+  }
+  const auto width = dimensions.at(0).toInt();
+  const auto height = dimensions.at(1).toInt();
+  const auto scale = read_line().trimmed().toFloat();
+  if (width <= 0 || height <= 0 || scale >= 0.0F) {
+    return false;
+  }
+
+  const auto expected_values = static_cast<qsizetype>(width) * height * 3;
+  const auto expected_bytes = expected_values * static_cast<qsizetype>(sizeof(float));
+  if (data.size() - cursor != expected_bytes) {
+    return false;
+  }
+
+  image->width = width;
+  image->height = height;
+  image->pixels.resize(static_cast<std::size_t>(expected_values));
+  for (qsizetype index = 0; index < expected_values; ++index) {
+    float value = 0.0F;
+    std::memcpy(
+        &value,
+        data.constData() + cursor + index * static_cast<qsizetype>(sizeof(float)),
+        sizeof(float));
+    image->pixels[static_cast<std::size_t>(index)] = value;
+  }
+  return true;
 }
 
 }  // namespace
@@ -211,12 +275,53 @@ int main(int argc, char** argv) {
   if (!threshold_preflight.value(QStringLiteral("ok")).toBool() ||
       threshold_preflight.value(QStringLiteral("outputColorSpace")).toString() != QStringLiteral("sRGB") ||
       std::abs(threshold_preflight.value(QStringLiteral("outputHeadroom")).toDouble() - 2.0) > 1.0e-9 ||
+      threshold_preflight.value(QStringLiteral("preservesOverRange")).toBool() ||
+      threshold_preflight.value(QStringLiteral("outputEncoding")).toString() != QStringLiteral("integer-sdr") ||
+      threshold_preflight.value(QStringLiteral("headroomPolicy")).toString() !=
+          QStringLiteral("tone-map-to-output-headroom") ||
       issue_code_count(threshold_issues, QStringLiteral("gamut-mapping-off")) != 1 ||
+      !issue_code_present(threshold_issues, QStringLiteral("output-headroom-sdr-export")) ||
       issue_code_present(threshold_issues, QStringLiteral("profile-web-wide-gamut")) ||
       issue_code_present(threshold_issues, QStringLiteral("preview-clipping")) ||
       issue_code_present(threshold_issues, QStringLiteral("raw-clipping"))) {
     return fail(
         "export preflight should gate gamut warnings on sRGB output and preserve configured output headroom");
+  }
+
+  photo_editor::desktop::EditRecipeState scene_linear_preflight_state;
+  scene_linear_preflight_state.output_color_space = QStringLiteral("sRGB");
+  scene_linear_preflight_state.output_headroom = 2.0;
+  const auto scene_linear_preflight = controller.exportPreflight(
+      QStringLiteral("photo"),
+      source_path,
+      QString(),
+      photo_editor::desktop::serialize_edit_recipe_json(scene_linear_preflight_state),
+      QStringLiteral("Scene Linear PFM"),
+      export_dir,
+      8,
+      0,
+      0,
+      8,
+      0,
+      0);
+  const auto scene_linear_issues =
+      scene_linear_preflight.value(QStringLiteral("issues")).toList();
+  const auto scene_linear_settings =
+      scene_linear_preflight.value(QStringLiteral("exportImageSettings")).toMap();
+  if (!scene_linear_preflight.value(QStringLiteral("ok")).toBool() ||
+      scene_linear_preflight.value(QStringLiteral("format")).toString() != QStringLiteral("PFM") ||
+      scene_linear_preflight.value(QStringLiteral("bitDepth")).toInt() != 32 ||
+      scene_linear_preflight.value(QStringLiteral("embedProfile")).toBool() ||
+      !scene_linear_preflight.value(QStringLiteral("sceneLinear")).toBool() ||
+      !scene_linear_preflight.value(QStringLiteral("preservesOverRange")).toBool() ||
+      scene_linear_preflight.value(QStringLiteral("outputEncoding")).toString() !=
+          QStringLiteral("scene-linear-float") ||
+      scene_linear_preflight.value(QStringLiteral("headroomPolicy")).toString() !=
+          QStringLiteral("preserve-over-range") ||
+      !scene_linear_settings.value(QStringLiteral("sceneLinear")).toBool() ||
+      !scene_linear_settings.value(QStringLiteral("preservesOverRange")).toBool() ||
+      issue_code_present(scene_linear_issues, QStringLiteral("output-headroom-sdr-export"))) {
+    return fail("scene-linear export preflight should expose float headroom preservation without SDR warnings");
   }
 
   threshold_state.output_color_space = QStringLiteral("Display P3");
@@ -723,6 +828,231 @@ int main(int argc, char** argv) {
     return fail("archive TIFF export should embed the requested output profile");
   }
 
+  const auto export_settings_preflight = controller.exportPreflight(
+      QStringLiteral("photo"),
+      source_path,
+      QString(),
+      recipe_json,
+      QStringLiteral("PNG 8-bit"),
+      export_dir,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0);
+  const auto preflight_export_settings =
+      export_settings_preflight.value(QStringLiteral("exportImageSettings")).toMap();
+  if (export_settings_preflight.value(QStringLiteral("format")).toString() !=
+          QStringLiteral("PNG") ||
+      export_settings_preflight.value(QStringLiteral("bitDepth")).toInt() != 8 ||
+      export_settings_preflight.value(QStringLiteral("flattenAlpha")).toBool() ||
+      !export_settings_preflight.value(QStringLiteral("embedProfile")).toBool() ||
+      preflight_export_settings.value(QStringLiteral("format")).toString() !=
+          QStringLiteral("PNG") ||
+      preflight_export_settings.value(QStringLiteral("bitDepth")).toInt() != 8) {
+    return fail("export preflight should expose explicit format, bit-depth, alpha, and profile settings");
+  }
+
+  QImage alpha_source(18, 10, QImage::Format_ARGB32);
+  alpha_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  alpha_source.fill(Qt::transparent);
+  for (int y = 0; y < alpha_source.height(); ++y) {
+    for (int x = alpha_source.width() / 2; x < alpha_source.width(); ++x) {
+      alpha_source.setPixelColor(x, y, QColor(32, 160, 220, 255));
+    }
+  }
+  const auto alpha_source_path = temp_dir.filePath(QStringLiteral("alpha-source.png"));
+  if (!alpha_source.save(alpha_source_path)) {
+    return fail("alpha export source should be written");
+  }
+  photo_editor::desktop::EditRecipeState alpha_state;
+  alpha_state.output_color_space = QStringLiteral("sRGB");
+  const auto alpha_recipe_json = photo_editor::desktop::serialize_edit_recipe_json(alpha_state);
+  auto queue_recipe_export = [&](const QString& asset_id,
+                                 const QString& preset,
+                                 const QString& source,
+                                 const QString& recipe) -> QVariantMap {
+    const auto index = controller.jobCount();
+    if (!controller.queueExport(
+            asset_id,
+            QStringLiteral("photo"),
+            asset_id,
+            source,
+            QString(),
+            recipe,
+            preset,
+            export_dir)) {
+      return {};
+    }
+    if (!wait_for_job(&controller, index)) {
+      return {};
+    }
+    return controller.jobs().at(index).toMap();
+  };
+  auto queue_format_export = [&](const QString& asset_id, const QString& preset) -> QVariantMap {
+    return queue_recipe_export(asset_id, preset, alpha_source_path, alpha_recipe_json);
+  };
+
+  const auto png8_job = queue_format_export(QStringLiteral("PNG 8-bit Check"), QStringLiteral("PNG 8-bit"));
+  const auto png16_job = queue_format_export(QStringLiteral("PNG 16-bit Check"), QStringLiteral("PNG 16-bit"));
+  const auto tiff8_job = queue_format_export(QStringLiteral("TIFF 8-bit Check"), QStringLiteral("TIFF 8-bit"));
+  const auto tiff16_job = queue_format_export(QStringLiteral("TIFF 16-bit Check"), QStringLiteral("TIFF 16-bit"));
+  const auto jpeg8_job = queue_format_export(QStringLiteral("JPEG 8-bit Check"), QStringLiteral("JPEG 8-bit"));
+  if (png8_job.isEmpty() || png16_job.isEmpty() || tiff8_job.isEmpty() ||
+      tiff16_job.isEmpty() || jpeg8_job.isEmpty()) {
+    return fail("explicit format/bit-depth exports should queue and finish");
+  }
+  const auto require_export_settings = [&](const QVariantMap& job,
+                                           const QString& suffix,
+                                           const QString& format,
+                                           int bit_depth,
+                                           bool flatten_alpha) {
+    const auto output_path = job.value(QStringLiteral("outputPath")).toString();
+    const auto render_job = job.value(QStringLiteral("exportRenderJob")).toMap();
+    const auto settings = render_job.value(QStringLiteral("exportImageSettings")).toMap();
+    return job.value(QStringLiteral("status")).toString() == QStringLiteral("Completed") &&
+           QFileInfo(output_path).suffix().compare(suffix, Qt::CaseInsensitive) == 0 &&
+           render_job.value(QStringLiteral("format")).toString() == format &&
+           render_job.value(QStringLiteral("bitDepth")).toInt() == bit_depth &&
+           render_job.value(QStringLiteral("flattenAlpha")).toBool() == flatten_alpha &&
+           settings.value(QStringLiteral("format")).toString() == format &&
+           settings.value(QStringLiteral("bitDepth")).toInt() == bit_depth &&
+           settings.value(QStringLiteral("flattenAlpha")).toBool() == flatten_alpha;
+  };
+  if (!require_export_settings(png8_job, QStringLiteral("png"), QStringLiteral("PNG"), 8, false) ||
+      !require_export_settings(png16_job, QStringLiteral("png"), QStringLiteral("PNG"), 16, false) ||
+      !require_export_settings(tiff8_job, QStringLiteral("tif"), QStringLiteral("TIFF"), 8, false) ||
+      !require_export_settings(tiff16_job, QStringLiteral("tif"), QStringLiteral("TIFF"), 16, false) ||
+      !require_export_settings(jpeg8_job, QStringLiteral("jpg"), QStringLiteral("JPEG"), 8, true)) {
+    return fail("export render jobs should persist explicit format, bit-depth, and alpha policy");
+  }
+  const auto png8_signature =
+      png8_job.value(QStringLiteral("exportRenderJob")).toMap().value(QStringLiteral("stateSignature")).toString();
+  const auto png16_signature =
+      png16_job.value(QStringLiteral("exportRenderJob")).toMap().value(QStringLiteral("stateSignature")).toString();
+  const auto tiff8_signature =
+      tiff8_job.value(QStringLiteral("exportRenderJob")).toMap().value(QStringLiteral("stateSignature")).toString();
+  const auto tiff16_signature =
+      tiff16_job.value(QStringLiteral("exportRenderJob")).toMap().value(QStringLiteral("stateSignature")).toString();
+  if (png8_signature.isEmpty() || png16_signature.isEmpty() ||
+      tiff8_signature.isEmpty() || tiff16_signature.isEmpty() ||
+      png8_signature == png16_signature ||
+      tiff8_signature == tiff16_signature) {
+    return fail("export render signatures should include format and bit-depth settings");
+  }
+  const QImage png8_image(png8_job.value(QStringLiteral("outputPath")).toString());
+  const QImage png16_image(png16_job.value(QStringLiteral("outputPath")).toString());
+  const QImage tiff8_image(tiff8_job.value(QStringLiteral("outputPath")).toString());
+  const QImage tiff16_image(tiff16_job.value(QStringLiteral("outputPath")).toString());
+  const QImage jpeg8_image(jpeg8_job.value(QStringLiteral("outputPath")).toString());
+  if (png8_image.isNull() || png16_image.isNull() || tiff8_image.isNull() ||
+      tiff16_image.isNull() || jpeg8_image.isNull()) {
+    return fail("explicit format/bit-depth export artifacts should be readable");
+  }
+  if (png8_image.depth() > 32 || png16_image.format() != QImage::Format_RGBA64 ||
+      tiff8_image.depth() > 32 || tiff16_image.format() != QImage::Format_RGBA64) {
+    return fail("PNG/TIFF exports should honor requested 8-bit or 16-bit storage");
+  }
+  if (jpeg8_image.hasAlphaChannel() ||
+      jpeg8_image.pixelColor(1, jpeg8_image.height() / 2).red() < 220 ||
+      jpeg8_image.pixelColor(1, jpeg8_image.height() / 2).green() < 220 ||
+      jpeg8_image.pixelColor(1, jpeg8_image.height() / 2).blue() < 220) {
+    return fail("JPEG 8-bit export should flatten transparent pixels onto white and drop alpha");
+  }
+
+  const auto require_profile_export = [&](const QString& asset_id,
+                                          const QString& preset,
+                                          const QString& output_profile,
+                                          const QColorSpace& expected_profile) -> bool {
+    photo_editor::desktop::EditRecipeState profile_state;
+    profile_state.output_color_space = output_profile;
+    const auto profile_recipe_json = photo_editor::desktop::serialize_edit_recipe_json(profile_state);
+    const auto job = queue_recipe_export(asset_id, preset, alpha_source_path, profile_recipe_json);
+    if (job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
+      return false;
+    }
+    const QImage decoded(job.value(QStringLiteral("outputPath")).toString());
+    return !decoded.isNull() && decoded.colorSpace() == expected_profile;
+  };
+  if (!require_profile_export(
+          QStringLiteral("sRGB PNG Profile Check"),
+          QStringLiteral("PNG 16-bit"),
+          QStringLiteral("sRGB"),
+          QColorSpace(QColorSpace::SRgb)) ||
+      !require_profile_export(
+          QStringLiteral("Display P3 PNG Profile Check"),
+          QStringLiteral("PNG 16-bit"),
+          QStringLiteral("Display P3"),
+          QColorSpace(QColorSpace::DisplayP3)) ||
+      !require_profile_export(
+          QStringLiteral("ProPhoto TIFF Profile Check"),
+          QStringLiteral("TIFF 16-bit"),
+          QStringLiteral("ProPhoto RGB"),
+          QColorSpace(QColorSpace::ProPhotoRgb))) {
+    return fail("exports should preserve embedded output profile metadata for sRGB, Display P3, and wide gamut");
+  }
+
+  QImage headroom_source(2, 1, QImage::Format_ARGB32);
+  headroom_source.setColorSpace(QColorSpace(QColorSpace::SRgb));
+  headroom_source.fill(Qt::white);
+  const auto headroom_source_path = temp_dir.filePath(QStringLiteral("headroom-source.png"));
+  if (!headroom_source.save(headroom_source_path)) {
+    return fail("headroom export source should be written");
+  }
+  photo_editor::desktop::EditRecipeState headroom_state;
+  headroom_state.output_color_space = QStringLiteral("sRGB");
+  headroom_state.output_headroom = 2.0;
+  headroom_state.exposure = 3.0;
+  const auto headroom_recipe_json =
+      photo_editor::desktop::serialize_edit_recipe_json(headroom_state);
+  const auto headroom_png_job = queue_recipe_export(
+      QStringLiteral("Headroom PNG SDR Check"),
+      QStringLiteral("PNG 16-bit"),
+      headroom_source_path,
+      headroom_recipe_json);
+  const auto headroom_pfm_job = queue_recipe_export(
+      QStringLiteral("Headroom Scene Linear Check"),
+      QStringLiteral("Scene Linear PFM"),
+      headroom_source_path,
+      headroom_recipe_json);
+  if (headroom_png_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed") ||
+      headroom_pfm_job.value(QStringLiteral("status")).toString() != QStringLiteral("Completed")) {
+    return fail("headroom PNG and scene-linear PFM exports should complete");
+  }
+  const auto headroom_png_render_job =
+      headroom_png_job.value(QStringLiteral("exportRenderJob")).toMap();
+  const auto headroom_pfm_render_job =
+      headroom_pfm_job.value(QStringLiteral("exportRenderJob")).toMap();
+  if (headroom_png_render_job.value(QStringLiteral("preservesOverRange")).toBool() ||
+      headroom_png_render_job.value(QStringLiteral("headroomPolicy")).toString() !=
+          QStringLiteral("tone-map-to-output-headroom") ||
+      !headroom_pfm_render_job.value(QStringLiteral("sceneLinear")).toBool() ||
+      !headroom_pfm_render_job.value(QStringLiteral("preservesOverRange")).toBool() ||
+      headroom_pfm_render_job.value(QStringLiteral("outputEncoding")).toString() !=
+          QStringLiteral("scene-linear-float") ||
+      headroom_pfm_render_job.value(QStringLiteral("headroomPolicy")).toString() !=
+          QStringLiteral("preserve-over-range")) {
+    return fail("export render metadata should distinguish SDR and scene-linear headroom policy");
+  }
+  const QImage headroom_png(headroom_png_job.value(QStringLiteral("outputPath")).toString());
+  PfmImage headroom_pfm;
+  if (headroom_png.isNull() ||
+      !read_pfm_image(headroom_pfm_job.value(QStringLiteral("outputPath")).toString(), &headroom_pfm) ||
+      headroom_pfm.width != 2 || headroom_pfm.height != 1 || headroom_pfm.pixels.size() < 3) {
+    return fail("headroom export artifacts should be readable as PNG and PFM");
+  }
+  if (headroom_png.pixelColor(0, 0).redF() > 1.0001F ||
+      headroom_png.pixelColor(0, 0).greenF() > 1.0001F ||
+      headroom_png.pixelColor(0, 0).blueF() > 1.0001F) {
+    return fail("integer SDR headroom export should not decode to over-range pixel values");
+  }
+  if (headroom_pfm.pixels[0] <= 1.0F || headroom_pfm.pixels[0] > 2.05F ||
+      std::abs(headroom_pfm.pixels[0] - headroom_pfm.pixels[1]) > 1.0e-4F ||
+      std::abs(headroom_pfm.pixels[1] - headroom_pfm.pixels[2]) > 1.0e-4F) {
+    return fail("scene-linear PFM export should preserve neutral over-range headroom");
+  }
+
   const auto copy_job_index = controller.jobCount();
   if (!controller.queueExport(
           QStringLiteral("asset-copy"),
@@ -783,6 +1113,8 @@ int main(int argc, char** argv) {
 
   photo_editor::desktop::JobRunner recovered_runner;
   photo_editor::desktop::ExportJobController recovered_controller;
+  recovered_controller.initializeFromStore();
+  recovered_runner.initializeFromStore();
   if (recovered_controller.jobCount() < 1) {
     return fail("recovered export jobs should load into the queue");
   }

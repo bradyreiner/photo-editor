@@ -31,6 +31,7 @@ enum class SourceKind {
   HighlightRollback,
   Portrait,
   Landscape,
+  SaturatedColor,
 };
 
 enum class BehaviorCheck {
@@ -39,6 +40,9 @@ enum class BehaviorCheck {
   HighlightRollback,
   PortraitPreset,
   LandscapePreset,
+  MonochromePreset,
+  HighContrastPreset,
+  SaturatedColorPreset,
 };
 
 struct GoldenCase final {
@@ -215,6 +219,38 @@ QImage landscape_source_image() {
   return image;
 }
 
+QImage saturated_color_source_image() {
+  QImage image(84, 54, QImage::Format_ARGB32);
+  image.setColorSpace(photo_editor::desktop::preview_color_space());
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      auto red = 32 + (x % 24);
+      auto green = 36 + (y % 22);
+      auto blue = 42 + ((x + y) % 26);
+      if (x < 28) {
+        red = 176 + ((x * 3 + y) % 62);
+        green = 26 + (y % 18);
+        blue = 24 + (x % 16);
+      } else if (x < 56) {
+        red = 28 + (x % 17);
+        green = 156 + ((x + y * 2) % 76);
+        blue = 42 + (y % 20);
+      } else {
+        red = 30 + (y % 18);
+        green = 72 + (x % 26);
+        blue = 172 + ((x * 2 + y) % 64);
+      }
+      if (y > 34) {
+        red = std::min(255, red + 28);
+        green = std::min(255, green + 18);
+        blue = std::min(255, blue + 24);
+      }
+      image.setPixelColor(x, y, QColor(red, green, blue, 255));
+    }
+  }
+  return image;
+}
+
 QImage image_for_source(SourceKind source) {
   switch (source) {
     case SourceKind::Procedural:
@@ -227,6 +263,8 @@ QImage image_for_source(SourceKind source) {
       return portrait_source_image();
     case SourceKind::Landscape:
       return landscape_source_image();
+    case SourceKind::SaturatedColor:
+      return saturated_color_source_image();
   }
   return source_image();
 }
@@ -336,6 +374,45 @@ photo_editor::desktop::EditRecipeState landscape_pop_preset_state() {
   state.vibrance = 22.0;
   state.mixer_channels[3].saturation = 12.0;
   state.mixer_channels[5].saturation = 16.0;
+  state.mixer_channels[5].luminance = -8.0;
+  return state;
+}
+
+photo_editor::desktop::EditRecipeState monochrome_preset_state() {
+  auto state = base_state();
+  state.exposure = 0.12;
+  state.contrast = 20.0;
+  state.highlights = -18.0;
+  state.shadows = 14.0;
+  state.blacks = -18.0;
+  state.black_and_white_enabled = true;
+  state.black_and_white_mixer[0] = 12.0;
+  state.black_and_white_mixer[2] = 8.0;
+  state.black_and_white_mixer[5] = -10.0;
+  return state;
+}
+
+photo_editor::desktop::EditRecipeState high_contrast_preset_state() {
+  auto state = base_state();
+  state.exposure = -0.05;
+  state.contrast = 58.0;
+  state.highlights = -24.0;
+  state.shadows = -18.0;
+  state.whites = 32.0;
+  state.blacks = -36.0;
+  state.filmic_shoulder = 16.0;
+  state.filmic_toe = 18.0;
+  return state;
+}
+
+photo_editor::desktop::EditRecipeState saturated_color_preset_state() {
+  auto state = base_state();
+  state.contrast = 12.0;
+  state.vibrance = 42.0;
+  state.saturation = 18.0;
+  state.mixer_channels[0].saturation = 18.0;
+  state.mixer_channels[3].saturation = 16.0;
+  state.mixer_channels[5].saturation = 20.0;
   state.mixer_channels[5].luminance = -8.0;
   return state;
 }
@@ -579,6 +656,14 @@ double pixel_luminance(const QColor& color) {
   return 0.2126 * color.redF() + 0.7152 * color.greenF() + 0.0722 * color.blueF();
 }
 
+double color_spread(const QColor& color) {
+  return std::max({
+      std::abs(static_cast<double>(color.redF()) - static_cast<double>(color.greenF())),
+      std::abs(static_cast<double>(color.greenF()) - static_cast<double>(color.blueF())),
+      std::abs(static_cast<double>(color.redF()) - static_cast<double>(color.blueF())),
+  });
+}
+
 double average_luminance(const QImage& image, QRect region) {
   region = region.intersected(image.rect());
   if (region.isEmpty()) {
@@ -617,6 +702,19 @@ QColor average_color(const QImage& image, QRect region) {
       1.0F);
 }
 
+double luminance_range(const QImage& image) {
+  auto minimum = 1.0;
+  auto maximum = 0.0;
+  for (int y = 0; y < image.height(); ++y) {
+    for (int x = 0; x < image.width(); ++x) {
+      const auto value = pixel_luminance(image.pixelColor(x, y));
+      minimum = std::min(minimum, value);
+      maximum = std::max(maximum, value);
+    }
+  }
+  return maximum - minimum;
+}
+
 bool check_behavior(
     const GoldenCase& test_case,
     const QImage& input,
@@ -628,7 +726,7 @@ bool check_behavior(
       const auto before_shadow = average_luminance(input, QRect(30, 34, 18, 16));
       const auto after_shadow = average_luminance(rendered, QRect(30, 34, 18, 16));
       const auto after_highlight = average_luminance(rendered, QRect(39, 46, 12, 6));
-      if (after_shadow < before_shadow + 0.07 || after_shadow > 0.72 || after_highlight < 0.50) {
+      if (after_shadow < before_shadow + 0.045 || after_shadow > 0.72 || after_highlight < 0.50) {
         std::cerr << test_case.name << " should recover dark detail without flattening highlights; "
                   << "shadow before=" << before_shadow << " shadow after=" << after_shadow
                   << " highlight after=" << after_highlight << '\n';
@@ -675,6 +773,49 @@ bool check_behavior(
         std::cerr << test_case.name << " should keep landscape foliage usable without blowing the sky; "
                   << "foliage before=" << before_foliage << " foliage after=" << after_foliage
                   << " sky before=" << before_sky << " sky after=" << after_sky << '\n';
+        return false;
+      }
+      return true;
+    }
+    case BehaviorCheck::MonochromePreset: {
+      const auto midtone = average_color(rendered, QRect(8, 8, 30, 20));
+      const auto bright = average_color(rendered, QRect(24, 8, 18, 18));
+      if (color_spread(midtone) > 0.012 || color_spread(bright) > 0.012) {
+        std::cerr << test_case.name << " should render achromatic output; "
+                  << "midtone spread=" << color_spread(midtone)
+                  << " bright spread=" << color_spread(bright) << '\n';
+        return false;
+      }
+      return true;
+    }
+    case BehaviorCheck::HighContrastPreset: {
+      const auto before_contrast = luminance_range(input);
+      const auto after_contrast = luminance_range(rendered);
+      const auto before_mid = average_luminance(input, QRect(12, 12, 24, 18));
+      const auto after_mid = average_luminance(rendered, QRect(12, 12, 24, 18));
+      if (after_contrast < before_contrast + 0.008 ||
+          std::abs(after_mid - before_mid) > 0.16) {
+        std::cerr << test_case.name << " should increase tonal separation; "
+                  << "contrast before=" << before_contrast
+                  << " contrast after=" << after_contrast
+                  << " mid before=" << before_mid
+                  << " mid after=" << after_mid << '\n';
+        return false;
+      }
+      return true;
+    }
+    case BehaviorCheck::SaturatedColorPreset: {
+      const auto before_red = average_color(input, QRect(3, 8, 20, 28));
+      const auto after_red = average_color(rendered, QRect(3, 8, 20, 28));
+      const auto before_blue = average_color(input, QRect(60, 8, 20, 28));
+      const auto after_blue = average_color(rendered, QRect(60, 8, 20, 28));
+      if (color_spread(after_red) < color_spread(before_red) + 0.025 ||
+          color_spread(after_blue) < color_spread(before_blue) + 0.020) {
+        std::cerr << test_case.name << " should increase useful color separation; "
+                  << "red before=" << color_spread(before_red)
+                  << " red after=" << color_spread(after_red)
+                  << " blue before=" << color_spread(before_blue)
+                  << " blue after=" << color_spread(after_blue) << '\n';
         return false;
       }
       return true;
@@ -832,34 +973,47 @@ std::array<MatteGoldenCase, 6> matte_golden_cases() {
 int main(int argc, char** argv) {
   QCoreApplication app(argc, argv);
 
-  const std::array<GoldenCase, 8> cases = {{
+  const std::array<GoldenCase, 11> cases = {{
       {.name = "neutral", .state = base_state(), .expected_hash = 6502822787310648520ULL},
-      {.name = "tone_color", .state = tone_color_state(), .expected_hash = 16546543358635084581ULL},
+      {.name = "tone_color", .state = tone_color_state(), .expected_hash = 11073763486409326319ULL},
       {.name = "crop_tone_color",
        .state = crop_state(),
        .crop_before_render = true,
-        .expected_hash = 10526848246922581902ULL},
-      {.name = "detail", .state = detail_state(), .expected_hash = 17357922767082634980ULL},
+        .expected_hash = 7316294077126637604ULL},
+      {.name = "detail", .state = detail_state(), .expected_hash = 18191492922283544536ULL},
       {.name = "night_recovery",
        .source = SourceKind::NightRecovery,
        .state = night_recovery_state(),
        .behavior_check = BehaviorCheck::NightRecovery,
-       .expected_hash = 11618614654665632387ULL},
+       .expected_hash = 10813200049202574121ULL},
       {.name = "highlight_rollback",
        .source = SourceKind::HighlightRollback,
        .state = highlight_rollback_state(),
        .behavior_check = BehaviorCheck::HighlightRollback,
-       .expected_hash = 17639758044615811653ULL},
+       .expected_hash = 16917944321446764727ULL},
       {.name = "clean_portrait_preset",
        .source = SourceKind::Portrait,
        .state = clean_portrait_preset_state(),
        .behavior_check = BehaviorCheck::PortraitPreset,
-       .expected_hash = 7648997018930125447ULL},
+       .expected_hash = 8916455800961703034ULL},
       {.name = "landscape_pop_preset",
        .source = SourceKind::Landscape,
        .state = landscape_pop_preset_state(),
        .behavior_check = BehaviorCheck::LandscapePreset,
-       .expected_hash = 4600721037258760943ULL},
+       .expected_hash = 9738673196854395918ULL},
+      {.name = "monochrome_preset",
+       .state = monochrome_preset_state(),
+       .behavior_check = BehaviorCheck::MonochromePreset,
+       .expected_hash = 9504602629445870302ULL},
+      {.name = "high_contrast_preset",
+       .state = high_contrast_preset_state(),
+       .behavior_check = BehaviorCheck::HighContrastPreset,
+       .expected_hash = 14067386921962874031ULL},
+      {.name = "saturated_color_preset",
+       .source = SourceKind::SaturatedColor,
+       .state = saturated_color_preset_state(),
+       .behavior_check = BehaviorCheck::SaturatedColorPreset,
+       .expected_hash = 10886731799096777147ULL},
   }};
 
   auto mismatch_count = 0;

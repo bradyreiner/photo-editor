@@ -2,6 +2,8 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
+pragma ComponentBehavior: Bound
+
 Item {
     id: root
 
@@ -50,6 +52,10 @@ Item {
         return wheelWrap.height / 2 - clamp(root.luminance, -100, 100) / 200 * innerBounds.height
     }
 
+    function railValueX(value, minimum, maximum, width) {
+        return clamp((value - minimum) / Math.max(1, maximum - minimum), 0, 1) * width
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: root.ringMode ? 7 : 5
@@ -61,8 +67,8 @@ Item {
             color: root.ringMode ? theme.textStrong : theme.textFaint
             font.family: theme.fontUi
             font.pixelSize: root.ringMode ? 12 : 9
-            font.weight: root.ringMode ? Font.Black : Font.Medium
-            font.capitalization: root.ringMode ? Font.AllUppercase : Font.MixedCase
+            font.weight: root.ringMode ? Font.Bold : Font.Medium
+            font.capitalization: Font.MixedCase
             font.letterSpacing: 0
         }
 
@@ -74,8 +80,8 @@ Item {
 
             QtObject {
                 id: innerBounds
-                readonly property real width: Math.max(28, wheelWrap.width * (root.ringMode ? 0.43 : 0.88))
-                readonly property real height: Math.max(28, wheelWrap.height * (root.ringMode ? 0.43 : 0.88))
+                readonly property real width: Math.max(28, wheelWrap.width * (root.ringMode ? 0.56 : 0.88))
+                readonly property real height: Math.max(28, wheelWrap.height * (root.ringMode ? 0.42 : 0.88))
             }
 
             Canvas {
@@ -89,7 +95,7 @@ Item {
                     const cx = width / 2
                     const cy = height / 2
                     const radius = Math.min(width, height) * (root.ringMode ? 0.46 : 0.44)
-                    const innerRadius = root.ringMode ? radius * 0.72 : 0
+                    const innerRadius = root.ringMode ? radius * 0.86 : 0
                     const segments = 180
 
                     for (let i = 0; i < segments; ++i) {
@@ -128,9 +134,9 @@ Item {
 
                     if (root.ringMode) {
                         ctx.lineWidth = 1
-                        ctx.strokeStyle = theme.alpha(theme.polar, 0.16)
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.10)
                         ctx.beginPath()
-                        ctx.arc(cx, cy, innerRadius - 3, 0, Math.PI * 2)
+                        ctx.arc(cx, cy, innerRadius - 2, 0, Math.PI * 2)
                         ctx.stroke()
                     } else {
                         ctx.strokeStyle = theme.alpha(theme.polar, 0.08)
@@ -139,13 +145,15 @@ Item {
                         ctx.stroke()
                     }
 
-                    ctx.strokeStyle = theme.alpha(theme.polar, root.ringMode ? 0.18 : 0.14)
-                    ctx.beginPath()
-                    ctx.moveTo(cx - (root.ringMode ? innerBounds.width / 2 : radius), cy)
-                    ctx.lineTo(cx + (root.ringMode ? innerBounds.width / 2 : radius), cy)
-                    ctx.moveTo(cx, cy - (root.ringMode ? innerBounds.height / 2 : radius))
-                    ctx.lineTo(cx, cy + (root.ringMode ? innerBounds.height / 2 : radius))
-                    ctx.stroke()
+                    if (!root.ringMode) {
+                        ctx.strokeStyle = theme.alpha(theme.polar, 0.14)
+                        ctx.beginPath()
+                        ctx.moveTo(cx - radius, cy)
+                        ctx.lineTo(cx + radius, cy)
+                        ctx.moveTo(cx, cy - radius)
+                        ctx.lineTo(cx, cy + radius)
+                        ctx.stroke()
+                    }
                 }
 
                 Component.onCompleted: requestPaint()
@@ -155,73 +163,135 @@ Item {
 
             Rectangle {
                 visible: root.ringMode
+                z: 3
                 x: wheelWrap.width / 2 - innerBounds.width / 2
                 y: wheelWrap.height / 2 - innerBounds.height / 2
                 width: innerBounds.width
                 height: innerBounds.height
-                radius: 3
-                color: theme.alpha(theme.ink950, 0.42)
+                radius: 5
+                color: theme.alpha(theme.ink950, 0.58)
                 border.width: 1
-                border.color: theme.alpha(theme.polar, 0.14)
-            }
+                border.color: theme.alpha(theme.polar, 0.10)
+                clip: true
 
-            Rectangle {
-                visible: root.ringMode
-                x: wheelWrap.width / 2 - innerBounds.width / 2
-                y: root.innerValueY() - 1
-                width: innerBounds.width
-                height: 2
-                radius: 1
-                color: theme.alpha(root.accent, 0.56)
-            }
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 9
+                    spacing: 7
 
-            Rectangle {
-                visible: root.ringMode
-                x: root.innerValueX() - 1
-                y: wheelWrap.height / 2 - innerBounds.height / 2
-                width: 2
-                height: innerBounds.height
-                radius: 1
-                color: theme.alpha(root.accent, 0.50)
-            }
+                    Repeater {
+                        model: [
+                            { label: "Sat", value: root.saturation, minimum: 0, maximum: root.maxSaturation, defaultValue: 0, kind: "saturation" },
+                            { label: "Lum", value: root.luminance, minimum: -100, maximum: 100, defaultValue: 0, kind: "luminance" }
+                        ]
 
-            Rectangle {
-                readonly property real wheelRadius: Math.min(wheelWrap.width, wheelWrap.height) * (root.ringMode ? 0.46 : 0.44)
-                readonly property real angle: root.normalizedHue(root.hue) * Math.PI * 2 - Math.PI / 2
-                readonly property real radiusAmount: root.ringMode ? 1.0 : root.clamp(root.saturation, 0, root.maxSaturation) / root.maxSaturation
+                        RowLayout {
+                            id: railRow
+                            required property var modelData
+                            Layout.fillWidth: true
+                            spacing: 7
 
-                x: wheelWrap.width / 2 + Math.cos(angle) * wheelRadius * radiusAmount - width / 2
-                y: wheelWrap.height / 2 + Math.sin(angle) * wheelRadius * radiusAmount - height / 2
-                width: root.ringMode ? 14 : 10
-                height: width
-                radius: width / 2
-                color: theme.alpha(theme.ink950, root.ringMode ? 0.88 : 0.74)
-                border.width: 2
-                border.color: root.ringMode ? root.accent : theme.polar
-            }
+                            Label {
+                                Layout.preferredWidth: 24
+                                text: String(railRow.modelData.label || "")
+                                color: theme.textMain
+                                font.family: theme.fontUi
+                                font.pixelSize: 9
+                                font.weight: Font.Bold
+                                font.letterSpacing: 0
+                            }
 
-            Rectangle {
-                visible: root.ringMode
-                x: root.innerValueX() - width / 2
-                y: root.innerValueY() - height / 2
-                width: 16
-                height: 16
-                radius: 3
-                rotation: 45
-                color: theme.alpha(theme.polar, 0.92)
-                border.width: 2
-                border.color: theme.alpha(root.accent, 0.92)
+                            Item {
+                                id: ringInnerRail
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 14
+                                readonly property real minimumValue: Number(railRow.modelData.minimum || 0)
+                                readonly property real maximumValue: Number(railRow.modelData.maximum || 100)
+                                readonly property real defaultValue: Number(railRow.modelData.defaultValue || 0)
+                                readonly property real railValue: Number(railRow.modelData.value || 0)
+                                readonly property real defaultX: root.railValueX(defaultValue, minimumValue, maximumValue, width)
+                                readonly property real valueX: root.railValueX(railValue, minimumValue, maximumValue, width)
 
-                Rectangle {
-                    anchors.centerIn: parent
-                    width: 4
-                    height: 4
-                    radius: 2
-                    color: theme.ink950
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    height: 3
+                                    radius: 2
+                                    color: theme.alpha(theme.polar, 0.18)
+                                }
+
+                                Rectangle {
+                                    x: Math.min(ringInnerRail.defaultX, ringInnerRail.valueX)
+                                    width: Math.max(1, Math.abs(ringInnerRail.valueX - ringInnerRail.defaultX))
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    height: 3
+                                    radius: 2
+                                    color: root.accent
+                                    opacity: Math.abs(ringInnerRail.railValue - ringInnerRail.defaultValue) > 0.5 ? 0.84 : 0
+                                }
+
+                                Rectangle {
+                                    x: Math.max(0, Math.min(parent.width - width, ringInnerRail.valueX - width / 2))
+                                    y: parent.height / 2 - height / 2
+                                    width: 10
+                                    height: 10
+                                    radius: 5
+                                    color: theme.alpha(theme.polar, 0.94)
+                                    border.width: 1
+                                    border.color: theme.alpha(root.accent, 0.82)
+                                }
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.SizeHorCursor
+                                    function editFromX(mouseX) {
+                                        const value = ringInnerRail.minimumValue +
+                                                      root.clamp(mouseX / Math.max(1, width), 0, 1) *
+                                                      (ringInnerRail.maximumValue - ringInnerRail.minimumValue)
+                                        if (railRow.modelData.kind === "saturation")
+                                            root.saturationEdited(value)
+                                        else
+                                            root.luminanceEdited(value)
+                                    }
+                                    onPressed: function(mouse) { editFromX(mouse.x) }
+                                    onPositionChanged: function(mouse) {
+                                        if (pressed)
+                                            editFromX(mouse.x)
+                                    }
+                                    onDoubleClicked: {
+                                        if (railRow.modelData.kind === "saturation")
+                                            root.saturationEdited(0)
+                                        else
+                                            root.luminanceEdited(0)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
+            Rectangle {
+                z: root.ringMode ? 2 : 0
+                readonly property real wheelRadius: Math.min(wheelWrap.width, wheelWrap.height) * (root.ringMode ? 0.46 : 0.44)
+                readonly property real ringHandleRadius: root.ringMode ? wheelRadius * 0.93 : wheelRadius
+                readonly property real angle: root.normalizedHue(root.hue) * Math.PI * 2 - Math.PI / 2
+                readonly property real radiusAmount: root.ringMode ? 1.0 : root.clamp(root.saturation, 0, root.maxSaturation) / root.maxSaturation
+
+                x: wheelWrap.width / 2 + Math.cos(angle) * (root.ringMode ? ringHandleRadius : wheelRadius * radiusAmount) - width / 2
+                y: wheelWrap.height / 2 + Math.sin(angle) * (root.ringMode ? ringHandleRadius : wheelRadius * radiusAmount) - height / 2
+                width: root.ringMode ? 10 : 10
+                height: width
+                radius: width / 2
+                color: root.ringMode ? theme.alpha(theme.polar, 0.96) : theme.alpha(theme.ink950, 0.74)
+                border.width: root.ringMode ? 1 : 2
+                border.color: root.ringMode ? root.accent : theme.polar
+            }
+
             MouseArea {
+                z: 1
                 anchors.fill: parent
                 cursorShape: Qt.CrossCursor
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -243,15 +313,8 @@ Item {
                     const normalizedHue = ((angle / (Math.PI * 2)) + 1) % 1
                     const radius = Math.sqrt(dx * dx + dy * dy) / (Math.min(width, height) * (root.ringMode ? 0.46 : 0.44))
 
-                    if (root.ringMode && radius < 0.72) {
-                        const nextSat = root.clamp(((mouseX - (width / 2 - innerBounds.width / 2)) / innerBounds.width) * root.maxSaturation,
-                                                   0,
-                                                   root.maxSaturation)
-                        const nextLum = root.clamp(((height / 2 - mouseY) / (innerBounds.height / 2)) * 100, -100, 100)
-                        root.saturationEdited(nextSat)
-                        root.luminanceEdited(nextLum)
+                    if (root.ringMode && radius < 0.80)
                         return
-                    }
 
                     const nextHue = normalizedHue
                     const nextSat = root.clamp(radius * root.maxSaturation, 0, root.maxSaturation)

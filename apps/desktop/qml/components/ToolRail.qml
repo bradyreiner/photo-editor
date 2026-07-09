@@ -49,6 +49,14 @@ Item {
     readonly property string toolDiscoveryContract: "tool-discovery:v1|families-visible:true|active-family:true|active-variant:true|variants-one-expansion:true|stale-menus-close:true|disabled-reasons:true"
     readonly property string staleMenuCleanupContract: "tool-rail-stale-menu-cleanup:v1|one-expansion:true|on-tool-click:true|on-menu-open:true|on-menu-trigger:true|on-tools-changed:true|on-switch-serial:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|rail-labels:fit|menu-wrap:true|tooltip-full:true|variant-visible:true"
+    readonly property string groupedNavigationContract: "tool-rail-navigation:v2|groups:" +
+                                                        railGroupOrder().join(">") +
+                                                        "|button-size:" +
+                                                        String(root.buttonSize) +
+                                                        "|stable-size:true|hover-layout-shift:false|tooltips:explicit|variants:menus|one-expansion:true"
+    readonly property string activationCoverageContract: "tool-rail-activation:v1|primary-tools:" +
+                                                         primaryToolIds().join(",") +
+                                                         "|source:rail-model|buttons:present|trigger-by-id:true"
 
     onToolsChanged: closeOpenMenus()
     onSwitchSerialChanged: closeOpenMenus()
@@ -79,6 +87,10 @@ Item {
         return String(tool && tool.shortcut !== undefined ? tool.shortcut : "")
     }
 
+    function toolRailGroup(tool) {
+        return String(tool && tool.railGroup !== undefined ? tool.railGroup : "")
+    }
+
     function toolDisabledReason(tool) {
         return String(tool && tool.disabledReason !== undefined ? tool.disabledReason : "")
     }
@@ -106,6 +118,9 @@ Item {
         const reason = toolDisabledReason(tool)
         if (!toolEnabled(tool) && reason.length > 0)
             return toolLabel(tool) + " - " + reason
+        const explicitTooltip = String(tool && tool.tooltip !== undefined ? tool.tooltip : "")
+        if (explicitTooltip.length > 0)
+            return explicitTooltip
         const parts = [toolLabel(tool)]
         const variant = toolVariant(tool)
         const shortcut = toolShortcut(tool)
@@ -114,6 +129,44 @@ Item {
         if (shortcut.length > 0)
             parts.push(shortcut)
         return parts.join(" / ")
+    }
+
+    function railGroupOrder() {
+        const list = root.tools || []
+        const groups = []
+        for (let index = 0; index < list.length; ++index) {
+            const group = toolRailGroup(list[index])
+            if (group.length > 0 && groups.indexOf(group) < 0)
+                groups.push(group)
+        }
+        return groups
+    }
+
+    function primaryToolIds() {
+        const list = root.tools || []
+        const ids = []
+        for (let index = 0; index < list.length; ++index) {
+            const tool = list[index]
+            if (tool && tool.primaryTool !== false)
+                ids.push(toolId(tool))
+        }
+        return ids
+    }
+
+    function triggerToolById(requestedToolId) {
+        const requested = String(requestedToolId || "")
+        const list = root.tools || []
+        for (let index = 0; index < list.length; ++index) {
+            const tool = list[index]
+            if (toolId(tool) === requested) {
+                if (!toolEnabled(tool))
+                    return false
+                root.closeOpenMenus()
+                root.toolTriggered(tool)
+                return true
+            }
+        }
+        return false
     }
 
     function menuWidthForTool(tool) {
@@ -191,7 +244,7 @@ Item {
 
                 Components.ToolButton {
                     id: toolButton
-                    objectName: String(toolDelegate.tool.objectName || "")
+                    objectName: String(toolDelegate.tool.railObjectName || toolDelegate.tool.objectName || "")
                     anchors.fill: parent
                     label: root.toolLabel(toolDelegate.tool)
                     iconName: String(toolDelegate.tool.icon || "")

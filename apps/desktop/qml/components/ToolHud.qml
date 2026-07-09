@@ -30,6 +30,7 @@ Rectangle {
                                                     root.activeVariantLabel +
                                                     "|one-next-action:true|done-cancel-visible:true|stale-on-switch:false"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|title-fit:true|subtitle-fit:true|tooltip-full:true|accessibility-full:true|min-title-px:9|min-subtitle-px:8"
+    readonly property string commandSemanticsContract: "tool-hud-command-semantics:v1|done:exit-tool-state|cancel:abort-pending-or-exit|apply:not-used|close:not-used|enter:done-when-completable|escape:cancel"
 
     signal doneRequested()
     signal cancelRequested()

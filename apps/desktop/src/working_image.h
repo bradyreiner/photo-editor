@@ -302,7 +302,7 @@ struct WorkingImageQImageTelemetry final {
 
 [[nodiscard]] inline QImage qimage_from_working_image(
     const WorkingImage& working,
-    const QColorSpace& target_color_space = preview_color_space(),
+    const QColorSpace& target_color_space,
     QImage::Format output_format = QImage::Format_ARGB32,
     const QString& working_profile_name = QStringLiteral("Linear ProPhoto RGB"),
     photo_editor::pipeline::CancellationToken cancellation = {},
@@ -375,7 +375,7 @@ struct WorkingImageQImageTelemetry final {
 [[nodiscard]] inline QImage qimage_from_working_image_rect(
     const WorkingImage& working,
     const QRect& source_rect,
-    const QColorSpace& target_color_space = preview_color_space(),
+    const QColorSpace& target_color_space,
     QImage::Format output_format = QImage::Format_ARGB32,
     const QString& working_profile_name = QStringLiteral("Linear ProPhoto RGB"),
     photo_editor::pipeline::CancellationToken cancellation = {},

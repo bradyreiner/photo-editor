@@ -4,6 +4,7 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <numbers>
 
@@ -42,6 +43,27 @@ bool warnings_contain(const QStringList& warnings, const QString& needle) {
     }
   }
   return false;
+}
+
+template <std::size_t Size>
+QVariantList percent_bins(const std::array<int, Size>& bins, double total) {
+  QVariantList values;
+  values.reserve(static_cast<int>(Size));
+  for (const auto count : bins) {
+    values.append(total <= 0.0 ? 0.0 : (static_cast<double>(count) * 100.0 / total));
+  }
+  return values;
+}
+
+template <std::size_t Size>
+int peak_bin_index(const std::array<int, Size>& bins) {
+  auto peak_index = 0;
+  for (auto index = 1; index < static_cast<int>(Size); ++index) {
+    if (bins[static_cast<std::size_t>(index)] > bins[static_cast<std::size_t>(peak_index)]) {
+      peak_index = index;
+    }
+  }
+  return peak_index;
 }
 
 QVariantMap quality_score_report_for_validation(const QVariantMap& report) {
@@ -358,6 +380,16 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
   auto luma_square_sum = 0.0;
   auto luma_min = 255.0;
   auto luma_max = 0.0;
+  auto saturation_sum = 0.0;
+  auto chroma_x_sum = 0.0;
+  auto chroma_y_sum = 0.0;
+  auto chroma_radius_sum = 0.0;
+  auto chroma_radius_square_sum = 0.0;
+  auto shadow_luma_count = 0.0;
+  auto midtone_luma_count = 0.0;
+  auto highlight_luma_count = 0.0;
+  std::array<int, 16> luma_histogram{};
+  std::array<int, 12> hue_histogram{};
   auto skin_candidate_count = 0.0;
   auto skin_hue_sum = 0.0;
   auto skin_saturation_sum = 0.0;
@@ -379,6 +411,18 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
       luma_square_sum += luma * luma;
       luma_min = std::min(luma_min, luma);
       luma_max = std::max(luma_max, luma);
+      const auto luma_bin = std::clamp(
+          static_cast<int>(std::floor(luma / 16.0)),
+          0,
+          static_cast<int>(luma_histogram.size()) - 1);
+      ++luma_histogram[static_cast<std::size_t>(luma_bin)];
+      if (luma < 32.0) {
+        shadow_luma_count += 1.0;
+      } else if (luma > 224.0) {
+        highlight_luma_count += 1.0;
+      } else {
+        midtone_luma_count += 1.0;
+      }
       if (red >= 250 || green >= 250 || blue >= 250) {
         highlight_clip_count += 1.0;
       }
@@ -387,6 +431,23 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
       }
       const auto maximum = std::max({red, green, blue});
       const auto minimum = std::min({red, green, blue});
+      const auto saturation = color.hsvSaturationF();
+      saturation_sum += saturation;
+      const auto chroma_x = (static_cast<double>(red) - luma) / 255.0;
+      const auto chroma_y = (static_cast<double>(blue) - luma) / 255.0;
+      const auto chroma_radius = std::hypot(chroma_x, chroma_y);
+      chroma_x_sum += chroma_x;
+      chroma_y_sum += chroma_y;
+      chroma_radius_sum += chroma_radius;
+      chroma_radius_square_sum += chroma_radius * chroma_radius;
+      const auto hue = color.hsvHueF();
+      if (hue >= 0.0 && saturation >= 0.08 && maximum > 16) {
+        const auto hue_bin = std::clamp(
+            static_cast<int>(std::floor(hue * static_cast<double>(hue_histogram.size()))),
+            0,
+            static_cast<int>(hue_histogram.size()) - 1);
+        ++hue_histogram[static_cast<std::size_t>(hue_bin)];
+      }
       if (maximum > 32 && (static_cast<double>(maximum - minimum) / static_cast<double>(maximum)) >= 0.95) {
         saturation_extreme_count += 1.0;
       }
@@ -430,6 +491,19 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
       skin_candidate_count <= 0.0 ? 0.0 : skin_luma_sum / skin_candidate_count;
   const auto average_skin_red_blue_delta =
       skin_candidate_count <= 0.0 ? 0.0 : skin_red_blue_delta_sum / skin_candidate_count;
+  const auto average_saturation = saturation_sum / total_pixels;
+  const auto average_chroma_x = chroma_x_sum / total_pixels;
+  const auto average_chroma_y = chroma_y_sum / total_pixels;
+  const auto average_chroma_radius = chroma_radius_sum / total_pixels;
+  const auto chroma_radius_variance =
+      std::max(0.0, (chroma_radius_square_sum / total_pixels) -
+                        (average_chroma_radius * average_chroma_radius));
+  const auto chroma_radius_stddev = std::sqrt(chroma_radius_variance);
+  const auto shadow_luma_percent = shadow_luma_count * 100.0 / total_pixels;
+  const auto midtone_luma_percent = midtone_luma_count * 100.0 / total_pixels;
+  const auto highlight_luma_percent = highlight_luma_count * 100.0 / total_pixels;
+  const auto luma_peak_bin = peak_bin_index(luma_histogram);
+  const auto hue_peak_bin = peak_bin_index(hue_histogram);
 
   const auto highlight_limit =
       validation_threshold(style, QStringLiteral("highlight_clip_limit_percent"), 1.0);
@@ -514,6 +588,69 @@ QVariantMap validate_agent_edit_image(const QImage& image, const QVariantMap& st
   report.insert(QStringLiteral("averageSkinLuma"), average_skin_luma);
   report.insert(QStringLiteral("averageSkinRedBlueDelta"), average_skin_red_blue_delta);
   report.insert(QStringLiteral("skinTonePlausible"), skin_tone_plausible);
+  report.insert(
+      QStringLiteral("imageStats"),
+      QVariantMap{
+          {QStringLiteral("version"), QStringLiteral("agent-image-stats-v1")},
+          {QStringLiteral("sampleWidth"), sample.width()},
+          {QStringLiteral("sampleHeight"), sample.height()},
+          {QStringLiteral("sampleCount"), static_cast<int>(total_pixels)},
+          {QStringLiteral("histogram"),
+           QVariantMap{
+               {QStringLiteral("kind"), QStringLiteral("luma-16-bin-percent")},
+               {QStringLiteral("binCount"), static_cast<int>(luma_histogram.size())},
+               {QStringLiteral("binsPercent"), percent_bins(luma_histogram, total_pixels)},
+               {QStringLiteral("peakBin"), luma_peak_bin},
+               {QStringLiteral("peakBinApproxLuma"),
+                (static_cast<double>(luma_peak_bin) + 0.5) *
+                    (255.0 / static_cast<double>(luma_histogram.size()))},
+               {QStringLiteral("shadowPercent"), shadow_luma_percent},
+               {QStringLiteral("midtonePercent"), midtone_luma_percent},
+               {QStringLiteral("highlightPercent"), highlight_luma_percent},
+               {QStringLiteral("averageLuma"), average_luma},
+               {QStringLiteral("lumaMin"), luma_min},
+               {QStringLiteral("lumaMax"), luma_max},
+               {QStringLiteral("lumaRange"), luma_range},
+               {QStringLiteral("lumaStddev"), luma_stddev},
+               {QStringLiteral("compressed"),
+                average_luma > 16.0 && luma_range < 18.0 && luma_stddev < 5.0},
+           }},
+          {QStringLiteral("rgb"),
+           QVariantMap{
+               {QStringLiteral("averageRed"), average_red},
+               {QStringLiteral("averageGreen"), average_green},
+               {QStringLiteral("averageBlue"), average_blue},
+               {QStringLiteral("channelImbalance"), channel_imbalance},
+               {QStringLiteral("redBlueCast"), red_blue_delta},
+               {QStringLiteral("greenCast"), green_delta},
+           }},
+          {QStringLiteral("vectorscope"),
+           QVariantMap{
+               {QStringLiteral("kind"), QStringLiteral("hue-12-bin-plus-chroma-summary")},
+               {QStringLiteral("hueBinCount"), static_cast<int>(hue_histogram.size())},
+               {QStringLiteral("hueBinsPercent"), percent_bins(hue_histogram, total_pixels)},
+               {QStringLiteral("dominantHueBin"), hue_peak_bin},
+               {QStringLiteral("dominantHueDegreesApprox"),
+                (static_cast<double>(hue_peak_bin) + 0.5) *
+                    (360.0 / static_cast<double>(hue_histogram.size()))},
+               {QStringLiteral("averageSaturation"), average_saturation},
+               {QStringLiteral("saturationExtremePercent"), saturation_extreme_percent},
+               {QStringLiteral("chromaCenterX"), average_chroma_x},
+               {QStringLiteral("chromaCenterY"), average_chroma_y},
+               {QStringLiteral("chromaAverageRadius"), average_chroma_radius},
+               {QStringLiteral("chromaRadiusStddev"), chroma_radius_stddev},
+           }},
+          {QStringLiteral("skin"),
+           QVariantMap{
+               {QStringLiteral("checkRequired"), require_skin_tone_check},
+               {QStringLiteral("candidatePercent"), skin_candidate_percent},
+               {QStringLiteral("averageHue"), average_skin_hue},
+               {QStringLiteral("averageSaturation"), average_skin_saturation},
+               {QStringLiteral("averageLuma"), average_skin_luma},
+               {QStringLiteral("averageRedBlueDelta"), average_skin_red_blue_delta},
+               {QStringLiteral("plausible"), skin_tone_plausible},
+           }},
+      });
   attach_quality_score(&report);
   return report;
 }

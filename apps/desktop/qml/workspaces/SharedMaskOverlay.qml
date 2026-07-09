@@ -19,12 +19,14 @@ Item {
     property color accentColor: "#24DCC2"
     property real outlinePhase: 0
     property bool outlineAnimationEnabled: false
+    property real outlineVisualScale: 1.0
     property real cropX: editorPreview.cropRectX
     property real cropY: editorPreview.cropRectY
     property real cropWidth: editorPreview.cropRectWidth
     property real cropHeight: editorPreview.cropRectHeight
     property real transformRotation: editorPreview.transformRotation
     property real genericTintOpacity: 0.18
+    property bool outlineActivationDeferred: false
     readonly property int sharedOverlayVersion: 1
     readonly property string overlayGeometryContract: "image-rect-clipped|crop-rotation-aware:v1"
     readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
@@ -35,7 +37,7 @@ Item {
     readonly property string liveOverlayPerformanceContract: "live-brush-overlay|ui-frame-budget:16ms|point-budget:512|no-preview-render-block:v1"
     readonly property string settledMaskOutlineContract: "outline-only|fragment-filtered|no-fill:v1"
     readonly property string outlineTraceContract: "public-outline-trace|source|tolerance|provider|path-count|image-normalized|final-alpha:v2"
-    readonly property var activeOutlineTrace: editorPreview.activeMaskOutlineTrace || ({})
+    readonly property var activeOutlineTrace: outlineActivationDeferred ? ({}) : (editorPreview.activeMaskOutlineTrace || ({}))
     readonly property string activeOutlineTraceSource: String(activeOutlineTrace.outline_trace_source || "")
     readonly property int activeOutlineTracePathCount: Math.max(0, Number(activeOutlineTrace.outline_trace_path_count || 0))
     readonly property real activeOutlineTraceTolerancePixels: Math.max(0, Number(activeOutlineTrace.outline_trace_tolerance_pixels || 0))
@@ -72,6 +74,21 @@ Item {
             root.geometricMaskCanvasPaintPending = false
             root.activeSelectionOutlinePaintPending = false
         }
+    }
+
+    CanvasCoordinateMapper {
+        id: sharedCoordinateMapper
+        contentX: 0
+        contentY: 0
+        contentWidth: root.width
+        contentHeight: root.height
+        cropX: root.cropX
+        cropY: root.cropY
+        cropWidth: root.cropWidth
+        cropHeight: root.cropHeight
+        rotationDegrees: root.transformRotation
+        fitMode: "overlay"
+        devicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
     }
 
     function scheduleLiveBrushVectorCanvasPaint() {
@@ -112,6 +129,21 @@ Item {
         return Math.max(low, Math.min(high, value))
     }
 
+    function viewPointForImage(normalizedX, normalizedY) {
+        const point = sharedCoordinateMapper.imageToViewPoint(normalizedX, normalizedY)
+        return { valid: point.valid, x: point.x, y: point.y }
+    }
+
+    function imagePointFromLocal(localX, localY) {
+        const point = sharedCoordinateMapper.viewToImagePoint(localX, localY)
+        return { valid: point.valid, x: point.x, y: point.y }
+    }
+
+    function pointerMappingDiagnosticSignature(localX, localY) {
+        return "shared-mask-overlay-pointer:v1|" +
+               sharedCoordinateMapper.pointerMappingDiagnosticSignature(localX, localY)
+    }
+
     function selectionOperationOverlayColor(operationName) {
         const operation = String(operationName || "add").trim().toLowerCase()
         if (operation === "subtract")
@@ -136,6 +168,18 @@ Item {
 
     function stableOutlineDash(logicalPixels) {
         return Math.max(1.0, Number(logicalPixels || 1.0))
+    }
+
+    function outlineScaleFactor() {
+        const scale = Number(outlineVisualScale || 1.0)
+        return Math.max(0.25, isFinite(scale) ? scale : 1.0)
+    }
+
+    Binding {
+        target: editorPreview
+        property: "activeMaskOutlineDisplayScale"
+        value: root.outlineScaleFactor()
+        when: root.visible && root.masked && root.hasActiveMask
     }
 
     function handleOuterHaloColor() {
@@ -205,11 +249,18 @@ Item {
         if (count < 2)
             return false
         ctx.beginPath()
-        ctx.moveTo(root.pixelAligned(root.width * root.pointXValue(points[0])),
-                   root.pixelAligned(root.height * root.pointYValue(points[0])))
-        for (let i = 1; i < count; ++i)
-            ctx.lineTo(root.pixelAligned(root.width * root.pointXValue(points[i])),
-                       root.pixelAligned(root.height * root.pointYValue(points[i])))
+        const firstViewPoint = root.viewPointForImage(
+                root.pointXValue(points[0]),
+                root.pointYValue(points[0]))
+        ctx.moveTo(root.pixelAligned(firstViewPoint.x),
+                   root.pixelAligned(firstViewPoint.y))
+        for (let i = 1; i < count; ++i) {
+            const viewPoint = root.viewPointForImage(
+                    root.pointXValue(points[i]),
+                    root.pointYValue(points[i]))
+            ctx.lineTo(root.pixelAligned(viewPoint.x),
+                       root.pixelAligned(viewPoint.y))
+        }
         if (count >= 3)
             ctx.closePath()
         return true
@@ -309,24 +360,36 @@ Item {
             for (let pointIndex = 1; pointIndex < points.length; ++pointIndex) {
                 const previous = points[pointIndex - 1]
                 const current = points[pointIndex]
+                const previousViewPoint = root.viewPointForImage(
+                        root.pointXValue(previous),
+                        root.pointYValue(previous))
+                const currentViewPoint = root.viewPointForImage(
+                        root.pointXValue(current),
+                        root.pointYValue(current))
                 if (root.distanceToSegmentPixels(
                             mouseX, mouseY,
-                            root.width * root.pointXValue(previous),
-                            root.height * root.pointYValue(previous),
-                            root.width * root.pointXValue(current),
-                            root.height * root.pointYValue(current)) <= slop) {
+                            previousViewPoint.x,
+                            previousViewPoint.y,
+                            currentViewPoint.x,
+                            currentViewPoint.y) <= slop) {
                     return true
                 }
             }
             if (points.length >= 3) {
                 const first = points[0]
                 const last = points[points.length - 1]
+                const firstViewPoint = root.viewPointForImage(
+                        root.pointXValue(first),
+                        root.pointYValue(first))
+                const lastViewPoint = root.viewPointForImage(
+                        root.pointXValue(last),
+                        root.pointYValue(last))
                 if (root.distanceToSegmentPixels(
                             mouseX, mouseY,
-                            root.width * root.pointXValue(last),
-                            root.height * root.pointYValue(last),
-                            root.width * root.pointXValue(first),
-                            root.height * root.pointYValue(first)) <= slop) {
+                            lastViewPoint.x,
+                            lastViewPoint.y,
+                            firstViewPoint.x,
+                            firstViewPoint.y) <= slop) {
                     return true
                 }
             }
@@ -343,8 +406,10 @@ Item {
                     12)) {
             return false
         }
-        root.activeOutlineClicked(root.clamp(mouseX / Math.max(1, root.width), 0, 1),
-                                  root.clamp(mouseY / Math.max(1, root.height), 0, 1))
+        const point = root.imagePointFromLocal(mouseX, mouseY)
+        if (!point.valid)
+            return false
+        root.activeOutlineClicked(point.x, point.y)
         return true
     }
 
@@ -571,11 +636,16 @@ Item {
                         if (ctx.setLineDash)
                             ctx.setLineDash(count >= 3 ? [] : [6, 5])
                         ctx.beginPath()
-                        ctx.moveTo(root.pixelAligned(width * Number(points[0].x || 0)),
-                                   root.pixelAligned(height * Number(points[0].y || 0)))
-                        for (let i = 1; i < count; ++i)
-                            ctx.lineTo(root.pixelAligned(width * Number(points[i].x || 0)),
-                                       root.pixelAligned(height * Number(points[i].y || 0)))
+                        let firstViewPoint = root.viewPointForImage(Number(points[0].x || 0), Number(points[0].y || 0))
+                        ctx.moveTo(root.pixelAligned(firstViewPoint.x),
+                                   root.pixelAligned(firstViewPoint.y))
+                        for (let i = 1; i < count; ++i) {
+                            const viewPoint = root.viewPointForImage(
+                                        Number(points[i].x || 0),
+                                        Number(points[i].y || 0))
+                            ctx.lineTo(root.pixelAligned(viewPoint.x),
+                                       root.pixelAligned(viewPoint.y))
+                        }
                         if (count >= 3) {
                             ctx.closePath()
                             if (geometricMaskCanvas.polygonFeatherVisualizationActive) {
@@ -595,9 +665,12 @@ Item {
                             ctx.setLineDash([])
                         for (let pointIndex = 0; pointIndex < count; ++pointIndex) {
                             const radius = pointIndex === 0 && count >= 3 ? 6 : 4
+                            const pointViewPoint = root.viewPointForImage(
+                                        Number(points[pointIndex].x || 0),
+                                        Number(points[pointIndex].y || 0))
                             ctx.beginPath()
-                            ctx.arc(root.pixelAligned(width * Number(points[pointIndex].x || 0)),
-                                    root.pixelAligned(height * Number(points[pointIndex].y || 0)),
+                            ctx.arc(root.pixelAligned(pointViewPoint.x),
+                                    root.pixelAligned(pointViewPoint.y),
                                     radius, 0, Math.PI * 2)
                             ctx.fillStyle = pointIndex === 0 && count >= 3
                                             ? theme.alpha(theme.ink950, 0.88)
@@ -663,12 +736,13 @@ Item {
                                                  : modelData
                 readonly property real normalizedX: (Number(modelData.x || 0) + Number(nextPoint.x || 0)) / 2
                 readonly property real normalizedY: (Number(modelData.y || 0) + Number(nextPoint.y || 0)) / 2
+                readonly property var viewPoint: root.viewPointForImage(normalizedX, normalizedY)
 
                 objectName: "polygonEdgeInsertHandle" + edgeIndex
                 readonly property string handleReadabilityContract: root.handleReadabilityContract
                 visible: !parent.activeBrushPainting
-                x: parent.width * normalizedX - width / 2
-                y: parent.height * normalizedY - height / 2
+                x: viewPoint.x - width / 2
+                y: viewPoint.y - height / 2
                 width: 14
                 height: 14
                 radius: 3
@@ -732,12 +806,13 @@ Item {
                 property int pointIndex: index
                 property real grabOffsetX: width / 2
                 property real grabOffsetY: height / 2
+                readonly property var viewPoint: root.viewPointForImage(Number(modelData.x || 0), Number(modelData.y || 0))
 
                 objectName: "polygonVertexHandle" + pointIndex
                 readonly property string handleReadabilityContract: root.handleReadabilityContract
                 visible: !parent.activeBrushPainting
-                x: parent.width * Number(modelData.x || 0) - width / 2
-                y: parent.height * Number(modelData.y || 0) - height / 2
+                x: viewPoint.x - width / 2
+                y: viewPoint.y - height / 2
                 width: pointIndex === 0 && editorPreview.activeMaskPolygonPointCount >= 3 ? 18 : 14
                 height: width
                 radius: width / 2
@@ -789,13 +864,14 @@ Item {
                     onPositionChanged: function(mouse) {
                         if (!pressed)
                             return
-                        const nextX = root.clamp(
-                                    (parent.x + mouse.x - parent.grabOffsetX + parent.width / 2) / Math.max(1, parent.parent.width),
-                                    0, 1)
-                        const nextY = root.clamp(
-                                    (parent.y + mouse.y - parent.grabOffsetY + parent.height / 2) / Math.max(1, parent.parent.height),
-                                    0, 1)
-                        editorPreview.moveActivePolygonPoint(parent.pointIndex, nextX, nextY)
+                        const localX = parent.x + mouse.x - parent.grabOffsetX + parent.width / 2
+                        const localY = parent.y + mouse.y - parent.grabOffsetY + parent.height / 2
+                        const point = root.imagePointFromLocal(localX, localY)
+                        if (point.valid)
+                            editorPreview.moveActivePolygonPoint(
+                                        parent.pointIndex,
+                                        root.clamp(point.x, 0, 1),
+                                        root.clamp(point.y, 0, 1))
                         mouse.accepted = true
                     }
                 }
@@ -807,13 +883,14 @@ Item {
             readonly property string handleReadabilityContract: root.handleReadabilityContract
             readonly property var snapPoints: editorPreview.activeMaskPolygonPoints || []
             readonly property var firstPoint: snapPoints.length > 0 ? snapPoints[0] : ({ "x": 0.5, "y": 0.5 })
+            readonly property var viewPoint: root.viewPointForImage(Number(firstPoint.x || 0), Number(firstPoint.y || 0))
             visible: root.enablePolygonHandles &&
                      editorPreview.activeMaskKind === "polygon" &&
                      editorPreview.activeMaskPolygonPointCount >= 3 &&
                      !editorPreview.activeMaskPolygonSelfIntersecting &&
                      !parent.activeBrushPainting
-            x: parent.width * Number(firstPoint.x || 0) - width / 2
-            y: parent.height * Number(firstPoint.y || 0) - height / 2
+            x: viewPoint.x - width / 2
+            y: viewPoint.y - height / 2
             width: 32
             height: 32
             radius: 16
@@ -867,6 +944,7 @@ Item {
             root.hasActiveMask &&
             !root.previewTemporarilyHidden() &&
             editorPreview.maskPreviewMode !== "none" &&
+            !root.outlineActivationDeferred &&
             !root.compareMode
             ? editorPreview.activeMaskOutlinePaths
             : []

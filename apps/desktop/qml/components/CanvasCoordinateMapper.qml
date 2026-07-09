@@ -13,8 +13,9 @@ QtObject {
     property real cropHeight: 1
     property real rotationDegrees: 0
     property real devicePixelRatio: 1
+    property string fitMode: "fit"
 
-    readonly property string coordinateTransformContract: "coordinate-transform:v1|view-to-image:true|image-to-view:true|crop:true|rotation:true|zoom-pan:true|device-pixel-ratio:true|roundtrip:true|clamp:true"
+    readonly property string coordinateTransformContract: "coordinate-transform:v1|view-to-image:true|image-to-view:true|crop:true|rotation:true|zoom-pan:true|painted-image-rect:true|fit-fill:true|device-pixel-ratio:true|roundtrip:true|clamp:true"
     readonly property bool contentValid: contentWidth > 1 && contentHeight > 1 && cropWidth > 0 && cropHeight > 0
 
     function clamp(value, low, high) {
@@ -118,6 +119,27 @@ QtObject {
             valid = valid && points[index].valid
         }
         return { valid: valid, x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    }
+
+    function pointerMappingDiagnosticSignature(viewX, viewY) {
+        const point = viewToImagePoint(viewX, viewY)
+        return "canvas-coordinate-mapper:v1" +
+               "|valid:" + String(point.valid === true) +
+               "|view:" + Number(viewX || 0).toFixed(3) + "," +
+               Number(viewY || 0).toFixed(3) +
+               "|image:" + Number(point.x || 0).toFixed(6) + "," +
+               Number(point.y || 0).toFixed(6) +
+               "|content:" + Number(contentX || 0).toFixed(3) + "," +
+               Number(contentY || 0).toFixed(3) + "," +
+               Number(contentWidth || 0).toFixed(3) + "x" +
+               Number(contentHeight || 0).toFixed(3) +
+               "|crop:" + Number(cropX || 0).toFixed(6) + "," +
+               Number(cropY || 0).toFixed(6) + "," +
+               Number(cropWidth || 0).toFixed(6) + "x" +
+               Number(cropHeight || 0).toFixed(6) +
+               "|rotation:" + Number(rotationDegrees || 0).toFixed(3) +
+               "|fitMode:" + String(fitMode || "fit") +
+               "|dpr:" + Math.max(1.0, Number(devicePixelRatio || 1.0)).toFixed(3)
     }
 
     function devicePixelRectForViewRect(viewX, viewY, viewWidth, viewHeight) {

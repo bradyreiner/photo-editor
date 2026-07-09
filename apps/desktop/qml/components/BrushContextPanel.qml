@@ -10,7 +10,7 @@ Rectangle {
     property string layerIconName: "media"
     property string layerName: "Base image"
     property string layerStateText: "Direct adjustment"
-    property string maskName: "No active mask"
+    property string maskName: "No active selection"
     property string maskStateText: ""
     property int maskSetCount: 0
     property string maskChipText: "Active selection"

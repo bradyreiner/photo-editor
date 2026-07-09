@@ -598,6 +598,13 @@ struct GamutWarningAnalysis final {
   }
 };
 
+struct OutputTransformResult final {
+  ColorPixel pixel;
+  bool source_out_of_gamut = false;
+  double max_channel_excursion = 0.0;
+  std::string output_profile_name;
+};
+
 struct CancellationToken final {
   const std::atomic<int>* latest_generation = nullptr;
   int generation = 0;
@@ -620,6 +627,16 @@ struct CancellationToken final {
 [[nodiscard]] std::vector<float> build_perceptual_curve_lut(std::span<const CurvePoint> points, int sample_count = 256);
 [[nodiscard]] double evaluate_tone_curve(double value, const ColorAdjustmentState& state);
 [[nodiscard]] double channel_weight_for_selection(double hue, std::string_view channel);
+[[nodiscard]] OutputTransformResult apply_output_transform(
+    const ColorPixel& pixel,
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target = GamutWarningTarget::ExportOutput,
+    std::string_view chromatic_adaptation_method = "Bradford");
+void apply_output_transform(
+    std::span<ColorPixel> pixels,
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target = GamutWarningTarget::ExportOutput,
+    std::string_view chromatic_adaptation_method = "Bradford");
 [[nodiscard]] GamutWarningAnalysis analyze_gamut_warnings(
     std::span<const ColorPixel> pixels,
     const ColorPipelineConfig& config,
@@ -724,5 +741,16 @@ struct LocalAdjustmentCoordinateMapping final {
     int width,
     int height,
     std::span<const ColorPixel> source_pixels = {});
+[[nodiscard]] std::vector<std::uint8_t> rasterize_local_mask_set_alpha(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels = {});
+[[nodiscard]] std::vector<std::uint8_t> rasterize_local_mask_set_alpha(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels,
+    const ColorPipelineConfig& color_pipeline);
 
 }  // namespace photo_editor::pipeline

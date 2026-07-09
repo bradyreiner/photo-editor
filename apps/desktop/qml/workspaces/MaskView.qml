@@ -17,6 +17,7 @@ Rectangle {
     readonly property string maskWorkflowPolishContract: "mask-workflow-polish:v1|first-glance:canvas-active-selection-inspector-source-tools|close-inspection:context-source-operation-preview-refine-pending-actions|clutter:provider-details-diagnostic-only-one-active-context|interaction:create-select-refine-combine-preview-rename-reorder-delete|text:no-elide-no-overlap|functionality:preserved"
     readonly property string maskPageCompletionContract: "page-completion:v1|masks|sidebar:source-variant-controls-search|content:canvas-overlay-brush-lasso-polygon-handles|inspector:active-context-mask-stack-refine-adjustments|toolbar:combine-preview-import-retry-apply-cancel|states:no-mask-active-mask-generating-locked-empty-error"
     readonly property string maskLayerParameterTerminologyContract: "mask-layer-parameter-terminology:v1|layer-opacity:composite-layer-result|mask-density:alpha-strength-before-gating|mask-opacity:mask-source-contribution|brush-flow:per-stamp-paint-rate|brush-opacity:pressure-or-source-opacity|overlay-opacity:visualization-only"
+    readonly property string pointerCoordinateMappingContract: "mask-view-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs"
     property bool objectPickArmed: false
     property bool objectPickCreateNew: false
     property string objectPickMode: "selection"
@@ -79,6 +80,21 @@ Rectangle {
             root.clearTransientTools()
             editorPreview.beginAlphaImageMaskImport(selectedFile)
         }
+    }
+
+    CanvasCoordinateMapper {
+        id: maskCoordinateMapper
+        contentX: 0
+        contentY: 0
+        contentWidth: previewItem.width
+        contentHeight: previewItem.height
+        cropX: editorPreview.cropRectX
+        cropY: editorPreview.cropRectY
+        cropWidth: editorPreview.cropRectWidth
+        cropHeight: editorPreview.cropRectHeight
+        rotationDegrees: editorPreview.transformRotation
+        fitMode: "fit"
+        devicePixelRatio: Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
     }
 
     Rectangle {
@@ -201,26 +217,56 @@ Rectangle {
         editorPreview.resetSmartSelectStroke()
     }
 
-    function normalizedStrokeX(mouseX) {
-        return clamp(mouseX / Math.max(1, previewItem.width), 0.0, 1.0)
+    function imagePointFromItem(item, itemX, itemY) {
+        if (!item)
+            return { valid: false, x: 0, y: 0 }
+        const mapped = item.mapToItem(previewItem, Number(itemX || 0), Number(itemY || 0))
+        const point = maskCoordinateMapper.viewToImagePoint(mapped.x, mapped.y)
+        return { valid: point.valid, x: root.clamp(point.x, 0.0, 1.0), y: root.clamp(point.y, 0.0, 1.0) }
     }
 
-    function normalizedStrokeY(mouseY) {
-        return clamp(mouseY / Math.max(1, previewItem.height), 0.0, 1.0)
+    function pointerMappingDiagnosticSignature(item, itemX, itemY) {
+        if (!item)
+            return "mask-view-pointer:v1|invalid-item"
+        const mapped = item.mapToItem(previewItem, Number(itemX || 0), Number(itemY || 0))
+        return "mask-view-pointer:v1|" +
+               maskCoordinateMapper.pointerMappingDiagnosticSignature(mapped.x, mapped.y)
+    }
+
+    function normalizedStrokePoint(item, itemX, itemY) {
+        return imagePointFromItem(item, itemX, itemY)
+    }
+
+    function viewPointForImage(normalizedX, normalizedY) {
+        const point = maskCoordinateMapper.imageToViewPoint(normalizedX, normalizedY)
+        return { valid: point.valid, x: point.x, y: point.y }
+    }
+
+    function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter) {
+        const radius = Math.max(0.0, Number(normalizedDiameter || 0)) / 2.0
+        const left = root.viewPointForImage(root.clamp(centerX - radius, 0.0, 1.0), centerY)
+        const right = root.viewPointForImage(root.clamp(centerX + radius, 0.0, 1.0), centerY)
+        const top = root.viewPointForImage(centerX, root.clamp(centerY - radius, 0.0, 1.0))
+        const bottom = root.viewPointForImage(centerX, root.clamp(centerY + radius, 0.0, 1.0))
+        const horizontal = Math.sqrt(Math.pow(right.x - left.x, 2) + Math.pow(right.y - left.y, 2))
+        const vertical = Math.sqrt(Math.pow(bottom.x - top.x, 2) + Math.pow(bottom.y - top.y, 2))
+        return Math.max(1, horizontal, vertical)
     }
 
     function beginSmartSelectStroke(mouseX, mouseY) {
+        const point = normalizedStrokePoint(previewItem, mouseX, mouseY)
         editorPreview.beginSmartSelectStroke(
-                    normalizedStrokeX(mouseX),
-                    normalizedStrokeY(mouseY),
+                    point.x,
+                    point.y,
                     previewItem.width,
                     previewItem.height)
     }
 
     function updateSmartSelectStroke(mouseX, mouseY) {
+        const point = normalizedStrokePoint(previewItem, mouseX, mouseY)
         editorPreview.updateSmartSelectStroke(
-                    normalizedStrokeX(mouseX),
-                    normalizedStrokeY(mouseY),
+                    point.x,
+                    point.y,
                     previewItem.width,
                     previewItem.height)
     }
@@ -1031,8 +1077,11 @@ Rectangle {
                                     cursorShape: active ? Qt.CrossCursor : Qt.PointingHandCursor
                                     onPressed: function(mouse) {
                                         editorPreview.activeMaskIndex = index
-                                        if (active)
-                                            editorPreview.activeMaskPosition = root.clamp(mouse.y / linearOverlay.height, 0, 1)
+                                        if (active) {
+                                            const point = root.imagePointFromItem(linearOverlay, mouse.x, mouse.y)
+                                            if (point.valid)
+                                                editorPreview.activeMaskPosition = root.clamp(point.y, 0, 1)
+                                        }
                                     }
                                 }
 
@@ -1053,10 +1102,12 @@ Rectangle {
                                         onPositionChanged: function(mouse) {
                                             if (!pressed)
                                                 return
-                                            editorPreview.activeMaskPosition = root.clamp(
-                                                        (parent.y + mouse.y + parent.height / 2) / linearOverlay.height,
-                                                        0,
-                                                        1)
+                                            const point = root.imagePointFromItem(
+                                                        linearOverlay,
+                                                        parent.x + mouse.x,
+                                                        parent.y + mouse.y + parent.height / 2)
+                                            if (point.valid)
+                                                editorPreview.activeMaskPosition = root.clamp(point.y, 0, 1)
                                         }
                                     }
                                 }
@@ -1159,8 +1210,14 @@ Rectangle {
                                         onPositionChanged: function(mouse) {
                                             if (!pressed)
                                                 return
-                                            editorPreview.activeMaskCenterX = root.clamp((radialOverlay.x + parent.x + mouse.x) / previewItem.width, 0, 1)
-                                            editorPreview.activeMaskCenterY = root.clamp((radialOverlay.y + parent.y + mouse.y) / previewItem.height, 0, 1)
+                                            const point = root.imagePointFromItem(
+                                                        radialOverlay,
+                                                        parent.x + mouse.x,
+                                                        parent.y + mouse.y)
+                                            if (point.valid) {
+                                                editorPreview.activeMaskCenterX = root.clamp(point.x, 0, 1)
+                                                editorPreview.activeMaskCenterY = root.clamp(point.y, 0, 1)
+                                            }
                                         }
                                     }
                                 }
@@ -1182,7 +1239,12 @@ Rectangle {
                                         onPositionChanged: function(mouse) {
                                             if (!pressed)
                                                 return
-                                            editorPreview.activeMaskRadiusX = root.clamp((parent.x + mouse.x) / previewItem.width / 2, 0.05, 1.0)
+                                            const point = root.imagePointFromItem(
+                                                        radialOverlay,
+                                                        parent.x + mouse.x,
+                                                        parent.y + mouse.y)
+                                            if (point.valid)
+                                                editorPreview.activeMaskRadiusX = root.clamp(Math.abs(point.x - radialOverlay.centerXValue), 0.05, 1.0)
                                         }
                                     }
                                 }
@@ -1204,7 +1266,12 @@ Rectangle {
                                         onPositionChanged: function(mouse) {
                                             if (!pressed)
                                                 return
-                                            editorPreview.activeMaskRadiusY = root.clamp((parent.y + mouse.y) / previewItem.height / 2, 0.05, 1.0)
+                                            const point = root.imagePointFromItem(
+                                                        radialOverlay,
+                                                        parent.x + mouse.x,
+                                                        parent.y + mouse.y)
+                                            if (point.valid)
+                                                editorPreview.activeMaskRadiusY = root.clamp(Math.abs(point.y - radialOverlay.centerYValue), 0.05, 1.0)
                                         }
                                     }
                                 }
@@ -1289,10 +1356,14 @@ Rectangle {
                                 }
 
                                 Rectangle {
-                                    property real sourceX: (mask.cloneSourceX || 0.5) * brushOverlay.width
-                                    property real sourceY: (mask.cloneSourceY || 0.5) * brushOverlay.height
-                                    property real targetX: Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0))) * brushOverlay.width
-                                    property real targetY: Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0))) * brushOverlay.height
+                                    property var sourcePoint: root.viewPointForImage(mask.cloneSourceX || 0.5, mask.cloneSourceY || 0.5)
+                                    property var targetPoint: root.viewPointForImage(
+                                        Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0))),
+                                        Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0))))
+                                    property real sourceX: sourcePoint.x
+                                    property real sourceY: sourcePoint.y
+                                    property real targetX: targetPoint.x
+                                    property real targetY: targetPoint.y
                                     property real offsetLength: Math.sqrt(Math.pow(targetX - sourceX, 2) + Math.pow(targetY - sourceY, 2))
                                     visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
                                     x: sourceX
@@ -1307,10 +1378,16 @@ Rectangle {
                                 }
 
                                 Item {
+                                    property real targetX: Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0)))
+                                    property real targetY: Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0)))
+                                    property var targetPoint: root.viewPointForImage(targetX, targetY)
                                     visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
-                                    x: Math.max(0, Math.min(1, (mask.cloneSourceX || 0.5) - (mask.cloneOffsetX || 0))) * brushOverlay.width - width / 2
-                                    y: Math.max(0, Math.min(1, (mask.cloneSourceY || 0.5) - (mask.cloneOffsetY || 0))) * brushOverlay.height - height / 2
-                                    width: Math.max(18, Math.min(58, (mask.brushSize || 0.07) * brushOverlay.width * (mask.cloneScale || 1.0)))
+                                    x: targetPoint.x - width / 2
+                                    y: targetPoint.y - height / 2
+                                    width: Math.max(18, Math.min(58, root.viewDiameterForImageSpan(
+                                                             targetX,
+                                                             targetY,
+                                                             (mask.brushSize || 0.07) * (mask.cloneScale || 1.0))))
                                     height: width
 
                                     Rectangle {
@@ -1333,9 +1410,10 @@ Rectangle {
                                 }
 
                                 Item {
+                                    property var sourcePoint: root.viewPointForImage(mask.cloneSourceX || 0.5, mask.cloneSourceY || 0.5)
                                     visible: active && mask.retouchMode === "clone" && (mask.cloneSourceSet || false)
-                                    x: (mask.cloneSourceX || 0.5) * brushOverlay.width - width / 2
-                                    y: (mask.cloneSourceY || 0.5) * brushOverlay.height - height / 2
+                                    x: sourcePoint.x - width / 2
+                                    y: sourcePoint.y - height / 2
                                     width: 22
                                     height: 22
 
@@ -1377,11 +1455,12 @@ Rectangle {
                                         root.brushHoverY = y
                                         root.brushHoverActive = true
                                         root.brushCursorPositionKnown = true
+                                        const point = root.imagePointFromItem(brushOverlay, x, y)
+                                        if (!point.valid)
+                                            return
                                         if (mask.retouchMode === "clone" &&
                                                 (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
-                                            editorPreview.setActiveMaskCloneSource(
-                                                        x / brushOverlay.width,
-                                                        y / brushOverlay.height)
+                                            editorPreview.setActiveMaskCloneSource(point.x, point.y)
                                             root.cloneSourcePickArmed = false
                                             root.tabletBrushStrokeActive = false
                                             return
@@ -1389,8 +1468,8 @@ Rectangle {
                                         editorPreview.beginActiveBrushStroke()
                                         root.tabletBrushStrokeActive = true
                                         editorPreview.addBrushPointWithTabletEraser(
-                                                    x / brushOverlay.width,
-                                                    y / brushOverlay.height,
+                                                    point.x,
+                                                    point.y,
                                                     pressure,
                                                     tiltX,
                                                     tiltY,
@@ -1405,9 +1484,12 @@ Rectangle {
                                         if (!root.tabletBrushStrokeActive || root.cloneSourcePickArmed ||
                                                 (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                             return
+                                        const point = root.imagePointFromItem(brushOverlay, x, y)
+                                        if (!point.valid)
+                                            return
                                         editorPreview.addBrushPointWithTabletEraser(
-                                                    x / brushOverlay.width,
-                                                    y / brushOverlay.height,
+                                                    point.x,
+                                                    point.y,
                                                     pressure,
                                                     tiltX,
                                                     tiltY,
@@ -1438,15 +1520,16 @@ Rectangle {
                                         root.brushHoverY = mouse.y
                                         root.brushHoverActive = true
                                         root.brushCursorPositionKnown = true
+                                        const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)
+                                        if (!point.valid)
+                                            return
                                         if (mask.retouchMode === "clone" &&
                                                 (root.cloneSourcePickArmed || !(mask.cloneSourceSet || false))) {
-                                            editorPreview.setActiveMaskCloneSource(
-                                                        mouse.x / brushOverlay.width,
-                                                        mouse.y / brushOverlay.height)
+                                            editorPreview.setActiveMaskCloneSource(point.x, point.y)
                                             root.cloneSourcePickArmed = false
                                             return
                                         }
-                                        editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
+                                        editorPreview.addBrushPointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                     onPositionChanged: function(mouse) {
                                         root.brushHoverX = mouse.x
@@ -1456,7 +1539,9 @@ Rectangle {
                                         if (!pressed || root.cloneSourcePickArmed ||
                                                 (mask.retouchMode === "clone" && !(mask.cloneSourceSet || false)))
                                             return
-                                        editorPreview.addBrushPointWithTablet(mouse.x / brushOverlay.width, mouse.y / brushOverlay.height, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
+                                        const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)
+                                        if (point.valid)
+                                            editorPreview.addBrushPointWithTablet(point.x, point.y, root.pointerPressure(mouse), root.pointerTilt(mouse, "xTilt"), root.pointerTilt(mouse, "yTilt"))
                                     }
                                 }
 
@@ -1558,9 +1643,11 @@ Rectangle {
                                             return
 
                                         ctx.beginPath()
-                                        ctx.moveTo(root.previewPointX(points[0].x || 0.5), root.previewPointY(points[0].y || 0.5))
+                                        const firstViewPoint = root.viewPointForImage(points[0].x || 0.5, points[0].y || 0.5)
+                                        ctx.moveTo(root.pixelAligned(firstViewPoint.x), root.pixelAligned(firstViewPoint.y))
                                         for (let i = 1; i < count; ++i) {
-                                            ctx.lineTo(root.previewPointX(points[i].x || 0.5), root.previewPointY(points[i].y || 0.5))
+                                            const viewPoint = root.viewPointForImage(points[i].x || 0.5, points[i].y || 0.5)
+                                            ctx.lineTo(root.pixelAligned(viewPoint.x), root.pixelAligned(viewPoint.y))
                                         }
                                         if (count >= 3)
                                             ctx.closePath()
@@ -1586,11 +1673,12 @@ Rectangle {
                                         required property var modelData
 
                                         readonly property string handleReadabilityContract: root.handleReadabilityContract
+                                        readonly property var viewPoint: root.viewPointForImage(modelData.x || 0.5, modelData.y || 0.5)
                                         width: 14
                                         height: width
                                         radius: width / 2
-                                        x: root.previewPointX(modelData.x || 0.5) - width / 2
-                                        y: root.previewPointY(modelData.y || 0.5) - height / 2
+                                        x: viewPoint.x - width / 2
+                                        y: viewPoint.y - height / 2
                                         color: "transparent"
                                         border.width: 0
                                         visible: active
@@ -1698,11 +1786,13 @@ Rectangle {
                             const overlayAccent = root.resolvedMaskOverlayColor(
                                         editorPreview.maskStack[editorPreview.activeMaskIndex])
                             ctx.beginPath()
-                            ctx.moveTo(root.pixelAligned(root.previewPointX(points[0].x || 0.5)),
-                                       root.pixelAligned(root.previewPointY(points[0].y || 0.5)))
+                            const firstViewPoint = root.viewPointForImage(points[0].x || 0.5, points[0].y || 0.5)
+                            ctx.moveTo(root.pixelAligned(firstViewPoint.x),
+                                       root.pixelAligned(firstViewPoint.y))
                             for (let i = 1; i < count; ++i) {
-                                ctx.lineTo(root.pixelAligned(root.previewPointX(points[i].x || 0.5)),
-                                           root.pixelAligned(root.previewPointY(points[i].y || 0.5)))
+                                const viewPoint = root.viewPointForImage(points[i].x || 0.5, points[i].y || 0.5)
+                                ctx.lineTo(root.pixelAligned(viewPoint.x),
+                                           root.pixelAligned(viewPoint.y))
                             }
                             if (count >= 3)
                                 ctx.closePath()
@@ -1751,9 +1841,9 @@ Rectangle {
 
                             onPointChanged: {
                                 if (root.objectPickArmed && !editorPreview.smartSelectStrokeActive) {
-                                    editorPreview.scheduleSmartSelectPreview(
-                                                point.position.x / Math.max(1, previewItem.width),
-                                                point.position.y / Math.max(1, previewItem.height))
+                                    const imagePoint = root.normalizedStrokePoint(previewItem, point.position.x, point.position.y)
+                                    if (imagePoint.valid)
+                                        editorPreview.scheduleSmartSelectPreview(imagePoint.x, imagePoint.y)
                                 }
                             }
                         }
@@ -1799,9 +1889,12 @@ Rectangle {
                                     parent.lassoPointerX = point.position.x
                                     parent.lassoPointerY = point.position.y
                                     editorPreview.startLassoSelection()
-                                    editorPreview.appendActivePolygonPoint(
-                                                parent.lassoPointerX / Math.max(1, previewItem.width),
-                                                parent.lassoPointerY / Math.max(1, previewItem.height))
+                                    const imagePoint = root.normalizedStrokePoint(
+                                                previewItem,
+                                                parent.lassoPointerX,
+                                                parent.lassoPointerY)
+                                    if (imagePoint.valid)
+                                        editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)
                                 } else {
                                     root.lassoDrawArmed = false
                                 }
@@ -1811,9 +1904,12 @@ Rectangle {
                                 parent.lassoPointerX = point.position.x
                                 parent.lassoPointerY = point.position.y
                                 if (active) {
-                                    editorPreview.appendActivePolygonPoint(
-                                                parent.lassoPointerX / Math.max(1, previewItem.width),
-                                                parent.lassoPointerY / Math.max(1, previewItem.height))
+                                    const imagePoint = root.normalizedStrokePoint(
+                                                previewItem,
+                                                parent.lassoPointerX,
+                                                parent.lassoPointerY)
+                                    if (imagePoint.valid)
+                                        editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)
                                 }
                             }
                         }
@@ -1827,15 +1923,21 @@ Rectangle {
                             grabPermissions: PointerHandler.TakeOverForbidden
 
                             onTapped: function(eventPoint, button) {
-                                editorPreview.appendActivePolygonPoint(
-                                            eventPoint.position.x / Math.max(1, previewItem.width),
-                                            eventPoint.position.y / Math.max(1, previewItem.height))
+                                const imagePoint = root.normalizedStrokePoint(
+                                            previewItem,
+                                            eventPoint.position.x,
+                                            eventPoint.position.y)
+                                if (imagePoint.valid)
+                                    editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)
                             }
 
                             onDoubleTapped: function(eventPoint, button) {
-                                editorPreview.appendActivePolygonPoint(
-                                            eventPoint.position.x / Math.max(1, previewItem.width),
-                                            eventPoint.position.y / Math.max(1, previewItem.height))
+                                const imagePoint = root.normalizedStrokePoint(
+                                            previewItem,
+                                            eventPoint.position.x,
+                                            eventPoint.position.y)
+                                if (imagePoint.valid)
+                                    editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)
                                 root.polygonDrawArmed = false
                             }
                         }

@@ -834,14 +834,70 @@ int main() {
     };
     cases.push_back(NeutralRampCase{"luma point curve", state});
 
+    state = base;
+    state.master_curve_points = {
+        CurvePoint{0.0, 0.0},
+        CurvePoint{0.22, 0.16},
+        CurvePoint{0.64, 0.78},
+        CurvePoint{1.0, 1.0},
+    };
+    cases.push_back(NeutralRampCase{"master point curve", state});
+
     check(
-        cases.size() == 8,
-        "tone-only chroma registry should cover global light, levels, zone, and luma curve tools",
+        cases.size() == 9,
+        "tone-only chroma registry should cover global light, levels, zone, luma curve, and master curve tools",
         &failures);
     for (const auto& tone_case : cases) {
       const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, tone_case.state);
       require_chroma_relationships_preserved(tone_case.name, input, output, &failures);
     }
+  }
+
+  {
+    const auto source = std::vector<ColorPixel>{
+        gray(0.025),
+        gray(0.08),
+        gray(0.18),
+        gray(0.55),
+        gray(0.82),
+        gray(0.96),
+    };
+    const auto delta_at = [&](const ColorAdjustmentState& state, std::size_t index) {
+      const auto output = apply_pixels(source, static_cast<int>(source.size()), 1, state);
+      return luminance(output[index]) - luminance(source[index]);
+    };
+
+    auto state = base;
+    state.whites = 70.0;
+    check(
+        delta_at(state, 5) > delta_at(state, 3) + 0.015 &&
+            delta_at(state, 5) > delta_at(state, 2) + 0.035,
+        "whites should target the upper endpoint more than midtones",
+        &failures);
+
+    state = base;
+    state.highlights = -70.0;
+    check(
+        std::abs(delta_at(state, 4)) > std::abs(delta_at(state, 2)) + 0.020 &&
+            std::abs(delta_at(state, 4)) > std::abs(delta_at(state, 1)) + 0.020,
+        "highlights should target bright tones more than shadows and midtones",
+        &failures);
+
+    state = base;
+    state.shadows = 70.0;
+    check(
+        delta_at(state, 1) > delta_at(state, 3) + 0.015 &&
+            delta_at(state, 1) > delta_at(state, 4) + 0.020,
+        "shadows should target lower tones more than highlights",
+        &failures);
+
+    state = base;
+    state.blacks = 70.0;
+    check(
+        delta_at(state, 0) > delta_at(state, 2) + 0.004 &&
+            delta_at(state, 0) > delta_at(state, 4) + 0.004,
+        "blacks should target the lower endpoint more than midtones and highlights",
+        &failures);
   }
 
   {

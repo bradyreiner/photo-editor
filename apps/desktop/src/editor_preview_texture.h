@@ -14,6 +14,7 @@ class EditorPreviewTexture {
 
   [[nodiscard]] virtual bool available() const = 0;
   [[nodiscard]] virtual const char* backendName() const = 0;
+  virtual bool ensureNativeTexture(const QSize& size, QImage::Format format) = 0;
   virtual bool upload(const QImage& image) = 0;
   virtual bool uploadRegion(const QImage& image, const QRect& region) = 0;
   virtual bool uploadPatch(const QImage& image, const QRect& destination_region) = 0;

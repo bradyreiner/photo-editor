@@ -9,7 +9,7 @@ Rectangle {
     property string totalLayersText: "1 TOTAL LAYER"
     property bool isolationActive: false
     property string targetIconName: "adjust"
-    property string targetName: "Adjustment Layer"
+    property string targetName: "Layer"
     property string targetStateText: "Brush target"
     property string maskName: "Active selection"
     property string maskStateText: "Brush / Add / Overlay"
@@ -64,7 +64,7 @@ Rectangle {
                 tone: "primary"
                 menuWidth: 236
                 menuItems: root.addMenuItems
-                tooltipText: "Add the default adjustment layer."
+                tooltipText: "Add the default layer."
                 menuTooltipText: "Choose layer type"
                 onClicked: root.addLayerRequested()
                 onMenuItemTriggered: function(key) { root.addLayerMenuItemTriggered(key) }

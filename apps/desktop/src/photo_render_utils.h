@@ -27,6 +27,12 @@ struct RenderBackendTelemetry final {
   QString fallback_reason;
 };
 
+struct GpuPipelineSupport final {
+  bool supported = false;
+  bool metal_aware_cpu_engine = false;
+  QString fallback_reason;
+};
+
 struct RenderMaskOptions final {
   bool rebuild_editable_masks_at_output_resolution = false;
 };
@@ -34,6 +40,12 @@ struct RenderMaskOptions final {
 [[nodiscard]] bool preview_supported(const QString& file_path);
 [[nodiscard]] bool render_backend_available(RenderBackendPreference backend_preference);
 [[nodiscard]] QString render_backend_unavailable_reason(RenderBackendPreference backend_preference);
+[[nodiscard]] GpuPipelineSupport evaluate_gpu_pipeline_support(
+    const QImage& image,
+    const RenderEditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
+    RenderMaskOptions mask_options = {},
+    bool assume_metal_available = true);
 [[nodiscard]] bool decode_source_image(
     const QString& file_path,
     QImage* image,

@@ -4,11 +4,13 @@
 #include <memory>
 
 #include <QDir>
+#include <QFile>
 #include <QGuiApplication>
 #include <QMetaObject>
 #include <QQmlComponent>
 #include <QQmlEngine>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <QVariantMap>
 
@@ -17,6 +19,19 @@ namespace {
 int fail(const char* message) {
   std::cerr << message << '\n';
   return EXIT_FAILURE;
+}
+
+bool require_source_patterns(
+    const QString& source,
+    const QStringList& required_patterns,
+    const char* message) {
+  for (const auto& pattern : required_patterns) {
+    if (!source.contains(pattern)) {
+      std::cerr << message << " missing pattern: " << pattern.toStdString() << '\n';
+      return false;
+    }
+  }
+  return true;
 }
 
 bool near_value(const double actual, const double expected, const double tolerance = 1e-6) {
@@ -82,6 +97,26 @@ QVariantMap invoke_map(
   return return_value.toMap();
 }
 
+QString invoke_string(
+    QObject* object,
+    const char* method,
+    const QVariantList& arguments) {
+  QVariant return_value;
+  bool invoked = false;
+  if (arguments.size() == 2) {
+    invoked = QMetaObject::invokeMethod(
+        object,
+        method,
+        Q_RETURN_ARG(QVariant, return_value),
+        Q_ARG(QVariant, arguments.at(0)),
+        Q_ARG(QVariant, arguments.at(1)));
+  }
+  if (!invoked) {
+    return {};
+  }
+  return return_value.toString();
+}
+
 void set_identity_view(QObject* mapper) {
   mapper->setProperty("contentX", 50.0);
   mapper->setProperty("contentY", 20.0);
@@ -93,6 +128,74 @@ void set_identity_view(QObject* mapper) {
   mapper->setProperty("cropHeight", 1.0);
   mapper->setProperty("rotationDegrees", 0.0);
   mapper->setProperty("devicePixelRatio", 1.0);
+}
+
+void set_surface_view(
+    QObject* mapper,
+    const double content_x,
+    const double content_y,
+    const double content_width,
+    const double content_height,
+    const double crop_x,
+    const double crop_y,
+    const double crop_width,
+    const double crop_height,
+    const double rotation_degrees,
+    const double device_pixel_ratio) {
+  mapper->setProperty("contentX", content_x);
+  mapper->setProperty("contentY", content_y);
+  mapper->setProperty("contentWidth", content_width);
+  mapper->setProperty("contentHeight", content_height);
+  mapper->setProperty("cropX", crop_x);
+  mapper->setProperty("cropY", crop_y);
+  mapper->setProperty("cropWidth", crop_width);
+  mapper->setProperty("cropHeight", crop_height);
+  mapper->setProperty("rotationDegrees", rotation_degrees);
+  mapper->setProperty("devicePixelRatio", device_pixel_ratio);
+}
+
+bool expect_same_image_point(
+    const QVariantMap& actual,
+    const QVariantMap& expected,
+    const char* message) {
+  if (!actual.value(QStringLiteral("valid")).toBool() ||
+      !expected.value(QStringLiteral("valid")).toBool() ||
+      !near_value(
+          actual.value(QStringLiteral("x")).toDouble(),
+          expected.value(QStringLiteral("x")).toDouble()) ||
+      !near_value(
+          actual.value(QStringLiteral("y")).toDouble(),
+          expected.value(QStringLiteral("y")).toDouble())) {
+    std::cerr << message
+              << " actual=(" << actual.value(QStringLiteral("x")).toDouble()
+              << ", " << actual.value(QStringLiteral("y")).toDouble()
+              << ") expected=(" << expected.value(QStringLiteral("x")).toDouble()
+              << ", " << expected.value(QStringLiteral("y")).toDouble()
+              << ")\n";
+    return false;
+  }
+  return true;
+}
+
+QString read_source_file(const QString& relative_path) {
+  QFile file(QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR)).filePath(relative_path));
+  if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+    return {};
+  }
+  return QString::fromUtf8(file.readAll());
+}
+
+bool reject_source_patterns(
+    const QString& source,
+    const QStringList& patterns,
+    const char* message) {
+  for (const auto& pattern : patterns) {
+    if (source.contains(pattern)) {
+      std::cerr << message << " pattern=" << pattern.toStdString() << '\n';
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -126,6 +229,9 @@ int main(int argc, char** argv) {
       !contract.contains(QStringLiteral("image-to-view:true")) ||
       !contract.contains(QStringLiteral("crop:true")) ||
       !contract.contains(QStringLiteral("rotation:true")) ||
+      !contract.contains(QStringLiteral("zoom-pan:true")) ||
+      !contract.contains(QStringLiteral("painted-image-rect:true")) ||
+      !contract.contains(QStringLiteral("fit-fill:true")) ||
       !contract.contains(QStringLiteral("device-pixel-ratio:true"))) {
     return fail("coordinate mapper should expose its transform contract");
   }
@@ -148,6 +254,17 @@ int main(int argc, char** argv) {
       !expect_number(image_point, QStringLiteral("x"), 0.25, "identity view-to-image x") ||
       !expect_number(image_point, QStringLiteral("y"), 0.5, "identity view-to-image y")) {
     return fail("identity view-to-image transform should round trip exactly");
+  }
+  auto source_pixel_rect = invoke_map(
+      mapper.get(),
+      "imageToViewRect",
+      {0.25, 0.50, 1.0 / 8.0, 1.0 / 4.0});
+  if (!expect_bool(source_pixel_rect, QStringLiteral("valid"), true, "source pixel rect validity") ||
+      !expect_number(source_pixel_rect, QStringLiteral("x"), 150.0, "source pixel rect x") ||
+      !expect_number(source_pixel_rect, QStringLiteral("y"), 120.0, "source pixel rect y") ||
+      !expect_number(source_pixel_rect, QStringLiteral("width"), 50.0, "source pixel rect width") ||
+      !expect_number(source_pixel_rect, QStringLiteral("height"), 50.0, "source pixel rect height")) {
+    return fail("source-pixel grid cells should map through the same image-to-view rect contract as overlays");
   }
 
   mapper->setProperty("contentX", -100.0);
@@ -211,6 +328,326 @@ int main(int argc, char** argv) {
       !expect_number(device_rect, QStringLiteral("height"), 21.0, "dpr rect height") ||
       !expect_number(device_rect, QStringLiteral("devicePixelRatio"), 2.0, "dpr rect ratio")) {
     return fail("device-pixel-ratio view rect conversion should be exact");
+  }
+  const auto diagnostic_signature =
+      invoke_string(mapper.get(), "pointerMappingDiagnosticSignature", {250.0, 120.0});
+  if (!diagnostic_signature.startsWith(QStringLiteral("canvas-coordinate-mapper:v1|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|valid:true|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|view:250.000,120.000|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|image:0.500000,0.500000|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|crop:0.000000,0.000000,1.000000x1.000000|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|rotation:0.000|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|fitMode:fit|")) ||
+      !diagnostic_signature.contains(QStringLiteral("|dpr:2.000"))) {
+    return fail("pointer mapping diagnostics should report mapper-backed view, image, crop, rotation, fit mode, and dpr state");
+  }
+
+  const auto studio_workspace_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/StudioWorkspace.qml"));
+  const auto mask_view_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskView.qml"));
+  const auto mask_canvas_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskCanvasOverlay.qml"));
+  const auto shared_mask_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"));
+  const auto mask_inspector_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"));
+  const auto controller_source =
+      read_source_file(QStringLiteral("apps/desktop/src/editor_preview_controller.cpp"));
+  if (studio_workspace_source.isEmpty() ||
+      mask_view_source.isEmpty() ||
+      mask_canvas_overlay_source.isEmpty() ||
+      shared_mask_overlay_source.isEmpty() ||
+      !studio_workspace_source.contains(QStringLiteral("function normalizedPointForViewport(x, y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("fitMode: viewport.fitMode")) ||
+      !mask_view_source.contains(QStringLiteral("mask-view-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs")) ||
+      !mask_view_source.contains(QStringLiteral("function imagePointFromItem(")) ||
+      !mask_view_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("mask-canvas-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function imagePointFromItem(")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("fitMode: \"overlay\"")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("const point = root.imagePointFromLocal(mouseX, mouseY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("root.activeOutlineClicked(point.x, point.y)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("const previousViewPoint = root.viewPointForImage(")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("const firstViewPoint = root.viewPointForImage(")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("activeOutlineClicked(root.clamp(mouseX /")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("root.width * root.pointXValue(")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("root.height * root.pointYValue("))) {
+    return fail("Studio, MaskView, MaskCanvasOverlay, and SharedMaskOverlay should expose mapper-backed pointer contracts with explicit layout modes");
+  }
+  const QStringList studio_tool_routing_contract = {
+      QStringLiteral("function normalizedPointForViewport(x, y) {\n            const point = viewportCoordinateMapper.viewToImagePoint(x, y)"),
+      QStringLiteral("function updatePixelInspectorAt(x, y) {\n            const point = normalizedPointForViewport(x, y)"),
+      QStringLiteral("function handleSamplingPointerPressed(mouse) {\n            if (!editorPreview.hasAsset || editorPreview.compareMode)\n                return false\n            const point = normalizedPointForViewport(mouse.x, mouse.y)"),
+      QStringLiteral("editorPreview.sampleActiveColorRangeAt(point.x, point.y)"),
+      QStringLiteral("editorPreview.beginActiveLuminanceRangeSample(point.x, point.y)"),
+      QStringLiteral("editorPreview.commitActiveLuminanceRangeSample(point.x, point.y)"),
+      QStringLiteral("function handleMaskPointerPressed(mouse) {\n            if (!maskPointerActive())\n                return false\n            const point = normalizedPointForViewport(mouse.x, mouse.y)"),
+      QStringLiteral("return editorPreview.applyActiveSelectionPixel(point.x, point.y, operation)"),
+      QStringLiteral("editorPreview.addBrushPointWithPressure(point.x, point.y, 1.0)"),
+      QStringLiteral("editorPreview.appendActivePolygonPoint(point.x, point.y)"),
+      QStringLiteral("editorPreview.smartSelectAddAt(point.x, point.y, !editorPreview.hasActiveMask)"),
+      QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)"),
+      QStringLiteral("editorPreview.setActiveMaskPatchSourceRegion("),
+      QStringLiteral("editorPreview.setActiveMaskCloneSource(")};
+  const QStringList mask_canvas_tool_routing_contract = {
+      QStringLiteral("function imagePointFromItem(item, itemX, itemY) {\n        const mapped = item && item !== previewItem"),
+      QStringLiteral("const point = maskCoordinateMapper.viewToImagePoint(mapped.x, mapped.y)"),
+      QStringLiteral("function normalizedStrokePoint(mouseX, mouseY) {\n        const point = imagePointFromItem(previewItem, mouseX, mouseY)"),
+      QStringLiteral("function scheduleSmartSelectPreviewFromItem(item, itemX, itemY, force) {\n        const point = imagePointFromItem(item, itemX, itemY)"),
+      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, x, y)\n                                if (point.valid) {\n                                    editorPreview.setActiveMaskCloneSource(point.x, point.y)"),
+      QStringLiteral("editorPreview.addBrushPointWithTabletEraser("),
+      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)\n                            if (point.valid)\n                                editorPreview.addBrushPointWithTablet(point.x, point.y"),
+      QStringLiteral("const point = root.normalizedStrokePoint(mouse.x, mouse.y)\n                if (!point.valid)"),
+      QStringLiteral("editorPreview.appendActivePolygonPoint(point.x, point.y)"),
+      QStringLiteral("root.scheduleSmartSelectPreviewFromItem(previewItem, mouse.x, mouse.y, false)"),
+      QStringLiteral("const point = root.imagePointFromItem(polygonOverlay, previewX, previewY)")};
+  const QStringList mask_view_tool_routing_contract = {
+      QStringLiteral("function imagePointFromItem(item, itemX, itemY) {\n        if (!item)"),
+      QStringLiteral("const point = maskCoordinateMapper.viewToImagePoint(mapped.x, mapped.y)"),
+      QStringLiteral("function normalizedStrokePoint(item, itemX, itemY) {\n        return imagePointFromItem(item, itemX, itemY)"),
+      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, x, y)"),
+      QStringLiteral("editorPreview.setActiveMaskCloneSource(point.x, point.y)"),
+      QStringLiteral("editorPreview.addBrushPointWithTabletEraser("),
+      QStringLiteral("const point = root.imagePointFromItem(brushOverlay, mouse.x, mouse.y)\n                                        if (!point.valid)"),
+      QStringLiteral("editorPreview.addBrushPointWithTablet(point.x, point.y"),
+      QStringLiteral("const imagePoint = root.normalizedStrokePoint(\n                                                previewItem,\n                                                parent.lassoPointerX,\n                                                parent.lassoPointerY)"),
+      QStringLiteral("const imagePoint = root.normalizedStrokePoint(\n                                            previewItem,\n                                            eventPoint.position.x,"),
+      QStringLiteral("editorPreview.appendActivePolygonPoint(imagePoint.x, imagePoint.y)")};
+  const QStringList shared_overlay_tool_routing_contract = {
+      QStringLiteral("function viewPointForImage(normalizedX, normalizedY) {\n        const point = sharedCoordinateMapper.imageToViewPoint(normalizedX, normalizedY)"),
+      QStringLiteral("function imagePointFromLocal(localX, localY) {\n        const point = sharedCoordinateMapper.viewToImagePoint(localX, localY)"),
+      QStringLiteral("const point = root.imagePointFromLocal(mouseX, mouseY)"),
+      QStringLiteral("root.activeOutlineClicked(point.x, point.y)")};
+  if (!require_source_patterns(
+          studio_workspace_source,
+          studio_tool_routing_contract,
+          "Studio workspace should route pixel inspector, sampling, brush, lasso, polygon, object, clone, and patch tools through the mapper") ||
+      !require_source_patterns(
+          mask_canvas_overlay_source,
+          mask_canvas_tool_routing_contract,
+          "MaskCanvasOverlay should route mouse, tablet, hover, lasso, polygon, brush, clone, and smart paths through the mapper") ||
+      !require_source_patterns(
+          mask_view_source,
+          mask_view_tool_routing_contract,
+          "MaskView should route mouse, tablet, hover, lasso, polygon, brush, clone, and smart paths through the mapper") ||
+      !require_source_patterns(
+          shared_mask_overlay_source,
+          shared_overlay_tool_routing_contract,
+          "SharedMaskOverlay should route outline drawing and hit testing through the mapper")) {
+    return fail("Every Goal 1 mask input category should have explicit mapper-backed source evidence");
+  }
+  if (!mask_canvas_overlay_source.contains(QStringLiteral("function scheduleSmartSelectPreviewFromItem(item, itemX, itemY, force) {\n        const point = imagePointFromItem(item, itemX, itemY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function beginSmartSelectStroke(mouseX, mouseY) {\n        const point = normalizedStrokePoint(mouseX, mouseY)\n        editorPreview.beginSmartSelectStroke(point.x, point.y")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function updateSmartSelectStroke(mouseX, mouseY) {\n        const point = normalizedStrokePoint(mouseX, mouseY)\n        editorPreview.updateSmartSelectStroke(point.x, point.y")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("const point = normalizedStrokePoint(mouse.x, mouse.y)\n        if (addNegativePrompt)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("root.scheduleSmartSelectPreviewFromItem(previewItem, mouseX, mouseY, false)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("root.scheduleSmartSelectPreviewFromItem(previewItem, mouse.x, mouse.y, false)")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("beginSmartSelectStroke(mouse.x /")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("updateSmartSelectStroke(mouse.x /")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("scheduleSmartSelectPreview(mouse.x")) ||
+      !mask_view_source.contains(QStringLiteral("function beginSmartSelectStroke(mouseX, mouseY) {\n        const point = normalizedStrokePoint(previewItem, mouseX, mouseY)")) ||
+      !mask_view_source.contains(QStringLiteral("function updateSmartSelectStroke(mouseX, mouseY) {\n        const point = normalizedStrokePoint(previewItem, mouseX, mouseY)")) ||
+      !mask_view_source.contains(QStringLiteral("const imagePoint = root.normalizedStrokePoint(previewItem, point.position.x, point.position.y)\n                                    if (imagePoint.valid)\n                                        editorPreview.scheduleSmartSelectPreview(imagePoint.x, imagePoint.y)")) ||
+      !mask_view_source.contains(QStringLiteral("root.beginSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)")) ||
+      !mask_view_source.contains(QStringLiteral("root.updateSmartSelectStroke(parent.smartPointerX, parent.smartPointerY)")) ||
+      mask_view_source.contains(QStringLiteral("scheduleSmartSelectPreview(point.position.x")) ||
+      !studio_workspace_source.contains(QStringLiteral("function normalizedPointForViewport(x, y) {\n            const point = viewportCoordinateMapper.viewToImagePoint(x, y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("if (!editorPreview.hasActiveMask || kind === \"object\") {\n                const objectMode = root.applyObjectPickModeForModifierState(mouse.modifiers)")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.smartSelectSubtractAt(point.x, point.y, !editorPreview.hasActiveMask)")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.smartSelectAddAt(point.x, point.y, !editorPreview.hasActiveMask)")) ||
+      studio_workspace_source.contains(QStringLiteral("smartSelectAddAt(mouse.x")) ||
+      studio_workspace_source.contains(QStringLiteral("smartSelectSubtractAt(mouse.x"))) {
+    return fail("Smart/Object selection hover, prompt, stroke, and one-click commit paths should all use mapper-backed normalized image coordinates");
+  }
+  const QStringList forbidden_mask_direct_normalization_patterns = {
+      QStringLiteral("mouse.x / previewItem.width"),
+      QStringLiteral("mouse.y / previewItem.height"),
+      QStringLiteral("mouse.x / brushOverlay.width"),
+      QStringLiteral("mouse.y / brushOverlay.height"),
+      QStringLiteral("point.position.x / previewItem.width"),
+      QStringLiteral("point.position.y / previewItem.height"),
+      QStringLiteral("x / brushOverlay.width"),
+      QStringLiteral("y / brushOverlay.height"),
+      QStringLiteral("previewX / Math.max(1, previewItem.width)"),
+      QStringLiteral("previewY / Math.max(1, previewItem.height)"),
+      QStringLiteral("localX / Math.max(1, root.width)"),
+      QStringLiteral("localY / Math.max(1, root.height)"),
+      QStringLiteral("parent.width * normalizedX"),
+      QStringLiteral("parent.height * normalizedY"),
+      QStringLiteral("parent.width * Number(modelData.x"),
+      QStringLiteral("parent.height * Number(modelData.y"),
+      QStringLiteral("(parent.x + mouse.x - parent.grabOffsetX + parent.width / 2) / Math.max(1, parent.parent.width)"),
+      QStringLiteral("(parent.y + mouse.y - parent.grabOffsetY + parent.height / 2) / Math.max(1, parent.parent.height)")};
+  if (!reject_source_patterns(
+          mask_canvas_overlay_source,
+          forbidden_mask_direct_normalization_patterns,
+          "MaskCanvasOverlay should not normalize mask pointers or handles by local width/height") ||
+      !reject_source_patterns(
+          mask_view_source,
+          forbidden_mask_direct_normalization_patterns,
+          "MaskView should not normalize mask pointers or handles by local width/height") ||
+      !reject_source_patterns(
+          shared_mask_overlay_source,
+          forbidden_mask_direct_normalization_patterns,
+          "SharedMaskOverlay should not normalize mask pointers or handles by local width/height")) {
+    return fail("Mask pointer paths should route through CanvasCoordinateMapper instead of direct local width/height math");
+  }
+  if (mask_inspector_source.isEmpty() ||
+      controller_source.isEmpty() ||
+      !controller_source.contains(QStringLiteral("fallback_metadata.insert(QStringLiteral(\"smartFallback\"), true);")) ||
+      !controller_source.contains(QStringLiteral("Created an editable rough selection fallback for refinement.")) ||
+      !mask_inspector_source.contains(QStringLiteral("function smartSelectionFallbackState(mask)")) ||
+      !mask_inspector_source.contains(QStringLiteral("metadata.smartFallback === true ? \"Editable preview\" : \"\"")) ||
+      !mask_inspector_source.contains(QStringLiteral("const fallbackState = root.smartSelectionFallbackState(mask)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function activeMaskData()")) ||
+      !studio_workspace_source.contains(QStringLiteral("function smartSelectionFallbackState(mask)")) ||
+      !studio_workspace_source.contains(QStringLiteral("metadata.smartFallback === true ? \"Editable preview\" : \"\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("const fallbackState = root.smartSelectionFallbackState(root.activeMaskData())")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property string fallbackState: root.smartSelectionFallbackState(root.activeMaskData())")) ||
+      !studio_workspace_source.contains(QStringLiteral("selectedMaskHeader.fallbackState.length > 0"))) {
+    return fail("Smart selection rough fallback masks should expose a visible editable preview state in mask status UI");
+  }
+  if (!studio_workspace_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter)")) ||
+      !studio_workspace_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(x, y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("viewportCoordinateMapper.pointerMappingDiagnosticSignature(x, y)")) ||
+      !studio_workspace_source.contains(QStringLiteral("readonly property var sampleViewRect: viewportAvailable")) ||
+      !studio_workspace_source.contains(QStringLiteral("property var sourceRect: viewport.viewRectForImage(sourceX, sourceY, sourceWidth, sourceHeight)")) ||
+      !studio_workspace_source.contains(QStringLiteral("property var sourcePoint: viewport.viewPointForImage(editorPreview.activeMaskCloneSourceX, editorPreview.activeMaskCloneSourceY)")) ||
+      !studio_workspace_source.contains(QStringLiteral("property var targetPoint: viewport.viewPointForImage(root.activeCloneTargetX(), root.activeCloneTargetY())")) ||
+      !studio_workspace_source.contains(QStringLiteral("const point = viewport.normalizedPointForViewport(mapped.x, mapped.y)")) ||
+      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + editorPreview.activeMaskCloneSourceX * viewport.paintedContentWidth")) ||
+      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + root.activeCloneTargetX() * viewport.paintedContentWidth")) ||
+      studio_workspace_source.contains(QStringLiteral("viewport.paintedContentX + sourceX * viewport.paintedContentWidth")) ||
+      studio_workspace_source.contains(QStringLiteral("(mapped.x - viewport.paintedContentX) / Math.max(1, viewport.paintedContentWidth)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function viewRectForImage(normalizedX, normalizedY, normalizedWidth, normalizedHeight)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(item, itemX, itemY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("maskCoordinateMapper.pointerMappingDiagnosticSignature(mapped.x, mapped.y)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("readonly property var patchViewRect: root.viewRectForImage(")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("property var sourcePoint: root.viewPointForImage(mask.cloneSourceX || 0.5, mask.cloneSourceY || 0.5)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("property var targetPoint: root.viewPointForImage(")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("(mask.cloneSourceX || 0.5) * brushOverlay.width")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("patchBounds.x * previewItem.width")) ||
+      !mask_view_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
+      !mask_view_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(item, itemX, itemY)")) ||
+      !mask_view_source.contains(QStringLiteral("maskCoordinateMapper.pointerMappingDiagnosticSignature(mapped.x, mapped.y)")) ||
+      !mask_view_source.contains(QStringLiteral("function viewDiameterForImageSpan(centerX, centerY, normalizedDiameter)")) ||
+      !mask_view_source.contains(QStringLiteral("property var sourcePoint: root.viewPointForImage(mask.cloneSourceX || 0.5, mask.cloneSourceY || 0.5)")) ||
+      !mask_view_source.contains(QStringLiteral("property var targetPoint: root.viewPointForImage(")) ||
+      mask_view_source.contains(QStringLiteral("(mask.cloneSourceX || 0.5) * brushOverlay.width")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("CanvasCoordinateMapper {\n        id: sharedCoordinateMapper")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("function viewPointForImage(normalizedX, normalizedY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("function imagePointFromLocal(localX, localY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("function pointerMappingDiagnosticSignature(localX, localY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("sharedCoordinateMapper.pointerMappingDiagnosticSignature(localX, localY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("readonly property var viewPoint: root.viewPointForImage(normalizedX, normalizedY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("readonly property var viewPoint: root.viewPointForImage(Number(modelData.x || 0), Number(modelData.y || 0))")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("editorPreview.insertActivePolygonPointAfter(\n                                    parent.edgeIndex,\n                                    parent.normalizedX,\n                                    parent.normalizedY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("const point = root.imagePointFromLocal(localX, localY)")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("editorPreview.moveActivePolygonPoint(\n                                        parent.pointIndex,\n                                        root.clamp(point.x, 0, 1),\n                                        root.clamp(point.y, 0, 1))")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("editorPreview.insertActivePolygonPointAfter(\n                                        parent.edgeIndex,\n                                        parent.normalizedX,\n                                        parent.normalizedY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("const point = root.imagePointFromItem(polygonOverlay, previewX, previewY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("editorPreview.moveActivePolygonPoint(\n                                                    parent.pointIndex,\n                                                    Math.max(0, Math.min(1, point.x)),\n                                                    Math.max(0, Math.min(1, point.y)))")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("parent.width * normalizedX")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("parent.height * normalizedY")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("parent.width * Number(modelData.x")) ||
+      shared_mask_overlay_source.contains(QStringLiteral("(parent.x + mouse.x - parent.grabOffsetX + parent.width / 2) / Math.max(1, parent.parent.width)")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("previewX / Math.max(1, previewItem.width)")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("previewY / Math.max(1, previewItem.height)")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("root.previewPointX(root.pointXValue(modelData))")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("root.previewPointX(root.pointXValue(firstPoint))")) ||
+      mask_view_source.contains(QStringLiteral("root.previewPointX(modelData.x || 0.5)"))) {
+    return fail("Range sample patches and retouch source/target guides should use image-to-view mapping and mapper-backed drag coordinates");
+  }
+  const QStringList pixel_grid_alignment_contract = {
+      QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\""),
+      QStringLiteral("readonly property bool pixelGridFullResolutionBacked: (nativePreviewActive &&\n                                                              editorPreview.displayPreviewNativeFullResolution) ||"),
+      QStringLiteral("Number(editorPreview.sourceImageWidth || 0) <= editorPreview.previewTargetEdge"),
+      QStringLiteral("Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge"),
+      QStringLiteral("readonly property bool pixelGridVisible: pixelInspectionActive"),
+      QStringLiteral("readonly property bool highCostInspectionOverlaysVisible: true"),
+      QStringLiteral("pixel-inspection-performance:v3|allow-loupe-and-analysis-overlays-while-source-pixels-visible:true|viewport-publish-signature-dedup:true|callLater-coalesced:true|deferred-source-patch-refresh:520ms"),
+      QStringLiteral("sourcePixelInspectionZoom * deepInspectionZoomMultiplier"),
+      QStringLiteral("function wheelZoomFactor(wheel)"),
+      QStringLiteral("(zoom <= 1.01 && !pixelInspectionActive)"),
+      QStringLiteral("function publishedPreviewViewportSignature("),
+      QStringLiteral("if (nextSignature === lastPublishedPreviewViewportSignature)"),
+      QStringLiteral("property bool publishedPreviewViewportUpdateQueued: false"),
+      QStringLiteral("onPixelInspectionActiveChanged: schedulePublishedPreviewViewportUpdate(false)"),
+      QStringLiteral("readonly property real sourcePixelScreenWidth: Number(editorPreview.sourceImageWidth || 0) > 0\n            ? paintedContentWidth / Math.max(1, Number(editorPreview.sourceImageWidth || 1))"),
+      QStringLiteral("readonly property real sourcePixelScreenHeight: Number(editorPreview.sourceImageHeight || 0) > 0\n            ? paintedContentHeight / Math.max(1, Number(editorPreview.sourceImageHeight || 1))"),
+      QStringLiteral("const rect = viewRectForImage(\n                        pixelX / sourceWidth,\n                        pixelY / sourceHeight,\n                        1.0 / sourceWidth,\n                        1.0 / sourceHeight)"),
+      QStringLiteral("readonly property string pixelBrushCursorSnapContract: \"pixel-brush-cursor:v2|source-cell:floor|screen-rect:mapper|visible:pixel-grid|source-backed:pixelGridFullResolutionBacked\""),
+      QStringLiteral("visible: root.pixelExactToolReady() && viewport.pixelGridVisible && cell.valid"),
+      QStringLiteral("const contentLeft = viewport.paintedContentX"),
+      QStringLiteral("const contentTop = viewport.paintedContentY"),
+      QStringLiteral("const startXIndex = Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))"),
+      QStringLiteral("const startYIndex = Math.max(0, Math.floor((visibleTop - contentTop) / stepY))"),
+      QStringLiteral("const lineX = Math.round(contentLeft + xIndex * stepX) + 0.5"),
+      QStringLiteral("const lineY = Math.round(contentTop + yIndex * stepY) + 0.5")};
+  if (!require_source_patterns(
+          studio_workspace_source,
+          pixel_grid_alignment_contract,
+          "Pixel grid, snapped pixel cursor, and source-pixel overlays should share the same source-pixel image-to-view geometry")) {
+    return fail("Pixel-grid alignment should be guarded against parallel hand-rolled geometry");
+  }
+
+  const auto painted_x = 266.0;
+  const auto painted_y = 144.0;
+  const auto painted_width = 640.0;
+  const auto painted_height = 360.0;
+  const auto crop_x = 0.12;
+  const auto crop_y = 0.08;
+  const auto crop_width = 0.72;
+  const auto crop_height = 0.64;
+  const auto rotation_degrees = 90.0;
+  const auto device_pixel_ratio = 2.0;
+
+  set_surface_view(
+      mapper.get(),
+      24.0,
+      18.0,
+      painted_width,
+      painted_height,
+      crop_x,
+      crop_y,
+      crop_width,
+      crop_height,
+      rotation_degrees,
+      device_pixel_ratio);
+  const auto studio_surface_point =
+      invoke_map(mapper.get(), "viewToImagePoint", {24.0 + painted_x, 18.0 + painted_y});
+
+  set_surface_view(
+      mapper.get(),
+      0.0,
+      0.0,
+      painted_width,
+      painted_height,
+      crop_x,
+      crop_y,
+      crop_width,
+      crop_height,
+      rotation_degrees,
+      device_pixel_ratio);
+  const auto mask_view_surface_point =
+      invoke_map(mapper.get(), "viewToImagePoint", {painted_x, painted_y});
+  const auto mask_canvas_surface_point =
+      invoke_map(mapper.get(), "viewToImagePoint", {painted_x, painted_y});
+  if (!expect_same_image_point(
+          mask_view_surface_point,
+          studio_surface_point,
+          "MaskView should submit the same normalized point as Studio for the same painted image location") ||
+      !expect_same_image_point(
+          mask_canvas_surface_point,
+          studio_surface_point,
+          "MaskCanvasOverlay should submit the same normalized point as Studio for the same painted image location")) {
+    return fail("Studio, MaskView, and MaskCanvasOverlay should share one normalized image coordinate mapping");
   }
 
   return EXIT_SUCCESS;

@@ -30,6 +30,22 @@ ApplicationWindow {
     property bool exportWorkspaceLoaded: false
     property bool secondaryWorkspacesPrewarmStarted: false
     property int secondaryWorkspacePrewarmStep: 0
+    property bool workspaceTransitionActive: false
+    property int pendingWorkspaceIndex: -1
+    property string pendingEditToolActivation: ""
+    property double qmlRouteStartedAtMs: 0
+    property double qmlRouteComponentCreatedAtMs: 0
+    property string qmlRouteSurface: ""
+    property bool qmlRouteReadyLogged: false
+    property double qmlFrameLastSampleAtMs: 0
+    property int qmlFrameSampleCount: 0
+    property int qmlFrameJankCount: 0
+    property int qmlFrameDroppedCount: 0
+    property int qmlFrameIdleGapCount: 0
+    property real qmlFrameMaxIntervalMs: 0
+    property string shellTransitionTitle: ""
+    property string shellTransitionDetail: ""
+    property color shellTransitionAccent: theme.accentWarm400
     property string libraryWorkspaceMode: "catalog"
     property string editWorkspaceMode: "adjust"
     property bool editorUsesLocalAsset: false
@@ -87,6 +103,7 @@ ApplicationWindow {
                                                              || jobQueue.activeJobCountForKind("timeline_render") > 0
                                                              || jobQueue.activeJobCountForKind("asset_export") > 0))
     readonly property bool blockingActivityVisible: anyAppActivity && primaryActivityKind !== "preview_render"
+    readonly property bool shellNavigationActivityVisible: workspaceTransitionActive
     readonly property bool previewUpdateVisible: editorPreview.processing
                                                && primaryActivityKind === "preview_render"
     readonly property string primaryFailureKind: {
@@ -454,6 +471,252 @@ ApplicationWindow {
         return workspaceLoader.item ? workspaceLoader.item : null
     }
 
+    function workspaceLoaded(index) {
+        if (index === libraryWorkspaceIndex)
+            return libraryWorkspaceLoaded
+        if (index === editWorkspaceIndex)
+            return editWorkspaceLoaded
+        if (index === carouselWorkspaceIndex)
+            return carouselWorkspaceLoaded
+        if (index === timelineWorkspaceIndex)
+            return timelineWorkspaceLoaded
+        if (index === exportWorkspaceIndex)
+            return exportWorkspaceLoaded
+        return false
+    }
+
+    function loadedWorkspaceItem(index) {
+        if (index === libraryWorkspaceIndex)
+            return workspaceLoader.item
+        if (index === editWorkspaceIndex)
+            return editWorkspaceLoader.item
+        if (index === carouselWorkspaceIndex)
+            return carouselWorkspaceLoader.item
+        if (index === timelineWorkspaceIndex)
+            return timelineWorkspaceLoader.item
+        if (index === exportWorkspaceIndex)
+            return exportWorkspaceLoader.item
+        return null
+    }
+
+    function markWorkspaceLoaded(index) {
+        if (index === libraryWorkspaceIndex)
+            libraryWorkspaceLoaded = true
+        else if (index === editWorkspaceIndex)
+            editWorkspaceLoaded = true
+        else if (index === carouselWorkspaceIndex)
+            carouselWorkspaceLoaded = true
+        else if (index === timelineWorkspaceIndex)
+            timelineWorkspaceLoaded = true
+        else if (index === exportWorkspaceIndex)
+            exportWorkspaceLoaded = true
+    }
+
+    function workspacePerformanceSurface(index, editToolName) {
+        const workspaceIndex = Number(index)
+        const tool = String(editToolName || "").trim().toLowerCase()
+        if (workspaceIndex === libraryWorkspaceIndex && libraryWorkspaceMode === "import")
+            return "import"
+        if (workspaceIndex === editWorkspaceIndex && tool === "masks")
+            return "masks"
+        if (workspaceIndex >= 0 && workspaceIndex < workspaceKinds.length)
+            return workspaceKinds[workspaceIndex]
+        return "unknown"
+    }
+
+    function activePerformanceSurface() {
+        return workspacePerformanceSurface(currentWorkspace, currentWorkspace === editWorkspaceIndex ? resolvedEditTool() : "")
+    }
+
+    function routeWorkflowId(surface) {
+        return "qml-route:" + String(surface || "unknown")
+    }
+
+    function hasQmlPerformance() {
+        return typeof qmlPerformance !== "undefined" && qmlPerformance
+    }
+
+    function qmlNowMs() {
+        return hasQmlPerformance() ? qmlPerformance.nowMs() : Date.now()
+    }
+
+    function noteWorkspaceComponentCreated(index) {
+        if (workspaceTransitionActive && pendingWorkspaceIndex === index)
+            qmlRouteComponentCreatedAtMs = qmlNowMs()
+    }
+
+    function logQmlRouteReady(index, prewarmed) {
+        if (!workspaceTransitionActive || qmlRouteReadyLogged || pendingWorkspaceIndex !== index)
+            return
+        if (!hasQmlPerformance())
+            return
+        qmlRouteReadyLogged = true
+        const surface = qmlRouteSurface.length > 0 ? qmlRouteSurface : workspacePerformanceSurface(index, pendingEditToolActivation)
+        qmlPerformance.routeReady(surface,
+                                  index,
+                                  qmlRouteStartedAtMs,
+                                  qmlRouteComponentCreatedAtMs,
+                                  prewarmed,
+                                  routeWorkflowId(surface))
+    }
+
+    function logInstantQmlRoute(surface, index) {
+        if (!hasQmlPerformance())
+            return
+        const startedAt = qmlNowMs()
+        const route = String(surface || "unknown")
+        qmlPerformance.routeStarted(route, index, routeWorkflowId(route))
+        qmlPerformance.routeReady(route, index, startedAt, startedAt, true, routeWorkflowId(route))
+    }
+
+    function sampleQmlFrame(nowMs) {
+        if (qmlFrameLastSampleAtMs <= 0) {
+            qmlFrameLastSampleAtMs = nowMs
+            return
+        }
+        const elapsed = Math.max(0, nowMs - qmlFrameLastSampleAtMs)
+        qmlFrameLastSampleAtMs = nowMs
+        if (elapsed > 1000) {
+            qmlFrameIdleGapCount += 1
+            flushQmlFrameSummary()
+            return
+        }
+        const janky = elapsed > 33
+        const dropped = elapsed > 50
+        qmlFrameSampleCount += 1
+        qmlFrameMaxIntervalMs = Math.max(qmlFrameMaxIntervalMs, elapsed)
+        if (janky)
+            qmlFrameJankCount += 1
+        if (dropped)
+            qmlFrameDroppedCount += 1
+        if (qmlFrameSampleCount >= 60)
+            flushQmlFrameSummary()
+    }
+
+    function flushQmlFrameSummary() {
+        if (qmlFrameSampleCount <= 0)
+            return
+        const surface = activePerformanceSurface()
+        const hasFrameIssue = qmlFrameJankCount > 0 || qmlFrameDroppedCount > 0
+        if (hasQmlPerformance() && hasFrameIssue) {
+            qmlPerformance.frameSummary(surface,
+                                        currentWorkspace,
+                                        qmlFrameSampleCount,
+                                        qmlFrameMaxIntervalMs,
+                                        qmlFrameJankCount,
+                                        qmlFrameDroppedCount)
+        }
+        qmlFrameSampleCount = 0
+        qmlFrameJankCount = 0
+        qmlFrameDroppedCount = 0
+        qmlFrameIdleGapCount = 0
+        qmlFrameMaxIntervalMs = 0
+    }
+
+    function editToolTitle(toolName) {
+        const tool = String(toolName || "").toLowerCase()
+        if (tool === "crop")
+            return "Crop"
+        if (tool === "masks")
+            return "Masks"
+        if (tool === "brush")
+            return "Brush"
+        if (tool === "compare")
+            return "Compare"
+        if (tool === "layers")
+            return "Layers"
+        if (tool === "retouch")
+            return "Retouch"
+        return "Adjust"
+    }
+
+    function beginShellTransition(targetWorkspaceIndex, title, detail, accent, editToolName) {
+        const workspaceIndex = Number(targetWorkspaceIndex)
+        if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
+            return false
+
+        pendingWorkspaceIndex = workspaceIndex
+        pendingEditToolActivation = String(editToolName || "")
+        qmlRouteSurface = workspacePerformanceSurface(workspaceIndex, pendingEditToolActivation)
+        qmlRouteStartedAtMs = qmlNowMs()
+        qmlRouteComponentCreatedAtMs = 0
+        qmlRouteReadyLogged = false
+        if (hasQmlPerformance())
+            qmlPerformance.routeStarted(qmlRouteSurface, workspaceIndex, routeWorkflowId(qmlRouteSurface))
+        shellTransitionTitle = String(title || ("Opening " + workspaceTitles[workspaceIndex]))
+        shellTransitionDetail = String(detail || workspaceSubtitles[workspaceIndex])
+        shellTransitionAccent = accent || workspaceAccent(workspaceIndex)
+        workspaceTransitionActive = true
+        workspaceTransitionCommitTimer.restart()
+        return true
+    }
+
+    function finishShellTransitionSoon() {
+        if (!workspaceTransitionActive)
+            return
+        workspaceTransitionFinishTimer.restart()
+    }
+
+    function completeShellTransition() {
+        workspaceTransitionActive = false
+        pendingWorkspaceIndex = -1
+        pendingEditToolActivation = ""
+        qmlRouteStartedAtMs = 0
+        qmlRouteComponentCreatedAtMs = 0
+        qmlRouteSurface = ""
+        qmlRouteReadyLogged = false
+        shellTransitionTitle = ""
+        shellTransitionDetail = ""
+    }
+
+    function commitPendingWorkspaceTransition() {
+        if (!workspaceTransitionActive) {
+            return
+        }
+
+        const workspaceIndex = pendingWorkspaceIndex
+        if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length) {
+            completeShellTransition()
+            return
+        }
+
+        if (workspaceIndex === editWorkspaceIndex && pendingEditToolActivation.length > 0)
+            editWorkspaceMode = pendingEditToolActivation
+
+        currentWorkspace = workspaceIndex
+
+        if (workspaceIndex === editWorkspaceIndex) {
+            Qt.callLater(function() {
+                window.applyPendingEditToolActivation()
+                window.maybeFinishWorkspaceTransition(window.editWorkspaceIndex)
+            })
+            return
+        }
+
+        maybeFinishWorkspaceTransition(workspaceIndex)
+    }
+
+    function maybeFinishWorkspaceTransition(index) {
+        if (!workspaceTransitionActive || pendingWorkspaceIndex !== index)
+            return
+        if (loadedWorkspaceItem(index) === null)
+            return
+        logQmlRouteReady(index, workspaceLoaded(index))
+        finishShellTransitionSoon()
+    }
+
+    function applyPendingEditToolActivation() {
+        if (pendingEditToolActivation.length === 0)
+            return false
+        const workspace = editWorkspaceLoader.item
+        if (!workspace || typeof workspace.activateEditTool !== "function")
+            return false
+        const tool = pendingEditToolActivation
+        workspace.activateEditTool(tool)
+        pendingEditToolActivation = ""
+        return true
+    }
+
     function resolvedEditTool() {
         if (editWorkspaceMode === "compare")
             return "compare"
@@ -560,17 +823,20 @@ ApplicationWindow {
     function activatePrimaryEditTool(toolName) {
         const cleanTool = String(toolName || "").trim().toLowerCase()
         if (cleanTool === "export") {
-            currentWorkspace = exportWorkspaceIndex
-            return true
+            return beginShellTransition(exportWorkspaceIndex,
+                                        "Opening Export",
+                                        workspaceSubtitles[exportWorkspaceIndex],
+                                        workspaceAccent(exportWorkspaceIndex),
+                                        "")
         }
         if (cleanTool.length === 0)
             return false
-        editWorkspaceMode = cleanTool
-        currentWorkspace = editWorkspaceIndex
-        const workspace = activeWorkspaceItem()
-        if (workspace && typeof workspace.activateEditTool === "function")
-            workspace.activateEditTool(cleanTool)
-        return true
+
+        return beginShellTransition(editWorkspaceIndex,
+                                    "Switching to " + editToolTitle(cleanTool),
+                                    workspaceSubtitles[editWorkspaceIndex],
+                                    workspaceAccent(editWorkspaceIndex),
+                                    cleanTool)
     }
 
     function switchToWorkspaceIndex(index) {
@@ -578,8 +844,14 @@ ApplicationWindow {
         if (workspaceIndex < 0 || workspaceIndex >= workspaceTitles.length)
             return false
 
-        currentWorkspace = workspaceIndex
-        return true
+        if (workspaceIndex === currentWorkspace && workspaceLoaded(workspaceIndex) && loadedWorkspaceItem(workspaceIndex))
+            return true
+
+        return beginShellTransition(workspaceIndex,
+                                    "Opening " + workspaceTitles[workspaceIndex],
+                                    workspaceSubtitles[workspaceIndex],
+                                    workspaceAccent(workspaceIndex),
+                                    "")
     }
 
     function switchWorkspaceByNumber(number) {
@@ -589,8 +861,11 @@ ApplicationWindow {
     function openEditPresetPanelFromExport(action) {
         const requestedAction = String(action || "")
         pendingEditInspectorTab = "presets"
-        editWorkspaceMode = "adjust"
-        currentWorkspace = editWorkspaceIndex
+        beginShellTransition(editWorkspaceIndex,
+                             "Opening Presets",
+                             workspaceSubtitles[editWorkspaceIndex],
+                             workspaceAccent(editWorkspaceIndex),
+                             "adjust")
         Qt.callLater(function() {
             const workspace = activeWorkspaceItem()
             if (workspace && workspace.objectName === "editStudioWorkspace") {
@@ -604,15 +879,18 @@ ApplicationWindow {
         return true
     }
 
-    function restorePrimaryStudioPanels(workspace) {
+    function restorePrimaryStudioPanels(workspace, preserveEditSidebarState) {
         if (!workspace)
             return false
+        const objectName = String(workspace.objectName || "")
+        const pageName = String(workspace.page || "")
+        const isEditWorkspace = pageName === "edit" || objectName === "editStudioWorkspace" || objectName === "editStudioWorkspaceContent"
         if (workspace.librarySourcesPanelVisible !== undefined)
             workspace.librarySourcesPanelVisible = true
         if (workspace.libraryInspectorPanelVisible !== undefined)
             workspace.libraryInspectorPanelVisible = true
-        if (workspace.editSidebarCollapsed !== undefined)
-            workspace.editSidebarCollapsed = false
+        if (workspace.editSidebarCollapsed !== undefined && preserveEditSidebarState !== true)
+            workspace.editSidebarCollapsed = isEditWorkspace
         if (workspace.editContextPanelVisible !== undefined)
             workspace.editContextPanelVisible = true
         if (workspace.editInspectorPanelVisible !== undefined)
@@ -821,7 +1099,7 @@ ApplicationWindow {
                     payload.recipeJson,
                     preset,
                     destinationFolder))
-            currentWorkspace = exportWorkspaceIndex
+            switchToWorkspaceIndex(exportWorkspaceIndex)
     }
 
     function loadSelectedAssetIntoEditor() {
@@ -887,7 +1165,7 @@ ApplicationWindow {
 
     function beginImportWorkspace() {
         libraryWorkspaceMode = "import"
-        currentWorkspace = libraryWorkspaceIndex
+        switchToWorkspaceIndex(libraryWorkspaceIndex)
         catalogAssets.refreshImportSources()
     }
 
@@ -899,8 +1177,11 @@ ApplicationWindow {
             catalogAssets.selectIndex(0)
 
         editorUsesLocalAsset = false
-        editWorkspaceMode = "adjust"
-        currentWorkspace = editWorkspaceIndex
+        beginShellTransition(editWorkspaceIndex,
+                             "Opening Edit",
+                             workspaceSubtitles[editWorkspaceIndex],
+                             workspaceAccent(editWorkspaceIndex),
+                             "adjust")
     }
 
     function openSelectedTimelineDocument() {
@@ -908,12 +1189,12 @@ ApplicationWindow {
             return
 
         timelineDocument.loadTimeline(catalogAssets.selectedTimelineDocumentPath)
-        currentWorkspace = timelineWorkspaceIndex
+        switchToWorkspaceIndex(timelineWorkspaceIndex)
     }
 
     function createTimelineFromMenu() {
         timelineDocument.createTimeline()
-        currentWorkspace = timelineWorkspaceIndex
+        switchToWorkspaceIndex(timelineWorkspaceIndex)
     }
 
     function createCarouselFromMenu() {
@@ -922,7 +1203,7 @@ ApplicationWindow {
             "format": "4x5",
             "slideCount": 1
         })
-        currentWorkspace = carouselWorkspaceIndex
+        switchToWorkspaceIndex(carouselWorkspaceIndex)
     }
 
     function saveCurrentTimeline() {
@@ -939,16 +1220,19 @@ ApplicationWindow {
         catalogAssets.openProject(projectName)
 
         if (destination === "edit") {
-            editWorkspaceMode = "adjust"
             if (catalogAssets.selectedMediaType === "photo")
                 loadSelectedAssetIntoEditor()
             else
                 editorPreview.loadAsset("", "", "", "", "", "", "")
-            currentWorkspace = editWorkspaceIndex
+            beginShellTransition(editWorkspaceIndex,
+                                 "Opening Edit",
+                                 workspaceSubtitles[editWorkspaceIndex],
+                                 workspaceAccent(editWorkspaceIndex),
+                                 "adjust")
             return
         }
 
-        currentWorkspace = timelineWorkspaceIndex
+        switchToWorkspaceIndex(timelineWorkspaceIndex)
     }
 
     Action {
@@ -1000,7 +1284,7 @@ ApplicationWindow {
         shortcut: StandardKey.Open
         enabled: !catalogAssets.busy
         onTriggered: {
-            window.currentWorkspace = window.libraryWorkspaceIndex
+            window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
             catalogAssets.importFolder()
         }
     }
@@ -1011,7 +1295,7 @@ ApplicationWindow {
         shortcut: window.primaryShortcut("R")
         enabled: !catalogAssets.busy
         onTriggered: {
-            window.currentWorkspace = window.libraryWorkspaceIndex
+            window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
             catalogAssets.refresh()
         }
     }
@@ -1098,8 +1382,7 @@ ApplicationWindow {
         onTriggered: {
             const nextCompareMode = !editorPreview.compareMode
             editorPreview.compareMode = nextCompareMode
-            window.editWorkspaceMode = nextCompareMode ? "compare" : "adjust"
-            window.currentWorkspace = window.editWorkspaceIndex
+            window.activatePrimaryEditTool(nextCompareMode ? "compare" : "adjust")
         }
     }
 
@@ -1738,6 +2021,10 @@ ApplicationWindow {
 
     Component.onCompleted: {
         currentWorkspace = appShell.preferredStartupWorkspace
+        const startupSurface = activePerformanceSurface()
+        const startupStartedAt = qmlNowMs()
+        if (hasQmlPerformance())
+            qmlPerformance.routeStarted(startupSurface, currentWorkspace, routeWorkflowId(startupSurface))
         workspaceInitialized = true
         appShell.currentWorkspace = currentWorkspace
         if (currentWorkspace === libraryWorkspaceIndex) {
@@ -1751,9 +2038,18 @@ ApplicationWindow {
         } else if (currentWorkspace === exportWorkspaceIndex) {
             exportWorkspaceLoaded = true
         }
+        Qt.callLater(function() {
+            if (!hasQmlPerformance())
+                return
+            qmlPerformance.routeReady(startupSurface,
+                                      currentWorkspace,
+                                      startupStartedAt,
+                                      qmlNowMs(),
+                                      workspaceLoaded(currentWorkspace),
+                                      routeWorkflowId(startupSurface))
+        })
         if (currentWorkspace !== editWorkspaceIndex)
             editWorkspacePrewarmTimer.restart()
-        preloadSecondaryWorkspaces()
     }
 
     onCurrentWorkspaceChanged: {
@@ -1791,24 +2087,56 @@ ApplicationWindow {
     onEditWorkspaceModeChanged: {
         if (editWorkspaceLoader.item) {
             editWorkspaceLoader.item.editTool = resolvedEditTool()
-            window.restorePrimaryStudioPanels(editWorkspaceLoader.item)
+            window.restorePrimaryStudioPanels(editWorkspaceLoader.item, true)
             if (editWorkspaceLoader.item.contentWorkspace)
-                window.restorePrimaryStudioPanels(editWorkspaceLoader.item.contentWorkspace)
+                window.restorePrimaryStudioPanels(editWorkspaceLoader.item.contentWorkspace, true)
         }
     }
 
     Timer {
         id: editWorkspacePrewarmTimer
-        interval: 10
+        interval: 700
         repeat: false
-        onTriggered: window.preloadEditWorkspace()
+        onTriggered: {
+            if (!window.workspaceTransitionActive && !window.anyAppActivity)
+                window.preloadEditWorkspace()
+            else
+                restart()
+        }
     }
 
     Timer {
         id: secondaryWorkspacePrewarmTimer
-        interval: 10
+        interval: 1200
         repeat: false
-        onTriggered: window.preloadNextSecondaryWorkspace()
+        onTriggered: {
+            if (!window.workspaceTransitionActive && !window.anyAppActivity)
+                window.preloadNextSecondaryWorkspace()
+            else
+                restart()
+        }
+    }
+
+    Timer {
+        id: qmlFrameSampler
+        interval: 16
+        repeat: true
+        running: window.visible
+        onTriggered: window.sampleQmlFrame(window.qmlNowMs())
+    }
+
+    Timer {
+        id: workspaceTransitionCommitTimer
+        interval: 45
+        repeat: false
+        onTriggered: window.commitPendingWorkspaceTransition()
+    }
+
+    Timer {
+        id: workspaceTransitionFinishTimer
+        interval: 110
+        repeat: false
+        onTriggered: window.completeShellTransition()
     }
 
     Connections {
@@ -1885,7 +2213,7 @@ ApplicationWindow {
                             ToolTip.delay: 350
                             ToolTip.timeout: 2800
                             ToolTip.text: workspaceSubtitles[index]
-                            onClicked: window.currentWorkspace = index
+                            onClicked: window.switchToWorkspaceIndex(index)
 
                             background: Item {
                                 Rectangle {
@@ -2005,6 +2333,11 @@ ApplicationWindow {
                 active: window.libraryWorkspaceLoaded || window.currentWorkspace === window.libraryWorkspaceIndex
                 visible: window.currentWorkspace === window.libraryWorkspaceIndex
                 sourceComponent: active ? libraryView : null
+                onLoaded: {
+                    window.noteWorkspaceComponentCreated(window.libraryWorkspaceIndex)
+                    window.markWorkspaceLoaded(window.libraryWorkspaceIndex)
+                    window.maybeFinishWorkspaceTransition(window.libraryWorkspaceIndex)
+                }
             }
 
             Loader {
@@ -2015,6 +2348,8 @@ ApplicationWindow {
                 visible: window.currentWorkspace === window.editWorkspaceIndex
                 sourceComponent: active ? editView : null
                 onLoaded: {
+                    window.noteWorkspaceComponentCreated(window.editWorkspaceIndex)
+                    window.markWorkspaceLoaded(window.editWorkspaceIndex)
                     if (item) {
                         item.editTool = window.resolvedEditTool()
                         window.restorePrimaryStudioPanels(item)
@@ -2025,7 +2360,8 @@ ApplicationWindow {
                         item.editInspectorTab = window.pendingEditInspectorTab
                         window.pendingEditInspectorTab = ""
                     }
-                    window.preloadSecondaryWorkspaces()
+                    window.applyPendingEditToolActivation()
+                    window.maybeFinishWorkspaceTransition(window.editWorkspaceIndex)
                 }
             }
 
@@ -2036,21 +2372,19 @@ ApplicationWindow {
 
                 function onAssetActivated(destination) {
                     if (destination === "library") {
-                        window.currentWorkspace = window.libraryWorkspaceIndex
+                        window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
                         return
                     }
                     if (destination === "masks") {
-                        window.editWorkspaceMode = "masks"
-                        window.currentWorkspace = window.editWorkspaceIndex
+                        window.activatePrimaryEditTool("masks")
                         return
                     }
                     if (destination === "compare") {
-                        window.editWorkspaceMode = "compare"
-                        window.currentWorkspace = window.editWorkspaceIndex
+                        window.activatePrimaryEditTool("compare")
                         return
                     }
                     if (destination === "export") {
-                        window.currentWorkspace = window.exportWorkspaceIndex
+                        window.switchToWorkspaceIndex(window.exportWorkspaceIndex)
                         return
                     }
                 }
@@ -2071,6 +2405,11 @@ ApplicationWindow {
                 active: window.carouselWorkspaceLoaded || window.currentWorkspace === window.carouselWorkspaceIndex
                 visible: window.currentWorkspace === window.carouselWorkspaceIndex
                 source: Qt.resolvedUrl("workspaces/CarouselView.qml")
+                onLoaded: {
+                    window.noteWorkspaceComponentCreated(window.carouselWorkspaceIndex)
+                    window.markWorkspaceLoaded(window.carouselWorkspaceIndex)
+                    window.maybeFinishWorkspaceTransition(window.carouselWorkspaceIndex)
+                }
             }
 
             Loader {
@@ -2080,6 +2419,11 @@ ApplicationWindow {
                 active: window.timelineWorkspaceLoaded || window.currentWorkspace === window.timelineWorkspaceIndex
                 visible: window.currentWorkspace === window.timelineWorkspaceIndex
                 source: Qt.resolvedUrl("workspaces/TimelineView.qml")
+                onLoaded: {
+                    window.noteWorkspaceComponentCreated(window.timelineWorkspaceIndex)
+                    window.markWorkspaceLoaded(window.timelineWorkspaceIndex)
+                    window.maybeFinishWorkspaceTransition(window.timelineWorkspaceIndex)
+                }
             }
 
             Loader {
@@ -2089,6 +2433,11 @@ ApplicationWindow {
                 active: window.exportWorkspaceLoaded || window.currentWorkspace === window.exportWorkspaceIndex
                 visible: window.currentWorkspace === window.exportWorkspaceIndex
                 source: Qt.resolvedUrl("workspaces/ExportWorkspaceHost.qml")
+                onLoaded: {
+                    window.noteWorkspaceComponentCreated(window.exportWorkspaceIndex)
+                    window.markWorkspaceLoaded(window.exportWorkspaceIndex)
+                    window.maybeFinishWorkspaceTransition(window.exportWorkspaceIndex)
+                }
             }
 
             Connections {
@@ -2102,7 +2451,7 @@ ApplicationWindow {
 
                 function onAssetActivated(destination) {
                     if (destination === "library") {
-                        window.currentWorkspace = window.libraryWorkspaceIndex
+                        window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
                         return
                     }
                     if (destination === "import") {
@@ -2110,8 +2459,91 @@ ApplicationWindow {
                         return
                     }
                     if (destination === "edit") {
-                        window.currentWorkspace = window.editWorkspaceIndex
+                        window.switchToWorkspaceIndex(window.editWorkspaceIndex)
                         return
+                    }
+                }
+            }
+
+            Rectangle {
+                id: workspaceTransitionOverlay
+                objectName: "workspaceTransitionOverlay"
+                visible: window.shellNavigationActivityVisible
+                anchors.fill: parent
+                z: 8
+                color: theme.alpha(theme.ink950, 0.36)
+                opacity: visible ? 1 : 0
+
+                Behavior on opacity {
+                    NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    acceptedButtons: Qt.AllButtons
+                    hoverEnabled: true
+                }
+
+                Rectangle {
+                    width: Math.min(360, Math.max(240, parent.width * 0.28))
+                    height: transitionContent.implicitHeight + 22
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.top: parent.top
+                    anchors.topMargin: 22
+                    radius: 8
+                    color: theme.alpha(theme.glassBase, 0.84)
+                    border.width: 1
+                    border.color: theme.alpha(window.shellTransitionAccent, 0.38)
+
+                    ColumnLayout {
+                        id: transitionContent
+                        anchors.fill: parent
+                        anchors.margins: 11
+                        spacing: 8
+
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Rectangle {
+                                Layout.preferredWidth: 7
+                                Layout.preferredHeight: 7
+                                radius: width / 2
+                                color: window.shellTransitionAccent
+                                opacity: 0.94
+                            }
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: window.shellTransitionTitle
+                                color: theme.textStrong
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideNone
+                                fontSizeMode: Text.HorizontalFit
+                                minimumPixelSize: 9
+                            }
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: window.shellTransitionDetail
+                            visible: text.length > 0
+                            color: theme.textMuted
+                            font.family: theme.fontUi
+                            font.pixelSize: 10
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            maximumLineCount: 2
+                            elide: Text.ElideNone
+                        }
+
+                        ProgressStrip {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 3
+                            progress: -1
+                            accent: window.shellTransitionAccent
+                        }
                     }
                 }
             }
@@ -2119,7 +2551,7 @@ ApplicationWindow {
             InlineActivityIndicator {
                 id: floatingActivityIndicator
                 objectName: "floatingActivityIndicator"
-                visible: window.blockingActivityVisible
+                visible: window.blockingActivityVisible && !window.shellNavigationActivityVisible
                 width: Math.min(320, Math.max(190, parent.width * 0.26))
                 height: implicitHeight
                 z: 2
@@ -2472,31 +2904,32 @@ ApplicationWindow {
 
             onImportModeOpenChanged: {
                 window.libraryWorkspaceMode = importModeOpen ? "import" : "catalog"
-                if (importModeOpen)
+                if (importModeOpen) {
+                    window.logInstantQmlRoute("import", window.libraryWorkspaceIndex)
                     window.catalogAssetModel.refreshImportSources()
+                } else {
+                    window.logInstantQmlRoute("library", window.libraryWorkspaceIndex)
+                }
             }
 
             onAssetActivated: function(destination) {
                 if (destination === "edit") {
-                    window.editWorkspaceMode = "adjust"
-                    window.currentWorkspace = window.editWorkspaceIndex
+                    window.activatePrimaryEditTool("adjust")
                     return
                 }
 
                 if (destination === "masks") {
-                    window.editWorkspaceMode = "masks"
-                    window.currentWorkspace = window.editWorkspaceIndex
+                    window.activatePrimaryEditTool("masks")
                     return
                 }
 
                 if (destination === "compare") {
-                    window.editWorkspaceMode = "compare"
-                    window.currentWorkspace = window.editWorkspaceIndex
+                    window.activatePrimaryEditTool("compare")
                     return
                 }
 
                 if (destination === "export") {
-                    window.currentWorkspace = window.exportWorkspaceIndex
+                    window.switchToWorkspaceIndex(window.exportWorkspaceIndex)
                     return
                 }
 
@@ -2504,7 +2937,7 @@ ApplicationWindow {
                         && window.catalogAssetModel.selectedTimelineDocumentPath.length > 0)
                     timelineDocument.loadTimeline(window.catalogAssetModel.selectedTimelineDocumentPath)
 
-                window.currentWorkspace = window.timelineWorkspaceIndex
+                window.switchToWorkspaceIndex(window.timelineWorkspaceIndex)
             }
             onProjectActivated: function(destination, projectName) {
                 window.openProjectWorkspace(destination, projectName)
@@ -2515,8 +2948,7 @@ ApplicationWindow {
                 window.localEditorPreviewSource = previewSource
                 window.localEditorDisplayName = displayName
                 window.loadLocalAssetIntoEditor()
-                window.editWorkspaceMode = "adjust"
-                window.currentWorkspace = window.editWorkspaceIndex
+                window.activatePrimaryEditTool("adjust")
             }
         }
     }
@@ -2535,24 +2967,22 @@ ApplicationWindow {
 
             onAssetActivated: function(destination) {
                 if (destination === "library") {
-                    window.currentWorkspace = window.libraryWorkspaceIndex
+                    window.switchToWorkspaceIndex(window.libraryWorkspaceIndex)
                     return
                 }
 
                 if (destination === "masks") {
-                    window.editWorkspaceMode = "masks"
-                    window.currentWorkspace = window.editWorkspaceIndex
+                    window.activatePrimaryEditTool("masks")
                     return
                 }
 
                 if (destination === "compare") {
-                    window.editWorkspaceMode = "compare"
-                    window.currentWorkspace = window.editWorkspaceIndex
+                    window.activatePrimaryEditTool("compare")
                     return
                 }
 
                 if (destination === "export") {
-                    window.currentWorkspace = window.exportWorkspaceIndex
+                    window.switchToWorkspaceIndex(window.exportWorkspaceIndex)
                     return
                 }
             }

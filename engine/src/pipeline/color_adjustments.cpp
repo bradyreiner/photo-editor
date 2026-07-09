@@ -271,6 +271,9 @@ struct Matrix3 final {
 struct PipelineColorContext final {
   RgbColorSpace working_space = make_linear_srgb_color_space();
   RenderIntent render_intent = RenderIntent::Perceptual;
+  bool output_gamut_mapping_enabled = true;
+  GamutMappingPolicy output_gamut_mapping_policy = GamutMappingPolicy::Perceptual;
+  double output_headroom = 1.0;
   std::string chromatic_adaptation_method = "Bradford";
   Matrix3 rgb_to_xyz_native;
   Matrix3 xyz_native_to_rgb;
@@ -672,6 +675,9 @@ struct InputStageParameters final {
   PipelineColorContext context;
   context.working_space = state.color_pipeline.working_profile.color_space;
   context.render_intent = state.color_pipeline.render_intent;
+  context.output_gamut_mapping_enabled = state.color_pipeline.output_gamut_mapping_enabled;
+  context.output_gamut_mapping_policy = state.color_pipeline.output_gamut_mapping_policy;
+  context.output_headroom = std::clamp(state.color_pipeline.output_headroom, 1.0, 16.0);
   context.chromatic_adaptation_method = state.input_transform.chromatic_adaptation_method;
   context.rgb_to_xyz_native = rgb_to_xyz_matrix(context.working_space);
   context.xyz_native_to_rgb = invert_matrix3(context.rgb_to_xyz_native);
@@ -782,6 +788,8 @@ struct InputStageParameters final {
 [[nodiscard, maybe_unused]] bool metal_color_pipeline_supported(const ColorAdjustmentState& state) {
   return state.color_pipeline.working_profile.kind == WorkingTransformKind::LinearSrgb &&
          state.color_pipeline.render_intent == RenderIntent::Perceptual &&
+         state.color_pipeline.output_gamut_mapping_enabled &&
+         state.color_pipeline.output_gamut_mapping_policy == GamutMappingPolicy::Perceptual &&
          std::abs(state.color_pipeline.output_headroom - 1.0) <= 1e-9 &&
          !black_point_compensation_affects_output(state.color_pipeline);
 }
@@ -1258,6 +1266,18 @@ void apply_selective_color_adjustment(
   };
 }
 
+[[nodiscard]] ColorPixel clip_pixel_to_output_headroom(
+    const ColorPixel& pixel,
+    double output_headroom) {
+  const auto headroom = std::clamp(output_headroom, 1.0, 16.0);
+  return ColorPixel{
+      .red = static_cast<float>(std::clamp(static_cast<double>(pixel.red), 0.0, headroom)),
+      .green = static_cast<float>(std::clamp(static_cast<double>(pixel.green), 0.0, headroom)),
+      .blue = static_cast<float>(std::clamp(static_cast<double>(pixel.blue), 0.0, headroom)),
+      .alpha = pixel.alpha,
+  };
+}
+
 [[nodiscard]] std::array<std::pair<double, double>, 6> tone_curve_control_points(const ColorAdjustmentState& state) {
   const auto point = [](double x, double delta) {
     return std::pair<double, double>{x, clamp_unit(x + (delta / 100.0) * 0.34)};
@@ -1411,7 +1431,10 @@ struct ToneAnchor final {
 
 [[nodiscard]] double interpolate_tone_anchors(
     double stops,
-    const std::array<ToneAnchor, 7>& anchors) {
+    std::span<const ToneAnchor> anchors) {
+  if (anchors.empty()) {
+    return stops;
+  }
   if (stops <= anchors.front().input_stops) {
     return stops + (anchors.front().output_stops - anchors.front().input_stops);
   }
@@ -1459,9 +1482,11 @@ struct ToneAnchor final {
   const auto blacks = gentle_signed_response(clamp_signed_percent(state.blacks) / 100.0);
   const auto brightness = gentle_signed_response(clamp_signed_percent(state.brightness) / 100.0);
 
-  constexpr std::array<double, 7> kInputStops = {-8.0, -4.6, -2.15, 0.0, 1.15, 2.45, 5.25};
-  constexpr std::array<double, 7> kContrastWeights = {0.05, 0.20, 0.62, 0.0, 1.0, 0.04, 0.02};
-  std::array<ToneAnchor, 7> anchors{};
+  constexpr std::array<double, 9> kInputStops = {
+      -8.0, -5.25, -3.20, -1.45, 0.0, 1.35, 2.55, 4.25, 6.50};
+  constexpr std::array<double, 9> kContrastWeights = {
+      0.02, 0.08, 0.34, 0.82, 0.0, 0.86, 0.46, 0.10, 0.03};
+  std::array<ToneAnchor, 9> anchors{};
   const auto contrast_scale = contrast >= 0.0 ? 0.44 : 0.58;
   for (std::size_t index = 0; index < anchors.size(); ++index) {
     const auto local_slope = std::clamp(
@@ -1474,21 +1499,25 @@ struct ToneAnchor final {
     };
   }
 
-  anchors[0].output_stops += blacks * 1.35;
-  anchors[1].output_stops += blacks * 0.68 + shadows * 1.35;
-  anchors[2].output_stops += shadows * 1.10 + blacks * 0.18;
-  anchors[3].output_stops += brightness * 0.90;
-  anchors[4].output_stops += brightness * 0.65 + highlights * 0.18;
-  anchors[5].output_stops += highlights * 0.70 + whites * 0.26;
-  anchors[6].output_stops += whites * 1.02 + highlights * 0.32;
+  anchors[0].output_stops += blacks * 2.80;
+  anchors[1].output_stops += blacks * 2.60;
+  anchors[2].output_stops += blacks * 3.60 + shadows * 0.42;
+  anchors[3].output_stops += shadows * 1.14 + blacks * 0.30;
+  anchors[4].output_stops += brightness * 0.90;
+  anchors[5].output_stops += brightness * 0.65 + highlights * 0.68;
+  anchors[6].output_stops += highlights * 1.04 + whites * 0.18;
+  anchors[7].output_stops += whites * 0.82 + highlights * 0.16;
+  anchors[8].output_stops += whites * 1.12;
 
   const auto zone_offset =
       zone_exposure_delta(input_stops, state) * 0.75;
-  anchors[1].output_stops += zone_offset * 0.55;
-  anchors[2].output_stops += zone_offset * 0.82;
-  anchors[3].output_stops += zone_offset * 0.74;
-  anchors[4].output_stops += zone_offset * 0.68;
-  anchors[5].output_stops += zone_offset * 0.60;
+  anchors[1].output_stops += zone_offset * 0.40;
+  anchors[2].output_stops += zone_offset * 0.68;
+  anchors[3].output_stops += zone_offset * 0.82;
+  anchors[4].output_stops += zone_offset * 0.74;
+  anchors[5].output_stops += zone_offset * 0.68;
+  anchors[6].output_stops += zone_offset * 0.58;
+  anchors[7].output_stops += zone_offset * 0.34;
 
   constexpr auto kMinimumStopSeparation = 0.18;
   for (std::size_t index = 1; index < anchors.size(); ++index) {
@@ -1836,21 +1865,28 @@ struct ToneAnchor final {
     const ColorAdjustmentState& state,
     const PipelineColorContext& context) {
   InputStageParameters parameters;
+  const auto input_transform_enabled = state.input_transform.raw_input_transform_enabled;
   const auto& recipe = state.color_pipeline.input_transform_recipe;
+  const auto has_source_white_balance =
+      input_transform_enabled && recipe.has_source_white_balance;
   const auto source_temperature =
-      recipe.has_source_white_balance ? recipe.source_temperature : 5500.0;
+      has_source_white_balance ? recipe.source_temperature : 5500.0;
   const auto source_tint =
-      recipe.has_source_white_balance ? recipe.source_tint : 0.0;
+      has_source_white_balance ? recipe.source_tint : 0.0;
   parameters.exposure_gain = std::pow(
       2.0,
-      recipe.baseline_exposure + effective_input_exposure(state));
-  parameters.camera_profile = camera_profile_matrix(state.color_pipeline, source_temperature);
-  parameters.camera_matching_look = camera_matching_look_matrix(state.input_transform.camera_matching_look);
-  parameters.calibration = calibration_matrix(state.input_transform);
+      (input_transform_enabled ? recipe.baseline_exposure : 0.0) +
+          effective_input_exposure(state));
+  if (input_transform_enabled) {
+    parameters.camera_profile = camera_profile_matrix(state.color_pipeline, source_temperature);
+    parameters.camera_matching_look =
+        camera_matching_look_matrix(state.input_transform.camera_matching_look);
+    parameters.calibration = calibration_matrix(state.input_transform);
+  }
   parameters.highlight_reconstruction_strength =
       highlight_reconstruction_strength(state) *
       std::clamp(1.15 - recipe.highlight_headroom, 0.35, 1.0);
-  if (state.input_transform.raw_input_transform_enabled) {
+  if (input_transform_enabled) {
     parameters.raw_black_level = std::clamp(state.input_transform.raw_black_level, 0.0, 0.95);
     parameters.raw_white_level = std::clamp(
         state.input_transform.raw_white_level,
@@ -1858,7 +1894,7 @@ struct ToneAnchor final {
         4.0);
   }
 
-  if (state.input_transform.raw_input_transform_enabled &&
+  if (input_transform_enabled &&
       state.input_transform.raw_white_balance_override_enabled) {
     parameters.white_balance = white_balance_matrix_between_whites(
         source_temperature,
@@ -1872,7 +1908,7 @@ struct ToneAnchor final {
             effective_input_temperature(state),
             effective_input_tint(state),
             context),
-        recipe.has_source_white_balance
+        has_source_white_balance
             ? white_balance_matrix_between_whites(
                   source_temperature,
                   source_tint,
@@ -2396,9 +2432,9 @@ void apply_optical_corrections(
       }
 
       corrected[static_cast<std::size_t>(y * width + x)] = ColorPixel{
-          .red = static_cast<float>(clamp_unit(corrected_pixel.red)),
-          .green = static_cast<float>(clamp_unit(corrected_pixel.green)),
-          .blue = static_cast<float>(clamp_unit(corrected_pixel.blue)),
+          .red = corrected_pixel.red,
+          .green = corrected_pixel.green,
+          .blue = corrected_pixel.blue,
           .alpha = static_cast<float>(clamp_unit(corrected_pixel.alpha)),
       };
     }
@@ -2449,18 +2485,31 @@ void apply_optical_corrections(
       context.xyz_d65_to_rgb);
 }
 
-[[nodiscard]] bool in_gamut(const ColorPixel& pixel) {
-  return pixel.red >= -1e-6 && pixel.red <= 1.0 + 1e-6 && pixel.green >= -1e-6 &&
-         pixel.green <= 1.0 + 1e-6 && pixel.blue >= -1e-6 && pixel.blue <= 1.0 + 1e-6;
+[[nodiscard]] double oklab_lightness_ceiling(const PipelineColorContext& context) {
+  return std::cbrt(std::clamp(context.output_headroom, 1.0, 16.0));
 }
 
-[[nodiscard]] ColorPixel clamp_rgb(const ColorPixel& pixel) {
-  return ColorPixel{
-      .red = static_cast<float>(clamp_unit(pixel.red)),
-      .green = static_cast<float>(clamp_unit(pixel.green)),
-      .blue = static_cast<float>(clamp_unit(pixel.blue)),
-      .alpha = static_cast<float>(clamp_unit(pixel.alpha)),
-  };
+[[nodiscard]] double clamp_oklab_lightness(
+    double lightness,
+    const PipelineColorContext& context) {
+  return std::clamp(lightness, 0.0, oklab_lightness_ceiling(context));
+}
+
+[[nodiscard]] bool in_output_gamut(
+    const ColorPixel& pixel,
+    const PipelineColorContext& context) {
+  const auto headroom = std::clamp(context.output_headroom, 1.0, 16.0);
+  return pixel.red >= -1e-6 && pixel.red <= headroom + 1e-6 &&
+         pixel.green >= -1e-6 && pixel.green <= headroom + 1e-6 &&
+         pixel.blue >= -1e-6 && pixel.blue <= headroom + 1e-6;
+}
+
+[[nodiscard]] ColorPixel clamp_rgb_to_output_headroom(
+    const ColorPixel& pixel,
+    const PipelineColorContext& context) {
+  auto clamped = fit_pixel_to_output_headroom(pixel, context.output_headroom);
+  clamped.alpha = static_cast<float>(clamp_unit(clamped.alpha));
+  return clamped;
 }
 
 [[nodiscard]] Matrix3 white_balance_matrix(
@@ -2471,6 +2520,12 @@ void apply_optical_corrections(
     double lightness,
     double chroma,
     double hue,
+    double alpha,
+    const PipelineColorContext& context);
+[[nodiscard]] ColorPixel gamut_fit_oklab(
+    double lightness,
+    double a,
+    double b,
     double alpha,
     const PipelineColorContext& context);
 
@@ -2556,7 +2611,7 @@ void apply_local_adjustment_mask(
   }
 
   auto oklab = linear_rgb_to_oklab(*pixel, context);
-  auto lightness = clamp_unit(oklab.lightness);
+  auto lightness = clamp_oklab_lightness(oklab.lightness, context);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
 
@@ -2617,7 +2672,7 @@ void apply_mask_edge_cleanup(
   }
 
   auto oklab = linear_rgb_to_oklab(*pixel, context);
-  auto lightness = clamp_unit(oklab.lightness);
+  auto lightness = clamp_oklab_lightness(oklab.lightness, context);
   auto chroma = std::hypot(oklab.a, oklab.b);
   const auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
 
@@ -5494,28 +5549,6 @@ struct HslColor final {
   double lightness = 0.0;
 };
 
-[[nodiscard]] HslColor rgb_to_hsl(double red, double green, double blue) {
-  const auto max_channel = std::max({red, green, blue});
-  const auto min_channel = std::min({red, green, blue});
-  const auto delta = max_channel - min_channel;
-  HslColor hsl;
-  hsl.lightness = (max_channel + min_channel) * 0.5;
-  if (delta <= 1e-9) {
-    return hsl;
-  }
-  hsl.saturation = hsl.lightness > 0.5 ? delta / (2.0 - max_channel - min_channel)
-                                       : delta / (max_channel + min_channel);
-  if (max_channel == red) {
-    hsl.hue = (green - blue) / delta + (green < blue ? 6.0 : 0.0);
-  } else if (max_channel == green) {
-    hsl.hue = (blue - red) / delta + 2.0;
-  } else {
-    hsl.hue = (red - green) / delta + 4.0;
-  }
-  hsl.hue /= 6.0;
-  return hsl;
-}
-
 [[nodiscard]] double hue_to_rgb(double p, double q, double t) {
   if (t < 0.0) {
     t += 1.0;
@@ -5561,30 +5594,46 @@ struct HslColor final {
   return wrap_radians(std::atan2(target_oklab.b, target_oklab.a));
 }
 
-[[nodiscard]] double overlay_channel(double base, double source) {
-  return base <= 0.5 ? 2.0 * base * source
-                     : 1.0 - 2.0 * (1.0 - base) * (1.0 - source);
+[[nodiscard]] double overlay_channel(double base, double source, double headroom) {
+  const auto safe_headroom = std::clamp(headroom, 1.0, 16.0);
+  const auto normalized_base = std::clamp(base / safe_headroom, 0.0, 1.0);
+  const auto normalized_source = std::clamp(source / safe_headroom, 0.0, 1.0);
+  const auto blended = normalized_base <= 0.5
+                           ? 2.0 * normalized_base * normalized_source
+                           : 1.0 - 2.0 * (1.0 - normalized_base) * (1.0 - normalized_source);
+  return blended * safe_headroom;
 }
 
-[[nodiscard]] double soft_light_channel(double base, double source) {
-  if (source <= 0.5) {
-    return base - (1.0 - 2.0 * source) * base * (1.0 - base);
+[[nodiscard]] double soft_light_channel(double base, double source, double headroom) {
+  const auto safe_headroom = std::clamp(headroom, 1.0, 16.0);
+  const auto normalized_base = std::clamp(base / safe_headroom, 0.0, 1.0);
+  const auto normalized_source = std::clamp(source / safe_headroom, 0.0, 1.0);
+  double blended = normalized_base;
+  if (normalized_source <= 0.5) {
+    blended = normalized_base -
+              (1.0 - 2.0 * normalized_source) * normalized_base * (1.0 - normalized_base);
+  } else {
+    const auto d = normalized_base <= 0.25
+                       ? ((16.0 * normalized_base - 12.0) * normalized_base + 4.0) *
+                             normalized_base
+                       : std::sqrt(normalized_base);
+    blended = normalized_base + (2.0 * normalized_source - 1.0) * (d - normalized_base);
   }
-  const auto d = base <= 0.25 ? ((16.0 * base - 12.0) * base + 4.0) * base
-                              : std::sqrt(base);
-  return base + (2.0 * source - 1.0) * (d - base);
+  return blended * safe_headroom;
 }
 
 [[nodiscard]] ColorPixel blend_layer_color(
     const ColorPixel& base,
     const ColorPixel& source,
-    const std::string& mode) {
-  const auto base_red = clamp_unit(base.red);
-  const auto base_green = clamp_unit(base.green);
-  const auto base_blue = clamp_unit(base.blue);
-  const auto source_red = clamp_unit(source.red);
-  const auto source_green = clamp_unit(source.green);
-  const auto source_blue = clamp_unit(source.blue);
+    const std::string& mode,
+    const PipelineColorContext& context) {
+  const auto headroom = std::clamp(context.output_headroom, 1.0, 16.0);
+  const auto base_red = std::max(0.0, static_cast<double>(base.red));
+  const auto base_green = std::max(0.0, static_cast<double>(base.green));
+  const auto base_blue = std::max(0.0, static_cast<double>(base.blue));
+  const auto source_red = std::max(0.0, static_cast<double>(source.red));
+  const auto source_green = std::max(0.0, static_cast<double>(source.green));
+  const auto source_blue = std::max(0.0, static_cast<double>(source.blue));
 
   if (mode == "multiply") {
     return ColorPixel{
@@ -5595,30 +5644,30 @@ struct HslColor final {
   }
   if (mode == "screen") {
     return ColorPixel{
-        static_cast<float>(1.0 - (1.0 - base_red) * (1.0 - source_red)),
-        static_cast<float>(1.0 - (1.0 - base_green) * (1.0 - source_green)),
-        static_cast<float>(1.0 - (1.0 - base_blue) * (1.0 - source_blue)),
+        static_cast<float>(headroom - ((headroom - base_red) * (headroom - source_red) / headroom)),
+        static_cast<float>(headroom - ((headroom - base_green) * (headroom - source_green) / headroom)),
+        static_cast<float>(headroom - ((headroom - base_blue) * (headroom - source_blue) / headroom)),
         source.alpha};
   }
   if (mode == "overlay") {
     return ColorPixel{
-        static_cast<float>(overlay_channel(base_red, source_red)),
-        static_cast<float>(overlay_channel(base_green, source_green)),
-        static_cast<float>(overlay_channel(base_blue, source_blue)),
+        static_cast<float>(overlay_channel(base_red, source_red, headroom)),
+        static_cast<float>(overlay_channel(base_green, source_green, headroom)),
+        static_cast<float>(overlay_channel(base_blue, source_blue, headroom)),
         source.alpha};
   }
   if (mode == "soft light" || mode == "soft-light") {
     return ColorPixel{
-        static_cast<float>(soft_light_channel(base_red, source_red)),
-        static_cast<float>(soft_light_channel(base_green, source_green)),
-        static_cast<float>(soft_light_channel(base_blue, source_blue)),
+        static_cast<float>(soft_light_channel(base_red, source_red, headroom)),
+        static_cast<float>(soft_light_channel(base_green, source_green, headroom)),
+        static_cast<float>(soft_light_channel(base_blue, source_blue, headroom)),
         source.alpha};
   }
   if (mode == "hard light" || mode == "hard-light") {
     return ColorPixel{
-        static_cast<float>(overlay_channel(source_red, base_red)),
-        static_cast<float>(overlay_channel(source_green, base_green)),
-        static_cast<float>(overlay_channel(source_blue, base_blue)),
+        static_cast<float>(overlay_channel(source_red, base_red, headroom)),
+        static_cast<float>(overlay_channel(source_green, base_green, headroom)),
+        static_cast<float>(overlay_channel(source_blue, base_blue, headroom)),
         source.alpha};
   }
   if (mode == "difference") {
@@ -5644,36 +5693,48 @@ struct HslColor final {
   }
   if (mode == "linear light" || mode == "linear-light") {
     return ColorPixel{
-        static_cast<float>(clamp_unit(base_red + 2.0 * source_red - 1.0)),
-        static_cast<float>(clamp_unit(base_green + 2.0 * source_green - 1.0)),
-        static_cast<float>(clamp_unit(base_blue + 2.0 * source_blue - 1.0)),
+        static_cast<float>(std::clamp(base_red + 2.0 * source_red - headroom, 0.0, headroom)),
+        static_cast<float>(std::clamp(base_green + 2.0 * source_green - headroom, 0.0, headroom)),
+        static_cast<float>(std::clamp(base_blue + 2.0 * source_blue - headroom, 0.0, headroom)),
         source.alpha};
   }
   if (mode == "hue" || mode == "saturation" || mode == "color" || mode == "luminosity") {
-    auto base_hsl = rgb_to_hsl(base_red, base_green, base_blue);
-    const auto source_hsl = rgb_to_hsl(source_red, source_green, source_blue);
+    const auto base_oklab = linear_rgb_to_oklab(base, context);
+    const auto source_oklab = linear_rgb_to_oklab(source, context);
+    auto lightness = clamp_oklab_lightness(base_oklab.lightness, context);
+    auto chroma = std::hypot(base_oklab.a, base_oklab.b);
+    auto hue = wrap_radians(std::atan2(base_oklab.b, base_oklab.a));
+    const auto source_chroma = std::hypot(source_oklab.a, source_oklab.b);
+    const auto source_hue = source_chroma > 1.0e-6
+                                ? wrap_radians(std::atan2(source_oklab.b, source_oklab.a))
+                                : hue;
     if (mode == "hue") {
-      base_hsl.hue = source_hsl.hue;
+      hue = source_hue;
     } else if (mode == "saturation") {
-      base_hsl.saturation = source_hsl.saturation;
+      chroma = source_chroma;
     } else if (mode == "color") {
-      base_hsl.hue = source_hsl.hue;
-      base_hsl.saturation = source_hsl.saturation;
+      hue = source_hue;
+      chroma = source_chroma;
     } else {
-      base_hsl.lightness = source_hsl.lightness;
+      lightness = clamp_oklab_lightness(source_oklab.lightness, context);
     }
-    auto blended = hsl_to_rgb(base_hsl);
+    auto blended = gamut_fit_oklch(lightness, chroma, hue, source.alpha, context);
     blended.alpha = source.alpha;
     return blended;
   }
   return source;
 }
 
-void composite_layer_pixel(ColorPixel* target, const ColorPixel& source, double alpha, const std::string& mode) {
+void composite_layer_pixel(
+    ColorPixel* target,
+    const ColorPixel& source,
+    double alpha,
+    const std::string& mode,
+    const PipelineColorContext& context) {
   if (target == nullptr || alpha <= 1e-6) {
     return;
   }
-  const auto blended = blend_layer_color(*target, source, mode);
+  const auto blended = blend_layer_color(*target, source, mode, context);
   target->red = static_cast<float>(
       std::lerp(static_cast<double>(target->red), static_cast<double>(blended.red), alpha));
   target->green = static_cast<float>(
@@ -5723,6 +5784,23 @@ void composite_layer_pixel(ColorPixel* target, const ColorPixel& source, double 
 
 [[nodiscard]] double apply_layer_perceptual_point_curve(double value, const CurveEvaluationData& curve) {
   return srgb_to_linear(evaluate_curve_data(linear_to_srgb(value), curve));
+}
+
+[[nodiscard]] ColorPixel apply_layer_luminance_point_curve(
+    const ColorPixel& pixel,
+    const CurveEvaluationData& curve,
+    double output_headroom,
+    const PipelineColorContext& context) {
+  if (curve.points.size() < 2) {
+    return pixel;
+  }
+  const auto source_luminance = luminance_for_pixel(pixel, context);
+  const auto target_luminance = apply_layer_perceptual_point_curve(source_luminance, curve);
+  return scale_pixel_to_luminance_with_headroom(
+      pixel,
+      target_luminance,
+      output_headroom,
+      context);
 }
 
 [[nodiscard]] ColorPixel interpolate_adjustment_pixel(
@@ -5810,18 +5888,18 @@ void composite_layer_pixel(ColorPixel* target, const ColorPixel& source, double 
 
   const auto master_curve = build_curve_data(layer.master_curve_points);
   if (master_curve.points.size() >= 2) {
-    pixel.red = static_cast<float>(apply_layer_perceptual_point_curve(pixel.red, master_curve));
-    pixel.green = static_cast<float>(apply_layer_perceptual_point_curve(pixel.green, master_curve));
-    pixel.blue = static_cast<float>(apply_layer_perceptual_point_curve(pixel.blue, master_curve));
+    pixel = apply_layer_luminance_point_curve(
+        pixel,
+        master_curve,
+        kLayerCurveOutputHeadroom,
+        context);
   }
 
   const auto luma_curve = build_curve_data(layer.luma_curve_points);
   if (luma_curve.points.size() >= 2) {
-    const auto source_luminance = luminance_for_pixel(pixel, context);
-    const auto target_luminance = apply_layer_perceptual_point_curve(source_luminance, luma_curve);
-    pixel = scale_pixel_to_luminance_with_headroom(
+    pixel = apply_layer_luminance_point_curve(
         pixel,
-        target_luminance,
+        luma_curve,
         kLayerCurveOutputHeadroom,
         context);
   }
@@ -5966,6 +6044,38 @@ void composite_layer_pixel(ColorPixel* target, const ColorPixel& source, double 
   return std::abs(layer.texture) > 1e-9 || std::abs(layer.clarity) > 1e-9;
 }
 
+[[nodiscard]] bool has_photo_layer_optical_adjustments(const PhotoLayer& layer) {
+  return std::abs(layer.lens_distortion) > 1e-9 ||
+         std::abs(layer.lens_vignette) > 1e-9 ||
+         std::abs(layer.chromatic_aberration) > 1e-9 ||
+         std::abs(layer.perspective_vertical) > 1e-9 ||
+         std::abs(layer.perspective_horizontal) > 1e-9 ||
+         std::abs(layer.global_transform_rotation) > 1e-9 ||
+         std::abs(layer.global_transform_scale - 1.0) > 1e-9 ||
+         std::abs(layer.transform_skew_x) > 1e-9 ||
+         std::abs(layer.transform_skew_y) > 1e-9 ||
+         std::abs(layer.liquify_strength) > 1e-9;
+}
+
+[[nodiscard]] ColorAdjustmentState photo_layer_optical_adjustment_state(const PhotoLayer& layer) {
+  ColorAdjustmentState state;
+  state.lens_distortion = layer.lens_distortion;
+  state.lens_vignette = layer.lens_vignette;
+  state.chromatic_aberration = layer.chromatic_aberration;
+  state.perspective_vertical = layer.perspective_vertical;
+  state.perspective_horizontal = layer.perspective_horizontal;
+  state.transform_rotation = layer.global_transform_rotation;
+  state.transform_scale = layer.global_transform_scale;
+  state.transform_skew_x = layer.transform_skew_x;
+  state.transform_skew_y = layer.transform_skew_y;
+  state.liquify_center_x = layer.liquify_center_x;
+  state.liquify_center_y = layer.liquify_center_y;
+  state.liquify_radius = layer.liquify_radius;
+  state.liquify_strength = layer.liquify_strength;
+  state.content_aware_crop_fill = layer.content_aware_crop_fill;
+  return state;
+}
+
 struct PhotoLayerEffectDetailContext final {
   const std::vector<float>* luminance = nullptr;
   const std::vector<float>* texture_blur = nullptr;
@@ -5999,7 +6109,7 @@ struct PhotoLayerEffectDetailContext final {
       const auto scale = std::max(0.0, 1.0 + dehaze_strength * 0.10);
       lab.a *= scale;
       lab.b *= scale;
-      pixel = clamp_rgb(oklab_to_linear_rgb(lab, pixel.alpha, context));
+      pixel = clamp_rgb_to_output_headroom(oklab_to_linear_rgb(lab, pixel.alpha, context), context);
     }
   }
 
@@ -6078,6 +6188,172 @@ struct PhotoLayerEffectDetailContext final {
   return pixel;
 }
 
+void apply_photo_layer_sharpen_noise_adjustments(
+    std::vector<ColorPixel>* pixels,
+    int width,
+    int height,
+    const PipelineColorContext& context,
+    const PhotoLayer& layer) {
+  if (pixels == nullptr || pixels->empty() || width <= 0 || height <= 0) {
+    return;
+  }
+
+  const auto sharpen_strength = clamp_signed_percent(layer.sharpening) / 100.0;
+  const auto sharpen_radius = std::clamp(layer.sharpen_radius, 0.5, 3.0);
+  const auto sharpen_detail = std::clamp(layer.sharpen_detail, 0.0, 100.0) / 100.0;
+  const auto sharpen_mask_strength = clamp_signed_percent(layer.sharpen_masking) / 100.0;
+  const auto luma_nr_strength = clamp_signed_percent(layer.luminance_nr) / 100.0;
+  const auto color_nr_strength = clamp_signed_percent(layer.color_nr) / 100.0;
+  if (std::abs(sharpen_strength) <= 1e-6 &&
+      std::abs(luma_nr_strength) <= 1e-6 &&
+      std::abs(color_nr_strength) <= 1e-6) {
+    return;
+  }
+
+  const auto pixel_count = pixels->size();
+  const auto safe_width = static_cast<std::size_t>(width);
+  std::vector<float> lightness_buf(pixel_count);
+  std::vector<float> chroma_a_buf(pixel_count);
+  std::vector<float> chroma_b_buf(pixel_count);
+  BlurWorkspace detail_blur_workspace;
+
+  parallel_for(height, [&](int y) {
+    const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+    for (int x = 0; x < width; ++x) {
+      const auto index = row_offset + static_cast<std::size_t>(x);
+      const auto ok = linear_rgb_to_oklab((*pixels)[index], context);
+      lightness_buf[index] = static_cast<float>(ok.lightness);
+      chroma_a_buf[index] = static_cast<float>(ok.a);
+      chroma_b_buf[index] = static_cast<float>(ok.b);
+    }
+  });
+
+  if (std::abs(sharpen_strength) > 1e-6) {
+    const auto sharp_radius = std::max(1, static_cast<int>(std::lround(sharpen_radius)));
+    const auto edge_radius =
+        std::max(sharp_radius + 2, static_cast<int>(std::lround(sharpen_radius * 3.0)));
+    const auto sharpen_gain = 1.9 + sharpen_detail * 1.15;
+    std::vector<float> sharp_blur;
+    gaussian_approximate_blur_into(
+        lightness_buf,
+        width,
+        height,
+        sharp_radius,
+        &sharp_blur,
+        &detail_blur_workspace);
+    std::vector<float> edge_blur;
+    if (sharpen_mask_strength > 1e-6) {
+      gaussian_approximate_blur_into(
+          lightness_buf,
+          width,
+          height,
+          edge_radius,
+          &edge_blur,
+          &detail_blur_workspace);
+    }
+
+    parallel_for(height, [&](int y) {
+      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+      for (int x = 0; x < width; ++x) {
+        const auto index = row_offset + static_cast<std::size_t>(x);
+        const auto detail_signal = lightness_buf[index] - sharp_blur[index];
+        auto mask_gate = 1.0;
+        if (sharpen_mask_strength > 1e-6) {
+          const auto edge_strength = std::abs(lightness_buf[index] - edge_blur[index]);
+          mask_gate = smoothstep(
+              0.0015,
+              0.012 + 0.06 * sharpen_mask_strength,
+              static_cast<double>(edge_strength));
+        }
+        lightness_buf[index] += static_cast<float>(
+            static_cast<double>(detail_signal) * sharpen_strength * sharpen_gain * mask_gate);
+      }
+    });
+  }
+
+  if (std::abs(luma_nr_strength) > 1e-6) {
+    std::vector<float> nr_blur;
+    gaussian_approximate_blur_into(
+        lightness_buf,
+        width,
+        height,
+        2,
+        &nr_blur,
+        &detail_blur_workspace);
+    std::vector<float> nr_edge_blur;
+    gaussian_approximate_blur_into(
+        lightness_buf,
+        width,
+        height,
+        5,
+        &nr_edge_blur,
+        &detail_blur_workspace);
+
+    parallel_for(height, [&](int y) {
+      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+      for (int x = 0; x < width; ++x) {
+        const auto index = row_offset + static_cast<std::size_t>(x);
+        const auto edge = std::abs(lightness_buf[index] - nr_edge_blur[index]);
+        const auto edge_preserve = 1.0 - smoothstep(0.005, 0.04, static_cast<double>(edge));
+        const auto blend = luma_nr_strength * 0.85 * edge_preserve;
+        lightness_buf[index] = static_cast<float>(
+            static_cast<double>(lightness_buf[index]) * (1.0 - blend) +
+            static_cast<double>(nr_blur[index]) * blend);
+      }
+    });
+  }
+
+  if (std::abs(color_nr_strength) > 1e-6) {
+    std::vector<float> a_blur;
+    gaussian_approximate_blur_into(
+        chroma_a_buf,
+        width,
+        height,
+        3,
+        &a_blur,
+        &detail_blur_workspace);
+    std::vector<float> b_blur;
+    gaussian_approximate_blur_into(
+        chroma_b_buf,
+        width,
+        height,
+        3,
+        &b_blur,
+        &detail_blur_workspace);
+
+    parallel_for(height, [&](int y) {
+      const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+      const auto blend = color_nr_strength * 0.90;
+      for (int x = 0; x < width; ++x) {
+        const auto index = row_offset + static_cast<std::size_t>(x);
+        chroma_a_buf[index] = static_cast<float>(
+            static_cast<double>(chroma_a_buf[index]) * (1.0 - blend) +
+            static_cast<double>(a_blur[index]) * blend);
+        chroma_b_buf[index] = static_cast<float>(
+            static_cast<double>(chroma_b_buf[index]) * (1.0 - blend) +
+            static_cast<double>(b_blur[index]) * blend);
+      }
+    });
+  }
+
+  parallel_for(height, [&](int y) {
+    const auto row_offset = static_cast<std::size_t>(y) * safe_width;
+    for (int x = 0; x < width; ++x) {
+      const auto index = row_offset + static_cast<std::size_t>(x);
+      const auto lightness =
+          clamp_oklab_lightness(static_cast<double>(lightness_buf[index]), context);
+      const auto a = static_cast<double>(chroma_a_buf[index]);
+      const auto b = static_cast<double>(chroma_b_buf[index]);
+      (*pixels)[index] = gamut_fit_oklch(
+          lightness,
+          std::hypot(a, b),
+          std::atan2(b, a),
+          (*pixels)[index].alpha,
+          context);
+    }
+  });
+}
+
 void apply_photo_layers(
     std::vector<ColorPixel>* pixels,
     int width,
@@ -6109,6 +6385,9 @@ void apply_photo_layers(
       const auto has_effect_detail_adjustments = has_photo_layer_effect_detail_adjustments(layer);
       const auto has_spatial_effect_detail_adjustments =
           has_photo_layer_spatial_effect_detail_adjustments(layer);
+      const auto has_optical_adjustments = has_photo_layer_optical_adjustments(layer);
+      const auto precompute_adjusted_layer =
+          has_optical_adjustments || has_effect_detail_adjustments;
       std::vector<ColorPixel> effect_detail_input_pixels;
       std::vector<float> effect_detail_luminance;
       std::vector<float> effect_detail_texture_blur;
@@ -6150,10 +6429,14 @@ void apply_photo_layers(
             }
             return adjusted;
           };
-      if (has_spatial_effect_detail_adjustments) {
+      if (precompute_adjusted_layer) {
         effect_detail_input_pixels = *pixels;
         for (auto& source_pixel : effect_detail_input_pixels) {
           source_pixel = apply_layer_recipe_without_effect_detail(source_pixel);
+        }
+        if (has_optical_adjustments) {
+          auto optical_state = photo_layer_optical_adjustment_state(layer);
+          apply_optical_corrections(&effect_detail_input_pixels, width, height, optical_state);
         }
         effect_detail_luminance.resize(effect_detail_input_pixels.size());
         for (std::size_t index = 0; index < effect_detail_input_pixels.size(); ++index) {
@@ -6188,6 +6471,22 @@ void apply_photo_layers(
             .width = width,
             .height = height,
         };
+        if (has_effect_detail_adjustments) {
+          for (std::size_t index = 0; index < effect_detail_input_pixels.size(); ++index) {
+            effect_detail_input_pixels[index] = apply_photo_layer_effect_detail_adjustments(
+                effect_detail_input_pixels[index],
+                context,
+                layer,
+                has_spatial_effect_detail_adjustments ? &effect_detail_context : nullptr,
+                index);
+          }
+          apply_photo_layer_sharpen_noise_adjustments(
+              &effect_detail_input_pixels,
+              width,
+              height,
+              context,
+              layer);
+        }
       }
       for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
@@ -6201,21 +6500,13 @@ void apply_photo_layers(
             continue;
           }
           const auto before_layer = pixel;
-          auto adjusted = has_spatial_effect_detail_adjustments
+          auto adjusted = precompute_adjusted_layer
                               ? effect_detail_input_pixels[index]
                               : apply_layer_recipe_without_effect_detail(before_layer);
-          if (has_effect_detail_adjustments) {
-            adjusted = apply_photo_layer_effect_detail_adjustments(
-                adjusted,
-                context,
-                layer,
-                has_spatial_effect_detail_adjustments ? &effect_detail_context : nullptr,
-                index);
-          }
           if (photo_layer_uses_normal_blend(layer)) {
             pixel = interpolate_adjustment_pixel(before_layer, adjusted, layer_weight);
           } else {
-            composite_layer_pixel(&pixel, adjusted, layer_weight, layer.blend_mode);
+            composite_layer_pixel(&pixel, adjusted, layer_weight, layer.blend_mode, context);
           }
         }
       }
@@ -6235,7 +6526,7 @@ void apply_photo_layers(
             continue;
           }
           auto& target = (*pixels)[index];
-          composite_layer_pixel(&target, layer.fill_color, alpha, layer.blend_mode);
+          composite_layer_pixel(&target, layer.fill_color, alpha, layer.blend_mode, context);
         }
       }
       previous_layer_alpha = std::move(current_layer_alpha);
@@ -6269,7 +6560,7 @@ void apply_photo_layers(
           if (alpha <= 1e-6) {
             continue;
           }
-          composite_layer_pixel(&target, source, alpha, layer.blend_mode);
+          composite_layer_pixel(&target, source, alpha, layer.blend_mode, context);
         }
       }
       previous_layer_alpha = std::move(current_layer_alpha);
@@ -6319,7 +6610,7 @@ void apply_photo_layers(
         if (alpha <= 1e-6) {
           continue;
         }
-        composite_layer_pixel(&target, source, alpha, layer.blend_mode);
+        composite_layer_pixel(&target, source, alpha, layer.blend_mode, context);
       }
     }
     previous_layer_alpha = std::move(current_layer_alpha);
@@ -6561,6 +6852,59 @@ std::uint64_t refined_local_mask_set_hash_impl(
   return hash;
 }
 
+std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels,
+    const ColorPipelineConfig& color_pipeline) {
+  const auto safe_width = std::max(width, 0);
+  const auto safe_height = std::max(height, 0);
+  if (safe_width <= 0 || safe_height <= 0) {
+    return {};
+  }
+
+  const auto pixel_count =
+      static_cast<std::size_t>(safe_width) * static_cast<std::size_t>(safe_height);
+  std::vector<ColorPixel> source_copy;
+  const auto has_source_pixels = source_pixels.size() == pixel_count;
+  if (has_source_pixels) {
+    source_copy.assign(source_pixels.begin(), source_pixels.end());
+  }
+  const EdgeAwareMatteContext source_context{
+      .pixels = has_source_pixels ? &source_copy : nullptr,
+      .width = has_source_pixels ? safe_width : 0,
+      .height = has_source_pixels ? safe_height : 0,
+  };
+  const auto* source_context_ptr = has_source_pixels ? &source_context : nullptr;
+  ColorAdjustmentState context_state;
+  context_state.color_pipeline = color_pipeline;
+  const auto context = make_pipeline_color_context(context_state);
+  const auto neutral_pixel = ColorPixel{0.5F, 0.5F, 0.5F, 1.0F};
+
+  std::vector<std::uint8_t> alpha(pixel_count, 0);
+  for (int y = 0; y < safe_height; ++y) {
+    for (int x = 0; x < safe_width; ++x) {
+      const auto index = static_cast<std::size_t>(y * safe_width + x);
+      const auto& pixel = has_source_pixels ? source_copy[index] : neutral_pixel;
+      const auto normalized_x =
+          safe_width > 1 ? static_cast<double>(x) / static_cast<double>(safe_width - 1) : 0.5;
+      const auto normalized_y =
+          safe_height > 1 ? static_cast<double>(y) / static_cast<double>(safe_height - 1) : 0.5;
+      alpha[index] = static_cast<std::uint8_t>(
+          std::llround(clamp_unit(local_mask_set_weight(
+                         normalized_x,
+                         normalized_y,
+                         pixel,
+                         context,
+                         mask_set,
+                         source_context_ptr)) *
+                     255.0));
+    }
+  }
+  return alpha;
+}
+
 [[nodiscard, maybe_unused]] bool local_adjustments_supported_by_metal_pre_tone(
     const LocalAdjustmentSettings& adjustments) {
   return std::abs(adjustments.contrast) <= 1e-6 &&
@@ -6602,10 +6946,14 @@ std::uint64_t refined_local_mask_set_hash_impl(
     double chroma = 0.0;
     ColorPixel pixel;
   };
+  const auto should_clip =
+      !context.output_gamut_mapping_enabled ||
+      context.output_gamut_mapping_policy == GamutMappingPolicy::Clip ||
+      context.render_intent == RenderIntent::RelativeColorimetric;
 
   const auto search_chroma_at_lightness =
       [&](double candidate_lightness, double candidate_chroma, int iterations) -> GamutFitResult {
-    candidate_lightness = clamp_unit(candidate_lightness);
+    candidate_lightness = clamp_oklab_lightness(candidate_lightness, context);
     candidate_chroma = std::max(0.0, candidate_chroma);
 
     OklabColor candidate_lab{
@@ -6614,18 +6962,18 @@ std::uint64_t refined_local_mask_set_hash_impl(
         .b = candidate_chroma * std::sin(hue),
     };
     auto candidate = oklab_to_linear_rgb(candidate_lab, alpha, context);
-    if (context.render_intent == RenderIntent::RelativeColorimetric) {
+    if (should_clip) {
       return GamutFitResult{
           .lightness = candidate_lightness,
           .chroma = candidate_chroma,
-          .pixel = clamp_rgb(candidate),
+          .pixel = clamp_rgb_to_output_headroom(candidate, context),
       };
     }
-    if (in_gamut(candidate)) {
+    if (in_output_gamut(candidate, context)) {
       return GamutFitResult{
           .lightness = candidate_lightness,
           .chroma = candidate_chroma,
-          .pixel = clamp_rgb(candidate),
+          .pixel = clamp_rgb_to_output_headroom(candidate, context),
       };
     }
 
@@ -6639,7 +6987,7 @@ std::uint64_t refined_local_mask_set_hash_impl(
           .b = mid * std::sin(hue),
       };
       candidate = oklab_to_linear_rgb(candidate_lab, alpha, context);
-      if (in_gamut(candidate)) {
+      if (in_output_gamut(candidate, context)) {
         low = mid;
       } else {
         high = mid;
@@ -6654,26 +7002,30 @@ std::uint64_t refined_local_mask_set_hash_impl(
     return GamutFitResult{
         .lightness = candidate_lightness,
         .chroma = low,
-        .pixel = clamp_rgb(oklab_to_linear_rgb(candidate_lab, alpha, context)),
+        .pixel = clamp_rgb_to_output_headroom(oklab_to_linear_rgb(candidate_lab, alpha, context), context),
     };
   };
 
-  lightness = clamp_unit(lightness);
+  lightness = clamp_oklab_lightness(lightness, context);
   chroma = std::max(0.0, chroma);
   hue = wrap_radians(hue);
   if (chroma <= 1e-9) {
-    return clamp_rgb(oklab_to_linear_rgb(
+    return clamp_rgb_to_output_headroom(oklab_to_linear_rgb(
         OklabColor{
             .lightness = lightness,
             .a = 0.0,
             .b = 0.0,
         },
         alpha,
-        context));
+        context),
+        context);
   }
 
   auto best_fit = search_chroma_at_lightness(lightness, chroma, 16);
   if (best_fit.chroma > std::max(1e-4, chroma * 0.02)) {
+    return best_fit.pixel;
+  }
+  if (context.output_gamut_mapping_policy == GamutMappingPolicy::PreserveSaturation) {
     return best_fit.pixel;
   }
 
@@ -6698,7 +7050,7 @@ std::uint64_t refined_local_mask_set_hash_impl(
     double b,
     double alpha,
     const PipelineColorContext& context) {
-  const auto clamped_lightness = clamp_unit(lightness);
+  const auto clamped_lightness = clamp_oklab_lightness(lightness, context);
   const auto chroma_sq = (a * a) + (b * b);
   if (chroma_sq <= 1.0e-18) {
     return gamut_fit_oklch(clamped_lightness, 0.0, 0.0, alpha, context);
@@ -6712,8 +7064,11 @@ std::uint64_t refined_local_mask_set_hash_impl(
       },
       alpha,
       context);
-  if (context.render_intent == RenderIntent::RelativeColorimetric || in_gamut(direct)) {
-    return clamp_rgb(direct);
+  if (!context.output_gamut_mapping_enabled ||
+      context.output_gamut_mapping_policy == GamutMappingPolicy::Clip ||
+      context.render_intent == RenderIntent::RelativeColorimetric ||
+      in_output_gamut(direct, context)) {
+    return clamp_rgb_to_output_headroom(direct, context);
   }
 
   return gamut_fit_oklch(
@@ -6740,6 +7095,33 @@ std::uint64_t refined_local_mask_set_hash(
     int height,
     std::span<const ColorPixel> source_pixels) {
   return refined_local_mask_set_hash_impl(mask_set, width, height, source_pixels);
+}
+
+std::vector<std::uint8_t> rasterize_local_mask_set_alpha(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels) {
+  return rasterize_local_mask_set_alpha_impl(
+      mask_set,
+      width,
+      height,
+      source_pixels,
+      default_color_pipeline_config());
+}
+
+std::vector<std::uint8_t> rasterize_local_mask_set_alpha(
+    const LocalMaskSet& mask_set,
+    int width,
+    int height,
+    std::span<const ColorPixel> source_pixels,
+    const ColorPipelineConfig& color_pipeline) {
+  return rasterize_local_mask_set_alpha_impl(
+      mask_set,
+      width,
+      height,
+      source_pixels,
+      color_pipeline);
 }
 
 double clamp_signed_percent(double value) { return std::clamp(value, -100.0, 100.0); }
@@ -6786,6 +7168,23 @@ double apply_perceptual_point_curve(double value, const CurveEvaluationData& cur
   return srgb_to_linear(evaluate_curve_data(linear_to_srgb(value), curve));
 }
 
+[[nodiscard]] ColorPixel apply_luminance_point_curve(
+    const ColorPixel& pixel,
+    const CurveEvaluationData& curve,
+    double output_headroom,
+    const PipelineColorContext& context) {
+  if (curve.points.size() < 2) {
+    return pixel;
+  }
+  const auto source_luminance = luminance_for_pixel(pixel, context);
+  const auto target_luminance = apply_perceptual_point_curve(source_luminance, curve);
+  return scale_pixel_to_luminance_with_headroom(
+      pixel,
+      target_luminance,
+      output_headroom,
+      context);
+}
+
 std::vector<float> build_perceptual_curve_lut(std::span<const CurvePoint> points, int sample_count) {
   if (sample_count <= 0 || !has_point_curve(points)) {
     return {};
@@ -6810,24 +7209,22 @@ double evaluate_tone_curve(double value, const ColorAdjustmentState& state) {
   return evaluate_curve_data(value, build_parametric_curve_data(state));
 }
 
-GamutWarningAnalysis analyze_gamut_warnings(
-    std::span<const ColorPixel> pixels,
+[[nodiscard]] const OutputColorProfile& output_profile_for_target(
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target) {
+  return target == GamutWarningTarget::PreviewDisplay ? config.preview_output_profile
+                                                      : config.export_output_profile;
+}
+
+[[nodiscard]] Matrix3 working_rgb_to_output_rgb_matrix(
     const ColorPipelineConfig& config,
     GamutWarningTarget target,
     std::string_view chromatic_adaptation_method) {
-  GamutWarningAnalysis analysis;
-  if (pixels.empty()) {
-    return analysis;
-  }
-
   ColorAdjustmentState state;
   state.color_pipeline = config;
   state.input_transform.chromatic_adaptation_method = std::string(chromatic_adaptation_method);
   const auto source_context = make_pipeline_color_context(state);
-  const auto& target_profile = target == GamutWarningTarget::PreviewDisplay
-                                   ? config.preview_output_profile
-                                   : config.export_output_profile;
-  const auto& target_space = target_profile.color_space;
+  const auto& target_space = output_profile_for_target(config, target).color_space;
   const auto target_rgb_to_xyz_native = rgb_to_xyz_matrix(target_space);
   const auto target_xyz_native_to_rgb = invert_matrix3(target_rgb_to_xyz_native);
   const auto d65_white = xyz_from_chromaticity(white_point_chromaticity(WhitePoint::D65));
@@ -6838,31 +7235,81 @@ GamutWarningAnalysis analyze_gamut_warnings(
       target_white,
       chromatic_adaptation_method);
   const auto xyz_d65_to_target_rgb = multiply_matrix3(target_xyz_native_to_rgb, from_d65);
-  const auto source_rgb_to_target_rgb =
-      multiply_matrix3(xyz_d65_to_target_rgb, source_context.rgb_to_xyz_d65);
+  return multiply_matrix3(xyz_d65_to_target_rgb, source_context.rgb_to_xyz_d65);
+}
+
+[[nodiscard]] double output_transform_excursion(
+    const ColorPixel& pixel,
+    double output_headroom) {
+  const auto headroom = std::clamp(output_headroom, 1.0, 16.0);
+  auto max_excursion = 0.0;
+  for (const auto channel : {pixel.red, pixel.green, pixel.blue}) {
+    if (channel < 0.0F) {
+      max_excursion = std::max(max_excursion, -static_cast<double>(channel));
+    } else if (static_cast<double>(channel) > headroom) {
+      max_excursion = std::max(max_excursion, static_cast<double>(channel) - headroom);
+    }
+  }
+  return max_excursion;
+}
+
+OutputTransformResult apply_output_transform(
+    const ColorPixel& pixel,
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target,
+    std::string_view chromatic_adaptation_method) {
+  const auto& output_profile = output_profile_for_target(config, target);
+  const auto output_matrix =
+      working_rgb_to_output_rgb_matrix(config, target, chromatic_adaptation_method);
+  auto transformed = apply_rgb_matrix(pixel, output_matrix);
+  const auto headroom = std::clamp(config.output_headroom, 1.0, 16.0);
+  const auto max_excursion = output_transform_excursion(transformed, headroom);
+  transformed = apply_black_point_compensation(transformed, config);
+  const auto should_clip =
+      !config.output_gamut_mapping_enabled ||
+      config.output_gamut_mapping_policy == GamutMappingPolicy::Clip ||
+      config.render_intent == RenderIntent::RelativeColorimetric;
+  transformed = should_clip ? clip_pixel_to_output_headroom(transformed, headroom)
+                            : fit_pixel_to_output_headroom(transformed, headroom);
+  transformed.alpha = static_cast<float>(clamp_unit(transformed.alpha));
+  return OutputTransformResult{
+      .pixel = transformed,
+      .source_out_of_gamut = max_excursion > 1.0e-6,
+      .max_channel_excursion = max_excursion,
+      .output_profile_name = output_profile.profile_name,
+  };
+}
+
+void apply_output_transform(
+    std::span<ColorPixel> pixels,
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target,
+    std::string_view chromatic_adaptation_method) {
+  for (auto& pixel : pixels) {
+    pixel = apply_output_transform(pixel, config, target, chromatic_adaptation_method).pixel;
+  }
+}
+
+GamutWarningAnalysis analyze_gamut_warnings(
+    std::span<const ColorPixel> pixels,
+    const ColorPipelineConfig& config,
+    GamutWarningTarget target,
+    std::string_view chromatic_adaptation_method) {
+  GamutWarningAnalysis analysis;
+  if (pixels.empty()) {
+    return analysis;
+  }
 
   for (const auto& pixel : pixels) {
     if (pixel.alpha <= 1.0e-6F) {
       continue;
     }
     ++analysis.tested_pixels;
-    const auto target_pixel = apply_rgb_matrix(pixel, source_rgb_to_target_rgb);
-    const std::array<double, 3> channels = {
-        target_pixel.red,
-        target_pixel.green,
-        target_pixel.blue,
-    };
-    auto max_excursion = 0.0;
-    for (const auto channel : channels) {
-      if (channel < 0.0) {
-        max_excursion = std::max(max_excursion, -channel);
-      } else if (channel > 1.0) {
-        max_excursion = std::max(max_excursion, channel - 1.0);
-      }
-    }
-    if (max_excursion > 1.0e-6) {
+    const auto output = apply_output_transform(pixel, config, target, chromatic_adaptation_method);
+    if (output.source_out_of_gamut) {
       ++analysis.out_of_gamut_pixels;
-      analysis.max_channel_excursion = std::max(analysis.max_channel_excursion, max_excursion);
+      analysis.max_channel_excursion =
+          std::max(analysis.max_channel_excursion, output.max_channel_excursion);
     }
   }
 
@@ -6934,7 +7381,7 @@ ColorPixel apply_post_tone_color_adjustments(
       std::abs(input.red - input.blue),
   });
   const auto oklab_before_color = linear_rgb_to_oklab(input, context);
-  const auto pre_color_lightness = clamp_unit(oklab_before_color.lightness);
+  const auto pre_color_lightness = clamp_oklab_lightness(oklab_before_color.lightness, context);
   const auto pre_color_chroma = std::hypot(oklab_before_color.a, oklab_before_color.b);
   const auto highlight_chroma_scale = highlight_chroma_compression_enabled(state, input, output_headroom)
                                           ? highlight_chroma_compression_scale(
@@ -6950,7 +7397,7 @@ ColorPixel apply_post_tone_color_adjustments(
   }
 
   auto oklab = oklab_before_color;
-  auto lightness = clamp_unit(oklab.lightness);
+  auto lightness = clamp_oklab_lightness(oklab.lightness, context);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
   if (chroma <= 1e-4) {
@@ -6979,9 +7426,9 @@ ColorPixel apply_post_tone_color_adjustments(
 
     if (mixer_hue_for_selection >= 0.0) {
       const auto use_legacy_mixer = !has_per_channel_color_mixer_adjustments(state);
-      const auto hue_scale = mixer_model == "HSV" ? 0.16 : 0.14;
-      const auto saturation_scale = mixer_model == "LCH" ? 0.72 : (mixer_model == "HSV" ? 0.92 : 0.80);
-      const auto luminance_scale = mixer_model == "HSV" ? 0.14 : (mixer_model == "LCH" ? 0.20 : 0.18);
+      const auto hue_scale = mixer_model == "HSV" ? 0.16 : 0.22;
+      const auto saturation_scale = mixer_model == "LCH" ? 0.72 : (mixer_model == "HSV" ? 0.92 : 1.15);
+      const auto luminance_scale = mixer_model == "HSV" ? 0.14 : (mixer_model == "LCH" ? 0.20 : 0.30);
       for (int ch = 0; ch < kColorMixerChannelCount; ++ch) {
         auto mixer = state.color_mixer_channels[static_cast<std::size_t>(ch)];
         if (use_legacy_mixer &&
@@ -7143,14 +7590,10 @@ ColorPixel apply_global_color_pipeline(
   pixel = scale_pixel_to_luminance_with_headroom(pixel, curve_target, output_headroom, context);
 
   if (master_curve.points.size() >= 2) {
-    pixel.red = static_cast<float>(apply_perceptual_point_curve(pixel.red, master_curve));
-    pixel.green = static_cast<float>(apply_perceptual_point_curve(pixel.green, master_curve));
-    pixel.blue = static_cast<float>(apply_perceptual_point_curve(pixel.blue, master_curve));
+    pixel = apply_luminance_point_curve(pixel, master_curve, output_headroom, context);
   }
   if (luma_curve.points.size() >= 2) {
-    const auto source_luminance = luminance_for_pixel(pixel, context);
-    const auto target_luminance = apply_perceptual_point_curve(source_luminance, luma_curve);
-    pixel = scale_pixel_to_luminance_with_headroom(pixel, target_luminance, output_headroom, context);
+    pixel = apply_luminance_point_curve(pixel, luma_curve, output_headroom, context);
   }
   if (red_curve.points.size() >= 2) {
     pixel.red = static_cast<float>(apply_perceptual_point_curve(pixel.red, red_curve));
@@ -7175,7 +7618,7 @@ ColorPixel apply_global_color_pipeline(
       std::abs(pixel.red - pixel.blue),
   });
   const auto oklab_before_color = linear_rgb_to_oklab(pixel, context);
-  const auto pre_color_lightness = clamp_unit(oklab_before_color.lightness);
+  const auto pre_color_lightness = clamp_oklab_lightness(oklab_before_color.lightness, context);
   const auto pre_color_chroma = std::hypot(oklab_before_color.a, oklab_before_color.b);
   const auto highlight_chroma_scale = highlight_chroma_compression_enabled(state, pixel, output_headroom)
                                           ? highlight_chroma_compression_scale(
@@ -7191,7 +7634,7 @@ ColorPixel apply_global_color_pipeline(
   }
 
   auto oklab = oklab_before_color;
-  auto lightness = clamp_unit(oklab.lightness);
+  auto lightness = clamp_oklab_lightness(oklab.lightness, context);
   auto chroma = std::hypot(oklab.a, oklab.b);
   auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
   if (chroma <= 1e-4) {
@@ -7220,9 +7663,9 @@ ColorPixel apply_global_color_pipeline(
 
     if (mixer_hue_for_selection >= 0.0) {
       const auto use_legacy_mixer = !has_per_channel_color_mixer_adjustments(state);
-      const auto hue_scale = mixer_model == "HSV" ? 0.16 : 0.14;
-      const auto saturation_scale = mixer_model == "LCH" ? 0.72 : (mixer_model == "HSV" ? 0.92 : 0.80);
-      const auto luminance_scale = mixer_model == "HSV" ? 0.14 : (mixer_model == "LCH" ? 0.20 : 0.18);
+      const auto hue_scale = mixer_model == "HSV" ? 0.16 : 0.22;
+      const auto saturation_scale = mixer_model == "LCH" ? 0.72 : (mixer_model == "HSV" ? 0.92 : 1.15);
+      const auto luminance_scale = mixer_model == "HSV" ? 0.14 : (mixer_model == "LCH" ? 0.20 : 0.30);
       for (int ch = 0; ch < kColorMixerChannelCount; ++ch) {
         auto mixer = state.color_mixer_channels[static_cast<std::size_t>(ch)];
         if (use_legacy_mixer &&
@@ -7420,6 +7863,10 @@ ColorLut3D build_color_lut(const ColorAdjustmentState& state) {
         left.color_pipeline.export_output_profile.profile_name !=
             right.color_pipeline.export_output_profile.profile_name ||
         left.color_pipeline.render_intent != right.color_pipeline.render_intent ||
+        left.color_pipeline.output_gamut_mapping_enabled !=
+            right.color_pipeline.output_gamut_mapping_enabled ||
+        left.color_pipeline.output_gamut_mapping_policy !=
+            right.color_pipeline.output_gamut_mapping_policy ||
         !equal(left.color_pipeline.output_headroom, right.color_pipeline.output_headroom) ||
         !equal(left.exposure, right.exposure) ||
         !equal(left.contrast, right.contrast) ||
@@ -8865,6 +9312,29 @@ void apply_color_adjustments(
     if (cancellation.cancelled()) {
       return;
     }
+    auto ran_spatial_on_gpu = false;
+#if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
+    {
+      auto& metal = metal_backend();
+      ran_spatial_on_gpu =
+          removal_quality != RemovalQuality::Final &&
+          metal.available() &&
+          metal_color_pipeline_supported(state) &&
+          metal.apply_spatial_tone_effects(
+              pixels,
+              width,
+              height,
+              texture_strength,
+              clarity_strength,
+              dehaze_strength,
+              telemetry,
+              cancellation);
+      if (ran_spatial_on_gpu && telemetry != nullptr) {
+        telemetry->spatial_ms += elapsed_stage_ms(spatial_timer);
+      }
+    }
+#endif
+    if (!ran_spatial_on_gpu) {
     std::vector<float> luminance_buffer(static_cast<std::size_t>(width * height), 0.0F);
     const auto spatial_luminance_timer = StageClock::now();
     parallel_for(height, [&](int y) {
@@ -9049,6 +9519,7 @@ void apply_color_adjustments(
     if (telemetry != nullptr) {
       telemetry->spatial_ms += elapsed_stage_ms(spatial_timer);
     }
+    }
   }
 
   const auto post_color_timer = StageClock::now();
@@ -9099,16 +9570,16 @@ void apply_color_adjustments(
     const auto index = row_offset + static_cast<std::size_t>(x);
     auto& pixel = (*pixels)[index];
     if (master_curve.points.size() >= 2) {
-      pixel.red = static_cast<float>(apply_perceptual_point_curve(pixel.red, master_curve));
-      pixel.green = static_cast<float>(apply_perceptual_point_curve(pixel.green, master_curve));
-      pixel.blue = static_cast<float>(apply_perceptual_point_curve(pixel.blue, master_curve));
+      pixel = apply_luminance_point_curve(
+          pixel,
+          master_curve,
+          final_output_headroom,
+          color_context);
     }
     if (luma_curve.points.size() >= 2) {
-      const auto source_luminance = luminance_for_pixel(pixel, color_context);
-      const auto target_luminance = apply_perceptual_point_curve(source_luminance, luma_curve);
-      pixel = scale_pixel_to_luminance_with_headroom(
+      pixel = apply_luminance_point_curve(
           pixel,
-          target_luminance,
+          luma_curve,
           final_output_headroom,
           color_context);
     }
@@ -9143,7 +9614,7 @@ void apply_color_adjustments(
     });
 
     auto oklab = linear_rgb_to_oklab(pixel, color_context);
-    auto lightness = clamp_unit(oklab.lightness);
+    auto lightness = clamp_oklab_lightness(oklab.lightness, color_context);
     auto chroma = std::hypot(oklab.a, oklab.b);
     auto hue = wrap_radians(std::atan2(oklab.b, oklab.a));
     const auto highlight_chroma_scale = highlight_chroma_enabled
@@ -9178,11 +9649,11 @@ void apply_color_adjustments(
       chroma *= highlight_chroma_scale;
 
       if (post_color_has_mixer && mixer_hue_for_selection >= 0.0) {
-        const auto hue_scale = post_color_mixer_model == "HSV" ? 0.16 : 0.14;
+        const auto hue_scale = post_color_mixer_model == "HSV" ? 0.16 : 0.22;
         const auto saturation_scale =
-            post_color_mixer_model == "LCH" ? 0.72 : (post_color_mixer_model == "HSV" ? 0.92 : 0.80);
+            post_color_mixer_model == "LCH" ? 0.72 : (post_color_mixer_model == "HSV" ? 0.92 : 1.15);
         const auto luminance_scale =
-            post_color_mixer_model == "HSV" ? 0.14 : (post_color_mixer_model == "LCH" ? 0.20 : 0.18);
+            post_color_mixer_model == "HSV" ? 0.14 : (post_color_mixer_model == "LCH" ? 0.20 : 0.30);
         for (int ch = 0; ch < kColorMixerChannelCount; ++ch) {
           auto mixer = state.color_mixer_channels[static_cast<std::size_t>(ch)];
           if (post_color_use_legacy_mixer &&
@@ -9496,7 +9967,11 @@ void apply_color_adjustments(
             sharpen_detail,
             sharpen_mask_strength,
             luma_nr_strength,
-            color_nr_strength)) {
+            color_nr_strength,
+            telemetry)) {
+      if (telemetry != nullptr) {
+        telemetry->detail_ms += elapsed_stage_ms(detail_timer);
+      }
       return;
     }
 #endif
@@ -9709,7 +10184,8 @@ void apply_color_adjustments(
       const auto row_offset = static_cast<std::size_t>(y) * safe_width;
       for (int x = 0; x < width; ++x) {
         const auto index = row_offset + static_cast<std::size_t>(x);
-        const auto L = clamp_unit(static_cast<double>(lightness_buf[index]));
+        const auto L =
+            clamp_oklab_lightness(static_cast<double>(lightness_buf[index]), color_context);
         const auto a = static_cast<double>(chroma_a_buf[index]);
         const auto b = static_cast<double>(chroma_b_buf[index]);
         (*pixels)[index] = gamut_fit_oklab(L, a, b, (*pixels)[index].alpha, color_context);

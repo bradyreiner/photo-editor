@@ -13,6 +13,7 @@ class NullEditorPreviewTexture final : public EditorPreviewTexture {
  public:
   [[nodiscard]] bool available() const override { return false; }
   [[nodiscard]] const char* backendName() const override { return "cpu"; }
+  bool ensureNativeTexture(const QSize&, QImage::Format) override { return false; }
   bool upload(const QImage&) override { return false; }
   bool uploadRegion(const QImage&, const QRect&) override { return false; }
   bool uploadPatch(const QImage&, const QRect&) override { return false; }

@@ -1,9 +1,11 @@
 #include "job_runner.h"
 
 #include "app_bootstrap.h"
+#include "export_image_settings.h"
 #include "observability.h"
 #include "timeline_asset_store.h"
 #include "timeline_document_controller.h"
+#include "worker_queue_registry.h"
 
 #include <QtConcurrent>
 
@@ -17,6 +19,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -25,8 +28,11 @@
 #include <QTimer>
 #include <QUuid>
 #include <QUrl>
+#include <QtEndian>
 
 #include <algorithm>
+#include <cmath>
+#include <cstring>
 
 #include "edit_recipe_state.h"
 #include "job_store.h"
@@ -36,13 +42,6 @@
 namespace photo_editor::desktop {
 
 namespace {
-
-struct ExportImageOptions final {
-  int max_edge = 0;
-  int jpeg_quality = 95;
-  QByteArray writer_format = "png";
-  QImage::Format image_format = QImage::Format_RGBA64;
-};
 
 struct PreviewExportDiff final {
   bool available = false;
@@ -69,6 +68,38 @@ qint64 queue_wait_msecs_since(const QString& created_at, const QDateTime& refere
 
 qint64 queue_wait_msecs_for_job(const PersistentJobRecord& job) {
   return queue_wait_msecs_since(job.created_at, QDateTime::currentDateTimeUtc());
+}
+
+QString worker_pool_id_for_job_kind(const QString& job_kind) {
+  if (job_kind == QStringLiteral("catalog_import")) {
+    return QStringLiteral("catalog-import");
+  }
+  if (job_kind == QStringLiteral("timeline_render")) {
+    return QStringLiteral("timeline-media");
+  }
+  if (job_kind == QStringLiteral("metadata_extraction") ||
+      job_kind == QStringLiteral("metadata_extract")) {
+    return QStringLiteral("metadata-extraction");
+  }
+  if (job_kind == QStringLiteral("carousel_render")) {
+    return QStringLiteral("carousel-render");
+  }
+  return QStringLiteral("export");
+}
+
+QString worker_surface_for_job_kind(const QString& job_kind) {
+  if (job_kind == QStringLiteral("catalog_import") ||
+      job_kind == QStringLiteral("metadata_extraction") ||
+      job_kind == QStringLiteral("metadata_extract")) {
+    return QStringLiteral("library");
+  }
+  if (job_kind == QStringLiteral("timeline_render")) {
+    return QStringLiteral("timeline");
+  }
+  if (job_kind == QStringLiteral("carousel_render")) {
+    return QStringLiteral("carousel");
+  }
+  return QStringLiteral("export");
 }
 
 QString cancellation_reason_for_job(const PersistentJobRecord& job) {
@@ -212,21 +243,77 @@ QString resolved_source_path(const PersistentJobRecord& job, bool* uses_preview)
   return {};
 }
 
-ExportImageOptions export_image_options_for_preset(const QString& preset) {
-  const auto normalized = preset.trimmed();
-  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 1440, .jpeg_quality = 88, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
+QImage prepare_image_for_export_write(const QImage& image, const ExportImageSettings& options) {
+  if (image.isNull()) {
+    return {};
   }
-  if (normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2048, .jpeg_quality = 92, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
+  if (!options.flatten_alpha) {
+    return image.convertToFormat(options.image_format);
   }
-  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 2560, .jpeg_quality = 94, .writer_format = "jpg", .image_format = QImage::Format_ARGB32};
+
+  QImage flattened(image.size(), QImage::Format_RGB888);
+  flattened.setColorSpace(image.colorSpace());
+  flattened.fill(Qt::white);
+  QPainter painter(&flattened);
+  painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+  painter.drawImage(0, 0, image);
+  painter.end();
+  return flattened;
+}
+
+QColorSpace export_target_color_space(
+    const RenderEditState& state,
+    const ExportImageSettings& options) {
+  if (options.scene_linear) {
+    return linear_srgb_color_space();
   }
-  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
-    return {.max_edge = 0, .jpeg_quality = 100, .writer_format = "tif", .image_format = QImage::Format_RGBA64};
+  return preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space));
+}
+
+void append_pfm_float(QByteArray* data, float value) {
+  if (!std::isfinite(value)) {
+    value = 0.0F;
   }
-  return {.max_edge = 0, .jpeg_quality = 100, .writer_format = "png", .image_format = QImage::Format_RGBA64};
+  quint32 bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  const auto little_endian_bits = qToLittleEndian(bits);
+  data->append(reinterpret_cast<const char*>(&little_endian_bits), sizeof(little_endian_bits));
+}
+
+bool write_pfm_image(const QImage& image, const QString& output_path) {
+  if (image.isNull() || image.width() <= 0 || image.height() <= 0) {
+    return false;
+  }
+
+  const auto float_image = image.format() == QImage::Format_RGBA32FPx4
+                               ? image
+                               : image.convertToFormat(QImage::Format_RGBA32FPx4);
+  if (float_image.isNull()) {
+    return false;
+  }
+
+  QByteArray data;
+  data.reserve(64 + float_image.width() * float_image.height() * 3 * static_cast<int>(sizeof(float)));
+  data.append("PF\n");
+  data.append(QByteArray::number(float_image.width()));
+  data.append(' ');
+  data.append(QByteArray::number(float_image.height()));
+  data.append("\n-1.0\n");
+  for (int y = float_image.height() - 1; y >= 0; --y) {
+    const auto* scanline = reinterpret_cast<const float*>(float_image.constScanLine(y));
+    for (int x = 0; x < float_image.width(); ++x) {
+      const auto* pixel = scanline + (x * 4);
+      append_pfm_float(&data, pixel[0]);
+      append_pfm_float(&data, pixel[1]);
+      append_pfm_float(&data, pixel[2]);
+    }
+  }
+
+  QFile file(output_path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    return false;
+  }
+  return file.write(data) == data.size();
 }
 
 int preview_export_diff_tolerance_for_preset(const QString& preset) {
@@ -524,7 +611,8 @@ QString export_render_state_signature(
     const QString& source_path,
     const QString& output_path,
     bool render_photo,
-    const QJsonObject& mask_alpha_trace) {
+    const QJsonObject& mask_alpha_trace,
+    const QJsonObject& export_image_settings) {
   QJsonObject payload;
   payload.insert(QStringLiteral("jobId"), job.job_id);
   payload.insert(QStringLiteral("assetId"), job.asset_id);
@@ -535,6 +623,7 @@ QString export_render_state_signature(
   payload.insert(QStringLiteral("metadata"), job.metadata_json);
   payload.insert(QStringLiteral("renderPhoto"), render_photo);
   payload.insert(QStringLiteral("maskAlphaTrace"), mask_alpha_trace);
+  payload.insert(QStringLiteral("exportImageSettings"), export_image_settings);
   return QStringLiteral("sha1:%1").arg(QString::fromLatin1(
       QCryptographicHash::hash(
           QJsonDocument(payload).toJson(QJsonDocument::Compact),
@@ -549,12 +638,16 @@ QJsonObject export_render_job_metadata(
     bool render_photo) {
   const auto mask_alpha_trace =
       render_photo ? export_mask_alpha_trace_metadata(job.recipe_json, source_path) : QJsonObject{};
+  const auto export_image_settings =
+      render_photo ? export_image_settings_metadata(export_image_settings_for_preset(job.preset_name))
+                   : QJsonObject{};
   const auto signature = export_render_state_signature(
       job,
       source_path,
       output_path,
       render_photo,
-      mask_alpha_trace);
+      mask_alpha_trace,
+      export_image_settings);
   const auto signature_token =
       signature.mid(signature.indexOf(QLatin1Char(':')) + 1, 12);
   QJsonObject metadata;
@@ -572,6 +665,33 @@ QJsonObject export_render_job_metadata(
   metadata.insert(QStringLiteral("stateSignature"), signature);
   metadata.insert(QStringLiteral("queuedAt"), job.created_at);
   metadata.insert(QStringLiteral("renderPhoto"), render_photo);
+  if (!export_image_settings.isEmpty()) {
+    metadata.insert(QStringLiteral("exportImageSettings"), export_image_settings);
+    metadata.insert(
+        QStringLiteral("format"),
+        export_image_settings.value(QStringLiteral("format")).toString());
+    metadata.insert(
+        QStringLiteral("bitDepth"),
+        export_image_settings.value(QStringLiteral("bitDepth")).toInt());
+    metadata.insert(
+        QStringLiteral("flattenAlpha"),
+        export_image_settings.value(QStringLiteral("flattenAlpha")).toBool());
+    metadata.insert(
+        QStringLiteral("embedProfile"),
+        export_image_settings.value(QStringLiteral("embedProfile")).toBool());
+    metadata.insert(
+        QStringLiteral("sceneLinear"),
+        export_image_settings.value(QStringLiteral("sceneLinear")).toBool());
+    metadata.insert(
+        QStringLiteral("preservesOverRange"),
+        export_image_settings.value(QStringLiteral("preservesOverRange")).toBool());
+    metadata.insert(
+        QStringLiteral("outputEncoding"),
+        export_image_settings.value(QStringLiteral("outputEncoding")).toString());
+    metadata.insert(
+        QStringLiteral("headroomPolicy"),
+        export_image_settings.value(QStringLiteral("headroomPolicy")).toString());
+  }
   if (!mask_alpha_trace.isEmpty()) {
     metadata.insert(QStringLiteral("maskAlphaTrace"), mask_alpha_trace);
   }
@@ -690,14 +810,15 @@ QString output_suffix_for_preset(const QString& preset, bool rendered_output) {
   if (!rendered_output) {
     return {};
   }
-  const auto normalized = preset.trimmed();
-  if (normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0) {
+  const auto options = export_image_settings_for_preset(preset);
+  if (options.writer_format == "jpg") {
     return QStringLiteral("jpg");
   }
-  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
+  if (options.writer_format == "tif") {
     return QStringLiteral("tif");
+  }
+  if (options.writer_format == "pfm") {
+    return QStringLiteral("pfm");
   }
   return QStringLiteral("png");
 }
@@ -719,11 +840,11 @@ bool render_photo_export(
   }
 
   image = apply_crop(image, state);
-  const auto options = export_image_options_for_preset(preset);
+  const auto options = export_image_settings_for_preset(preset);
   image = render_output_image(
       image,
       state,
-      preview_color_space_for_name(normalized_output_color_space_name(state.output_color_space)),
+      export_target_color_space(state, options),
       options.image_format,
       metadata.valid ? &metadata : nullptr,
       telemetry,
@@ -734,8 +855,16 @@ bool render_photo_export(
   if (options.max_edge > 0 && (image.width() > options.max_edge || image.height() > options.max_edge)) {
     image = image.scaled(options.max_edge, options.max_edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
   }
+  image = prepare_image_for_export_write(image, options);
+  if (image.isNull()) {
+    return false;
+  }
   if (rendered_output != nullptr) {
     *rendered_output = image;
+  }
+
+  if (options.writer_format == "pfm") {
+    return write_pfm_image(image, output_path);
   }
 
   QImageWriter writer(output_path, options.writer_format);
@@ -1171,6 +1300,14 @@ void JobRunner::processNextJob() {
           {QStringLiteral("source_path"), job.source_path},
           {QStringLiteral("queue_wait_ms"), active_queue_wait_ms_},
       });
+  WorkerQueueRegistry::logSample(
+      worker_pool_id_for_job_kind(job.job_kind),
+      job.job_kind,
+      worker_surface_for_job_kind(job.job_kind),
+      1,
+      static_cast<int>(qMax<qsizetype>(0, queued_jobs.size() - 1)),
+      1,
+      active_queue_wait_ms_);
   if (job.job_kind == QStringLiteral("catalog_import")) {
     QTimer::singleShot(0, this, [this, job_id = active_job_id_]() { runImportJob(job_id); });
     return;
@@ -1425,6 +1562,17 @@ void JobRunner::handleAsyncJobFinished() {
 
   job.updated_at = iso_now();
   (void)upsertPersistedJobRecord(job, nullptr);
+  WorkerQueueRegistry::logSummary(
+      worker_pool_id_for_job_kind(job_kind),
+      job_kind,
+      worker_surface_for_job_kind(job_kind),
+      0,
+      0,
+      1,
+      queue_wait_ms,
+      worker_elapsed_ms,
+      job.status == QStringLiteral("Completed") ? 1 : 0,
+      cancellation_requested ? 1 : 0);
   if (job.status == QStringLiteral("Completed")) {
     observability::logInfo(
         photoEditorJobsLog(),

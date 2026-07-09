@@ -6,6 +6,7 @@
 #include "photo_render_utils.h"
 #include "raw_image_decoder.h"
 #include "timeline_asset_store.h"
+#include "worker_queue_registry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -436,6 +437,41 @@ QString thumbnail_cache_path_for_key(const QString& key) {
   const auto hash =
       QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex();
   return QDir(thumbnail_cache_root()).filePath(QStringLiteral("%1.jpg").arg(QString::fromLatin1(hash)));
+}
+
+struct ThumbnailCacheStats final {
+  qint64 bytes = 0;
+  int entries = 0;
+  qint64 elapsed_ms = 0;
+};
+
+ThumbnailCacheStats sample_thumbnail_cache_stats() {
+  QElapsedTimer timer;
+  timer.start();
+
+  ThumbnailCacheStats stats;
+  const QDir cache_dir(thumbnail_cache_root());
+  if (!cache_dir.exists()) {
+    stats.elapsed_ms = timer.elapsed();
+    return stats;
+  }
+
+  QDirIterator iterator(
+      cache_dir.absolutePath(),
+      QStringList{QStringLiteral("*.jpg")},
+      QDir::Files,
+      QDirIterator::NoIteratorFlags);
+  while (iterator.hasNext()) {
+    iterator.next();
+    const QFileInfo info = iterator.fileInfo();
+    if (!info.exists()) {
+      continue;
+    }
+    stats.bytes += qMax<qint64>(0, info.size());
+    ++stats.entries;
+  }
+  stats.elapsed_ms = timer.elapsed();
+  return stats;
 }
 
 QString versioned_local_file_url(const QString& file_path) {
@@ -3645,16 +3681,30 @@ void CatalogAssetModel::startNextThumbnailTask() {
               {QStringLiteral("queue_wait_ms"), queue_wait_ms},
               {QStringLiteral("queue_priority"), queue_priority},
               {QStringLiteral("active_worker_count"), active_thumbnail_asset_ids_.size()},
+              {QStringLiteral("pending_worker_count"), pending_thumbnail_asset_ids_.size()},
               {QStringLiteral("worker_limit"), kMaxConcurrentThumbnailTasks},
           });
+      WorkerQueueRegistry::logSample(
+          QStringLiteral("thumbnail"),
+          QStringLiteral("thumbnail"),
+          QStringLiteral("library"),
+          static_cast<int>(active_thumbnail_asset_ids_.size()),
+          static_cast<int>(pending_thumbnail_asset_ids_.size()),
+          kMaxConcurrentThumbnailTasks,
+          queue_wait_ms);
       watcher->setFuture(QtConcurrent::run([asset_id, file_path, recipe_json, queue_wait_ms, queue_priority]() {
         QElapsedTimer timer;
         timer.start();
+        const auto thumbnail_source = thumbnail_source_for_path(file_path, recipe_json);
+        const auto cache_stats = sample_thumbnail_cache_stats();
         return ThumbnailTaskResult{
             .asset_id = asset_id,
             .file_path = file_path,
             .recipe_json = recipe_json,
-            .thumbnail_source = thumbnail_source_for_path(file_path, recipe_json),
+            .thumbnail_source = thumbnail_source,
+            .thumbnail_cache_bytes = cache_stats.bytes,
+            .thumbnail_cache_entries = cache_stats.entries,
+            .thumbnail_cache_probe_ms = cache_stats.elapsed_ms,
             .queue_wait_ms = queue_wait_ms,
             .elapsed_ms = timer.elapsed(),
             .queue_priority = queue_priority,
@@ -3816,13 +3866,29 @@ void CatalogAssetModel::handleThumbnailFinished() {
           {QStringLiteral("asset_id"), result.asset_id},
           {QStringLiteral("file_path"), result.file_path},
           {QStringLiteral("success"), !result.thumbnail_source.isEmpty()},
+          {QStringLiteral("thumbnail_cache_bytes"), result.thumbnail_cache_bytes},
+          {QStringLiteral("cache_bytes"), result.thumbnail_cache_bytes},
+          {QStringLiteral("thumbnail_cache_entries"), result.thumbnail_cache_entries},
+          {QStringLiteral("thumbnail_cache_probe_ms"), result.thumbnail_cache_probe_ms},
           {QStringLiteral("queue_wait_ms"), result.queue_wait_ms},
           {QStringLiteral("elapsed_ms"), result.elapsed_ms},
           {QStringLiteral("queue_priority"), result.queue_priority},
           {QStringLiteral("active_worker_count"), active_thumbnail_asset_ids_.size()},
+          {QStringLiteral("pending_worker_count"), pending_thumbnail_asset_ids_.size()},
           {QStringLiteral("worker_limit"), kMaxConcurrentThumbnailTasks},
           {QStringLiteral("cancellation_reason"), applied ? QString() : QStringLiteral("stale_result")},
       });
+  WorkerQueueRegistry::logSummary(
+      QStringLiteral("thumbnail"),
+      QStringLiteral("thumbnail"),
+      QStringLiteral("library"),
+      static_cast<int>(active_thumbnail_asset_ids_.size()),
+      static_cast<int>(pending_thumbnail_asset_ids_.size()),
+      kMaxConcurrentThumbnailTasks,
+      result.queue_wait_ms,
+      result.elapsed_ms,
+      applied ? 1 : 0,
+      applied ? 0 : 1);
   if (!applied && !result.thumbnail_source.isEmpty()) {
     queueThumbnailRefreshes();
     return;

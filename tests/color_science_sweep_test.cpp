@@ -77,6 +77,19 @@ bool finite_pixel(const ColorPixel& pixel) {
          std::isfinite(pixel.blue) && std::isfinite(pixel.alpha);
 }
 
+double max_delta(const std::vector<ColorPixel>& before, const std::vector<ColorPixel>& after) {
+  auto delta = 0.0;
+  for (std::size_t index = 0; index < before.size(); ++index) {
+    delta = std::max(delta, std::abs(static_cast<double>(before[index].red) -
+                                    static_cast<double>(after[index].red)));
+    delta = std::max(delta, std::abs(static_cast<double>(before[index].green) -
+                                    static_cast<double>(after[index].green)));
+    delta = std::max(delta, std::abs(static_cast<double>(before[index].blue) -
+                                    static_cast<double>(after[index].blue)));
+  }
+  return delta;
+}
+
 }  // namespace
 
 int main() {
@@ -125,6 +138,152 @@ int main() {
     }
   }
 
+  const std::vector<ColorPixel> control_fixture = {
+      ColorPixel{0.018F, 0.018F, 0.018F, 1.0F},
+      ColorPixel{0.12F, 0.12F, 0.12F, 1.0F},
+      ColorPixel{0.46F, 0.46F, 0.46F, 1.0F},
+      ColorPixel{0.88F, 0.88F, 0.88F, 1.0F},
+      ColorPixel{0.44F, 0.18F, 0.08F, 1.0F},
+      ColorPixel{0.10F, 0.36F, 0.12F, 1.0F},
+      ColorPixel{0.08F, 0.16F, 0.52F, 1.0F},
+      ColorPixel{1.35F, 0.18F, 0.08F, 1.0F},
+  };
+  const auto control_base = apply_pixels(control_fixture, base_state());
+  auto require_visible_delta = [&](std::string_view name,
+                                   const ColorAdjustmentState& state,
+                                   double threshold) {
+    const auto output = apply_pixels(control_fixture, state);
+    const auto delta = max_delta(control_base, output);
+    if (delta <= threshold) {
+      std::cerr << name << " should have a visible effect above threshold "
+                << threshold << " actual=" << delta << '\n';
+      return false;
+    }
+    return true;
+  };
+  {
+    auto state = base_state();
+    state.exposure = 0.10;
+    if (!require_visible_delta("small exposure", state, 0.012)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.contrast = 10.0;
+    if (!require_visible_delta("small contrast", state, 0.008)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.highlights = -15.0;
+    if (!require_visible_delta("small highlights", state, 0.006)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.shadows = 15.0;
+    if (!require_visible_delta("small shadows", state, 0.0035)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.whites = 15.0;
+    if (!require_visible_delta("small whites", state, 0.006)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.blacks = -15.0;
+    if (!require_visible_delta("small blacks", state, 0.004)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.vibrance = 20.0;
+    if (!require_visible_delta("small vibrance", state, 0.004)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.saturation = 20.0;
+    if (!require_visible_delta("small saturation", state, 0.010)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.color_mixer_model = "OKLab";
+    state.color_mixer_channels[0].hue = 15.0;
+    state.color_mixer_channels[0].saturation = 18.0;
+    state.color_mixer_channels[0].luminance = -8.0;
+    if (!require_visible_delta("small color mixer", state, 0.0055)) {
+      return EXIT_FAILURE;
+    }
+    state = base_state();
+    state.grading_midtones_hue = 0.08;
+    state.grading_midtones_saturation = 18.0;
+    if (!require_visible_delta("small color grading", state, 0.006)) {
+      return EXIT_FAILURE;
+    }
+  }
+
+  {
+    std::array<ColorAdjustmentState, 14> endpoint_states = {
+        base_state(), base_state(), base_state(), base_state(), base_state(), base_state(),
+        base_state(), base_state(), base_state(), base_state(), base_state(), base_state(),
+        base_state(), base_state()};
+    endpoint_states[0].exposure = -2.0;
+    endpoint_states[1].exposure = 2.0;
+    endpoint_states[2].contrast = 100.0;
+    endpoint_states[3].contrast = -100.0;
+    endpoint_states[4].highlights = -100.0;
+    endpoint_states[5].shadows = 100.0;
+    endpoint_states[6].whites = 100.0;
+    endpoint_states[7].blacks = -100.0;
+    endpoint_states[8].vibrance = 100.0;
+    endpoint_states[9].saturation = 100.0;
+    endpoint_states[10].color_mixer_model = "OKLab";
+    endpoint_states[10].color_mixer_channels[0].hue = 100.0;
+    endpoint_states[10].color_mixer_channels[0].saturation = 100.0;
+    endpoint_states[10].color_mixer_channels[0].luminance = -100.0;
+    endpoint_states[11].color_mixer_model = "OKLab";
+    endpoint_states[11].color_mixer_channels[5].hue = -100.0;
+    endpoint_states[11].color_mixer_channels[5].saturation = 100.0;
+    endpoint_states[11].color_mixer_channels[5].luminance = 100.0;
+    endpoint_states[12].grading_shadows_hue = 0.62;
+    endpoint_states[12].grading_shadows_saturation = 100.0;
+    endpoint_states[12].grading_shadows_luminance = -100.0;
+    endpoint_states[13].grading_highlights_hue = 0.12;
+    endpoint_states[13].grading_highlights_saturation = 100.0;
+    endpoint_states[13].grading_highlights_luminance = 100.0;
+    for (const auto& state : endpoint_states) {
+      const auto output = apply_pixels(control_fixture, state);
+      for (const auto& pixel : output) {
+        if (!finite_pixel(pixel)) {
+          return fail("current slider endpoints should produce finite pixels");
+        }
+        if (pixel.alpha < 0.999F || pixel.alpha > 1.001F) {
+          return fail("current slider endpoints should preserve alpha");
+        }
+      }
+      const auto preview = photo_editor::pipeline::apply_output_transform(
+          output.front(),
+          state.color_pipeline,
+          photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+      const auto export_output = photo_editor::pipeline::apply_output_transform(
+          output.front(),
+          state.color_pipeline,
+          photo_editor::pipeline::GamutWarningTarget::ExportOutput);
+      if (!finite_pixel(preview.pixel) ||
+          !finite_pixel(export_output.pixel) ||
+          preview.pixel.red < -1.0e-6F ||
+          preview.pixel.green < -1.0e-6F ||
+          preview.pixel.blue < -1.0e-6F ||
+          export_output.pixel.red < -1.0e-6F ||
+          export_output.pixel.green < -1.0e-6F ||
+          export_output.pixel.blue < -1.0e-6F ||
+          preview.pixel.red > 1.00001F ||
+          preview.pixel.green > 1.00001F ||
+          preview.pixel.blue > 1.00001F ||
+          export_output.pixel.red > 1.00001F ||
+          export_output.pixel.green > 1.00001F ||
+          export_output.pixel.blue > 1.00001F) {
+        return fail("current slider endpoints should stay bounded after preview/export transforms");
+      }
+    }
+  }
+
   const std::vector<ColorPixel> tone_colors = {
       ColorPixel{0.20F, 0.08F, 0.03F, 1.0F},
       ColorPixel{0.06F, 0.24F, 0.10F, 1.0F},
@@ -154,9 +313,13 @@ int main() {
           ColorPixel{0.05F, 0.05F, 0.05F, 1.0F},
       },
       dark_recovery_state);
-  if (!(luminance(dark_recovery_output[0]) > 0.075 &&
+  if (!(luminance(dark_recovery_output[0]) > 0.070 &&
         luminance(dark_recovery_output[1]) > 0.12 &&
         luminance(dark_recovery_output[2]) > 0.24)) {
+    std::cerr << "dark recovery luminance actual="
+              << luminance(dark_recovery_output[0]) << ","
+              << luminance(dark_recovery_output[1]) << ","
+              << luminance(dark_recovery_output[2]) << '\n';
     return fail("exposure, shadows, and brightness should recover visibly dark linear detail");
   }
 

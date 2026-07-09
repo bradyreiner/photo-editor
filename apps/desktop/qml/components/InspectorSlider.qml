@@ -15,16 +15,20 @@ Item {
     property string disabledReason: ""
     property bool showFullLabelTooltip: true
     property int labelColumnWidth: theme.labelMinWidth
-    property int valueColumnWidth: theme.valueColumnWidth
+    property int valueColumnWidth: Math.max(theme.valueColumnWidth, 68)
     property int resetColumnWidth: 28
     property bool showResetButton: true
+    property bool throttleDraggedValues: true
+    property int dragCommitIntervalMs: 16
+    property real pendingDraggedValue: 0
+    property bool hasPendingDraggedValue: false
     property real defaultValue: from <= 0 && to >= 0 ? 0 : from
     property real modifiedEpsilon: stepSize > 0 ? Math.max(stepSize / 2, 0.0001) : 0.0001
     property int controlHeight: 44
     readonly property real sliderScale: Math.max(1.0, controlHeight / 34)
     readonly property int trackHeight: 3
-    readonly property int thumbRestSize: 14
-    readonly property int thumbPressedSize: 18
+    readonly property int thumbRestSize: 12
+    readonly property int thumbPressedSize: 16
     readonly property int thumbReservedSize: Math.max(thumbRestSize, thumbPressedSize)
     readonly property real thumbVisualScale: thumbReservedSize > 0
                                        ? (control.pressed ? 1.0 : thumbRestSize / thumbReservedSize)
@@ -66,9 +70,12 @@ Item {
                                              String(valueInputEnabled) +
                                              "|modified-marker:true|center-marker:" +
                                              String(hasCenterMarker) +
-                                             "|default-marker:true|fixed-reset:true|stable-value:true|fixed-label:true|disabled-reason:true|no-elide:true|double-click-reset:true|no-handle-layout-shift:true"
+                                             "|default-marker:true|fixed-reset:true|stable-value:true|fixed-label:true|disabled-reason:true|no-elide:true|double-click-reset:true|no-handle-layout-shift:true|drag-commit-throttle:" +
+                                             String(throttleDraggedValues) +
+                                             "|drag-commit-interval-ms:" +
+                                             String(dragCommitIntervalMs)
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|value-fit:true|tooltip-full:true|accessibility-full:true"
-    readonly property string valueGeometryContract: "slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:44|track-height:3|thumb:14-18|reserved-thumb:18|handle-layout-shift:false"
+    readonly property string valueGeometryContract: "slider-value-geometry:v2|label-column-fixed:true|value-column-fixed:true|reset-column-fixed:true|row-height:44|track-height:3|thumb:12-16|reserved-thumb:16|handle-layout-shift:false"
     readonly property string resetActionContract: "slider-reset-action:v1|icon-only:true|tooltip-full:true|accessible-label:true|disabled-reason:true|active-when-modified:true|fixed-column:" +
                                                   String(root.resetColumnWidth)
     signal interactionStarted()
@@ -114,6 +121,31 @@ Item {
         root.valueDragged(nextValue)
     }
 
+    function queueDraggedValue(value) {
+        if (!root.throttleDraggedValues) {
+            root.valueDragged(value)
+            return
+        }
+        if (!dragCommitTimer.running && !root.hasPendingDraggedValue) {
+            root.valueDragged(value)
+            dragCommitTimer.start()
+            return
+        }
+        root.pendingDraggedValue = value
+        root.hasPendingDraggedValue = true
+        if (!dragCommitTimer.running)
+            dragCommitTimer.start()
+    }
+
+    function flushQueuedDraggedValue() {
+        if (!root.hasPendingDraggedValue)
+            return
+        const value = root.pendingDraggedValue
+        root.hasPendingDraggedValue = false
+        dragCommitTimer.stop()
+        root.valueDragged(value)
+    }
+
     function testCommitInputText(text) {
         valueField.text = String(text)
         commitValueText()
@@ -124,6 +156,13 @@ Item {
         acceptedButtons: Qt.LeftButton
         gesturePolicy: TapHandler.DragThreshold
         onDoubleTapped: root.resetRequested()
+    }
+
+    Timer {
+        id: dragCommitTimer
+        interval: root.dragCommitIntervalMs
+        repeat: false
+        onTriggered: root.flushQueuedDraggedValue()
     }
 
     RowLayout {
@@ -150,8 +189,8 @@ Item {
             maximumLineCount: 1
             font.family: theme.fontUi
             font.pixelSize: 11
-            font.weight: root.modified || control.pressed ? Font.Black : Font.Bold
-            font.capitalization: Font.AllUppercase
+            font.weight: root.modified || control.pressed ? Font.DemiBold : Font.Bold
+            font.capitalization: Font.MixedCase
             font.letterSpacing: 0
             ToolTip.visible: root.showFullLabelTooltip &&
                              (labelText.contentWidth > labelText.width + 1 ||
@@ -288,12 +327,14 @@ Item {
                     }
                 }
 
-                onMoved: root.valueDragged(control.value)
+                onMoved: root.queueDraggedValue(control.value)
                 onPressedChanged: {
-                    if (pressed)
+                    if (pressed) {
                         root.interactionStarted()
-                    else
+                    } else {
+                        root.flushQueuedDraggedValue()
                         root.interactionFinished()
+                    }
                 }
             }
         }

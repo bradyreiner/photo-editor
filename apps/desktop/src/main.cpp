@@ -29,6 +29,7 @@
 #include "agent_edit_controller.h"
 #include "photo_automation_bridge.h"
 #include "preview_backend_controller.h"
+#include "qml_performance_monitor.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
 
@@ -379,6 +380,7 @@ int main(int argc, char* argv[]) {
   }
   photo_editor::desktop::MacosUpdater macos_updater;
   photo_editor::desktop::PreviewBackendController preview_backend;
+  photo_editor::desktop::QmlPerformanceMonitor qml_performance;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
   QQmlApplicationEngine engine;
@@ -394,6 +396,7 @@ int main(int argc, char* argv[]) {
   engine.rootContext()->setContextProperty("jobQueue", &job_queue);
   engine.rootContext()->setContextProperty("macosUpdater", &macos_updater);
   engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
+  engine.rootContext()->setContextProperty("qmlPerformance", &qml_performance);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 

@@ -9,6 +9,7 @@
 ## Performance Contract
 
 Complete this section for any change that can affect launch, import, library scroll, preview render, masking, timeline playback, export throughput, memory use, or background-job pressure.
+For optimization claims, use `docs/performance-optimization-pr-evidence.md`.
 
 - Metric:
 - Before:

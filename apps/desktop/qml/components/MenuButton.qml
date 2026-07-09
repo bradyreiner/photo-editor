@@ -14,6 +14,8 @@ Item {
     property bool enabled: true
     property bool allowLabelWrap: false
     property bool menuEnabled: (menuItems || []).length > 0
+    property bool primaryOpensMenu: false
+    property bool secondaryActionMenu: false
     property var menuItems: []
     property string tooltipText: ""
     property string menuTooltipText: text.length > 0 ? "More options for " + text : "More options"
@@ -30,6 +32,11 @@ Item {
     implicitHeight: compact ? theme.controlHeightDense : theme.controlHeight
     implicitWidth: primaryButton.implicitWidth + (root.menuEnabled ? chevronButton.implicitWidth + 1 : 0)
     opacity: root.enabled ? 1.0 : 0.56
+
+    Behavior on opacity {
+        NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+    }
+
     readonly property int checkedItemCount: countCheckedItems()
     readonly property int disabledItemCount: countDisabledItems()
     readonly property int disabledItemReasonCount: countDisabledItemsWithReasons()
@@ -37,6 +44,7 @@ Item {
     readonly property bool disabledItemsExplainState: disabledItemCount === disabledItemReasonCount
     readonly property bool destructiveItemsSeparated: dangerItemCount === 0 || firstDangerIndex() > 0
     readonly property bool destructiveItemsLast: dangerItemCount === 0 || nonDangerAfterFirstDangerIndex() < 0
+    readonly property bool secondaryActionsUseMore: !secondaryActionMenu || text === "More"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|menu-wrap:true|menu-lines:" +
                                                    String(root.menuItemMaxLines) +
                                                    "|popover-width:min-content|tooltip-full:true"
@@ -47,6 +55,18 @@ Item {
                                                    "|padding:" +
                                                    String(root.menuPopoverPadding) +
                                                    "|item-height:32-36|icon-column:true|shortcut-column:true|labels-wrap:true"
+    readonly property string secondaryActionSemanticsContract: "secondary-action-menu:v1|secondary:" +
+                                                               String(root.secondaryActionMenu) +
+                                                               "|label:" +
+                                                               root.text +
+                                                               "|uses-more:" +
+                                                               String(root.secondaryActionsUseMore) +
+                                                               "|tooltip-specific:" +
+                                                               String(root.tooltipText.length > 0) +
+                                                               "|destructive-deliberate:" +
+                                                               String(root.destructiveItemsSeparated &&
+                                                                      root.destructiveItemsLast)
+    readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
     readonly property string menuContract: "menu-button:v1|items:" +
                                            String(root.menuItems ? root.menuItems.length : 0) +
                                            "|checked:" +
@@ -87,7 +107,9 @@ Item {
     function disabledReasonForItem(item) {
         if (!item)
             return ""
-        const disabledReason = String(item.disabledReason || item.reason || "")
+        const disabledReason = item.enabled === false
+                ? String(item.disabledReason || item.reason || "Unavailable in the current state.")
+                : String(item.disabledReason || item.reason || "")
         return disabledReason
     }
 
@@ -150,7 +172,12 @@ Item {
             active: root.active
             enabled: root.enabled
             tooltipText: root.tooltipText
-            onClicked: root.clicked()
+            onClicked: {
+                if (root.primaryOpensMenu && root.menuEnabled)
+                    menuPopup.open()
+                else
+                    root.clicked()
+            }
         }
 
         ActionButton {

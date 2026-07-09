@@ -7,13 +7,18 @@ Rectangle {
 
     property string label: "Option"
     property string helperText: ""
+    property string disabledReason: ""
+    property string disabledFallbackReason: "Unavailable in the current state."
     property bool checked: false
     property bool toggleEnabled: true
     property color accent: theme.focusRing
 
     signal toggled(bool checked)
 
-    readonly property string toolOptionToggleContract: "tool-option-toggle:v1|checked-state:true|keyboard:true|hover:true|disabled-state:true|readable-text:true|no-elide:true|tooltip-full:true"
+    readonly property string disabledTooltipText: !toggleEnabled
+                                                  ? (disabledReason.length > 0 ? disabledReason : disabledFallbackReason)
+                                                  : (helperText.length > 0 ? helperText : label)
+    readonly property string toolOptionToggleContract: "tool-option-toggle:v2|checked-state:true|keyboard:true|hover:true|disabled-state:true|disabled-fallback:true|readable-text:true|no-elide:true|tooltip-full:true"
     readonly property string readableTextContract: "readable-text:v1|ellipsis:none|label-fit:true|tooltip-full:true|accessibility-full:true"
 
     Theme { id: theme }
@@ -38,7 +43,7 @@ Rectangle {
     activeFocusOnTab: true
     clip: true
     Accessible.name: label
-    Accessible.description: helperText.length > 0 ? helperText : label
+    Accessible.description: disabledTooltipText
     Accessible.role: Accessible.CheckBox
     Accessible.checked: checked
 
@@ -101,10 +106,10 @@ Rectangle {
         }
     }
 
-    ToolTip.visible: optionHover.hovered && (helperText.length > 0 || optionLabel.contentWidth > optionLabel.width + 1)
+    ToolTip.visible: optionHover.hovered && (disabledTooltipText.length > 0 || optionLabel.contentWidth > optionLabel.width + 1)
     ToolTip.delay: 250
     ToolTip.timeout: 3200
-    ToolTip.text: helperText.length > 0 ? helperText : label
+    ToolTip.text: disabledTooltipText
 
     TapHandler {
         enabled: root.toggleEnabled

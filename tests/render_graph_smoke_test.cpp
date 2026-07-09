@@ -32,6 +32,16 @@ bool contains_name(const std::vector<std::string>& names, const std::string& exp
   return false;
 }
 
+std::vector<std::string> stage_names(
+    const std::vector<photo_editor::pipeline::RenderStage>& stages) {
+  std::vector<std::string> names;
+  names.reserve(stages.size());
+  for (const auto& stage : stages) {
+    names.push_back(stage.name);
+  }
+  return names;
+}
+
 bool contains_text(const std::string& text, const std::string& expected) {
   return text.find(expected) != std::string::npos;
 }
@@ -156,6 +166,32 @@ int main() {
   if (export_variant_plan.size() != stages.size() ||
       export_variant_plan.back().name != "export_encode") {
     std::cerr << "expected export variant plan to include export encoding\n";
+    return EXIT_FAILURE;
+  }
+  const std::vector<std::string> expected_display_stage_order = {
+      "raw_decode",
+      "input_transform",
+      "camera_lens_normalization",
+      "global_tone_color",
+      "mask_resolve",
+      "local_adjustments",
+      "layer_composite",
+      "detail",
+      "crop_transform",
+      "output_transform",
+  };
+  auto expected_export_stage_order = expected_display_stage_order;
+  expected_export_stage_order.push_back("export_encode");
+  if (stage_names(preview_variant_plan) != expected_display_stage_order) {
+    std::cerr << "expected preview plan to follow canonical display-stage order\n";
+    return EXIT_FAILURE;
+  }
+  if (stage_names(full_resolution_variant_plan) != expected_display_stage_order) {
+    std::cerr << "expected full-resolution preview plan to follow canonical display-stage order\n";
+    return EXIT_FAILURE;
+  }
+  if (stage_names(export_variant_plan) != expected_export_stage_order) {
+    std::cerr << "expected export plan to follow canonical display-stage order before encoding\n";
     return EXIT_FAILURE;
   }
 

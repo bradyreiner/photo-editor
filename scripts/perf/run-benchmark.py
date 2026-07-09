@@ -24,15 +24,26 @@ DEFAULT_SCENARIOS = (
     "perf-library-scroll",
     "perf-preview-raster",
     "perf-color-adjustment",
+    "perf-edit-global-sliders",
+    "perf-edit-color-tools",
+    "perf-edit-tone-curves",
+    "perf-layer-adjustments",
+    "perf-retouch",
+    "perf-crop-geometry",
     "perf-preview-raw",
     "perf-thumbnail-cold-warm",
     "perf-mask-brush",
+    "perf-mask-lasso",
+    "perf-mask-smart-select",
     "perf-interaction-workflow",
     "perf-actual-app-workflow",
     "perf-export-batch",
+    "perf-import-large-folder",
     "perf-timeline-scroll",
     "perf-timeline-playback",
+    "perf-timeline-edit",
     "perf-carousel-preview",
+    "perf-workspace-switch",
 )
 
 
@@ -90,6 +101,12 @@ def parse_args() -> argparse.Namespace:
         "--keep-open",
         action="store_true",
         help="Leave the app running after target events are observed.",
+    )
+    parser.add_argument(
+        "--memory-growth-threshold-kb",
+        type=int,
+        default=65536,
+        help="RSS delta above this threshold marks workflow.resource_summary as growth detected.",
     )
     parser.add_argument(
         "--allow-gui-unavailable",
@@ -154,6 +171,22 @@ def process_rss_kb(pid: int) -> int | None:
         return None
 
 
+def process_rss_kb_with_retry(
+    process: subprocess.Popen[Any],
+    timeout: float = 1.0,
+    interval: float = 0.05,
+) -> int | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            return process_rss_kb(process.pid)
+        sample = process_rss_kb(process.pid)
+        if sample is not None:
+            return sample
+        time.sleep(interval)
+    return process_rss_kb(process.pid)
+
+
 def sample_peak_rss(process: subprocess.Popen[Any], current_peak_kb: int | None) -> int | None:
     if process.poll() is not None:
         return current_peak_kb
@@ -163,6 +196,24 @@ def sample_peak_rss(process: subprocess.Popen[Any], current_peak_kb: int | None)
     if current_peak_kb is None:
         return sample
     return max(current_peak_kb, sample)
+
+
+def rss_delta_kb(start_kb: int | None, end_kb: int | None) -> int | None:
+    if start_kb is None or end_kb is None:
+        return None
+    return end_kb - start_kb
+
+
+def kb_to_bytes(value: int | None) -> int | None:
+    return None if value is None else value * 1024
+
+
+def max_optional_int(left: int | None, right: int | None) -> int | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 def wait_for_events(
@@ -203,10 +254,163 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def append_jsonl_event(jsonl_path: Path, event: str, fields: dict[str, Any]) -> None:
+    payload = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "event": event,
+        "severity": fields.get("severity", "info"),
+        "fields": {"event": event, **fields},
+    }
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    with jsonl_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def append_resource_sample(
+    jsonl_path: Path,
+    *,
+    workflow_id: str,
+    workflow: str,
+    stage: str,
+    rss_kb: int | None,
+    peak_rss_kb: int | None,
+) -> None:
+    append_jsonl_event(
+        jsonl_path,
+        "workflow.resource_sampled",
+        {
+            "workflow_id": workflow_id,
+            "workflow": workflow,
+            "surface": "benchmark",
+            "stage": stage,
+            "rss_kb": rss_kb,
+            "rss_bytes": kb_to_bytes(rss_kb),
+            "peak_rss_kb": peak_rss_kb,
+            "peak_rss_bytes": kb_to_bytes(peak_rss_kb),
+        },
+    )
+
+
+def append_resource_summary(
+    jsonl_path: Path,
+    *,
+    workflow_id: str,
+    workflow: str,
+    start_rss_kb: int | None,
+    peak_rss_kb: int | None,
+    end_rss_kb: int | None,
+    memory_growth_threshold_kb: int,
+) -> bool:
+    delta_kb = rss_delta_kb(start_rss_kb, end_rss_kb)
+    memory_growth_detected = (
+        delta_kb is not None and delta_kb > max(0, memory_growth_threshold_kb)
+    )
+    append_jsonl_event(
+        jsonl_path,
+        "workflow.resource_summary",
+        {
+            "workflow_id": workflow_id,
+            "workflow": workflow,
+            "surface": "benchmark",
+            "stage": "summary",
+            "rss_start_kb": start_rss_kb,
+            "rss_peak_kb": peak_rss_kb,
+            "rss_end_kb": end_rss_kb,
+            "rss_delta_kb": delta_kb,
+            "rss_bytes": kb_to_bytes(end_rss_kb),
+            "rss_delta_bytes": kb_to_bytes(delta_kb),
+            "memory_growth_threshold_kb": memory_growth_threshold_kb,
+            "memory_growth_threshold_bytes": kb_to_bytes(memory_growth_threshold_kb),
+            "memory_growth_detected": memory_growth_detected,
+        },
+    )
+    return memory_growth_detected
+
+
+def append_worker_queue_summary(
+    jsonl_path: Path,
+    *,
+    workflow_id: str,
+    workflow: str,
+    elapsed_ms: int,
+    completed: bool,
+) -> None:
+    append_jsonl_event(
+        jsonl_path,
+        "worker.queue.summary",
+        {
+            "workflow_id": workflow_id,
+            "workflow": workflow,
+            "surface": "benchmark",
+            "stage": "summary",
+            "worker_pool": "benchmark-process",
+            "pool_id": "benchmark-process",
+            "active_worker_count": 0,
+            "pending_worker_count": 0,
+            "worker_limit": 1,
+            "queue_wait_ms": 0,
+            "worker_elapsed_ms": elapsed_ms,
+            "completed_count": 1 if completed else 0,
+            "cancelled_count": 0 if completed else 1,
+        },
+    )
+
+
+def append_benchmark_artifact_summary(
+    jsonl_path: Path,
+    *,
+    workflow_id: str,
+    workflow: str,
+    artifact_dir: Path,
+    elapsed_ms: int,
+    target_met: bool,
+    skipped: bool,
+    process_returncode: int | None,
+    start_rss_kb: int | None,
+    peak_rss_kb: int | None,
+    end_rss_kb: int | None,
+) -> None:
+    append_jsonl_event(
+        jsonl_path,
+        "benchmark.artifact.summary",
+        {
+            "workflow_id": workflow_id,
+            "workflow": workflow,
+            "surface": "benchmark",
+            "stage": "summary",
+            "artifact_dir": str(artifact_dir),
+            "elapsed_ms": elapsed_ms,
+            "target_events_met": target_met,
+            "skipped": skipped,
+            "process_returncode": process_returncode,
+            "rss_start_kb": start_rss_kb,
+            "rss_peak_kb": peak_rss_kb,
+            "rss_end_kb": end_rss_kb,
+            "rss_delta_kb": rss_delta_kb(start_rss_kb, end_rss_kb),
+            "rss_bytes": kb_to_bytes(end_rss_kb),
+            "rss_delta_bytes": kb_to_bytes(rss_delta_kb(start_rss_kb, end_rss_kb)),
+        },
+    )
+
+
 def run_summary(run_dir: Path, artifact_dir: Path) -> None:
     summarizer = Path(__file__).with_name("summarize-jsonl.py")
+    group_args = [
+        "--group-by",
+        "workflow",
+        "--group-by",
+        "tool",
+        "--group-by",
+        "stage",
+        "--group-by",
+        "backend",
+        "--group-by",
+        "surface",
+        "--group-by",
+        "worker_pool",
+    ]
     text_result = subprocess.run(
-        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events"],
+        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events", *group_args],
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -215,7 +419,7 @@ def run_summary(run_dir: Path, artifact_dir: Path) -> None:
     (artifact_dir / "summary.txt").write_text(text_result.stdout, encoding="utf-8")
 
     json_result = subprocess.run(
-        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events", "--json"],
+        [sys.executable, "-B", str(summarizer), str(run_dir), "--all-events", "--json", *group_args],
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -226,8 +430,6 @@ def run_summary(run_dir: Path, artifact_dir: Path) -> None:
 
 def gui_unavailable_abort(process_returncode: int | None, desktop_log: Path, process_output: Path) -> bool:
     if process_returncode not in {-6, 134}:
-        return False
-    if desktop_log.exists():
         return False
     try:
         output = process_output.read_text(encoding="utf-8", errors="replace")
@@ -248,6 +450,7 @@ def main() -> int:
 
     target_events = set(args.target_events or ["desktop.startup.ready"])
     session_id = uuid.uuid4().hex
+    workflow_id = f"{args.scenario}:{session_id}"
     artifact_dir = (args.output_root / f"{timestamp_slug()}-{args.scenario}-{session_id[:8]}").resolve()
     run_dir = artifact_dir / "logs" / "runs" / f"{args.scenario}-{session_id[:8]}"
     runtime_root = (args.runtime_root or artifact_dir / "runtime").resolve()
@@ -278,6 +481,7 @@ def main() -> int:
         app_args = app_args[1:]
     command = [str(app), *app_args]
     started_at = datetime.now(timezone.utc).isoformat()
+    started_monotonic = time.monotonic()
     process_output = artifact_dir / "process-output.log"
     with process_output.open("w", encoding="utf-8") as process_output_handle:
         process = subprocess.Popen(
@@ -289,18 +493,66 @@ def main() -> int:
             text=True,
         )
     desktop_log = run_dir / "desktop.jsonl"
+    start_rss_kb = process_rss_kb_with_retry(process)
+    append_resource_sample(
+        desktop_log,
+        workflow_id=workflow_id,
+        workflow=args.scenario,
+        stage="start",
+        rss_kb=start_rss_kb,
+        peak_rss_kb=start_rss_kb,
+    )
     seen_events, peak_rss_kb = wait_for_events(desktop_log, target_events, args.timeout, process)
+    peak_rss_kb = max_optional_int(start_rss_kb, peak_rss_kb)
+    append_resource_sample(
+        desktop_log,
+        workflow_id=workflow_id,
+        workflow=args.scenario,
+        stage="target_events",
+        rss_kb=process_rss_kb(process.pid),
+        peak_rss_kb=peak_rss_kb,
+    )
     target_met = target_events.issubset(seen_events)
     if target_met and args.settle_seconds > 0:
         settle_deadline = time.monotonic() + args.settle_seconds
         while time.monotonic() < settle_deadline:
             peak_rss_kb = sample_peak_rss(process, peak_rss_kb)
             time.sleep(0.1)
+        append_resource_sample(
+            desktop_log,
+            workflow_id=workflow_id,
+            workflow=args.scenario,
+            stage="settled",
+            rss_kb=process_rss_kb(process.pid),
+            peak_rss_kb=peak_rss_kb,
+        )
 
     if not args.keep_open:
+        end_rss_kb = process_rss_kb(process.pid)
+        peak_rss_kb = sample_peak_rss(process, peak_rss_kb)
+        append_resource_sample(
+            desktop_log,
+            workflow_id=workflow_id,
+            workflow=args.scenario,
+            stage="end",
+            rss_kb=end_rss_kb,
+            peak_rss_kb=peak_rss_kb,
+        )
         terminate_process(process)
+    else:
+        end_rss_kb = process_rss_kb(process.pid)
+        peak_rss_kb = sample_peak_rss(process, peak_rss_kb)
+        append_resource_sample(
+            desktop_log,
+            workflow_id=workflow_id,
+            workflow=args.scenario,
+            stage="end_keep_open",
+            rss_kb=end_rss_kb,
+            peak_rss_kb=peak_rss_kb,
+        )
 
     ended_at = datetime.now(timezone.utc).isoformat()
+    elapsed_ms = int(round((time.monotonic() - started_monotonic) * 1000.0))
     process_returncode = process.poll()
     skipped = (
         not target_met
@@ -308,15 +560,48 @@ def main() -> int:
         and gui_unavailable_abort(process_returncode, desktop_log, process_output)
     )
     skip_reason = "gui_session_unavailable" if skipped else None
+    memory_growth_detected = append_resource_summary(
+        desktop_log,
+        workflow_id=workflow_id,
+        workflow=args.scenario,
+        start_rss_kb=start_rss_kb,
+        peak_rss_kb=peak_rss_kb,
+        end_rss_kb=end_rss_kb,
+        memory_growth_threshold_kb=args.memory_growth_threshold_kb,
+    )
+    benchmark_completed = target_met or skipped
+    append_worker_queue_summary(
+        desktop_log,
+        workflow_id=workflow_id,
+        workflow=args.scenario,
+        elapsed_ms=elapsed_ms,
+        completed=benchmark_completed,
+    )
+    append_benchmark_artifact_summary(
+        desktop_log,
+        workflow_id=workflow_id,
+        workflow=args.scenario,
+        artifact_dir=artifact_dir,
+        elapsed_ms=elapsed_ms,
+        target_met=target_met,
+        skipped=skipped,
+        process_returncode=process_returncode,
+        start_rss_kb=start_rss_kb,
+        peak_rss_kb=peak_rss_kb,
+        end_rss_kb=end_rss_kb,
+    )
     run_summary(run_dir, artifact_dir)
     manifest = {
         "scenario": args.scenario,
         "session_id": session_id,
+        "workflow_id": workflow_id,
         "started_at": started_at,
         "ended_at": ended_at,
         "target_events": sorted(target_events),
         "seen_events": sorted(seen_events),
         "target_events_met": target_met,
+        "benchmark_summary_event": "benchmark.artifact.summary",
+        "benchmark_worker_pool": "benchmark-process",
         "app": str(app),
         "command": command,
         "runtime_root": str(runtime_root),
@@ -328,8 +613,23 @@ def main() -> int:
         "artifact_dir": str(artifact_dir),
         "process_output": str(process_output),
         "process_returncode": process_returncode,
+        "start_rss_kb": start_rss_kb,
         "peak_rss_kb": peak_rss_kb,
+        "end_rss_kb": end_rss_kb,
+        "rss_delta_kb": rss_delta_kb(start_rss_kb, end_rss_kb),
+        "rss_start_kb": start_rss_kb,
+        "rss_peak_kb": peak_rss_kb,
+        "rss_end_kb": end_rss_kb,
+        "rss_bytes": kb_to_bytes(end_rss_kb),
+        "rss_start_bytes": kb_to_bytes(start_rss_kb),
+        "rss_peak_bytes": kb_to_bytes(peak_rss_kb),
+        "rss_end_bytes": kb_to_bytes(end_rss_kb),
+        "rss_delta_bytes": kb_to_bytes(rss_delta_kb(start_rss_kb, end_rss_kb)),
         "gpu_memory_kb": None,
+        "gpu_memory_bytes": None,
+        "memory_growth_threshold_kb": args.memory_growth_threshold_kb,
+        "memory_growth_threshold_bytes": kb_to_bytes(args.memory_growth_threshold_kb),
+        "memory_growth_detected": memory_growth_detected,
         "skipped": skipped,
         "skip_reason": skip_reason,
     }

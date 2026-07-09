@@ -55,8 +55,26 @@ std::vector<ColorPixel> make_pixels(int width, int height) {
   return pixels;
 }
 
+void configure_metal_compatible_color_pipeline(ColorAdjustmentState* state) {
+  if (state == nullptr) {
+    return;
+  }
+  state->color_pipeline.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  state->color_pipeline.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  state->color_pipeline.export_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  state->color_pipeline.render_intent = photo_editor::pipeline::RenderIntent::Perceptual;
+  state->color_pipeline.output_headroom = 1.0;
+  state->input_transform.raw_input_transform_enabled = false;
+  state->input_transform.highlight_recovery_enabled = false;
+  state->input_transform.camera_matching_look = "Standard";
+}
+
 ColorAdjustmentState benchmark_state() {
   ColorAdjustmentState state;
+  configure_metal_compatible_color_pipeline(&state);
   state.exposure = 0.35;
   state.contrast = 18.0;
   state.highlights = -22.0;
@@ -84,17 +102,7 @@ ColorAdjustmentState benchmark_state() {
 
 ColorAdjustmentState simple_global_benchmark_state() {
   ColorAdjustmentState state;
-  state.color_pipeline.working_profile =
-      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
-  state.color_pipeline.preview_output_profile =
-      photo_editor::pipeline::output_color_profile_from_name("sRGB");
-  state.color_pipeline.export_output_profile =
-      photo_editor::pipeline::output_color_profile_from_name("sRGB");
-  state.color_pipeline.render_intent = photo_editor::pipeline::RenderIntent::Perceptual;
-  state.color_pipeline.output_headroom = 1.0;
-  state.input_transform.raw_input_transform_enabled = false;
-  state.input_transform.highlight_recovery_enabled = false;
-  state.input_transform.camera_matching_look = "Standard";
+  configure_metal_compatible_color_pipeline(&state);
   state.exposure = 0.35;
   state.contrast = 18.0;
   state.highlights = -22.0;

@@ -159,13 +159,22 @@ class BenchmarkPreviewTexture final : public photo_editor::desktop::EditorPrevie
  public:
   [[nodiscard]] bool available() const override { return true; }
   [[nodiscard]] const char* backendName() const override { return "benchmark-fake"; }
+  bool ensureNativeTexture(const QSize& size, QImage::Format format) override {
+    if (!size.isValid() || size.width() <= 0 || size.height() <= 0) {
+      return false;
+    }
+    texture_size_ = size;
+    texture_format_name_ = native_format_name_for_format(format);
+    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_format(format);
+    return true;
+  }
   bool upload(const QImage& image) override {
     if (image.isNull()) {
       return false;
     }
     texture_size_ = image.size();
-    texture_format_name_ = native_format_name_for_image(image);
-    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_image(image);
+    texture_format_name_ = native_format_name_for_format(image.format());
+    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_format(image.format());
     ++upload_count_;
     return true;
   }
@@ -205,11 +214,11 @@ class BenchmarkPreviewTexture final : public photo_editor::desktop::EditorPrevie
   [[nodiscard]] QRect lastPatchUploadRect() const { return last_patch_upload_rect_; }
 
  private:
-  [[nodiscard]] static const char* native_format_name_for_image(const QImage& image) {
-    return image.format() == QImage::Format_RGBA16FPx4 ? "rgba16float" : "bgra8unorm";
+  [[nodiscard]] static const char* native_format_name_for_format(QImage::Format format) {
+    return format == QImage::Format_RGBA16FPx4 ? "rgba16float" : "bgra8unorm";
   }
-  [[nodiscard]] static int native_bytes_per_pixel_for_image(const QImage& image) {
-    return image.format() == QImage::Format_RGBA16FPx4 ? 8 : 4;
+  [[nodiscard]] static int native_bytes_per_pixel_for_format(QImage::Format format) {
+    return format == QImage::Format_RGBA16FPx4 ? 8 : 4;
   }
 
   QSize texture_size_;

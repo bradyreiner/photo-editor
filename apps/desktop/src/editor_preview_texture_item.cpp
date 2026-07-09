@@ -17,6 +17,20 @@ QObject* EditorPreviewTextureItem::controller() const {
   return controller_;
 }
 
+bool EditorPreviewTextureItem::crispPixels() const {
+  return crisp_pixels_;
+}
+
+void EditorPreviewTextureItem::setCrispPixels(bool crisp_pixels) {
+  if (crisp_pixels_ == crisp_pixels) {
+    return;
+  }
+
+  crisp_pixels_ = crisp_pixels;
+  update();
+  emit crispPixelsChanged();
+}
+
 void EditorPreviewTextureItem::setController(QObject* controller) {
   auto* next_controller = qobject_cast<EditorPreviewController*>(controller);
   if (controller_ == next_controller) {
@@ -57,8 +71,8 @@ QSGNode* EditorPreviewTextureItem::updatePaintNode(
   if (node == nullptr) {
     node = new QSGSimpleTextureNode;
     node->setOwnsTexture(true);
-    node->setFiltering(QSGTexture::Linear);
   }
+  node->setFiltering(crisp_pixels_ ? QSGTexture::Nearest : QSGTexture::Linear);
 
   if (node->texture() == nullptr ||
       scene_graph_texture_handle_ != native_texture_handle_ ||

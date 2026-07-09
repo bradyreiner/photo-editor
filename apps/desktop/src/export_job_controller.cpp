@@ -1,5 +1,7 @@
 #include "export_job_controller.h"
 
+#include "export_image_settings.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -292,19 +294,10 @@ int preset_max_edge(const QString& preset) {
 }
 
 QString preset_format(const QString& preset) {
-  const auto normalized = preset.trimmed();
-  if (normalized.compare(QStringLiteral("Archive TIFF"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("TIFF");
-  }
-  if (normalized.compare(QStringLiteral("Original Copy"), Qt::CaseInsensitive) == 0) {
+  if (is_original_copy_preset(preset)) {
     return QStringLiteral("Source");
   }
-  if (normalized.compare(QStringLiteral("Web Proof"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("Client Preview"), Qt::CaseInsensitive) == 0 ||
-      normalized.compare(QStringLiteral("Quick Web"), Qt::CaseInsensitive) == 0) {
-    return QStringLiteral("JPEG");
-  }
-  return QStringLiteral("PNG");
+  return export_image_settings_for_preset(preset).format_name;
 }
 
 QSize estimated_export_size(const QSize& source_size, const EditRecipeState& state, const QString& preset) {
@@ -467,6 +460,11 @@ bool ExportJobController::queueExportWithCropConstraint(
   job.recipe_json = recipe_json.trimmed();
   job.metadata_json = export_crop_metadata(crop_preset, crop_x, crop_y, crop_width, crop_height);
   job.preset = preset.trimmed().isEmpty() ? QStringLiteral("Full Resolution") : preset.trimmed();
+  if (should_render_photo_job(job.media_type, job.preset)) {
+    job.metadata_json.insert(
+        QStringLiteral("exportImageSettings"),
+        export_image_settings_metadata(export_image_settings_for_preset(job.preset)));
+  }
   job.destination_directory = normalized_destination;
   job.display_label = display_label_for_job(display_label, job.source_path);
   job.created_at = iso_now();
@@ -572,6 +570,7 @@ QVariantMap ExportJobController::exportPreflight(
   const auto normalized_preview = normalized_local_path(edited_preview_source);
   const auto normalized_destination = normalized_local_path(destination_directory);
   const auto render_photo = should_render_photo_job(normalized_media_type, normalized_preset);
+  const auto export_settings = export_image_settings_for_preset(normalized_preset);
 
   if (normalized_destination.isEmpty()) {
     add_issue(
@@ -717,6 +716,22 @@ QVariantMap ExportJobController::exportPreflight(
         QStringLiteral("The active soft proof profile differs from the export output profile."));
   }
 
+  if (render_photo && export_settings.flatten_alpha) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("alpha-flattened"),
+        QStringLiteral("This export format does not preserve alpha; transparent pixels will be flattened."));
+  }
+
+  const auto output_headroom = qBound(1.0, recipe_state.output_headroom, 16.0);
+  if (render_photo && output_headroom > 1.0 + 1.0e-6 &&
+      !export_settings.preserves_over_range) {
+    add_issue(
+        QStringLiteral("warning"),
+        QStringLiteral("output-headroom-sdr-export"),
+        QStringLiteral("This integer export will tone-map extended output headroom into SDR pixel values."));
+  }
+
   if (!recipe_state.raw_gamut_mapping &&
       output_profile.compare(QStringLiteral("sRGB"), Qt::CaseInsensitive) == 0) {
     add_issue(
@@ -746,9 +761,29 @@ QVariantMap ExportJobController::exportPreflight(
   result.insert(QStringLiteral("warningCount"), warning_count);
   result.insert(QStringLiteral("issues"), issues);
   result.insert(QStringLiteral("preset"), normalized_preset);
-  result.insert(QStringLiteral("format"), preset_format(normalized_preset));
+  result.insert(QStringLiteral("format"), render_photo ? export_settings.format_name : preset_format(normalized_preset));
+  result.insert(QStringLiteral("bitDepth"), render_photo ? export_settings.bit_depth : 0);
+  result.insert(QStringLiteral("flattenAlpha"), render_photo && export_settings.flatten_alpha);
+  result.insert(QStringLiteral("embedProfile"), render_photo && export_settings.embed_profile);
+  result.insert(QStringLiteral("sceneLinear"), render_photo && export_settings.scene_linear);
+  result.insert(QStringLiteral("preservesOverRange"), render_photo && export_settings.preserves_over_range);
+  result.insert(
+      QStringLiteral("outputEncoding"),
+      render_photo
+          ? (export_settings.scene_linear ? QStringLiteral("scene-linear-float")
+                                          : QStringLiteral("integer-sdr"))
+          : QString());
+  result.insert(
+      QStringLiteral("headroomPolicy"),
+      render_photo
+          ? (export_settings.preserves_over_range ? QStringLiteral("preserve-over-range")
+                                                  : QStringLiteral("tone-map-to-output-headroom"))
+          : QString());
+  result.insert(
+      QStringLiteral("exportImageSettings"),
+      export_image_settings_metadata(export_settings).toVariantMap());
   result.insert(QStringLiteral("outputColorSpace"), output_profile);
-  result.insert(QStringLiteral("outputHeadroom"), qBound(1.0, recipe_state.output_headroom, 16.0));
+  result.insert(QStringLiteral("outputHeadroom"), output_headroom);
   result.insert(QStringLiteral("softProofEnabled"), recipe_state.soft_proof_enabled);
   result.insert(QStringLiteral("softProofProfile"), recipe_state.soft_proof_profile);
   result.insert(QStringLiteral("estimatedPixelWidth"), estimated_size.isValid() ? estimated_size.width() : 0);

@@ -29,6 +29,12 @@ int main() {
     std::cerr << "default output headroom should target SDR\n";
     return EXIT_FAILURE;
   }
+  if (!default_config.output_gamut_mapping_enabled ||
+      default_config.output_gamut_mapping_policy !=
+          photo_editor::pipeline::GamutMappingPolicy::Perceptual) {
+    std::cerr << "default output gamut mapping should use perceptual compression\n";
+    return EXIT_FAILURE;
+  }
   if (!default_config.black_point_compensation_enabled ||
       std::abs(default_config.source_black_point) > 1.0e-9 ||
       std::abs(default_config.output_black_point) > 1.0e-9) {
@@ -42,6 +48,12 @@ int main() {
   if (photo_editor::pipeline::normalize_render_intent_name("relative-colorimetric") !=
       "Relative Colorimetric") {
     std::cerr << "render intent normalization should canonicalize relative colorimetric\n";
+    return EXIT_FAILURE;
+  }
+  if (photo_editor::pipeline::normalize_gamut_mapping_policy_name("clipping") != "Clip" ||
+      photo_editor::pipeline::normalize_gamut_mapping_policy_name("preserve-saturation") !=
+          "Preserve Saturation") {
+    std::cerr << "gamut mapping policy normalization should canonicalize supported policies\n";
     return EXIT_FAILURE;
   }
   if (photo_editor::pipeline::normalize_working_color_profile_name("linear-rec2020") !=
@@ -228,6 +240,121 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  photo_editor::pipeline::ColorAdjustmentState input_stage_white_balance_state;
+  input_stage_white_balance_state.color_pipeline.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear ProPhoto RGB");
+  input_stage_white_balance_state.color_pipeline.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  input_stage_white_balance_state.color_pipeline.export_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("Display P3");
+  input_stage_white_balance_state.input_transform.raw_input_transform_enabled = true;
+  input_stage_white_balance_state.input_transform.temperature = 46.0;
+  input_stage_white_balance_state.input_transform.tint = -24.0;
+  input_stage_white_balance_state.input_transform.chromatic_adaptation_method = "Bradford";
+  input_stage_white_balance_state.input_transform.raw_black_level = 0.04;
+  input_stage_white_balance_state.input_transform.raw_white_level = 1.18;
+  input_stage_white_balance_state.input_transform.calibration_hue = 18.0;
+  input_stage_white_balance_state.input_transform.red_primary_saturation = 14.0;
+  input_stage_white_balance_state.exposure = 0.38;
+  input_stage_white_balance_state.contrast = 24.0;
+  input_stage_white_balance_state.color_pipeline.output_headroom = 1.0;
+  std::vector<photo_editor::pipeline::ColorPixel> input_stage_white_balance_pixels = {
+      {.red = 0.68F, .green = 0.37F, .blue = 0.16F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &input_stage_white_balance_pixels,
+      1,
+      1,
+      input_stage_white_balance_state);
+
+  auto late_white_balance_state = input_stage_white_balance_state;
+  late_white_balance_state.input_transform.temperature = 0.0;
+  late_white_balance_state.input_transform.tint = 0.0;
+  photo_editor::pipeline::PhotoLayer late_white_balance_layer;
+  late_white_balance_layer.enabled = true;
+  late_white_balance_layer.kind = "adjustment";
+  late_white_balance_layer.blend_mode = "normal";
+  late_white_balance_layer.opacity = 1.0;
+  late_white_balance_layer.temperature = 46.0;
+  late_white_balance_layer.tint = -24.0;
+  late_white_balance_state.photo_layers.push_back(late_white_balance_layer);
+  std::vector<photo_editor::pipeline::ColorPixel> late_white_balance_pixels = {
+      {.red = 0.68F, .green = 0.37F, .blue = 0.16F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &late_white_balance_pixels,
+      1,
+      1,
+      late_white_balance_state);
+  const auto input_vs_late_white_balance_delta = std::max({
+      std::abs(input_stage_white_balance_pixels[0].red - late_white_balance_pixels[0].red),
+      std::abs(input_stage_white_balance_pixels[0].green - late_white_balance_pixels[0].green),
+      std::abs(input_stage_white_balance_pixels[0].blue - late_white_balance_pixels[0].blue),
+  });
+  if (input_vs_late_white_balance_delta <= 0.01F) {
+    std::cerr << "RAW white balance should run in the input transform, not as late RGB tinting\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto preview_transform = photo_editor::pipeline::apply_output_transform(
+      input_stage_white_balance_pixels[0],
+      input_stage_white_balance_state.color_pipeline,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      input_stage_white_balance_state.input_transform.chromatic_adaptation_method);
+  const auto export_transform = photo_editor::pipeline::apply_output_transform(
+      input_stage_white_balance_pixels[0],
+      input_stage_white_balance_state.color_pipeline,
+      photo_editor::pipeline::GamutWarningTarget::ExportOutput,
+      input_stage_white_balance_state.input_transform.chromatic_adaptation_method);
+  if (preview_transform.output_profile_name != "sRGB" ||
+      export_transform.output_profile_name != "Display P3" ||
+      !std::isfinite(preview_transform.pixel.red) ||
+      !std::isfinite(preview_transform.pixel.green) ||
+      !std::isfinite(preview_transform.pixel.blue) ||
+      !std::isfinite(export_transform.pixel.red) ||
+      !std::isfinite(export_transform.pixel.green) ||
+      !std::isfinite(export_transform.pixel.blue) ||
+      preview_transform.pixel.red < -1.0e-6F ||
+      preview_transform.pixel.green < -1.0e-6F ||
+      preview_transform.pixel.blue < -1.0e-6F ||
+      export_transform.pixel.red < -1.0e-6F ||
+      export_transform.pixel.green < -1.0e-6F ||
+      export_transform.pixel.blue < -1.0e-6F ||
+      preview_transform.pixel.red > 1.00001F ||
+      preview_transform.pixel.green > 1.00001F ||
+      preview_transform.pixel.blue > 1.00001F ||
+      export_transform.pixel.red > 1.00001F ||
+      export_transform.pixel.green > 1.00001F ||
+      export_transform.pixel.blue > 1.00001F) {
+    std::cerr << "input-stage white balance should feed bounded preview and export transforms\n";
+    return EXIT_FAILURE;
+  }
+  std::vector<photo_editor::pipeline::ColorPixel> preview_transform_pixels = {
+      input_stage_white_balance_pixels[0],
+  };
+  std::vector<photo_editor::pipeline::ColorPixel> export_transform_pixels = {
+      input_stage_white_balance_pixels[0],
+  };
+  photo_editor::pipeline::apply_output_transform(
+      preview_transform_pixels,
+      input_stage_white_balance_state.color_pipeline,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay,
+      input_stage_white_balance_state.input_transform.chromatic_adaptation_method);
+  photo_editor::pipeline::apply_output_transform(
+      export_transform_pixels,
+      input_stage_white_balance_state.color_pipeline,
+      photo_editor::pipeline::GamutWarningTarget::ExportOutput,
+      input_stage_white_balance_state.input_transform.chromatic_adaptation_method);
+  if (std::abs(preview_transform_pixels[0].red - preview_transform.pixel.red) > 1.0e-6F ||
+      std::abs(preview_transform_pixels[0].green - preview_transform.pixel.green) > 1.0e-6F ||
+      std::abs(preview_transform_pixels[0].blue - preview_transform.pixel.blue) > 1.0e-6F ||
+      std::abs(export_transform_pixels[0].red - export_transform.pixel.red) > 1.0e-6F ||
+      std::abs(export_transform_pixels[0].green - export_transform.pixel.green) > 1.0e-6F ||
+      std::abs(export_transform_pixels[0].blue - export_transform.pixel.blue) > 1.0e-6F) {
+    std::cerr << "preview/export output transforms should use the same input-stage white-balance result\n";
+    return EXIT_FAILURE;
+  }
+
   photo_editor::pipeline::ColorAdjustmentState calibration_state;
   calibration_state.input_transform.calibration_hue = 24.0;
   calibration_state.input_transform.calibration_saturation = 35.0;
@@ -289,6 +416,89 @@ int main() {
   });
   if (camera_profile_delta <= 1.0e-4F) {
     std::cerr << "DCP/ICC camera profiles should affect the input-stage camera transform\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState raw_normalization_state;
+  raw_normalization_state.color_pipeline.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear ProPhoto RGB");
+  raw_normalization_state.color_pipeline.input_profile = dcp_input_profile;
+  raw_normalization_state.color_pipeline.camera_profile = dcp_resolved_profile;
+  raw_normalization_state.color_pipeline.input_transform_recipe.has_source_white_balance = true;
+  raw_normalization_state.color_pipeline.input_transform_recipe.source_temperature = 4200.0;
+  raw_normalization_state.color_pipeline.input_transform_recipe.source_tint = -10.0;
+  raw_normalization_state.color_pipeline.input_transform_recipe.baseline_exposure = 0.55;
+  raw_normalization_state.color_pipeline.input_transform_recipe.highlight_headroom = 0.72;
+  raw_normalization_state.input_transform.raw_input_transform_enabled = true;
+  raw_normalization_state.input_transform.raw_white_balance_override_enabled = true;
+  raw_normalization_state.input_transform.raw_white_balance_temperature = 6400.0;
+  raw_normalization_state.input_transform.raw_white_balance_tint = 16.0;
+  raw_normalization_state.input_transform.raw_black_level = 0.08;
+  raw_normalization_state.input_transform.raw_white_level = 1.45;
+  raw_normalization_state.input_transform.highlight_recovery_enabled = true;
+  raw_normalization_state.input_transform.highlight_reconstruction_mode = "Enabled";
+  raw_normalization_state.input_transform.chromatic_adaptation_method = "CAT02";
+  raw_normalization_state.input_transform.camera_matching_look = "Landscape";
+  raw_normalization_state.input_transform.calibration_hue = -18.0;
+  raw_normalization_state.input_transform.calibration_saturation = 24.0;
+  raw_normalization_state.input_transform.red_primary_hue = 15.0;
+  raw_normalization_state.input_transform.red_primary_saturation = 20.0;
+  raw_normalization_state.input_transform.green_primary_hue = -12.0;
+  raw_normalization_state.input_transform.green_primary_saturation = -18.0;
+  raw_normalization_state.input_transform.blue_primary_hue = 10.0;
+  raw_normalization_state.input_transform.blue_primary_saturation = 14.0;
+  std::vector<photo_editor::pipeline::ColorPixel> raw_normalization_pixels = {
+      {.red = 0.16F, .green = 0.38F, .blue = 0.92F, .alpha = 1.0F},
+      {.red = 1.70F, .green = 0.26F, .blue = 0.12F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &raw_normalization_pixels,
+      2,
+      1,
+      raw_normalization_state);
+
+  auto disabled_raw_normalization_state = raw_normalization_state;
+  disabled_raw_normalization_state.input_transform.raw_input_transform_enabled = false;
+  std::vector<photo_editor::pipeline::ColorPixel> disabled_raw_normalization_pixels = {
+      {.red = 0.16F, .green = 0.38F, .blue = 0.92F, .alpha = 1.0F},
+      {.red = 1.70F, .green = 0.26F, .blue = 0.12F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &disabled_raw_normalization_pixels,
+      2,
+      1,
+      disabled_raw_normalization_state);
+
+  photo_editor::pipeline::ColorAdjustmentState non_raw_reference_state;
+  non_raw_reference_state.color_pipeline.working_profile =
+      raw_normalization_state.color_pipeline.working_profile;
+  non_raw_reference_state.input_transform.raw_input_transform_enabled = false;
+  non_raw_reference_state.input_transform.chromatic_adaptation_method = "CAT02";
+  std::vector<photo_editor::pipeline::ColorPixel> non_raw_reference_pixels = {
+      {.red = 0.16F, .green = 0.38F, .blue = 0.92F, .alpha = 1.0F},
+      {.red = 1.70F, .green = 0.26F, .blue = 0.12F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &non_raw_reference_pixels,
+      2,
+      1,
+      non_raw_reference_state);
+  auto max_pixel_delta = [](const std::vector<photo_editor::pipeline::ColorPixel>& left,
+                            const std::vector<photo_editor::pipeline::ColorPixel>& right) {
+    double delta = 0.0;
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      delta = std::max(delta, static_cast<double>(std::abs(left[index].red - right[index].red)));
+      delta = std::max(delta, static_cast<double>(std::abs(left[index].green - right[index].green)));
+      delta = std::max(delta, static_cast<double>(std::abs(left[index].blue - right[index].blue)));
+    }
+    return delta;
+  };
+  if (max_pixel_delta(raw_normalization_pixels, disabled_raw_normalization_pixels) <= 0.05) {
+    std::cerr << "camera normalization fields should affect RAW-like input when enabled\n";
+    return EXIT_FAILURE;
+  }
+  if (max_pixel_delta(disabled_raw_normalization_pixels, non_raw_reference_pixels) > 1.0e-5) {
+    std::cerr << "camera normalization fields should be inert when the input transform is disabled\n";
     return EXIT_FAILURE;
   }
 
@@ -356,6 +566,38 @@ int main() {
     std::cerr << "render intent differences should be visible in perceptual delta space\n";
     return EXIT_FAILURE;
   }
+  auto clip_policy_state = perceptual_state;
+  clip_policy_state.color_pipeline.output_gamut_mapping_policy =
+      photo_editor::pipeline::GamutMappingPolicy::Clip;
+  std::vector<photo_editor::pipeline::ColorPixel> clip_policy_pixels = {
+      {.red = 1.0F, .green = 0.15F, .blue = 0.02F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(&clip_policy_pixels, 1, 1, clip_policy_state);
+  const auto clip_policy_delta = photo_editor::pipeline::perceptual_delta(
+      perceptual_pixels[0],
+      clip_policy_pixels[0],
+      perceptual_state.color_pipeline.working_profile.color_space);
+  if (clip_policy_delta <= 1.0e-4) {
+    std::cerr << "output gamut mapping policy should affect saturated wide-gamut edits\n";
+    return EXIT_FAILURE;
+  }
+  auto disabled_gamut_state = perceptual_state;
+  disabled_gamut_state.color_pipeline.output_gamut_mapping_enabled = false;
+  std::vector<photo_editor::pipeline::ColorPixel> disabled_gamut_pixels = {
+      {.red = 1.0F, .green = 0.15F, .blue = 0.02F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &disabled_gamut_pixels,
+      1,
+      1,
+      disabled_gamut_state);
+  if (photo_editor::pipeline::perceptual_delta(
+          clip_policy_pixels[0],
+          disabled_gamut_pixels[0],
+          perceptual_state.color_pipeline.working_profile.color_space) > 1.0e-6) {
+    std::cerr << "disabled output gamut mapping should match explicit clipping\n";
+    return EXIT_FAILURE;
+  }
   if (photo_editor::pipeline::perceptual_delta(
           perceptual_pixels[0],
           perceptual_pixels[0],
@@ -363,6 +605,227 @@ int main() {
     std::cerr << "perceptual delta should be zero for identical colors\n";
     return EXIT_FAILURE;
   }
+
+  auto output_transform_config = photo_editor::pipeline::default_color_pipeline_config();
+  output_transform_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear Display P3");
+  output_transform_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  output_transform_config.export_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("Display P3");
+  const photo_editor::pipeline::ColorPixel p3_green{
+      .red = 0.0F,
+      .green = 1.0F,
+      .blue = 0.0F,
+      .alpha = 1.0F,
+  };
+  const auto srgb_output_transform = photo_editor::pipeline::apply_output_transform(
+      p3_green,
+      output_transform_config,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+  const auto display_p3_output_transform = photo_editor::pipeline::apply_output_transform(
+      p3_green,
+      output_transform_config,
+      photo_editor::pipeline::GamutWarningTarget::ExportOutput);
+  if (srgb_output_transform.output_profile_name != "sRGB" ||
+      !srgb_output_transform.source_out_of_gamut ||
+      srgb_output_transform.max_channel_excursion <= 1.0e-4 ||
+      srgb_output_transform.pixel.green < 0.99F ||
+      display_p3_output_transform.output_profile_name != "Display P3" ||
+      display_p3_output_transform.source_out_of_gamut ||
+      std::abs(display_p3_output_transform.pixel.green - 1.0F) > 1.0e-5F) {
+    std::cerr << "output transform should convert working pixels into explicit sRGB and Display P3 targets\n";
+    return EXIT_FAILURE;
+  }
+
+  struct ProfileRoundTripCase final {
+    const char* working_profile;
+    const char* output_profile;
+  };
+  for (const auto& profile_case : std::vector<ProfileRoundTripCase>{
+           {"Linear sRGB", "sRGB"},
+           {"Linear Display P3", "Display P3"},
+           {"Linear Rec.2020", "Rec.2020"},
+           {"Linear ProPhoto RGB", "ProPhoto RGB"},
+       }) {
+    auto identity_transform_config = photo_editor::pipeline::default_color_pipeline_config();
+    identity_transform_config.working_profile =
+        photo_editor::pipeline::working_color_profile_from_name(profile_case.working_profile);
+    identity_transform_config.export_output_profile =
+        photo_editor::pipeline::output_color_profile_from_name(profile_case.output_profile);
+    identity_transform_config.render_intent =
+        photo_editor::pipeline::RenderIntent::RelativeColorimetric;
+    identity_transform_config.output_gamut_mapping_enabled = false;
+    identity_transform_config.black_point_compensation_enabled = false;
+    identity_transform_config.output_headroom = 1.0;
+    const photo_editor::pipeline::ColorPixel profile_sample = {
+        .red = 0.18F,
+        .green = 0.42F,
+        .blue = 0.74F,
+        .alpha = 0.65F,
+    };
+    const auto round_trip = photo_editor::pipeline::apply_output_transform(
+        profile_sample,
+        identity_transform_config,
+        photo_editor::pipeline::GamutWarningTarget::ExportOutput);
+    if (round_trip.output_profile_name != profile_case.output_profile ||
+        round_trip.source_out_of_gamut ||
+        std::abs(round_trip.pixel.red - profile_sample.red) > 1.0e-5F ||
+        std::abs(round_trip.pixel.green - profile_sample.green) > 1.0e-5F ||
+        std::abs(round_trip.pixel.blue - profile_sample.blue) > 1.0e-5F ||
+        std::abs(round_trip.pixel.alpha - profile_sample.alpha) > 1.0e-6F) {
+      std::cerr << "same-profile output transform should round-trip within 1e-5 for "
+                << profile_case.working_profile << " -> "
+                << profile_case.output_profile << '\n';
+      return EXIT_FAILURE;
+    }
+  }
+
+  for (const auto* profile_name : {"Rec.2020", "ProPhoto RGB"}) {
+    auto profile_transform_config = output_transform_config;
+    profile_transform_config.export_output_profile =
+        photo_editor::pipeline::output_color_profile_from_name(profile_name);
+    const auto profile_output = photo_editor::pipeline::apply_output_transform(
+        p3_green,
+        profile_transform_config,
+        photo_editor::pipeline::GamutWarningTarget::ExportOutput);
+    if (profile_output.output_profile_name != profile_name ||
+        !std::isfinite(profile_output.pixel.red) ||
+        !std::isfinite(profile_output.pixel.green) ||
+        !std::isfinite(profile_output.pixel.blue) ||
+        profile_output.pixel.red < -1.0e-6F ||
+        profile_output.pixel.green < -1.0e-6F ||
+        profile_output.pixel.blue < -1.0e-6F ||
+        profile_output.pixel.red > 1.0001F ||
+        profile_output.pixel.green > 1.0001F ||
+        profile_output.pixel.blue > 1.0001F) {
+      std::cerr << "output transform should support bounded Rec.2020 and ProPhoto RGB targets\n";
+      return EXIT_FAILURE;
+    }
+  }
+
+  auto output_intent_config = photo_editor::pipeline::default_color_pipeline_config();
+  output_intent_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  output_intent_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  output_intent_config.output_headroom = 1.0;
+  output_intent_config.render_intent = photo_editor::pipeline::RenderIntent::Perceptual;
+  const photo_editor::pipeline::ColorPixel overrange_srgb{
+      .red = 1.40F,
+      .green = 0.70F,
+      .blue = 0.35F,
+      .alpha = 1.0F,
+  };
+  const auto perceptual_output_transform = photo_editor::pipeline::apply_output_transform(
+      overrange_srgb,
+      output_intent_config,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+  output_intent_config.render_intent =
+      photo_editor::pipeline::RenderIntent::RelativeColorimetric;
+  const auto relative_output_transform = photo_editor::pipeline::apply_output_transform(
+      overrange_srgb,
+      output_intent_config,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+  if (perceptual_output_transform.pixel.red > 1.0001F ||
+      relative_output_transform.pixel.red > 1.0001F ||
+      std::abs(perceptual_output_transform.pixel.green - relative_output_transform.pixel.green) <=
+          0.05F ||
+      perceptual_output_transform.pixel.green >= relative_output_transform.pixel.green) {
+    std::cerr << "output transform should distinguish perceptual compression from relative colorimetric clipping\n";
+    return EXIT_FAILURE;
+  }
+
+  auto output_bpc_config = photo_editor::pipeline::default_color_pipeline_config();
+  output_bpc_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  output_bpc_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  output_bpc_config.black_point_compensation_enabled = true;
+  output_bpc_config.source_black_point = 0.0;
+  output_bpc_config.output_black_point = 0.04;
+  const auto compensated_output_transform = photo_editor::pipeline::apply_output_transform(
+      {.red = 0.0F, .green = 0.0F, .blue = 0.0F, .alpha = 0.5F},
+      output_bpc_config,
+      photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+  if (compensated_output_transform.pixel.red < 0.039F ||
+      compensated_output_transform.pixel.green < 0.039F ||
+      compensated_output_transform.pixel.blue < 0.039F ||
+      std::abs(compensated_output_transform.pixel.alpha - 0.5F) > 1.0e-6F) {
+    std::cerr << "output transform should apply black-point compensation in the final target stage\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto hue_for_rgb = [](
+      const photo_editor::pipeline::ColorPixel& pixel) {
+    const auto red = std::max(0.0, static_cast<double>(pixel.red));
+    const auto green = std::max(0.0, static_cast<double>(pixel.green));
+    const auto blue = std::max(0.0, static_cast<double>(pixel.blue));
+    const auto maximum = std::max({red, green, blue});
+    const auto minimum = std::min({red, green, blue});
+    const auto delta = maximum - minimum;
+    if (delta <= 1.0e-9) {
+      return -1.0;
+    }
+    auto hue = 0.0;
+    if (maximum == red) {
+      hue = (green - blue) / delta + (green < blue ? 6.0 : 0.0);
+    } else if (maximum == green) {
+      hue = ((blue - red) / delta) + 2.0;
+    } else {
+      hue = ((red - green) / delta) + 4.0;
+    }
+    return hue / 6.0;
+  };
+  const auto hue_distance = [](double left, double right) {
+    auto distance = std::abs(left - right);
+    return std::min(distance, 1.0 - distance);
+  };
+  const auto normalized_chroma = [](
+      const photo_editor::pipeline::ColorPixel& pixel) {
+    const auto red = std::max(0.0, static_cast<double>(pixel.red));
+    const auto green = std::max(0.0, static_cast<double>(pixel.green));
+    const auto blue = std::max(0.0, static_cast<double>(pixel.blue));
+    const auto maximum = std::max({red, green, blue});
+    const auto minimum = std::min({red, green, blue});
+    return maximum <= 1.0e-9 ? 0.0 : (maximum - minimum) / maximum;
+  };
+  auto compression_config = photo_editor::pipeline::default_color_pipeline_config();
+  compression_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  compression_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  compression_config.output_headroom = 1.0;
+  compression_config.render_intent = photo_editor::pipeline::RenderIntent::Perceptual;
+  const std::vector<photo_editor::pipeline::ColorPixel> saturated_patches = {
+      {.red = 1.50F, .green = 0.42F, .blue = 0.12F, .alpha = 1.0F},
+      {.red = 0.20F, .green = 1.42F, .blue = 0.52F, .alpha = 1.0F},
+      {.red = 0.16F, .green = 0.48F, .blue = 1.36F, .alpha = 1.0F},
+      {.red = 1.35F, .green = 0.24F, .blue = 1.48F, .alpha = 1.0F},
+  };
+  for (const auto& patch : saturated_patches) {
+    const auto source_hue = hue_for_rgb(patch);
+    const auto source_chroma = normalized_chroma(patch);
+    const auto compressed = photo_editor::pipeline::apply_output_transform(
+        patch,
+        compression_config,
+        photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+    auto clipped_config = compression_config;
+    clipped_config.render_intent =
+        photo_editor::pipeline::RenderIntent::RelativeColorimetric;
+    const auto clipped = photo_editor::pipeline::apply_output_transform(
+        patch,
+        clipped_config,
+        photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+    if (!compressed.source_out_of_gamut ||
+        hue_distance(source_hue, hue_for_rgb(compressed.pixel)) > 0.015 ||
+        normalized_chroma(compressed.pixel) + 0.02 < source_chroma ||
+        normalized_chroma(compressed.pixel) < normalized_chroma(clipped.pixel)) {
+      std::cerr << "perceptual output compression should preserve saturated-patch hue and chroma better than clipping\n";
+      return EXIT_FAILURE;
+    }
+  }
+
   const auto small_delta = photo_editor::pipeline::perceptual_delta(
       {.red = 0.50F, .green = 0.50F, .blue = 0.50F, .alpha = 1.0F},
       {.red = 0.505F, .green = 0.50F, .blue = 0.50F, .alpha = 1.0F},
@@ -396,6 +859,30 @@ int main() {
       display_warning.out_of_gamut_fraction < 0.99 ||
       display_warning.max_channel_excursion <= 1.0e-4) {
     std::cerr << "display gamut warning analysis should flag Display P3 colors outside sRGB\n";
+    return EXIT_FAILURE;
+  }
+  auto transform_warning_count = std::size_t{0};
+  auto transform_max_excursion = 0.0;
+  auto transform_tested_pixels = std::size_t{0};
+  for (const auto& pixel : display_p3_pixels) {
+    if (pixel.alpha <= 1.0e-6F) {
+      continue;
+    }
+    ++transform_tested_pixels;
+    const auto output = photo_editor::pipeline::apply_output_transform(
+        pixel,
+        gamut_config,
+        photo_editor::pipeline::GamutWarningTarget::PreviewDisplay);
+    if (output.source_out_of_gamut) {
+      ++transform_warning_count;
+      transform_max_excursion =
+          std::max(transform_max_excursion, output.max_channel_excursion);
+    }
+  }
+  if (display_warning.tested_pixels != transform_tested_pixels ||
+      display_warning.out_of_gamut_pixels != transform_warning_count ||
+      std::abs(display_warning.max_channel_excursion - transform_max_excursion) > 1.0e-9) {
+    std::cerr << "gamut diagnostics should match final output-transform decisions pixel for pixel\n";
     return EXIT_FAILURE;
   }
   const auto export_warning = photo_editor::pipeline::analyze_gamut_warnings(
@@ -443,6 +930,188 @@ int main() {
   if (!hdr_lut.valid || std::abs(hdr_lut.shoulder_headroom - 2.0) > 1.0e-9 ||
       hdr_lut.shoulder_threshold > hdr_lut.shoulder_headroom) {
     std::cerr << "HDR LUT should carry the configured output headroom into tone mapping\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState optical_headroom_state;
+  optical_headroom_state.color_pipeline.output_headroom = 2.0;
+  optical_headroom_state.lens_vignette = 65.0;
+  std::vector<photo_editor::pipeline::ColorPixel> optical_headroom_pixels(
+      9,
+      {.red = 1.18F, .green = 1.18F, .blue = 1.18F, .alpha = 1.0F});
+  photo_editor::pipeline::apply_color_adjustments(
+      &optical_headroom_pixels, 3, 3, optical_headroom_state);
+  if (optical_headroom_pixels[0].red <= 1.0001F ||
+      optical_headroom_pixels[0].green <= 1.0001F ||
+      optical_headroom_pixels[0].blue <= 1.0001F ||
+      optical_headroom_pixels[0].red > 2.01F) {
+    std::cerr << "optical corrections should not clamp scene-referred HDR pixels before output transform\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState mixer_headroom_state;
+  mixer_headroom_state.color_pipeline.output_headroom = 2.0;
+  mixer_headroom_state.rgb_channel_mixer.red_from_green = 18.0;
+  std::vector<photo_editor::pipeline::ColorPixel> mixer_headroom_pixels = {
+      {.red = 1.12F, .green = 0.72F, .blue = 0.38F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &mixer_headroom_pixels, 1, 1, mixer_headroom_state);
+  if (mixer_headroom_pixels[0].red <= 1.12F ||
+      mixer_headroom_pixels[0].red > 2.01F ||
+      mixer_headroom_pixels[0].green < 0.70F) {
+    std::cerr << "RGB color mixer should preserve over-range scene values without upper clipping\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState grading_headroom_state;
+  grading_headroom_state.color_pipeline.output_headroom = 2.0;
+  grading_headroom_state.grading_highlights_saturation = 22.0;
+  grading_headroom_state.grading_highlights_luminance = 12.0;
+  std::vector<photo_editor::pipeline::ColorPixel> grading_headroom_pixels = {
+      {.red = 1.22F, .green = 1.10F, .blue = 0.92F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &grading_headroom_pixels, 1, 1, grading_headroom_state);
+  if (grading_headroom_pixels[0].red <= 1.0001F ||
+      std::max({grading_headroom_pixels[0].red,
+                grading_headroom_pixels[0].green,
+                grading_headroom_pixels[0].blue}) > 2.01F) {
+    std::cerr << "color grading should preserve extended headroom without forcing SDR clipping\n";
+    return EXIT_FAILURE;
+  }
+
+  photo_editor::pipeline::ColorAdjustmentState layer_headroom_state;
+  layer_headroom_state.color_pipeline.output_headroom = 2.0;
+  photo_editor::pipeline::PhotoLayer headroom_layer;
+  headroom_layer.kind = "adjustment";
+  headroom_layer.blend_mode = "normal";
+  headroom_layer.exposure = 1.0;
+  layer_headroom_state.photo_layers.push_back(headroom_layer);
+  std::vector<photo_editor::pipeline::ColorPixel> layer_headroom_pixels = {
+      {.red = 0.72F, .green = 0.68F, .blue = 0.62F, .alpha = 1.0F},
+  };
+  photo_editor::pipeline::apply_color_adjustments(
+      &layer_headroom_pixels, 1, 1, layer_headroom_state);
+  if (layer_headroom_pixels[0].red <= 1.0001F ||
+      layer_headroom_pixels[0].red > 2.01F ||
+      layer_headroom_pixels[0].green <= 1.0001F) {
+    std::cerr << "normal adjustment layers should preserve over-range scene-referred pixels\n";
+    return EXIT_FAILURE;
+  }
+
+  auto render_fill_blend = [](
+      const photo_editor::pipeline::ColorPixel& base,
+      const photo_editor::pipeline::ColorPixel& fill,
+      const std::string& blend_mode) {
+    photo_editor::pipeline::ColorAdjustmentState state;
+    state.color_pipeline.output_headroom = 2.0;
+    photo_editor::pipeline::PhotoLayer layer;
+    layer.kind = "fill";
+    layer.blend_mode = blend_mode;
+    layer.fill_color = fill;
+    state.photo_layers.push_back(layer);
+    std::vector<photo_editor::pipeline::ColorPixel> pixels = {base};
+    photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
+    return pixels[0];
+  };
+
+  const auto multiply_blend = render_fill_blend(
+      {.red = 1.40F, .green = 1.40F, .blue = 1.40F, .alpha = 1.0F},
+      {.red = 0.80F, .green = 0.80F, .blue = 0.80F, .alpha = 1.0F},
+      "multiply");
+  if (multiply_blend.red <= 1.0001F ||
+      std::abs(multiply_blend.red - multiply_blend.green) > 1.0e-5F ||
+      std::abs(multiply_blend.green - multiply_blend.blue) > 1.0e-5F) {
+    std::cerr << "multiply layer blend should operate in linear scene values and preserve HDR neutral balance\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto overlay_blend = render_fill_blend(
+      {.red = 1.40F, .green = 1.18F, .blue = 0.82F, .alpha = 1.0F},
+      {.red = 1.50F, .green = 0.96F, .blue = 0.60F, .alpha = 1.0F},
+      "overlay");
+  if (overlay_blend.red <= 1.0001F ||
+      overlay_blend.red > 2.01F ||
+      overlay_blend.red <= overlay_blend.green) {
+    std::cerr << "overlay layer blend should normalize against output headroom instead of SDR clipping\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto color_blend = render_fill_blend(
+      {.red = 1.30F, .green = 1.18F, .blue = 0.96F, .alpha = 1.0F},
+      {.red = 0.10F, .green = 0.30F, .blue = 1.55F, .alpha = 1.0F},
+      "color");
+  if (std::max({color_blend.red, color_blend.green, color_blend.blue}) <= 1.0001F ||
+      color_blend.blue <= color_blend.red ||
+      color_blend.blue > 2.01F) {
+    std::cerr << "color layer blend should use OKLab hue/chroma while preserving extended lightness\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto parity_source = photo_editor::pipeline::ColorPixel{
+      .red = 0.34F,
+      .green = 0.47F,
+      .blue = 0.63F,
+      .alpha = 1.0F,
+  };
+  const auto apply_single_pixel_state =
+      [&](const photo_editor::pipeline::ColorAdjustmentState& state) {
+        std::vector<photo_editor::pipeline::ColorPixel> pixels = {parity_source};
+        photo_editor::pipeline::apply_color_adjustments(&pixels, 1, 1, state);
+        return pixels[0];
+      };
+  auto configure_equivalent_edit =
+      [](auto* target) {
+        target->exposure = 0.45;
+        target->contrast = 18.0;
+        target->highlights = -12.0;
+        target->shadows = 16.0;
+        target->temperature = 18.0;
+        target->tint = -9.0;
+        target->vibrance = 14.0;
+        target->saturation = 9.0;
+      };
+
+  photo_editor::pipeline::ColorAdjustmentState global_parity_state;
+  global_parity_state.color_pipeline.output_headroom = 2.0;
+  configure_equivalent_edit(&global_parity_state);
+  const auto global_parity_pixel = apply_single_pixel_state(global_parity_state);
+
+  photo_editor::pipeline::ColorAdjustmentState local_parity_state;
+  local_parity_state.color_pipeline.output_headroom = 2.0;
+  photo_editor::pipeline::LocalMask full_local_mask;
+  full_local_mask.kind = "brush";
+  full_local_mask.operation = "add";
+  full_local_mask.segmentation_width = 1;
+  full_local_mask.segmentation_height = 1;
+  full_local_mask.segmentation_mask = {0xff};
+  configure_equivalent_edit(&full_local_mask);
+  local_parity_state.local_masks.push_back(full_local_mask);
+  const auto local_parity_pixel = apply_single_pixel_state(local_parity_state);
+
+  photo_editor::pipeline::ColorAdjustmentState layer_parity_state;
+  layer_parity_state.color_pipeline.output_headroom = 2.0;
+  photo_editor::pipeline::PhotoLayer parity_layer;
+  parity_layer.kind = "adjustment";
+  parity_layer.blend_mode = "normal";
+  parity_layer.opacity = 1.0;
+  configure_equivalent_edit(&parity_layer);
+  layer_parity_state.photo_layers.push_back(parity_layer);
+  const auto layer_parity_pixel = apply_single_pixel_state(layer_parity_state);
+
+  const auto max_float_delta = [](
+      const photo_editor::pipeline::ColorPixel& left,
+      const photo_editor::pipeline::ColorPixel& right) {
+    return std::max({
+        std::abs(left.red - right.red),
+        std::abs(left.green - right.green),
+        std::abs(left.blue - right.blue),
+    });
+  };
+  if (max_float_delta(global_parity_pixel, local_parity_pixel) > 0.035F ||
+      max_float_delta(global_parity_pixel, layer_parity_pixel) > 0.035F) {
+    std::cerr << "global, full-mask local, and normal adjustment-layer color edits should match within tolerance\n";
     return EXIT_FAILURE;
   }
 
@@ -768,6 +1437,86 @@ int main() {
       std::abs(spatial_half_density.green - spatial_half_opacity.green) > mask_gate_tolerance ||
       std::abs(spatial_half_density.blue - spatial_half_opacity.blue) > mask_gate_tolerance) {
     std::cerr << "layer-local texture and clarity should render before mask opacity and density gate alpha\n";
+    return EXIT_FAILURE;
+  }
+
+  const auto max_rgb_delta = [](const std::vector<photo_editor::pipeline::ColorPixel>& lhs,
+                                const std::vector<photo_editor::pipeline::ColorPixel>& rhs) {
+    auto max_delta = 0.0F;
+    if (lhs.size() != rhs.size()) {
+      return 1.0F;
+    }
+    for (std::size_t index = 0; index < lhs.size(); ++index) {
+      max_delta = std::max(
+          max_delta,
+          std::max({
+              std::abs(lhs[index].red - rhs[index].red),
+              std::abs(lhs[index].green - rhs[index].green),
+              std::abs(lhs[index].blue - rhs[index].blue),
+          }));
+    }
+    return max_delta;
+  };
+  std::vector<photo_editor::pipeline::ColorPixel> layer_detail_source;
+  layer_detail_source.reserve(35);
+  for (int y = 0; y < 5; ++y) {
+    for (int x = 0; x < 7; ++x) {
+      const auto checker = ((x + y) % 2) == 0 ? 0.10F : -0.08F;
+      const auto chroma_noise = ((x * 3 + y * 5) % 4) == 0 ? 0.07F : -0.05F;
+      layer_detail_source.push_back({
+          .red = 0.22F + static_cast<float>(x) * 0.055F + checker,
+          .green = 0.28F + static_cast<float>(y) * 0.062F - checker * 0.45F,
+          .blue = 0.34F + static_cast<float>(x + y) * 0.022F + chroma_noise,
+          .alpha = 1.0F,
+      });
+    }
+  }
+  const auto render_adjustment_detail_layer =
+      [&](const photo_editor::pipeline::PhotoLayer& layer) {
+        photo_editor::pipeline::ColorAdjustmentState state;
+        state.photo_layers.push_back(layer);
+        auto pixels = layer_detail_source;
+        photo_editor::pipeline::apply_color_adjustments(&pixels, 7, 5, state);
+        return pixels;
+      };
+  photo_editor::pipeline::PhotoLayer neutral_detail_layer;
+  neutral_detail_layer.kind = "adjustment";
+  neutral_detail_layer.blend_mode = "normal";
+  const auto neutral_detail_pixels = render_adjustment_detail_layer(neutral_detail_layer);
+
+  auto sharpen_layer = neutral_detail_layer;
+  sharpen_layer.sharpening = 100.0;
+  sharpen_layer.sharpen_radius = 1.0;
+  sharpen_layer.sharpen_detail = 80.0;
+  if (max_rgb_delta(render_adjustment_detail_layer(sharpen_layer), neutral_detail_pixels) <
+      0.002F) {
+    std::cerr << "adjustment layer sharpening should visibly affect rendered pixels\n";
+    return EXIT_FAILURE;
+  }
+
+  auto luma_nr_layer = neutral_detail_layer;
+  luma_nr_layer.luminance_nr = 100.0;
+  if (max_rgb_delta(render_adjustment_detail_layer(luma_nr_layer), neutral_detail_pixels) <
+      0.002F) {
+    std::cerr << "adjustment layer luminance noise reduction should visibly affect rendered pixels\n";
+    return EXIT_FAILURE;
+  }
+
+  auto color_nr_layer = neutral_detail_layer;
+  color_nr_layer.color_nr = 100.0;
+  if (max_rgb_delta(render_adjustment_detail_layer(color_nr_layer), neutral_detail_pixels) <
+      0.002F) {
+    std::cerr << "adjustment layer color noise reduction should visibly affect rendered pixels\n";
+    return EXIT_FAILURE;
+  }
+
+  auto lens_layer = neutral_detail_layer;
+  lens_layer.lens_vignette = -80.0;
+  lens_layer.lens_distortion = 60.0;
+  lens_layer.chromatic_aberration = 45.0;
+  if (max_rgb_delta(render_adjustment_detail_layer(lens_layer), neutral_detail_pixels) <
+      0.002F) {
+    std::cerr << "adjustment layer lens corrections should visibly affect rendered pixels\n";
     return EXIT_FAILURE;
   }
 

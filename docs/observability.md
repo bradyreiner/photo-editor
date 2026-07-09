@@ -68,6 +68,21 @@ Older aliases such as `render_reason`, `decoded_cache_hit`, and `linear_cache_hi
 present for compatibility, but the standard aliases are emitted for new records. Typical useful
 filters:
 
+Correlation fields are stable across app workflows:
+
+- `workflow` is the low-cardinality workflow or benchmark scenario, such as `preview`, `mask`,
+  `thumbnail`, `qml_route`, `qml_frame`, `perf-preview-raster`, or `perf-mask-brush`.
+- `workflow_id` is the stable run-local correlation key for a workflow instance. Benchmark runs use
+  `<scenario>:<session>`, QML routes use `qml-route:<surface>`, frame summaries use
+  `qml-frame:<surface>`, and render/tool interactions reuse the active interaction when available.
+- `interaction_id` is the user-gesture or tool-operation correlation key. It must stay stable
+  across started/stage/completed events and related renders for the same interaction.
+- `tool_id` is the normalized tool or command family, such as `global_sliders`, `color_tools`,
+  `tone_curves`, `crop_geometry`, `layer_adjustments`, `retouch`, `compare_view`,
+  `mask_brush`, `mask_lasso`, `mask_smart_select`, `mask_refine_edge`, or `mask_inpaint`.
+- `surface` is the UI or subsystem surface that owns the work, such as `library`, `import`, `edit`,
+  `masks`, `export`, `timeline`, `carousel`, `benchmark`, or `worker`.
+
 - preview render latency by `event=preview.render.completed`
 - startup timing by `event=desktop.startup.ready`
 - catalog bootstrap failures by `event=catalog.bootstrap.failed`

@@ -1355,6 +1355,14 @@ int main(int argc, char** argv) {
       {QStringLiteral("needsUserReview"), true},
       {QStringLiteral("tasteConfidence"), QStringLiteral("medium")},
   };
+  const QJsonObject repaired_proof_critique_content{
+      {QStringLiteral("pass"), true},
+      {QStringLiteral("summary"), QStringLiteral("Repaired proof is balanced enough to accept.")},
+      {QStringLiteral("issues"), QJsonArray{}},
+      {QStringLiteral("repairHints"), QJsonArray{}},
+      {QStringLiteral("needsUserReview"), false},
+      {QStringLiteral("tasteConfidence"), QStringLiteral("high")},
+  };
   const QJsonArray repair_sequence{
       QJsonObject{
           {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
@@ -1381,6 +1389,15 @@ int main(int argc, char** argv) {
            QJsonObject{
                {QStringLiteral("role"), QStringLiteral("assistant")},
                {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(repaired_plan_content).toJson(QJsonDocument::Compact))},
+           }},
+      },
+      QJsonObject{
+          {QStringLiteral("model"), QStringLiteral("qwen2.5vl:7b")},
+          {QStringLiteral("done"), true},
+          {QStringLiteral("message"),
+           QJsonObject{
+               {QStringLiteral("role"), QStringLiteral("assistant")},
+               {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(repaired_proof_critique_content).toJson(QJsonDocument::Compact))},
            }},
       },
   };
@@ -1417,8 +1434,12 @@ int main(int argc, char** argv) {
       model_repaired_asset_report.value(QStringLiteral("editLoop")).toMap().value(QStringLiteral("attempts")).toList();
   const auto model_repaired_first_attempt =
       model_repaired_loop_attempts.isEmpty() ? QVariantMap{} : model_repaired_loop_attempts.first().toMap();
+  const auto model_repaired_second_attempt =
+      model_repaired_loop_attempts.size() < 2 ? QVariantMap{} : model_repaired_loop_attempts.at(1).toMap();
   const auto model_repaired_critique =
       model_repaired_first_attempt.value(QStringLiteral("modelProofCritique")).toMap();
+  const auto model_repaired_accepting_critique =
+      model_repaired_second_attempt.value(QStringLiteral("modelProofCritique")).toMap();
   const auto repair_request_bytes = read_file_bytes(repair_request_path);
   if (!model_repaired_draft.value(QStringLiteral("ok")).toBool() ||
       model_repaired_asset_report.value(QStringLiteral("modelRepairCount")).toInt() < 1 ||
@@ -1435,7 +1456,12 @@ int main(int argc, char** argv) {
       !model_repaired_critique.value(QStringLiteral("ok")).toBool() ||
       model_repaired_critique.value(QStringLiteral("pass")).toBool() ||
       model_repaired_critique.value(QStringLiteral("repairHints")).toList().isEmpty() ||
+      !model_repaired_accepting_critique.value(QStringLiteral("ok")).toBool() ||
+      !model_repaired_accepting_critique.value(QStringLiteral("pass")).toBool() ||
       !repair_request_bytes.contains("Validation warnings JSON") ||
+      !repair_request_bytes.contains("current-proof-validation") ||
+      !repair_request_bytes.contains("imageStats") ||
+      !repair_request_bytes.contains("vectorscope") ||
       !repair_request_bytes.contains("You are a local photo-editing proof evaluator") ||
       !repair_request_bytes.contains("Previous attempts JSON") ||
       !controller.draftActive()) {

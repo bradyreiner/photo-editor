@@ -71,6 +71,16 @@ int main() {
       clean.value(QStringLiteral("qualityScoreReport")).toMap().value(QStringLiteral("needsUserReview")).toBool()) {
     return fail("clean midtone image should receive a high quality score without review");
   }
+  const auto clean_stats = clean.value(QStringLiteral("imageStats")).toMap();
+  const auto clean_histogram = clean_stats.value(QStringLiteral("histogram")).toMap();
+  const auto clean_vectorscope = clean_stats.value(QStringLiteral("vectorscope")).toMap();
+  if (clean_stats.value(QStringLiteral("version")).toString() != QStringLiteral("agent-image-stats-v1") ||
+      clean_histogram.value(QStringLiteral("binsPercent")).toList().size() != 16 ||
+      clean_vectorscope.value(QStringLiteral("hueBinsPercent")).toList().size() != 12 ||
+      clean_histogram.value(QStringLiteral("midtonePercent")).toDouble() <= 90.0 ||
+      clean_vectorscope.value(QStringLiteral("averageSaturation")).toDouble() <= 0.0) {
+    return fail("image validation should expose compact histogram and vectorscope stats for agent decisions");
+  }
 
   const auto clipped = photo_editor::desktop::validate_agent_edit_image(
       solid_image(QColor(255, 245, 245)),
@@ -110,6 +120,11 @@ int main() {
   if (!flat_histogram.value(QStringLiteral("warnings")).toStringList().join(QStringLiteral("; ")).contains(
           QStringLiteral("compressed histogram shape"))) {
     return fail("flat midtone image should report compressed histogram shape");
+  }
+  if (!flat_histogram.value(QStringLiteral("imageStats")).toMap()
+           .value(QStringLiteral("histogram")).toMap()
+           .value(QStringLiteral("compressed")).toBool()) {
+    return fail("image stats should mark compressed histogram shape");
   }
 
   const auto warm_cast = photo_editor::desktop::validate_agent_edit_image(

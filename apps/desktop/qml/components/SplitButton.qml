@@ -33,6 +33,11 @@ Item {
     implicitHeight: compact ? theme.controlHeightDense : theme.controlHeight
     implicitWidth: primaryButton.implicitWidth + (root.menuEnabled ? chevronButton.implicitWidth + 1 : 0)
     opacity: root.enabled ? 1.0 : 0.56
+
+    Behavior on opacity {
+        NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+    }
+
     readonly property int checkedItemCount: countCheckedItems()
     readonly property int disabledItemCount: countDisabledItems()
     readonly property int disabledItemReasonCount: countDisabledItemsWithReasons()
@@ -50,6 +55,7 @@ Item {
                                                    "|padding:" +
                                                    String(root.menuPopoverPadding) +
                                                    "|item-height:32-36|icon-column:true|shortcut-column:true|labels-wrap:true"
+    readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
     readonly property string splitContract: "split-button:v1|primary:" +
                                             String(root.primaryEnabled) +
                                             "|items:" +
@@ -92,7 +98,9 @@ Item {
     function disabledReasonForItem(item) {
         if (!item)
             return ""
-        const disabledReason = String(item.disabledReason || item.reason || "")
+        const disabledReason = item.enabled === false
+                ? String(item.disabledReason || item.reason || "Unavailable in the current state.")
+                : String(item.disabledReason || item.reason || "")
         return disabledReason
     }
 

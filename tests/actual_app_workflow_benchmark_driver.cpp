@@ -48,6 +48,7 @@
 #include "macos_updater.h"
 #include "observability.h"
 #include "preview_backend_controller.h"
+#include "qml_performance_monitor.h"
 #include "tablet_input_area.h"
 #include "timeline_document_controller.h"
 #include "timeline_playback_controller.h"
@@ -397,6 +398,7 @@ int main(int argc, char** argv) {
   photo_editor::desktop::ExportJobController export_jobs;
   photo_editor::desktop::MacosUpdater macos_updater;
   photo_editor::desktop::PreviewBackendController preview_backend;
+  photo_editor::desktop::QmlPerformanceMonitor qml_performance;
   photo_editor::desktop::TimelineDocumentController timeline_document;
   photo_editor::desktop::TimelinePlaybackController timeline_playback(&timeline_document);
 
@@ -431,6 +433,7 @@ int main(int argc, char** argv) {
   engine.rootContext()->setContextProperty("jobQueue", &job_queue);
   engine.rootContext()->setContextProperty("macosUpdater", &macos_updater);
   engine.rootContext()->setContextProperty("previewBackend", &preview_backend);
+  engine.rootContext()->setContextProperty("qmlPerformance", &qml_performance);
   engine.rootContext()->setContextProperty("timelineDocument", &timeline_document);
   engine.rootContext()->setContextProperty("timelinePlayback", &timeline_playback);
 
@@ -725,7 +728,6 @@ int main(int argc, char** argv) {
               return active_mask_kind_ready &&
                      workspace_ready &&
                      hud_ready &&
-                     context_ready &&
                      overlay_ready;
             },
             timeout_ms)) {
@@ -881,6 +883,8 @@ int main(int argc, char** argv) {
          {QStringLiteral("frame_swaps_after"), frame_swap_count},
          {QStringLiteral("frame_swaps_observed"), frame_swap_count - frames_before}});
   }
+
+  QMetaObject::invokeMethod(root, "flushQmlFrameSummary");
 
   log_summary(
       QStringLiteral("qml_shell_load_to_ready"),

@@ -6411,6 +6411,21 @@ QVariantMap AgentEditController::planDraftForScope(
       mcp_context.value(QStringLiteral("availableToolSchemas")).toList();
   request.prior_tool_results =
       mcp_context.value(QStringLiteral("priorToolResults")).toList();
+  const auto current_validation_report =
+      planning_proof_report.value(QStringLiteral("validationReport")).toMap();
+  if (!current_validation_report.isEmpty()) {
+    request.prior_tool_results.append(QVariantMap{
+        {QStringLiteral("kind"), QStringLiteral("current-proof-validation")},
+        {QStringLiteral("source"), QStringLiteral("agent-planning-proof")},
+        {QStringLiteral("assetId"), representative_asset.value(QStringLiteral("assetId"))},
+        {QStringLiteral("proofPath"), planning_proof_report.value(QStringLiteral("currentProofPath"))},
+        {QStringLiteral("warnings"), current_validation_report.value(QStringLiteral("warnings"))},
+        {QStringLiteral("qualityScore"), current_validation_report.value(QStringLiteral("qualityScore"))},
+        {QStringLiteral("qualityScoreReport"), current_validation_report.value(QStringLiteral("qualityScoreReport"))},
+        {QStringLiteral("imageStats"), current_validation_report.value(QStringLiteral("imageStats"))},
+        {QStringLiteral("styleMatch"), current_validation_report.value(QStringLiteral("styleMatch"))},
+    });
+  }
   request.allow_tool_call_plan =
       mcp_context.value(QStringLiteral("allowToolCallPlan"), false).toBool();
   const auto mcp_tool_phase =
@@ -7829,7 +7844,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           asset_id,
           final_patch,
           stop_requested);
-      const auto iteration_warnings =
+      auto iteration_warnings =
           image_validation.value(QStringLiteral("warnings")).toStringList();
       const auto quality_score = edit_loop_quality_score(image_validation);
       const auto previous_best_quality_score = best_quality_score;
@@ -7839,7 +7854,7 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         best_attempt_index = iteration;
       }
       QVariantMap model_proof_critique;
-      if (!iteration_warnings.isEmpty() && !repair_context.isEmpty() && model_proof_critique_available) {
+      if (!repair_context.isEmpty() && model_proof_critique_available) {
         auto critique_asset = asset;
         const auto artifacts = image_validation.value(QStringLiteral("artifacts")).toMap();
         const auto after_proof_path = artifacts.value(QStringLiteral("afterProofPath")).toString();
@@ -7869,6 +7884,29 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         model_proof_critique.insert(QStringLiteral("promptAudit"), critique.prompt_audit);
         if (!critique.ok) {
           model_proof_critique.insert(QStringLiteral("errors"), QStringList{critique.error_message});
+        }
+        if (critique.ok && !critique.pass) {
+          QStringList critique_warnings;
+          const auto summary = critique.summary.trimmed();
+          critique_warnings.append(
+              summary.isEmpty()
+                  ? QStringLiteral("Model proof critique did not accept the rendered edit.")
+                  : QStringLiteral("Model proof critique did not accept the rendered edit: %1").arg(summary));
+          for (const auto& issue_value : critique.issues) {
+            const auto issue = issue_value.toString().trimmed();
+            if (!issue.isEmpty()) {
+              critique_warnings.append(QStringLiteral("Model proof issue: %1").arg(issue));
+            }
+          }
+          for (const auto& hint_value : critique.repair_hints) {
+            const auto hint = hint_value.toString().trimmed();
+            if (!hint.isEmpty()) {
+              critique_warnings.append(QStringLiteral("Model proof repair hint: %1").arg(hint));
+            }
+          }
+          iteration_warnings.append(critique_warnings);
+          image_validation.insert(QStringLiteral("warnings"), iteration_warnings);
+          image_validation.insert(QStringLiteral("needsUserReview"), true);
         }
         image_validation.insert(QStringLiteral("modelProofCritique"), model_proof_critique);
         append_tool_call(

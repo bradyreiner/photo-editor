@@ -59,7 +59,9 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/raw_image_decoder_stub.cpp)
   set(photo_editor_desktop_image_decoder_frameworks)
   set(photo_editor_desktop_observability_sources
-    ../apps/desktop/src/observability.cpp)
+    ../apps/desktop/src/observability.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp)
   set(photo_editor_desktop_brush_preview_sources
     ../apps/desktop/src/brush_preview_compositor.h
     ../apps/desktop/src/brush_preview_compositor.cpp
@@ -135,7 +137,9 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     app_bootstrap_test.cpp
     ${photo_editor_desktop_observability_sources}
     ../apps/desktop/src/app_bootstrap.h
-    ../apps/desktop/src/app_bootstrap.cpp)
+    ../apps/desktop/src/app_bootstrap.cpp
+    ../apps/desktop/src/qml_performance_monitor.h
+    ../apps/desktop/src/qml_performance_monitor.cpp)
   set_target_properties(app_bootstrap_test PROPERTIES AUTOMOC ON)
   target_include_directories(
     app_bootstrap_test
@@ -254,6 +258,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/job_runner.cpp
     ../apps/desktop/src/job_store.h
     ../apps/desktop/src/job_store.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
     ../apps/desktop/src/decoded_image_cache.h
     ../apps/desktop/src/decoded_image_cache.cpp
     ${photo_editor_desktop_mask_alpha_provider_sources}
@@ -478,6 +484,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/photo_render_utils.cpp
     ../apps/desktop/src/preview_backend_controller.h
     ../apps/desktop/src/preview_backend_controller.cpp
+    ../apps/desktop/src/qml_performance_monitor.h
+    ../apps/desktop/src/qml_performance_monitor.cpp
     ${photo_editor_desktop_image_decoder_sources}
     ../apps/desktop/src/timeline_asset_store.h
     ../apps/desktop/src/timeline_asset_store.cpp
@@ -587,6 +595,17 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   add_test(NAME editor_preview_math_test COMMAND editor_preview_math_test)
 
   add_executable(
+    mask_lasso_render_math_test
+    mask_lasso_render_math_test.cpp)
+  target_link_libraries(
+    mask_lasso_render_math_test
+    PRIVATE
+      photo_engine)
+  photo_editor_apply_warnings(mask_lasso_render_math_test)
+
+  add_test(NAME mask_lasso_render_math_test COMMAND mask_lasso_render_math_test)
+
+  add_executable(
     edit_recipe_state_test
     edit_recipe_state_test.cpp)
   target_include_directories(
@@ -614,6 +633,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/editor_preview_controller.h
     ../apps/desktop/src/editor_preview_controller.cpp
     ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
     ${photo_editor_desktop_ai_model_sources}
     ../apps/desktop/src/photo_render_utils.h
     ../apps/desktop/src/photo_render_utils.cpp
@@ -637,6 +658,246 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
   photo_editor_apply_warnings(editor_preview_controller_test)
 
   add_test(NAME editor_preview_controller_test COMMAND editor_preview_controller_test)
+
+  add_executable(
+    editor_preview_before_after_recipe_test
+    editor_preview_before_after_recipe_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_before_after_recipe_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_before_after_recipe_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_before_after_recipe_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_before_after_recipe_test)
+
+  add_test(
+    NAME editor_preview_before_after_recipe_test
+    COMMAND editor_preview_before_after_recipe_test)
+
+  add_executable(
+    editor_preview_coalesced_undo_test
+    editor_preview_coalesced_undo_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_coalesced_undo_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_coalesced_undo_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_coalesced_undo_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_coalesced_undo_test)
+
+  add_test(
+    NAME editor_preview_coalesced_undo_test
+    COMMAND editor_preview_coalesced_undo_test)
+
+  add_executable(
+    editor_preview_local_edit_target_test
+    editor_preview_local_edit_target_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_local_edit_target_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_local_edit_target_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_local_edit_target_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_local_edit_target_test)
+
+  add_test(
+    NAME editor_preview_local_edit_target_test
+    COMMAND editor_preview_local_edit_target_test)
+
+  add_executable(
+    editor_preview_pixel_zoom_test
+    editor_preview_pixel_zoom_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ../apps/desktop/src/worker_queue_registry.h
+    ../apps/desktop/src/worker_queue_registry.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_pixel_zoom_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_pixel_zoom_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_pixel_zoom_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  target_compile_definitions(
+    editor_preview_pixel_zoom_test
+    PRIVATE
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  photo_editor_apply_warnings(editor_preview_pixel_zoom_test)
+
+  add_test(NAME editor_preview_pixel_zoom_test COMMAND editor_preview_pixel_zoom_test)
+
+  add_executable(
+    editor_preview_smart_selection_stale_test
+    editor_preview_smart_selection_stale_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_smart_selection_stale_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_smart_selection_stale_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_smart_selection_stale_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_smart_selection_stale_test)
+
+  add_test(NAME editor_preview_smart_selection_stale_test COMMAND editor_preview_smart_selection_stale_test)
+
+  add_executable(
+    editor_preview_color_cache_test
+    editor_preview_color_cache_test.cpp
+    ${photo_editor_desktop_observability_sources}
+    ../apps/desktop/src/app_bootstrap.h
+    ../apps/desktop/src/app_bootstrap.cpp
+    ${photo_editor_desktop_brush_preview_sources}
+    ${photo_editor_desktop_mask_alpha_provider_sources}
+    ../apps/desktop/src/decoded_image_cache.h
+    ../apps/desktop/src/decoded_image_cache.cpp
+    ../apps/desktop/src/editor_preview_controller.h
+    ../apps/desktop/src/editor_preview_controller.cpp
+    ../apps/desktop/src/thumbnail_refresh_queue_service.cpp
+    ${photo_editor_desktop_ai_model_sources}
+    ../apps/desktop/src/photo_render_utils.h
+    ../apps/desktop/src/photo_render_utils.cpp
+    ${photo_editor_desktop_image_decoder_sources}
+    ../apps/desktop/src/vision_segmentation.h
+    ../apps/desktop/src/vision_segmentation_stub.cpp)
+  set_target_properties(editor_preview_color_cache_test PROPERTIES AUTOMOC ON)
+  target_include_directories(
+    editor_preview_color_cache_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    editor_preview_color_cache_test
+    PRIVATE
+      Qt6::Concurrent
+      Qt6::Core
+      Qt6::Gui
+      ${photo_editor_desktop_brush_preview_frameworks}
+      ${photo_editor_desktop_image_decoder_frameworks}
+      photo_engine)
+  photo_editor_apply_warnings(editor_preview_color_cache_test)
+
+  add_test(NAME editor_preview_color_cache_test COMMAND editor_preview_color_cache_test)
 
   add_executable(
     editor_preview_layer_mask_history_test
@@ -875,6 +1136,8 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     ../apps/desktop/src/photo_render_utils.cpp
     ../apps/desktop/src/preview_backend_controller.h
     ../apps/desktop/src/preview_backend_controller.cpp
+    ../apps/desktop/src/qml_performance_monitor.h
+    ../apps/desktop/src/qml_performance_monitor.cpp
     ${photo_editor_desktop_image_decoder_sources}
     ../apps/desktop/src/timeline_asset_store.h
     ../apps/desktop/src/timeline_asset_store.cpp

@@ -341,13 +341,16 @@ QString compact_console_line_for_fields(const QString& event_name, const QJsonOb
   append_field(&parts, QStringLiteral("fallback"), string_field(fields, QStringLiteral("fallback_reason")));
   append_field(&parts, QStringLiteral("dirty"), string_field(fields, QStringLiteral("dirty_domain")));
   append_field(&parts, QStringLiteral("cache"), compact_cache_summary(fields));
-  append_field(
-      &parts,
-      QStringLiteral("failure"),
-      first_non_empty_field(
-          fields,
-          {QStringLiteral("failure_stage"), QStringLiteral("async_job_stage")}));
+  append_field(&parts, QStringLiteral("failure"), string_field(fields, QStringLiteral("failure_stage")));
+  append_field(&parts, QStringLiteral("job"), string_field(fields, QStringLiteral("async_job_stage")));
   append_field(&parts, QStringLiteral("gen"), string_field(fields, QStringLiteral("generation")));
+  if (event_name == QStringLiteral("qml.frame.summary")) {
+    append_field(&parts, QStringLiteral("surface"), string_field(fields, QStringLiteral("surface")));
+    append_field(&parts, QStringLiteral("samples"), string_field(fields, QStringLiteral("sample_count")));
+    append_ms_field(&parts, QStringLiteral("max"), number_field(fields, QStringLiteral("max_frame_interval_ms")));
+    append_field(&parts, QStringLiteral("jank"), string_field(fields, QStringLiteral("jank_frame_count")));
+    append_field(&parts, QStringLiteral("dropped"), string_field(fields, QStringLiteral("dropped_frame_count")));
+  }
   return parts.join(' ');
 }
 

@@ -134,6 +134,15 @@ class BenchmarkPreviewTexture final : public photo_editor::desktop::EditorPrevie
  public:
   [[nodiscard]] bool available() const override { return true; }
   [[nodiscard]] const char* backendName() const override { return "interaction-fake"; }
+  bool ensureNativeTexture(const QSize& size, QImage::Format format) override {
+    if (!size.isValid() || size.width() <= 0 || size.height() <= 0) {
+      return false;
+    }
+    texture_size_ = size;
+    texture_format_name_ = format == QImage::Format_RGBA16FPx4 ? "rgba16float" : "bgra8unorm";
+    texture_bytes_per_pixel_ = format == QImage::Format_RGBA16FPx4 ? 8 : 4;
+    return true;
+  }
   bool upload(const QImage& image) override {
     if (image.isNull()) {
       return false;

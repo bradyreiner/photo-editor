@@ -1,7 +1,10 @@
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <string_view>
+#include <utility>
 
 #include <QBuffer>
 #include <QColorSpace>
@@ -20,6 +23,26 @@ namespace {
 
 constexpr int kPreviewExportParityTolerance = 2;
 constexpr int kEncodedExportTolerance = 1;
+
+template <typename Working>
+concept ConvertsWorkingImageWithoutTarget = requires(const Working& working) {
+  photo_editor::desktop::qimage_from_working_image(working);
+};
+
+template <typename Working>
+concept ConvertsWorkingImageRectWithoutTarget = requires(
+    const Working& working,
+    const QRect& rect) {
+  photo_editor::desktop::qimage_from_working_image_rect(working, rect);
+};
+
+static_assert(
+    !ConvertsWorkingImageWithoutTarget<photo_editor::desktop::WorkingImage>,
+    "working-buffer conversion must require an explicit target color space");
+
+static_assert(
+    !ConvertsWorkingImageRectWithoutTarget<photo_editor::desktop::WorkingImage>,
+    "working-buffer rect conversion must require an explicit target color space");
 
 int fail(const char* message) {
   std::cerr << message << '\n';
@@ -238,6 +261,16 @@ bool write_png(const QImage& image, const QString& path) {
   return writer.write(image);
 }
 
+bool write_image_as(const QImage& image, const QString& path, const char* format) {
+  QImageWriter writer(path, format);
+  if (std::string_view(format) == "jpg" || std::string_view(format) == "jpeg") {
+    writer.setQuality(100);
+  } else if (std::string_view(format) == "png") {
+    writer.setCompression(0);
+  }
+  return writer.write(image);
+}
+
 QByteArray png_bytes(const QImage& image) {
   QByteArray bytes;
   QBuffer buffer(&bytes);
@@ -291,6 +324,383 @@ int main(int argc, char** argv) {
   const auto source = deterministic_source_image();
   const auto state = deterministic_state();
   const auto target_space = photo_editor::desktop::preview_color_space();
+
+  QImage exact_pixel_source(4, 4, QImage::Format_ARGB32);
+  exact_pixel_source.setColorSpace(target_space);
+  exact_pixel_source.fill(QColor(88, 88, 88, 255));
+  photo_editor::desktop::EditRecipeState exact_pixel_state;
+  exact_pixel_state.working_color_profile = QStringLiteral("Linear sRGB");
+  exact_pixel_state.preview_color_space = QStringLiteral("sRGB");
+  exact_pixel_state.output_color_space = QStringLiteral("sRGB");
+  QVariantMap exact_pixel_mask;
+  exact_pixel_mask.insert(QStringLiteral("id"), QStringLiteral("exact-pixel-alpha-render"));
+  exact_pixel_mask.insert(QStringLiteral("name"), QStringLiteral("Exact Pixel Alpha Render"));
+  exact_pixel_mask.insert(QStringLiteral("kind"), QStringLiteral("alpha"));
+  exact_pixel_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  exact_pixel_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("exact-pixel-render-set"));
+  exact_pixel_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  exact_pixel_mask.insert(QStringLiteral("exposure"), 1.0);
+  exact_pixel_mask.insert(QStringLiteral("feather"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionExpand"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionSmooth"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionFeather"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionBlur"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionGrow"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionShrink"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionDespeckle"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionFillHoles"), 0.0);
+  exact_pixel_mask.insert(QStringLiteral("selectionRemoveIslands"), 0.0);
+  QByteArray exact_pixel_alpha(16, char(0));
+  exact_pixel_alpha[5] = static_cast<char>(0xff);
+  exact_pixel_mask.insert(QStringLiteral("segmentationData"), exact_pixel_alpha);
+  exact_pixel_mask.insert(QStringLiteral("segmentationWidth"), 4);
+  exact_pixel_mask.insert(QStringLiteral("segmentationHeight"), 4);
+  exact_pixel_state.mask_stack.append(exact_pixel_mask);
+  const auto exact_pixel_neutral = photo_editor::desktop::render_output_image_with_backend(
+      exact_pixel_source,
+      photo_editor::desktop::EditRecipeState{},
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto exact_pixel_render = photo_editor::desktop::render_output_image_with_backend(
+      exact_pixel_source,
+      exact_pixel_state,
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (exact_pixel_neutral.isNull() || exact_pixel_render.isNull()) {
+    return fail("exact pixel alpha render should produce source-sized images");
+  }
+  const auto selected_before = exact_pixel_neutral.pixelColor(1, 1);
+  const auto selected_after = exact_pixel_render.pixelColor(1, 1);
+  if (selected_after.red() <= selected_before.red() + 16 ||
+      selected_after.green() <= selected_before.green() + 16 ||
+      selected_after.blue() <= selected_before.blue() + 16) {
+    return fail("exact pixel alpha render should visibly affect the selected source pixel");
+  }
+  for (const auto& neighbor : {
+           QPoint(0, 1),
+           QPoint(2, 1),
+           QPoint(1, 0),
+           QPoint(1, 2),
+           QPoint(0, 0),
+           QPoint(2, 2),
+       }) {
+    const auto before = exact_pixel_neutral.pixelColor(neighbor);
+    const auto after = exact_pixel_render.pixelColor(neighbor);
+    if (std::abs(after.red() - before.red()) > 2 ||
+        std::abs(after.green() - before.green()) > 2 ||
+        std::abs(after.blue() - before.blue()) > 2) {
+      return fail("exact pixel alpha render should not affect neighboring source pixels");
+    }
+  }
+
+  QImage photo_brush_source(9, 9, QImage::Format_ARGB32);
+  photo_brush_source.setColorSpace(target_space);
+  photo_brush_source.fill(QColor(88, 88, 88, 255));
+  photo_editor::desktop::EditRecipeState photo_brush_state;
+  photo_brush_state.working_color_profile = QStringLiteral("Linear sRGB");
+  photo_brush_state.preview_color_space = QStringLiteral("sRGB");
+  photo_brush_state.output_color_space = QStringLiteral("sRGB");
+  QVariantMap photo_brush_mask;
+  photo_brush_mask.insert(QStringLiteral("id"), QStringLiteral("photo-brush-falloff-render"));
+  photo_brush_mask.insert(QStringLiteral("name"), QStringLiteral("Photo Brush Falloff Render"));
+  photo_brush_mask.insert(QStringLiteral("kind"), QStringLiteral("brush"));
+  photo_brush_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  photo_brush_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("photo-brush-falloff-set"));
+  photo_brush_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  photo_brush_mask.insert(QStringLiteral("exposure"), 1.0);
+  photo_brush_mask.insert(QStringLiteral("brushHardness"), 0.20);
+  photo_brush_mask.insert(QStringLiteral("brushBuildup"), false);
+  photo_brush_mask.insert(QStringLiteral("feather"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionExpand"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionSmooth"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionFeather"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionBlur"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionGrow"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionShrink"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionDespeckle"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionFillHoles"), 0.0);
+  photo_brush_mask.insert(QStringLiteral("selectionRemoveIslands"), 0.0);
+  QVariantMap photo_brush_point;
+  photo_brush_point.insert(QStringLiteral("x"), 0.5);
+  photo_brush_point.insert(QStringLiteral("y"), 0.5);
+  photo_brush_point.insert(QStringLiteral("size"), 0.45);
+  photo_brush_point.insert(QStringLiteral("flow"), 1.0);
+  photo_brush_point.insert(QStringLiteral("opacity"), 1.0);
+  photo_brush_mask.insert(QStringLiteral("brushPoints"), QVariantList{photo_brush_point});
+  photo_brush_state.mask_stack.append(photo_brush_mask);
+  const auto photo_brush_neutral = photo_editor::desktop::render_output_image_with_backend(
+      photo_brush_source,
+      photo_editor::desktop::EditRecipeState{},
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto photo_brush_render = photo_editor::desktop::render_output_image_with_backend(
+      photo_brush_source,
+      photo_brush_state,
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly,
+      nullptr,
+      nullptr,
+      photo_editor::desktop::RenderMaskOptions{
+          .rebuild_editable_masks_at_output_resolution = true});
+  if (photo_brush_neutral.isNull() || photo_brush_render.isNull()) {
+    return fail("photo brush falloff render should produce source-sized images");
+  }
+  const auto brush_base = photo_brush_neutral.pixelColor(4, 4).red();
+  const auto brush_center_delta = photo_brush_render.pixelColor(4, 4).red() - brush_base;
+  const auto brush_near_delta = photo_brush_render.pixelColor(6, 4).red() -
+                                photo_brush_neutral.pixelColor(6, 4).red();
+  const auto brush_far_delta = photo_brush_render.pixelColor(8, 4).red() -
+                               photo_brush_neutral.pixelColor(8, 4).red();
+  if (brush_center_delta <= 16 ||
+      brush_near_delta <= 4 ||
+      brush_near_delta >= brush_center_delta - 4 ||
+      std::abs(brush_far_delta) > 2) {
+    const auto detail =
+        QStringLiteral(
+            "normal photo brush render should produce smooth falloff, unlike exact pixel selection "
+            "(center=%1 near=%2 far=%3 base=%4)")
+            .arg(brush_center_delta)
+            .arg(brush_near_delta)
+            .arg(brush_far_delta)
+            .arg(brush_base)
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  QImage crop_rotation_mask_source(32, 24, QImage::Format_ARGB32);
+  crop_rotation_mask_source.setColorSpace(target_space);
+  crop_rotation_mask_source.fill(QColor(74, 74, 74, 255));
+  for (int y = 9; y <= 15; ++y) {
+    for (int x = 13; x <= 19; ++x) {
+      crop_rotation_mask_source.setPixelColor(x, y, QColor(220, 42, 38, 255));
+    }
+  }
+  photo_editor::desktop::EditRecipeState crop_rotation_mask_state;
+  crop_rotation_mask_state.working_color_profile = QStringLiteral("Linear sRGB");
+  crop_rotation_mask_state.preview_color_space = QStringLiteral("sRGB");
+  crop_rotation_mask_state.output_color_space = QStringLiteral("sRGB");
+  crop_rotation_mask_state.transform_rotation = 7.5;
+  crop_rotation_mask_state.crop_rect_x = 0.125;
+  crop_rotation_mask_state.crop_rect_y = 0.125;
+  crop_rotation_mask_state.crop_rect_width = 0.75;
+  crop_rotation_mask_state.crop_rect_height = 0.75;
+  QVariantMap crop_rotation_shape_mask;
+  crop_rotation_shape_mask.insert(QStringLiteral("id"), QStringLiteral("crop-rotation-shape-source"));
+  crop_rotation_shape_mask.insert(QStringLiteral("name"), QStringLiteral("Crop Rotation Shape Source"));
+  crop_rotation_shape_mask.insert(QStringLiteral("kind"), QStringLiteral("rectangle"));
+  crop_rotation_shape_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  crop_rotation_shape_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("crop-rotation-shape-range-set"));
+  crop_rotation_shape_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Crop Rotation Shape Range"));
+  crop_rotation_shape_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  crop_rotation_shape_mask.insert(QStringLiteral("exposure"), 0.95);
+  crop_rotation_shape_mask.insert(QStringLiteral("centerX"), 0.29);
+  crop_rotation_shape_mask.insert(QStringLiteral("centerY"), 0.52);
+  crop_rotation_shape_mask.insert(QStringLiteral("radiusX"), 0.09);
+  crop_rotation_shape_mask.insert(QStringLiteral("radiusY"), 0.17);
+  crop_rotation_shape_mask.insert(QStringLiteral("rotation"), 18.0);
+  crop_rotation_shape_mask.insert(QStringLiteral("feather"), 0.0);
+  crop_rotation_shape_mask.insert(QStringLiteral("selectionFeather"), 0.0);
+  crop_rotation_shape_mask.insert(QStringLiteral("selectionSmooth"), 0.0);
+  QVariantMap crop_rotation_color_mask;
+  crop_rotation_color_mask.insert(QStringLiteral("id"), QStringLiteral("crop-rotation-range-source"));
+  crop_rotation_color_mask.insert(QStringLiteral("name"), QStringLiteral("Crop Rotation Range Source"));
+  crop_rotation_color_mask.insert(QStringLiteral("kind"), QStringLiteral("color"));
+  crop_rotation_color_mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+  crop_rotation_color_mask.insert(QStringLiteral("maskSetId"), QStringLiteral("crop-rotation-shape-range-set"));
+  crop_rotation_color_mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Crop Rotation Shape Range"));
+  crop_rotation_color_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+  crop_rotation_color_mask.insert(QStringLiteral("hueCenter"), 0.0);
+  crop_rotation_color_mask.insert(QStringLiteral("hueRange"), 0.50);
+  crop_rotation_color_mask.insert(QStringLiteral("saturationMin"), 0.45);
+  crop_rotation_color_mask.insert(QStringLiteral("saturationMax"), 1.0);
+  crop_rotation_color_mask.insert(QStringLiteral("rangeFeather"), 0.0);
+  crop_rotation_mask_state.mask_stack.append(crop_rotation_shape_mask);
+  crop_rotation_mask_state.mask_stack.append(crop_rotation_color_mask);
+
+  auto crop_rotation_neutral_state = crop_rotation_mask_state;
+  crop_rotation_neutral_state.mask_stack.clear();
+  const auto crop_rotation_neutral_full = photo_editor::desktop::render_output_image_with_backend(
+      crop_rotation_mask_source,
+      crop_rotation_neutral_state,
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto crop_rotation_preview_full = photo_editor::desktop::render_output_image_with_backend(
+      crop_rotation_mask_source,
+      crop_rotation_mask_state,
+      target_space,
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  const auto crop_rotation_export_full = photo_editor::desktop::render_output_image_with_backend(
+      crop_rotation_mask_source,
+      crop_rotation_mask_state,
+      target_space,
+      QImage::Format_RGBA64,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly);
+  if (crop_rotation_neutral_full.isNull() ||
+      crop_rotation_preview_full.isNull() ||
+      crop_rotation_export_full.isNull()) {
+    return fail("crop/rotation shape and range render proof should produce rendered images");
+  }
+  const auto crop_rotation_neutral =
+      photo_editor::desktop::apply_crop(crop_rotation_neutral_full, crop_rotation_mask_state);
+  const auto crop_rotation_preview =
+      photo_editor::desktop::apply_crop(crop_rotation_preview_full, crop_rotation_mask_state);
+  const auto crop_rotation_export =
+      photo_editor::desktop::apply_crop(
+          crop_rotation_export_full,
+          crop_rotation_mask_state).convertToFormat(QImage::Format_ARGB32);
+  if (crop_rotation_preview.size() != QSize(24, 18) ||
+      crop_rotation_export.size() != crop_rotation_preview.size() ||
+      max_channel_delta(crop_rotation_preview, crop_rotation_export) > kPreviewExportParityTolerance) {
+    return fail("cropped shape/range mask preview should match full-resolution export under rotation");
+  }
+  const auto crop_rotation_delta_at = [&](const QImage& before, const QImage& after, const QPoint& point) {
+    const auto before_color = before.pixelColor(point);
+    const auto after_color = after.pixelColor(point);
+    return std::max({
+        std::abs(after_color.red() - before_color.red()),
+        std::abs(after_color.green() - before_color.green()),
+        std::abs(after_color.blue() - before_color.blue())});
+  };
+  const auto shape_crop_delta =
+      crop_rotation_delta_at(crop_rotation_neutral, crop_rotation_preview, QPoint(5, 9));
+  const auto range_crop_delta =
+      crop_rotation_delta_at(crop_rotation_neutral, crop_rotation_preview, QPoint(12, 9));
+  const auto unselected_crop_delta =
+      crop_rotation_delta_at(crop_rotation_neutral, crop_rotation_preview, QPoint(21, 15));
+  if (shape_crop_delta < 12 ||
+      range_crop_delta < 12 ||
+      unselected_crop_delta > kPreviewExportParityTolerance) {
+    const auto detail =
+        QStringLiteral(
+            "shape and color range masks should stay aligned under render rotation and crop (shape=%1 range=%2 unselected=%3)")
+            .arg(shape_crop_delta)
+            .arg(range_crop_delta)
+            .arg(unselected_crop_delta)
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  const auto compiled_gpu_support = photo_editor::desktop::evaluate_gpu_pipeline_support(
+      source,
+      gpu_compatible_state(),
+      nullptr,
+      {},
+      true);
+  if (compiled_gpu_support.fallback_reason == QStringLiteral("metal_not_compiled")) {
+    if (compiled_gpu_support.supported || compiled_gpu_support.metal_aware_cpu_engine) {
+      return fail("uncompiled Metal support should report only metal_not_compiled");
+    }
+  } else {
+    if (!compiled_gpu_support.supported ||
+        compiled_gpu_support.metal_aware_cpu_engine ||
+        !compiled_gpu_support.fallback_reason.isEmpty()) {
+      return fail("GPU-compatible color pipeline should be reported as supported");
+    }
+
+    const auto unavailable_gpu_support = photo_editor::desktop::evaluate_gpu_pipeline_support(
+        source,
+        gpu_compatible_state(),
+        nullptr,
+        {},
+        false);
+    if (unavailable_gpu_support.supported ||
+        unavailable_gpu_support.fallback_reason != QStringLiteral("metal_unavailable")) {
+      return fail("GPU support query should report metal_unavailable when Metal is unavailable");
+    }
+
+    auto local_mask_set_state = gpu_compatible_state();
+    QVariantMap local_mask_set;
+    local_mask_set.insert(QStringLiteral("id"), QStringLiteral("gpu-support-local-mask"));
+    local_mask_set.insert(QStringLiteral("name"), QStringLiteral("GPU Support Local Mask"));
+    local_mask_set.insert(QStringLiteral("kind"), QStringLiteral("radial"));
+    local_mask_set.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+    local_mask_set.insert(QStringLiteral("maskSetId"), QStringLiteral("gpu-support-mask-set"));
+    local_mask_set.insert(QStringLiteral("operation"), QStringLiteral("add"));
+    local_mask_set.insert(QStringLiteral("exposure"), 0.15);
+    local_mask_set.insert(QStringLiteral("centerX"), 0.5);
+    local_mask_set.insert(QStringLiteral("centerY"), 0.5);
+    local_mask_set.insert(QStringLiteral("radiusX"), 0.35);
+    local_mask_set.insert(QStringLiteral("radiusY"), 0.35);
+    local_mask_set_state.mask_stack.append(local_mask_set);
+    const auto local_mask_set_support = photo_editor::desktop::evaluate_gpu_pipeline_support(
+        source,
+        local_mask_set_state);
+    if (local_mask_set_support.supported ||
+        !local_mask_set_support.metal_aware_cpu_engine ||
+        local_mask_set_support.fallback_reason != QStringLiteral("local_mask_sets")) {
+      return fail("GPU support query should report local mask sets as a Metal-aware CPU fallback");
+    }
+
+    auto retouch_state = gpu_compatible_state();
+    QVariantMap retouch_mask;
+    retouch_mask.insert(QStringLiteral("id"), QStringLiteral("gpu-support-retouch"));
+    retouch_mask.insert(QStringLiteral("name"), QStringLiteral("GPU Support Retouch"));
+    retouch_mask.insert(QStringLiteral("kind"), QStringLiteral("brush"));
+    retouch_mask.insert(QStringLiteral("toolRole"), QStringLiteral("retouch"));
+    retouch_mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+    retouch_mask.insert(QStringLiteral("retouchMode"), QStringLiteral("remove"));
+    retouch_mask.insert(QStringLiteral("committed"), true);
+    retouch_state.mask_stack.append(retouch_mask);
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, retouch_state)
+            .fallback_reason != QStringLiteral("retouch_masks")) {
+      return fail("GPU support query should report retouch masks as a CPU fallback");
+    }
+
+    auto legacy_mask_state = gpu_compatible_state();
+    legacy_mask_state.linear_mask_enabled = true;
+    legacy_mask_state.linear_mask_exposure = 0.25;
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, legacy_mask_state)
+            .fallback_reason != QStringLiteral("legacy_local_masks")) {
+      return fail("GPU support query should report legacy linear/radial masks as a CPU fallback");
+    }
+
+    QImage half_float_source(2, 1, QImage::Format_RGBA16FPx4);
+    half_float_source.setColorSpace(photo_editor::desktop::preview_color_space());
+    auto* half_float_scanline = reinterpret_cast<QRgbaFloat16*>(half_float_source.scanLine(0));
+    half_float_scanline[0] =
+        QRgbaFloat16{qfloat16(1.25F), qfloat16(0.30F), qfloat16(0.20F), qfloat16(1.0F)};
+    half_float_scanline[1] =
+        QRgbaFloat16{qfloat16(0.20F), qfloat16(0.30F), qfloat16(0.40F), qfloat16(1.0F)};
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(half_float_source, gpu_compatible_state())
+            .fallback_reason != QStringLiteral("extended_range_pixels")) {
+      return fail("GPU support query should report extended-range source pixels as a CPU fallback");
+    }
+
+    auto exact_tone_state = gpu_compatible_state();
+    exact_tone_state.exposure = 0.10;
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, exact_tone_state)
+            .fallback_reason != QStringLiteral("exact_global_tone")) {
+      return fail("GPU support query should report exact global tone as a CPU fallback");
+    }
+
+    auto exact_post_color_state = gpu_compatible_state();
+    exact_post_color_state.saturation = 12.0;
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, exact_post_color_state)
+            .fallback_reason != QStringLiteral("exact_post_color")) {
+      return fail("GPU support query should report exact post-color edits as a CPU fallback");
+    }
+
+    auto cpu_stage_state = gpu_compatible_state();
+    cpu_stage_state.texture = 6.0;
+    if (photo_editor::desktop::evaluate_gpu_pipeline_support(source, cpu_stage_state)
+            .fallback_reason != QStringLiteral("cpu_required_stages")) {
+      return fail("GPU support query should report CPU-required stages as a CPU fallback");
+    }
+
+    auto wide_gamut_gpu_state = gpu_compatible_state();
+    wide_gamut_gpu_state.working_color_profile = QStringLiteral("Linear ProPhoto RGB");
+    const auto wide_gamut_support =
+        photo_editor::desktop::evaluate_gpu_pipeline_support(source, wide_gamut_gpu_state);
+    if (!wide_gamut_support.supported || !wide_gamut_support.fallback_reason.isEmpty()) {
+      return fail("wide-gamut GPU-compatible recipes should be supported by the LUT-backed Metal path");
+    }
+  }
 
   const auto cpu_preview = photo_editor::desktop::render_output_image_with_backend(
       source,
@@ -453,6 +863,29 @@ int main(int argc, char** argv) {
     if (gpu_full_resolution_delta > kGpuColorGradingPreviewTolerance) {
       std::cerr << "GPU full-resolution max channel delta: " << gpu_full_resolution_delta << '\n';
       return fail("GPU full-resolution render should match CPU full-resolution render within tolerance");
+    }
+
+    auto wide_gamut_gpu_state = gpu_compatible_state();
+    wide_gamut_gpu_state.working_color_profile = QStringLiteral("Linear ProPhoto RGB");
+    const auto wide_gamut_cpu_preview = photo_editor::desktop::render_output_image_with_backend(
+        source,
+        wide_gamut_gpu_state,
+        target_space,
+        QImage::Format_ARGB32,
+        photo_editor::desktop::RenderBackendPreference::CpuOnly);
+    const auto wide_gamut_gpu_preview = photo_editor::desktop::render_output_image_with_backend(
+        source,
+        wide_gamut_gpu_state,
+        target_space,
+        QImage::Format_ARGB32,
+        photo_editor::desktop::RenderBackendPreference::GpuOnly);
+    if (wide_gamut_cpu_preview.isNull() || wide_gamut_gpu_preview.isNull()) {
+      return fail("wide-gamut CPU/Metal parity renders should produce images");
+    }
+    const auto wide_gamut_delta = max_channel_delta(wide_gamut_cpu_preview, wide_gamut_gpu_preview);
+    if (wide_gamut_delta > kGpuColorGradingPreviewTolerance) {
+      std::cerr << "wide-gamut GPU preview max channel delta: " << wide_gamut_delta << '\n';
+      return fail("wide-gamut GPU-compatible preview should match CPU preview within tolerance");
     }
 
     auto local_mask_grading_state = gpu_compatible_state();
@@ -919,6 +1352,227 @@ int main(int argc, char** argv) {
     return fail("linked selection full-color layer should visibly affect selected pixels");
   }
 
+  QImage mixed_selection_source(16, 12, QImage::Format_ARGB32);
+  mixed_selection_source.setColorSpace(photo_editor::desktop::preview_color_space());
+  mixed_selection_source.fill(QColor::fromRgb(74, 74, 74));
+  for (int y = 1; y <= 3; ++y) {
+    for (int x = 12; x <= 14; ++x) {
+      mixed_selection_source.setPixelColor(x, y, QColor::fromRgb(220, 42, 38));
+    }
+  }
+
+  const QString mixed_selection_set_id = QStringLiteral("mixed-selection-parity-set");
+  auto mixed_source_base = [&mixed_selection_set_id](QString id, QString name, QString kind) {
+    QVariantMap mask;
+    mask.insert(QStringLiteral("id"), id);
+    mask.insert(QStringLiteral("name"), name);
+    mask.insert(QStringLiteral("kind"), kind);
+    mask.insert(QStringLiteral("toolRole"), QStringLiteral("selection"));
+    mask.insert(QStringLiteral("maskSetId"), mixed_selection_set_id);
+    mask.insert(QStringLiteral("maskSetName"), QStringLiteral("Mixed Selection Parity"));
+    mask.insert(QStringLiteral("operation"), QStringLiteral("add"));
+    mask.insert(QStringLiteral("enabled"), true);
+    mask.insert(QStringLiteral("feather"), 0.0);
+    mask.insert(QStringLiteral("selectionFeather"), 0.0);
+    mask.insert(QStringLiteral("selectionSmooth"), 0.0);
+    return mask;
+  };
+
+  auto mixed_brush = mixed_source_base(
+      QStringLiteral("mixed-brush-source"),
+      QStringLiteral("Mixed Brush Source"),
+      QStringLiteral("brush"));
+  QVariantMap mixed_brush_point;
+  mixed_brush_point.insert(QStringLiteral("x"), 0.25);
+  mixed_brush_point.insert(QStringLiteral("y"), 0.25);
+  mixed_brush_point.insert(QStringLiteral("size"), 0.10);
+  mixed_brush_point.insert(QStringLiteral("flow"), 1.0);
+  mixed_brush_point.insert(QStringLiteral("opacity"), 1.0);
+  mixed_brush.insert(QStringLiteral("brushHardness"), 0.85);
+  mixed_brush.insert(QStringLiteral("brushBuildup"), false);
+  mixed_brush.insert(QStringLiteral("brushPoints"), QVariantList{mixed_brush_point});
+
+  auto mixed_lasso = mixed_source_base(
+      QStringLiteral("mixed-lasso-source"),
+      QStringLiteral("Mixed Lasso Source"),
+      QStringLiteral("lasso"));
+  mixed_lasso.insert(
+      QStringLiteral("polygonPoints"),
+      QVariantList{
+          QVariantMap{{QStringLiteral("x"), 0.06}, {QStringLiteral("y"), 0.64}},
+          QVariantMap{{QStringLiteral("x"), 0.28}, {QStringLiteral("y"), 0.64}},
+          QVariantMap{{QStringLiteral("x"), 0.28}, {QStringLiteral("y"), 0.92}},
+          QVariantMap{{QStringLiteral("x"), 0.06}, {QStringLiteral("y"), 0.92}},
+      });
+
+  auto mixed_rectangle = mixed_source_base(
+      QStringLiteral("mixed-rectangle-source"),
+      QStringLiteral("Mixed Rectangle Source"),
+      QStringLiteral("rectangle"));
+  mixed_rectangle.insert(QStringLiteral("centerX"), 0.56);
+  mixed_rectangle.insert(QStringLiteral("centerY"), 0.55);
+  mixed_rectangle.insert(QStringLiteral("radiusX"), 0.10);
+  mixed_rectangle.insert(QStringLiteral("radiusY"), 0.14);
+  mixed_rectangle.insert(QStringLiteral("rotation"), 0.0);
+
+  auto mixed_generated = mixed_source_base(
+      QStringLiteral("mixed-generated-source"),
+      QStringLiteral("Mixed Generated Source"),
+      QStringLiteral("object"));
+  QByteArray mixed_generated_alpha(16 * 12, char(0));
+  for (int y = 8; y <= 10; ++y) {
+    for (int x = 12; x <= 14; ++x) {
+      mixed_generated_alpha[y * 16 + x] = char(0xff);
+    }
+  }
+  mixed_generated.insert(QStringLiteral("segmentationData"), mixed_generated_alpha);
+  mixed_generated.insert(QStringLiteral("segmentationWidth"), 16);
+  mixed_generated.insert(QStringLiteral("segmentationHeight"), 12);
+  mixed_generated.insert(
+      QStringLiteral("generatedAlphaSourceContract"),
+      QStringLiteral("generated-alpha-plus-metadata-v1"));
+  mixed_generated.insert(QStringLiteral("generatedAlphaTargetType"), QStringLiteral("object"));
+
+  auto mixed_color_range = mixed_source_base(
+      QStringLiteral("mixed-color-range-source"),
+      QStringLiteral("Mixed Color Range Source"),
+      QStringLiteral("color"));
+  mixed_color_range.insert(QStringLiteral("hueCenter"), 0.0);
+  mixed_color_range.insert(QStringLiteral("hueRange"), 0.50);
+  mixed_color_range.insert(QStringLiteral("saturationMin"), 0.45);
+  mixed_color_range.insert(QStringLiteral("saturationMax"), 1.0);
+  mixed_color_range.insert(QStringLiteral("rangeFeather"), 0.0);
+
+  photo_editor::desktop::RenderEditState mixed_selection_state;
+  mixed_selection_state.working_color_profile = QStringLiteral("Linear sRGB");
+  mixed_selection_state.preview_color_space = QStringLiteral("sRGB");
+  mixed_selection_state.output_color_space = QStringLiteral("sRGB");
+  mixed_selection_state.mask_stack.append(mixed_brush);
+  mixed_selection_state.mask_stack.append(mixed_lasso);
+  mixed_selection_state.mask_stack.append(mixed_rectangle);
+  mixed_selection_state.mask_stack.append(mixed_generated);
+  mixed_selection_state.mask_stack.append(mixed_color_range);
+  QVariantMap mixed_selection_adjustments;
+  mixed_selection_adjustments.insert(QStringLiteral("exposure"), 0.95);
+  mixed_selection_adjustments.insert(QStringLiteral("contrast"), 18.0);
+  QVariantMap mixed_selection_layer;
+  mixed_selection_layer.insert(QStringLiteral("id"), QStringLiteral("mixed-selection-adjustment-layer"));
+  mixed_selection_layer.insert(QStringLiteral("name"), QStringLiteral("Mixed Selection Adjustment"));
+  mixed_selection_layer.insert(QStringLiteral("kind"), QStringLiteral("adjustment"));
+  mixed_selection_layer.insert(QStringLiteral("enabled"), true);
+  mixed_selection_layer.insert(QStringLiteral("opacity"), 1.0);
+  mixed_selection_layer.insert(QStringLiteral("adjustments"), mixed_selection_adjustments);
+  mixed_selection_layer.insert(QStringLiteral("selectionScoped"), true);
+  mixed_selection_layer.insert(
+      QStringLiteral("selectionMaskSetId"),
+      mixed_selection_set_id);
+  mixed_selection_state.layers.append(mixed_selection_layer);
+
+  const auto mixed_selection_working = photo_editor::desktop::working_image_from_qimage(
+      mixed_selection_source,
+      mixed_selection_state.working_color_profile);
+  if (mixed_selection_working.isNull()) {
+    return fail("mixed selection source should linearize for range-mask alpha proof");
+  }
+  photo_editor::pipeline::LocalMaskSet mixed_color_probe_set;
+  mixed_color_probe_set.enabled = true;
+  photo_editor::pipeline::LocalMask mixed_color_probe;
+  mixed_color_probe.kind = "color";
+  mixed_color_probe.operation = "add";
+  mixed_color_probe.enabled = true;
+  mixed_color_probe.hue_center = 0.0;
+  mixed_color_probe.hue_range = 0.50;
+  mixed_color_probe.saturation_min = 0.45;
+  mixed_color_probe.saturation_max = 1.0;
+  mixed_color_probe.range_feather = 0.0;
+  mixed_color_probe_set.sources.push_back(mixed_color_probe);
+  auto mixed_color_probe_config = photo_editor::pipeline::default_color_pipeline_config();
+  mixed_color_probe_config.working_profile =
+      photo_editor::pipeline::working_color_profile_from_name("Linear sRGB");
+  mixed_color_probe_config.preview_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  mixed_color_probe_config.export_output_profile =
+      photo_editor::pipeline::output_color_profile_from_name("sRGB");
+  const auto mixed_color_probe_alpha = photo_editor::pipeline::rasterize_local_mask_set_alpha(
+      mixed_color_probe_set,
+      mixed_selection_working.width,
+      mixed_selection_working.height,
+      mixed_selection_working.pixels,
+      mixed_color_probe_config);
+  if (mixed_color_probe_alpha.size() != 16 * 12 ||
+      mixed_color_probe_alpha[2 * 16 + 13] == 0 ||
+      mixed_color_probe_alpha[11 * 16 + 15] != 0) {
+    const auto detail =
+        QStringLiteral(
+            "mixed color range source should select the colored source patch without selecting neutral pixels (range=%1 neutral=%2)")
+            .arg(mixed_color_probe_alpha.size() == 16 * 12 ? int(mixed_color_probe_alpha[2 * 16 + 13]) : -1)
+            .arg(mixed_color_probe_alpha.size() == 16 * 12 ? int(mixed_color_probe_alpha[11 * 16 + 15]) : -1)
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  const auto mixed_selection_preview = photo_editor::desktop::render_output_image_with_backend(
+      mixed_selection_source,
+      mixed_selection_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_ARGB32,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly,
+      nullptr,
+      nullptr,
+      photo_editor::desktop::RenderMaskOptions{
+          .rebuild_editable_masks_at_output_resolution = true});
+  const auto mixed_selection_export = photo_editor::desktop::render_output_image_with_backend(
+      mixed_selection_source,
+      mixed_selection_state,
+      photo_editor::desktop::preview_color_space(),
+      QImage::Format_RGBA64,
+      photo_editor::desktop::RenderBackendPreference::CpuOnly,
+      nullptr,
+      nullptr,
+      photo_editor::desktop::RenderMaskOptions{
+          .rebuild_editable_masks_at_output_resolution = true});
+  if (mixed_selection_preview.isNull() || mixed_selection_export.isNull()) {
+    return fail("mixed selection preview/export parity proof should produce rendered images");
+  }
+  if (max_channel_delta(
+          mixed_selection_preview,
+          mixed_selection_export.convertToFormat(QImage::Format_ARGB32)) >
+      kPreviewExportParityTolerance) {
+    return fail("mixed brush/lasso/shape/generated/range selection preview should match full-resolution export");
+  }
+  const auto visible_delta_at = [&](const QPoint& point) {
+    const auto before = mixed_selection_source.pixelColor(point);
+    const auto after = mixed_selection_preview.pixelColor(point);
+    return std::max({
+        std::abs(after.red() - before.red()),
+        std::abs(after.green() - before.green()),
+        std::abs(after.blue() - before.blue())});
+  };
+  const std::array<std::pair<const char*, QPoint>, 5> mixed_selected_points{{
+      {"brush", QPoint(4, 3)},
+      {"lasso", QPoint(2, 9)},
+      {"shape", QPoint(9, 6)},
+      {"generated", QPoint(13, 9)},
+      {"range", QPoint(13, 2)},
+  }};
+  for (const auto& [source_label, selected_point] : mixed_selected_points) {
+    const auto delta = visible_delta_at(selected_point);
+    if (delta < 10) {
+      const auto detail =
+          QStringLiteral(
+              "mixed selection source should visibly affect representative brush, lasso, shape, generated, and range pixels (source=%1 x=%2 y=%3 delta=%4)")
+              .arg(QString::fromLatin1(source_label))
+              .arg(selected_point.x())
+              .arg(selected_point.y())
+              .arg(delta)
+              .toUtf8();
+      return fail(detail.constData());
+    }
+  }
+  if (visible_delta_at(QPoint(15, 11)) > kPreviewExportParityTolerance) {
+    return fail("mixed selection source should not leak into unselected pixels");
+  }
+
   const QSize layer_local_full_size(10, 8);
   const QSize layer_local_preview_size(5, 4);
   QImage layer_local_full_source(layer_local_full_size, QImage::Format_ARGB32);
@@ -1374,6 +2028,105 @@ int main(int argc, char** argv) {
   if (rendered_sixteen_bit.isNull() || rendered_sixteen_bit.format() != QImage::Format_RGBA64 ||
       !rendered_sixteen_bit.colorSpace().isValid()) {
     return fail("float working buffers should render to 16-bit integer output images");
+  }
+
+  struct OutputPathParityCase final {
+    const char* label;
+    QString output_profile;
+    QColorSpace target_space;
+    QImage::Format export_format = QImage::Format_ARGB32;
+    const char* writer_format = "png";
+    QString suffix;
+    int encoded_tolerance = 1;
+  };
+  const std::array<OutputPathParityCase, 4> output_path_cases = {{
+      {.label = "JPEG 8-bit sRGB",
+       .output_profile = QStringLiteral("sRGB"),
+       .target_space = photo_editor::desktop::preview_color_space(),
+       .export_format = QImage::Format_ARGB32,
+       .writer_format = "jpg",
+       .suffix = QStringLiteral("jpg"),
+       .encoded_tolerance = 8},
+      {.label = "PNG 16-bit sRGB",
+       .output_profile = QStringLiteral("sRGB"),
+       .target_space = photo_editor::desktop::preview_color_space(),
+       .export_format = QImage::Format_RGBA64,
+       .writer_format = "png",
+       .suffix = QStringLiteral("png"),
+       .encoded_tolerance = 1},
+      {.label = "TIFF 16-bit Display P3",
+       .output_profile = QStringLiteral("Display P3"),
+       .target_space = QColorSpace(QColorSpace::DisplayP3),
+       .export_format = QImage::Format_RGBA64,
+       .writer_format = "tiff",
+       .suffix = QStringLiteral("tif"),
+       .encoded_tolerance = 1},
+      {.label = "TIFF 16-bit ProPhoto",
+       .output_profile = QStringLiteral("ProPhoto RGB"),
+       .target_space = QColorSpace(QColorSpace::ProPhotoRgb),
+       .export_format = QImage::Format_RGBA64,
+       .writer_format = "tiff",
+       .suffix = QStringLiteral("tif"),
+       .encoded_tolerance = 1},
+  }};
+  auto output_path_case_count = 0;
+  for (const auto& output_case : output_path_cases) {
+    ++output_path_case_count;
+    auto output_state = gpu_compatible_state();
+    output_state.working_color_profile = QStringLiteral("Linear ProPhoto RGB");
+    output_state.preview_color_space = output_case.output_profile;
+    output_state.output_color_space = output_case.output_profile;
+    const auto preview_render = photo_editor::desktop::render_output_image_with_backend(
+        source,
+        output_state,
+        output_case.target_space,
+        QImage::Format_ARGB32,
+        photo_editor::desktop::RenderBackendPreference::CpuOnly);
+    const auto export_render = photo_editor::desktop::render_output_image_with_backend(
+        source,
+        output_state,
+        output_case.target_space,
+        output_case.export_format,
+        photo_editor::desktop::RenderBackendPreference::CpuOnly);
+    if (preview_render.isNull() || export_render.isNull()) {
+      std::cerr << output_case.label << " output-path parity should render preview and export\n";
+      return EXIT_FAILURE;
+    }
+    const auto preview_export_delta =
+        max_channel_delta(preview_render, export_render.convertToFormat(QImage::Format_ARGB32));
+    if (preview_export_delta > kPreviewExportParityTolerance) {
+      std::cerr << output_case.label << " preview/export max channel delta: "
+                << preview_export_delta << '\n';
+      return fail("output-path preview should match the full-resolution export render");
+    }
+    const auto encoded_path = temp_dir.filePath(
+        QStringLiteral("output-path-%1.%2")
+            .arg(QString::fromLatin1(output_case.writer_format), output_case.suffix));
+    if (!write_image_as(export_render, encoded_path, output_case.writer_format)) {
+      std::cerr << output_case.label << " encoded output path should be writable\n";
+      return EXIT_FAILURE;
+    }
+    const QImage encoded_output(encoded_path);
+    if (encoded_output.isNull()) {
+      std::cerr << output_case.label << " encoded output path should be readable\n";
+      return EXIT_FAILURE;
+    }
+    if (output_case.export_format == QImage::Format_RGBA64 &&
+        encoded_output.format() != QImage::Format_RGBA64) {
+      std::cerr << output_case.label << " should preserve 16-bit storage on readback\n";
+      return EXIT_FAILURE;
+    }
+    const auto encoded_delta = max_channel_delta(
+        export_render.convertToFormat(QImage::Format_ARGB32),
+        encoded_output.convertToFormat(QImage::Format_ARGB32));
+    if (encoded_delta > output_case.encoded_tolerance) {
+      std::cerr << output_case.label << " encoded max channel delta: "
+                << encoded_delta << '\n';
+      return fail("encoded output path should match the full-resolution export render");
+    }
+  }
+  if (output_path_case_count != 4) {
+    return fail("output path parity should cover JPEG 8-bit, PNG 16-bit, Display P3 TIFF, and wide-gamut TIFF");
   }
 
   photo_editor::desktop::RenderEditState scene_linear_state;

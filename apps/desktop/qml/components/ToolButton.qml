@@ -12,6 +12,7 @@ Button {
     property string variantLabel: ""
     property string statusText: ""
     property string disabledReason: ""
+    property string disabledFallbackReason: "Unavailable in the current state."
     property color accent: theme.accentWarm400
     property bool active: false
     property bool pending: false
@@ -43,8 +44,8 @@ Button {
                                                    variantBadgeLabel()
     readonly property string menuAffordanceContract: "tool-menu-affordance:v2|hover-chevron:true|corner:bottom-right|right-click:true|press-hold:true|keyboard:alt-down-alt-space|tooltip-full:true"
     readonly property string resolvedTooltip: {
-        if ((!enabled || !commandEnabled) && disabledReason.length > 0)
-            return disabledReason
+        if (!enabled || !commandEnabled)
+            return disabledReason.length > 0 ? disabledReason : disabledFallbackReason
         let parts = []
         const base = label.length > 0 ? label : text
         if (base.length > 0)
@@ -87,7 +88,7 @@ Button {
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
     Accessible.name: label.length > 0 ? label : text
-    Accessible.description: !enabled || !commandEnabled ? disabledReason : variantLabel
+    Accessible.description: !enabled || !commandEnabled ? resolvedTooltip : variantLabel
 
     ToolTip.visible: hovered && resolvedTooltip.length > 0
     ToolTip.delay: 300

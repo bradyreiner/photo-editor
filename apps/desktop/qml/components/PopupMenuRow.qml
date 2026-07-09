@@ -16,7 +16,10 @@ Button {
     readonly property string itemIcon: String(modelData.icon || "")
     readonly property string itemShortcut: String(modelData.shortcut || modelData.shortcutHint || "")
     readonly property string itemDescription: String(modelData.description || modelData.detail || modelData.summary || "")
-    readonly property string itemDisabledReason: String(modelData.disabledReason || modelData.reason || "")
+    readonly property string disabledFallbackReason: "Unavailable in the current state."
+    readonly property string itemDisabledReason: modelData.enabled === false
+                                                ? String(modelData.disabledReason || modelData.reason || disabledFallbackReason)
+                                                : String(modelData.disabledReason || modelData.reason || "")
     readonly property bool itemChecked: modelData.checked === true
     readonly property bool itemDanger: modelData.danger === true || modelData.destructive === true
     readonly property bool previousDanger: previousItem && (previousItem.danger === true || previousItem.destructive === true)
@@ -28,7 +31,7 @@ Button {
     readonly property int rowPreferredHeight: theme.menuItemHeight
     readonly property int menuIconColumnWidth: 16
     readonly property int menuShortcutColumnWidth: 72
-    readonly property string popupMenuRowContract: "popup-menu-row:v2|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true"
+    readonly property string popupMenuRowContract: "popup-menu-row:v3|shared-delegate:true|keyboard:true|hover:true|description:true|disabled-reason:true|disabled-fallback:true|checked-state:true|danger-state:true|shortcut-fit:true|readable-text:true|no-elide:true|geometry:true|icon-column:true|shortcut-column:true"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|label-wrap:true|description-wrap:true|disabled-wrap:true|shortcut-fit:true|tooltip-full:true|accessibility-full:true|full-label-available:true"
     readonly property string menuGeometryContract: "popup-menu-row-geometry:v1|min-height:32|preferred-height:34|icon-column:16|shortcut-column:72|shortcut-align:right|label-lines:" +
                                                    String(root.labelMaxLines)

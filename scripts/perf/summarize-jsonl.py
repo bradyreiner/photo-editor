@@ -3,8 +3,8 @@
 
 Current logs write the event name at the record root with details under
 `fields`. Older desktop logs kept the event in `fields.event`; this script
-accepts either shape, groups timing fields by event, and prints p50/p95 latency
-summaries suitable for before/after performance notes.
+accepts either shape, groups numeric fields by event, and prints p50/p95
+latency summaries suitable for before/after performance notes.
 """
 
 from __future__ import annotations
@@ -45,7 +45,12 @@ PRIMARY_TIMING_FIELDS = (
 )
 
 CATEGORY_FIELDS = (
+    "workflow_id",
     "workflow",
+    "interaction_id",
+    "tool_id",
+    "surface",
+    "stage",
     "backend",
     "decode_backend",
     "fallback_reason",
@@ -54,6 +59,8 @@ CATEGORY_FIELDS = (
     "render_reason",
     "interaction_mode",
     "queue_priority",
+    "worker_pool",
+    "pool_id",
     "pass",
     "reason",
     "job_kind",
@@ -68,6 +75,17 @@ CATEGORY_FIELDS = (
     "thread",
 )
 
+GROUP_DIMENSIONS = ("workflow", "tool", "stage", "backend", "surface", "worker_pool")
+
+GROUP_FIELD_ALIASES = {
+    "workflow": ("workflow", "workflow_id", "scenario"),
+    "tool": ("tool_id", "tool"),
+    "stage": ("stage", "render_stage", "layer_recipe_stage", "mask_alpha_stage"),
+    "backend": ("backend", "decode_backend"),
+    "surface": ("surface",),
+    "worker_pool": ("worker_pool", "pool_id"),
+}
+
 
 @dataclass
 class EventStats:
@@ -77,6 +95,14 @@ class EventStats:
     numeric_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
     categories: dict[str, Counter[str]] = field(default_factory=lambda: defaultdict(Counter))
     files: Counter[str] = field(default_factory=Counter)
+
+
+@dataclass
+class GroupStats:
+    count: int = 0
+    events: Counter[str] = field(default_factory=Counter)
+    timing_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
+    numeric_values: dict[str, list[float]] = field(default_factory=lambda: defaultdict(list))
 
 
 @dataclass
@@ -105,7 +131,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--all-events",
         action="store_true",
-        help="Include every event that has a timing field.",
+        help="Include every event that has a numeric metric field.",
     )
     parser.add_argument(
         "--json",
@@ -117,6 +143,13 @@ def parse_args() -> argparse.Namespace:
         action="append",
         dest="compare_inputs",
         help="Baseline run directory or .jsonl file to compare against. May be repeated.",
+    )
+    parser.add_argument(
+        "--group-by",
+        action="append",
+        choices=GROUP_DIMENSIONS,
+        default=[],
+        help="Add grouped numeric summaries for workflow, tool, stage, backend, or surface.",
     )
     return parser.parse_args()
 
@@ -201,6 +234,10 @@ def has_timing(fields: dict[str, Any]) -> bool:
     return any(coerce_number(value) is not None for key, value in fields.items() if key.endswith("_ms"))
 
 
+def has_numeric_metric(fields: dict[str, Any]) -> bool:
+    return any(coerce_number(value) is not None for value in fields.values())
+
+
 def add_record(
     summaries: dict[str, EventStats],
     event: str,
@@ -224,12 +261,45 @@ def add_record(
             stats.categories[key][str(value)] += 1
 
 
+def group_value(fields: dict[str, Any], dimension: str) -> str | None:
+    for field_name in GROUP_FIELD_ALIASES.get(dimension, (dimension,)):
+        value = fields.get(field_name)
+        if value is None or value == "":
+            continue
+        return str(value)
+    return None
+
+
+def add_group_record(
+    group_summaries: dict[str, dict[str, GroupStats]],
+    group_by: list[str],
+    event: str,
+    fields: dict[str, Any],
+) -> None:
+    for dimension in group_by:
+        value = group_value(fields, dimension)
+        if value is None:
+            continue
+        stats = group_summaries[dimension][value]
+        stats.count += 1
+        stats.events[event] += 1
+        for key, field_value in fields.items():
+            number = coerce_number(field_value)
+            if number is not None:
+                stats.numeric_values[key].append(number)
+            if key in PRIMARY_TIMING_FIELDS or key.endswith("_ms"):
+                if number is not None:
+                    stats.timing_values[key].append(number)
+
+
 def summarize_file(
     path: Path,
     summaries: dict[str, EventStats],
+    group_summaries: dict[str, dict[str, GroupStats]],
     parse_stats: ParseStats,
     selected_events: set[str],
     all_events: bool,
+    group_by: list[str],
 ) -> None:
     parse_stats.files += 1
     try:
@@ -259,11 +329,12 @@ def summarize_file(
                 continue
             if not all_events and event not in selected_events:
                 continue
-            if all_events and not has_timing(fields):
+            if all_events and not has_numeric_metric(fields):
                 continue
 
             parse_stats.records += 1
             add_record(summaries, event, fields, path)
+            add_group_record(group_summaries, group_by, event, fields)
 
 
 def timing_summary(values: list[float]) -> dict[str, float | int | None]:
@@ -277,7 +348,11 @@ def timing_summary(values: list[float]) -> dict[str, float | int | None]:
     }
 
 
-def build_output(summaries: dict[str, EventStats], parse_stats: ParseStats) -> dict[str, Any]:
+def build_output(
+    summaries: dict[str, EventStats],
+    group_summaries: dict[str, dict[str, GroupStats]],
+    parse_stats: ParseStats,
+) -> dict[str, Any]:
     events: dict[str, Any] = {}
     for event in sorted(summaries):
         stats = summaries[event]
@@ -298,6 +373,23 @@ def build_output(summaries: dict[str, EventStats], parse_stats: ParseStats) -> d
             },
             "files": dict(stats.files.most_common()),
         }
+    groups: dict[str, Any] = {}
+    for dimension, values in sorted(group_summaries.items()):
+        groups[dimension] = {}
+        for value, stats in sorted(values.items()):
+            groups[dimension][value] = {
+                "count": stats.count,
+                "events": dict(stats.events.most_common()),
+                "timings": {
+                    key: timing_summary(metric_values)
+                    for key, metric_values in sorted(stats.timing_values.items())
+                },
+                "numeric_fields": {
+                    key: timing_summary(metric_values)
+                    for key, metric_values in sorted(stats.numeric_values.items())
+                },
+            }
+
     return {
         "parse": {
             "files": parse_stats.files,
@@ -306,6 +398,7 @@ def build_output(summaries: dict[str, EventStats], parse_stats: ParseStats) -> d
             "skipped": parse_stats.skipped,
         },
         "events": events,
+        "groups": groups,
     }
 
 
@@ -320,12 +413,24 @@ def summarize_inputs(
     files: list[Path],
     selected_events: set[str],
     all_events: bool,
+    group_by: list[str] | None = None,
 ) -> dict[str, Any]:
     summaries: dict[str, EventStats] = defaultdict(EventStats)
+    group_summaries: dict[str, dict[str, GroupStats]] = {
+        dimension: defaultdict(GroupStats) for dimension in (group_by or [])
+    }
     parse_stats = ParseStats()
     for file_path in files:
-        summarize_file(file_path, summaries, parse_stats, selected_events, all_events)
-    return build_output(summaries, parse_stats)
+        summarize_file(
+            file_path,
+            summaries,
+            group_summaries,
+            parse_stats,
+            selected_events,
+            all_events,
+            group_by or [],
+        )
+    return build_output(summaries, group_summaries, parse_stats)
 
 
 def add_comparison(output: dict[str, Any], baseline: dict[str, Any]) -> None:
@@ -370,6 +475,35 @@ def percent_delta(current: Any, baseline: Any) -> float | None:
 
 
 def format_ms(value: float | int | None) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.1f}"
+
+
+def preferred_summary_field(stats: dict[str, Any]) -> tuple[str, dict[str, Any]] | None:
+    timings = stats.get("timings", {})
+    if isinstance(timings, dict):
+        for field_name in ("elapsed_ms", "queue_wait_ms", "worker_elapsed_ms"):
+            summary = timings.get(field_name)
+            if isinstance(summary, dict):
+                return field_name, summary
+        for field_name, summary in timings.items():
+            if isinstance(summary, dict):
+                return field_name, summary
+
+    numeric_fields = stats.get("numeric_fields", {})
+    if isinstance(numeric_fields, dict):
+        for field_name in ("rss_delta_bytes", "rss_bytes", "cache_bytes", "gpu_memory_bytes"):
+            summary = numeric_fields.get(field_name)
+            if isinstance(summary, dict):
+                return field_name, summary
+        for field_name, summary in numeric_fields.items():
+            if isinstance(summary, dict):
+                return field_name, summary
+    return None
+
+
+def format_number(value: float | int | None) -> str:
     if value is None:
         return "-"
     return f"{float(value):.1f}"
@@ -444,6 +578,33 @@ def print_table(output: dict[str, Any]) -> None:
         for line in category_lines:
             print(f"- {line}")
 
+    groups = output.get("groups", {})
+    if isinstance(groups, dict):
+        for dimension, values in groups.items():
+            if not isinstance(values, dict) or not values:
+                continue
+            print()
+            print(f"Grouped metrics by {dimension}")
+            print("group | field | n | p50 | p95 | max | avg | top events")
+            print("--- | --- | ---: | ---: | ---: | ---: | ---: | ---")
+            for group_name, stats in values.items():
+                if not isinstance(stats, dict):
+                    continue
+                field_summary = preferred_summary_field(stats)
+                if field_summary is None:
+                    continue
+                field_name, summary = field_summary
+                events = stats.get("events", {})
+                top_events = ""
+                if isinstance(events, dict):
+                    top_events = ", ".join(f"{key}={value}" for key, value in list(events.items())[:3])
+                print(
+                    f"{group_name} | {field_name} | {summary.get('count', 0)} | "
+                    f"{format_number(summary.get('p50'))} | {format_number(summary.get('p95'))} | "
+                    f"{format_number(summary.get('max'))} | {format_number(summary.get('avg'))} | "
+                    f"{top_events}"
+                )
+
     comparison = output.get("comparison")
     if comparison:
         comparison_rows: list[tuple[str, str, str, str, str, str]] = []
@@ -483,14 +644,19 @@ def main() -> int:
         print("No JSONL files found for the provided inputs.", file=sys.stderr)
         return 2
 
-    output = summarize_inputs(files, selected_events, args.all_events)
+    output = summarize_inputs(files, selected_events, args.all_events, args.group_by)
 
     if args.compare_inputs:
         baseline_files = collect_files(args.compare_inputs)
         if not baseline_files:
             print("No JSONL files found for --compare inputs.", file=sys.stderr)
             return 2
-        baseline_output = summarize_inputs(baseline_files, selected_events, args.all_events)
+        baseline_output = summarize_inputs(
+            baseline_files,
+            selected_events,
+            args.all_events,
+            args.group_by,
+        )
         add_comparison(output, baseline_output)
 
     if args.json:

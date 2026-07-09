@@ -13,6 +13,7 @@ Button {
     property color iconColor: "transparent"
     property string tooltip: ""
     property string disabledReason: ""
+    property string disabledFallbackReason: "Unavailable in the current state."
     property string a11yName: ""
     property bool labelVisible: true
     property bool fitTextToWidth: true
@@ -40,10 +41,15 @@ Button {
     readonly property bool labelFitsControl: !visible || visualIconOnly || label.width <= labelAvailableWidth + 1
     readonly property bool labelOverflowing: label.visible && label.contentWidth > label.width + 1
     readonly property real readableImplicitWidth: label.implicitWidth + (iconName.length > 0 ? 42 : 24)
-    readonly property string resolvedTooltipText: !root.enabled && root.disabledReason.length > 0 ? root.disabledReason : root.tooltip
+    readonly property string resolvedTooltipText: !root.enabled
+                                                  ? (root.disabledReason.length > 0
+                                                     ? root.disabledReason
+                                                     : root.disabledFallbackReason)
+                                                  : root.tooltip
     readonly property string miniButtonContract: "mini-button:v4|shared-component:true|active-state:true|roles:primary-secondary-segmented-ghost-icon-destructive|hierarchy:primary-accent-secondary-neutral-tertiary-quiet|monochrome-default:true|mint-primary:true|slash-primary-only:true|rounded-secondary:true|centered-icons:true|hover-fill-not-border:true|keyboard:true|tooltip-full:true|readable-text:true|no-elide:true"
     readonly property string readableTextContract: "readable-text:v2|ellipsis:none|compact-fit:true|optional-wrap:true|tooltip-full:true|a11y-full:true|minimum-px:9|readable-width:true"
-    readonly property string disabledReasonContract: "disabled-reason:v1|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true"
+    readonly property string disabledReasonContract: "disabled-reason:v2|tooltip-when-disabled:true|accessible-description:true|fallback-tooltip:true|fallback-reason:true"
+    readonly property string disabledStateMotionContract: "disabled-state-motion:v1|duration:110|opacity:true|layout-stable:true|tooltip-preserved:true|interruptible:true"
     readonly property string toolbarButtonContract: "toolbar-button:v1|baseline-aligned:true|stable-height:true|role:" +
                                                     root.role +
                                                     "|icon-only:" +
@@ -84,6 +90,12 @@ Button {
     clip: true
     hoverEnabled: true
     focusPolicy: Qt.TabFocus
+    opacity: root.enabled ? 1.0 : 0.74
+
+    Behavior on opacity {
+        NumberAnimation { duration: theme.durationFast; easing.type: Easing.OutCubic }
+    }
+
     Accessible.name: resolvedAccessibleName
     Accessible.description: resolvedTooltipText
     ToolTip.visible: hovered && (resolvedTooltipText.length > 0 || (!visualIconOnly && labelOverflowing))

@@ -43,6 +43,8 @@ struct RenderRequest final {
   QString render_reason;
   QString interaction_mode;
   QString render_mode;
+  QString tool_id;
+  QString interaction_id;
   int render_priority = 0;
   QString dirty_domain;
   QStringList dirty_stages;
@@ -138,6 +140,8 @@ struct RenderResult final {
   QString render_reason;
   QString interaction_mode;
   QString render_mode;
+  QString tool_id;
+  QString interaction_id;
   int render_priority = 0;
   QString dirty_domain;
   QStringList dirty_stages;
@@ -168,6 +172,7 @@ struct RenderResult final {
   qint64 adjusted_stage_elapsed_ms = 0;
   int mask_tile_cache_hit_count = 0;
   int mask_tile_cache_miss_count = 0;
+  qint64 crop_geometry_elapsed_ms = 0;
   qint64 output_stage_elapsed_ms = 0;
   qint64 output_linear_pack_elapsed_ms = 0;
   qint64 output_color_convert_elapsed_ms = 0;
@@ -196,6 +201,8 @@ struct RenderResult final {
   qint64 adjustment_final_output_ms = 0;
   qint64 adjustment_final_output_black_point_ms = 0;
   qint64 adjustment_final_output_headroom_ms = 0;
+  qint64 overlay_composite_elapsed_ms = 0;
+  qint64 histogram_scope_elapsed_ms = 0;
   qint64 adjustment_gpu_command_buffer_count = 0;
   qint64 adjustment_gpu_kernel_dispatch_count = 0;
   qint64 adjustment_gpu_blit_count = 0;
@@ -249,6 +256,7 @@ struct RenderResult final {
   QString fallback_reason;
   qint64 total_elapsed_ms = 0;
   qint64 queue_wait_ms = 0;
+  qint64 render_completed_at_msecs = 0;
   qint64 render_latency_budget_ms = 0;
   bool render_within_latency_budget = true;
   AsyncMaskJob async_job;
@@ -272,6 +280,8 @@ struct RenderResult final {
 struct EditIntent final {
   QString operation;
   QString phase = QStringLiteral("commit");
+  QString tool_id;
+  QString interaction_id;
   QString dirty_domain;
   QString render_reason = QStringLiteral("edit_change");
   QRectF normalized_region;
@@ -449,6 +459,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(bool displayPreviewNativeAvailable READ displayPreviewNativeAvailable NOTIFY previewChanged)
   Q_PROPERTY(quint64 displayPreviewNativeHandle READ displayPreviewNativeHandle NOTIFY previewChanged)
   Q_PROPERTY(QSize displayPreviewNativeSize READ displayPreviewNativeSize NOTIFY previewChanged)
+  Q_PROPERTY(bool displayPreviewNativeFullResolution READ displayPreviewNativeFullResolution NOTIFY previewChanged)
   Q_PROPERTY(int displayPreviewNativeRevision READ displayPreviewNativeRevision NOTIFY previewChanged)
   Q_PROPERTY(QVariantList histogramRed READ histogramRed NOTIFY histogramChanged)
   Q_PROPERTY(QVariantList histogramGreen READ histogramGreen NOTIFY histogramChanged)
@@ -823,6 +834,7 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QVariantList activeMaskOutlinePoints READ activeMaskOutlinePoints NOTIFY controlsChanged)
   Q_PROPERTY(QVariantList activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY controlsChanged)
   Q_PROPERTY(QVariantMap activeMaskOutlineTrace READ activeMaskOutlineTrace NOTIFY controlsChanged)
+  Q_PROPERTY(double activeMaskOutlineDisplayScale READ activeMaskOutlineDisplayScale WRITE setActiveMaskOutlineDisplayScale NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskOutlineQualityTier READ activeMaskOutlineQualityTier NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QString activeMaskPreviewQualityTier READ activeMaskPreviewQualityTier NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskPreviewSource READ activeMaskPreviewSource NOTIFY controlsChanged)
@@ -913,6 +925,7 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] bool displayPreviewNativeAvailable() const;
   [[nodiscard]] quint64 displayPreviewNativeHandle() const;
   [[nodiscard]] QSize displayPreviewNativeSize() const;
+  [[nodiscard]] bool displayPreviewNativeFullResolution() const;
   [[nodiscard]] int displayPreviewNativeRevision() const;
   [[nodiscard]] QString referencePreviewSource() const;
   [[nodiscard]] QString displayReferencePreviewSource() const;
@@ -1290,6 +1303,8 @@ class EditorPreviewController final : public QObject {
   [[nodiscard]] QVariantList activeMaskOutlinePoints() const;
   [[nodiscard]] QVariantList activeMaskOutlinePaths() const;
   [[nodiscard]] QVariantMap activeMaskOutlineTrace() const;
+  [[nodiscard]] double activeMaskOutlineDisplayScale() const;
+  void setActiveMaskOutlineDisplayScale(double scale);
   [[nodiscard]] QString activeMaskOutlineQualityTier() const;
   [[nodiscard]] QString activeMaskPreviewQualityTier() const;
   [[nodiscard]] QString activeMaskPreviewSource() const;
@@ -1524,6 +1539,14 @@ class EditorPreviewController final : public QObject {
       double normalized_height,
       int patch_max_edge,
       bool active = true);
+  Q_INVOKABLE int previewViewportPatchEdgeForInspection(
+      double visible_source_pixel_width,
+      double visible_source_pixel_height,
+      double visible_display_width,
+      double visible_display_height,
+      double device_pixel_ratio,
+      bool mask_work_active,
+      bool pixel_inspection_active) const;
   void setCropZoom(double crop_zoom);
   void setCropPreset(const QString& crop_preset);
   void setUprightMode(const QString& upright_mode);
@@ -1578,6 +1601,10 @@ class EditorPreviewController final : public QObject {
   void setActiveMaskSelectionEdgeContrast(double edge_contrast);
   void setActiveMaskSelectionDecontaminate(double decontaminate);
   Q_INVOKABLE bool resetActiveMaskRefinement();
+  Q_INVOKABLE bool applyActiveSelectionPixel(
+      double normalized_x,
+      double normalized_y,
+      const QString& operation);
   void setActiveMaskFeather(double local_feather);
   void setActiveMaskPosition(double local_position);
   void setActiveMaskRotation(double local_rotation);
@@ -2017,6 +2044,8 @@ signals:
       bool schedule_full_resolution = true,
       const QString& render_reason = {});
   void schedulePhotoLayerAdjustmentRender();
+  void scheduleEditTransactionInteractivePreview(const QString& reason);
+  void flushEditTransactionInteractivePreview();
   void submitMaskRasterizationEditIntent(
       const QString& operation,
       bool schedule_full_resolution = true,
@@ -2044,6 +2073,8 @@ signals:
       const QVariantMap& mask,
       const QSize& target_size,
       const QString& purpose);
+  static QString adjustedWorkingCacheKeyForTesting(const RenderRequest& request);
+  static QString renderedPreviewCacheKeyForTesting(const RenderRequest& request);
   static void clearScaledMaskMatteCacheForTesting();
   static int scaledMaskMatteCacheEntryCountForTesting();
   static qint64 scaledMaskMatteCacheBytesForTesting();
@@ -2412,6 +2443,12 @@ signals:
   QString highlight_reconstruction_mode_ = QStringLiteral("Enabled");
   QString chromatic_adaptation_method_ = QStringLiteral("Bradford");
   QString output_color_space_ = QStringLiteral("sRGB");
+  double output_headroom_ = 1.0;
+  bool output_gamut_mapping_enabled_ = true;
+  QString output_gamut_mapping_policy_ = QStringLiteral("Perceptual");
+  bool black_point_compensation_enabled_ = true;
+  double source_black_point_ = 0.0;
+  double output_black_point_ = 0.0;
   double raw_exposure_ = 0.0;
   double raw_boost_ = 0.0;
   double raw_shadow_boost_ = 1.0;
@@ -2701,6 +2738,7 @@ signals:
   QTimer interactive_render_timer_;
   QTimer full_render_timer_;
   QTimer photo_layer_adjustment_render_timer_;
+  QTimer edit_transaction_interactive_preview_timer_;
   QFutureWatcher<RenderResult> overlay_render_watcher_;
   RenderRequest pending_overlay_request_;
   RenderRequest last_overlay_render_request_;
@@ -2767,7 +2805,10 @@ signals:
   int edit_transaction_depth_ = 0;
   bool edit_transaction_render_requested_ = false;
   bool edit_transaction_schedule_full_resolution_ = false;
+  bool edit_transaction_persist_requested_ = false;
   QString edit_transaction_render_reason_;
+  int edit_transaction_interactive_preview_request_count_ = 0;
+  QString edit_transaction_interactive_preview_reason_;
   QString edit_transaction_asset_id_;
   EditState edit_transaction_undo_state_;
   QString edit_transaction_undo_label_;
@@ -2783,6 +2824,8 @@ signals:
   int render_generation_ = 0;
   qint64 render_requested_at_msecs_ = 0;
   QString render_reason_ = QStringLiteral("edit_change");
+  QString current_tool_id_;
+  QString current_interaction_id_;
   std::shared_ptr<std::atomic<int>> latest_render_generation_ =
       std::make_shared<std::atomic<int>>(0);
   int last_interactive_preview_generation_ = 0;
@@ -2810,6 +2853,7 @@ signals:
   mutable QString active_mask_outline_trace_source_;
   mutable int active_mask_outline_trace_path_count_ = 0;
   mutable QVariantMap active_mask_outline_trace_fields_;
+  double active_mask_outline_display_scale_ = 1.0;
   mutable int active_mask_preview_source_skip_count_ = 0;
   mutable bool smart_select_preview_outline_cache_valid_ = false;
   mutable QVariantList smart_select_preview_outline_cache_points_;

@@ -29,6 +29,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <span>
 
 namespace photo_editor::desktop {
 
@@ -149,7 +150,13 @@ QString gpu_fallback_reason(
   if (!pipeline_state.retouch_masks.empty()) {
     return QStringLiteral("retouch_masks");
   }
-  if (!pipeline_state.local_masks.empty()) {
+  if (!pipeline_state.local_masks.empty() ||
+      state.linear_mask_enabled ||
+      state.radial_mask_enabled ||
+      std::abs(state.linear_mask_exposure) > 1e-6 ||
+      std::abs(state.linear_mask_temperature) > 1e-6 ||
+      std::abs(state.radial_mask_exposure) > 1e-6 ||
+      std::abs(state.radial_mask_temperature) > 1e-6) {
     return QStringLiteral("legacy_local_masks");
   }
   if (has_extended_range_pixels(pixels)) {
@@ -1221,7 +1228,9 @@ void populate_photo_layer_selection_mask(
     const QVariantMap& layer,
     const QVariantList& masks,
     MaskRasterPolicy raster_policy,
-    const QSize& output_size) {
+    const QSize& output_size,
+    std::span<const photo_editor::pipeline::ColorPixel> source_pixels,
+    const photo_editor::pipeline::ColorPipelineConfig& color_pipeline) {
   if (target == nullptr || !layer.value(QStringLiteral("selectionScoped")).toBool()) {
     return;
   }
@@ -1252,6 +1261,25 @@ void populate_photo_layer_selection_mask(
           populate_photo_layer_selection_mask_from_stored_source(target, layer, set, raster_size)) {
         return;
       }
+      if (!matches) {
+        continue;
+      }
+      const auto alpha = photo_editor::pipeline::rasterize_local_mask_set_alpha(
+          set,
+          raster_size.width(),
+          raster_size.height(),
+          source_pixels,
+          color_pipeline);
+      if (alpha.size() !=
+          static_cast<std::size_t>(raster_size.width()) *
+              static_cast<std::size_t>(raster_size.height())) {
+        continue;
+      }
+      target->mask_data = alpha;
+      target->mask_width = raster_size.width();
+      target->mask_height = raster_size.height();
+      target->mask_inverted = layer.value(QStringLiteral("maskInverted")).toBool();
+      return;
     }
   }
 }
@@ -1310,7 +1338,9 @@ std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(
     const QVariantList& layers,
     const QVariantList& masks,
     MaskRasterPolicy raster_policy,
-    const QSize& output_size) {
+    const QSize& output_size,
+    std::span<const photo_editor::pipeline::ColorPixel> source_pixels,
+    const photo_editor::pipeline::ColorPipelineConfig& color_pipeline) {
   std::vector<photo_editor::pipeline::PhotoLayer> photo_layers;
   photo_layers.reserve(static_cast<std::size_t>(layers.size()));
   auto solo_active = false;
@@ -1511,7 +1541,14 @@ std::vector<photo_editor::pipeline::PhotoLayer> pipeline_photo_layers(
     };
     populate_photo_layer_mask(&photo_layer, layer);
     if (photo_layer.mask_data.empty()) {
-      populate_photo_layer_selection_mask(&photo_layer, layer, masks, raster_policy, output_size);
+      populate_photo_layer_selection_mask(
+          &photo_layer,
+          layer,
+          masks,
+          raster_policy,
+          output_size,
+          source_pixels,
+          color_pipeline);
     }
     populate_photo_layer_pixels(&photo_layer, layer);
     photo_layers.push_back(std::move(photo_layer));
@@ -1535,7 +1572,14 @@ photo_editor::pipeline::ColorPipelineConfig color_pipeline_config_for_state(cons
       .input_transform_recipe = {},
       .render_intent =
           photo_editor::pipeline::render_intent_from_name(state.render_intent.toStdString()),
+      .output_gamut_mapping_enabled = state.output_gamut_mapping_enabled,
+      .output_gamut_mapping_policy =
+          photo_editor::pipeline::gamut_mapping_policy_from_name(
+              state.output_gamut_mapping_policy.toStdString()),
       .output_headroom = state.output_headroom,
+      .black_point_compensation_enabled = state.black_point_compensation_enabled,
+      .source_black_point = state.source_black_point,
+      .output_black_point = state.output_black_point,
   };
 }
 
@@ -1559,9 +1603,11 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
     const RenderEditState& state,
     const photo_editor::pipeline::DecodedImageMetadata* metadata = nullptr,
     MaskRasterPolicy raster_policy = MaskRasterPolicy::UseStoredRaster,
-    const QSize& output_size = {}) {
+    const QSize& output_size = {},
+    std::span<const photo_editor::pipeline::ColorPixel> source_pixels = {}) {
   const auto raw_input_transform_enabled =
       metadata != nullptr && metadata->valid && metadata->is_raw && state.raw_input_transform_enabled;
+  const auto color_pipeline_config = color_pipeline_config_for_state(state, metadata);
   return photo_editor::pipeline::ColorAdjustmentState{
       .input_transform =
           photo_editor::pipeline::InputTransformSettings{
@@ -1600,7 +1646,7 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
               .blue_primary_saturation =
                   raw_input_transform_enabled ? state.raw_blue_primary_saturation : 0.0,
           },
-      .color_pipeline = color_pipeline_config_for_state(state, metadata),
+      .color_pipeline = color_pipeline_config,
       .exposure = state.exposure,
       .contrast = state.contrast,
       .highlights = state.highlights,
@@ -1732,7 +1778,14 @@ photo_editor::pipeline::ColorAdjustmentState to_pipeline_state(
       .radial_mask_rotation = state.radial_mask_rotation,
       .local_mask_sets = pipeline_local_mask_sets(state.mask_stack, raster_policy, output_size),
       .retouch_masks = pipeline_retouch_masks(state.mask_stack, raster_policy, output_size),
-      .photo_layers = pipeline_photo_layers(state.layers, state.mask_stack, raster_policy, output_size),
+      .photo_layers =
+          pipeline_photo_layers(
+              state.layers,
+              state.mask_stack,
+              raster_policy,
+              output_size,
+              source_pixels,
+              color_pipeline_config),
   };
 }
 
@@ -1782,6 +1835,51 @@ bool render_backend_available(RenderBackendPreference backend_preference) {
 #endif
   }
   return false;
+}
+
+GpuPipelineSupport evaluate_gpu_pipeline_support(
+    const QImage& image,
+    const RenderEditState& state,
+    const photo_editor::pipeline::DecodedImageMetadata* metadata,
+    RenderMaskOptions mask_options,
+    bool assume_metal_available) {
+  if (image.isNull()) {
+    return GpuPipelineSupport{
+        .supported = false,
+        .metal_aware_cpu_engine = false,
+        .fallback_reason = QStringLiteral("empty_source"),
+    };
+  }
+
+  const auto working = working_image_from_qimage(image, state.working_color_profile);
+  if (working.isNull()) {
+    return GpuPipelineSupport{
+        .supported = false,
+        .metal_aware_cpu_engine = false,
+        .fallback_reason = QStringLiteral("linearization_failed"),
+    };
+  }
+
+  const auto raster_policy = mask_options.rebuild_editable_masks_at_output_resolution
+                                 ? MaskRasterPolicy::RebuildEditableAtOutputResolution
+                                 : MaskRasterPolicy::UseStoredRaster;
+  const auto pipeline_state =
+      to_pipeline_state(
+          state,
+          metadata,
+          raster_policy,
+          QSize(working.width, working.height),
+          working.pixels);
+  const auto reason = gpu_fallback_reason(
+      state,
+      pipeline_state,
+      working.pixels,
+      assume_metal_available);
+  return GpuPipelineSupport{
+      .supported = reason.isEmpty(),
+      .metal_aware_cpu_engine = reason == QStringLiteral("local_mask_sets"),
+      .fallback_reason = reason,
+  };
 }
 
 bool decode_source_image(
@@ -2062,7 +2160,8 @@ QImage render_output_image_with_backend(
   const auto raster_policy = mask_options.rebuild_editable_masks_at_output_resolution
                                  ? MaskRasterPolicy::RebuildEditableAtOutputResolution
                                  : MaskRasterPolicy::UseStoredRaster;
-  const auto pipeline_state = to_pipeline_state(state, metadata, raster_policy, QSize(width, height));
+  const auto pipeline_state =
+      to_pipeline_state(state, metadata, raster_policy, QSize(width, height), pixels);
 #if defined(PHOTO_EDITOR_HAS_METAL_BACKEND) && PHOTO_EDITOR_HAS_METAL_BACKEND
   auto& metal = metal_backend();
   const auto fallback_reason = gpu_fallback_reason(state, pipeline_state, pixels, metal.available());

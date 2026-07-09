@@ -556,6 +556,9 @@ struct EditorPreviewControllerTestAccess {
   static bool full_render_timer_active(const EditorPreviewController& controller) {
     return controller.full_render_timer_.isActive();
   }
+  static int full_render_timer_interval(const EditorPreviewController& controller) {
+    return controller.full_render_timer_.interval();
+  }
   static bool full_render_pending(const EditorPreviewController& controller) {
     return controller.full_request_pending_;
   }
@@ -564,6 +567,17 @@ struct EditorPreviewControllerTestAccess {
   }
   static bool interactive_render_timer_active(const EditorPreviewController& controller) {
     return controller.interactive_render_timer_.isActive();
+  }
+  static int interactive_render_timer_interval(const EditorPreviewController& controller) {
+    return controller.interactive_render_timer_.interval();
+  }
+  static bool edit_transaction_interactive_preview_timer_active(
+      const EditorPreviewController& controller) {
+    return controller.edit_transaction_interactive_preview_timer_.isActive();
+  }
+  static int edit_transaction_interactive_preview_request_count(
+      const EditorPreviewController& controller) {
+    return controller.edit_transaction_interactive_preview_request_count_;
   }
   static bool interactive_render_pending(const EditorPreviewController& controller) {
     return controller.interactive_request_pending_;
@@ -586,6 +600,10 @@ struct EditorPreviewControllerTestAccess {
   static bool photo_layer_adjustment_render_timer_active(
       const EditorPreviewController& controller) {
     return controller.photo_layer_adjustment_render_timer_.isActive();
+  }
+  static int photo_layer_adjustment_render_timer_interval(
+      const EditorPreviewController& controller) {
+    return controller.photo_layer_adjustment_render_timer_.interval();
   }
   static bool smart_select_preview_request_pending(const EditorPreviewController& controller) {
     return controller.smart_select_preview_request_pending_;
@@ -945,16 +963,25 @@ struct EditorPreviewControllerTestAccess {
 };
 
 class FakeEditorPreviewTexture final : public EditorPreviewTexture {
- public:
-  [[nodiscard]] bool available() const override { return true; }
-  [[nodiscard]] const char* backendName() const override { return "fake"; }
-  bool upload(const QImage& image) override {
-    if (image.isNull()) {
-      return false;
-    }
-    texture_size_ = image.size();
-    texture_format_name_ = native_format_name_for_image(image);
-    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_image(image);
+	 public:
+	  [[nodiscard]] bool available() const override { return true; }
+	  [[nodiscard]] const char* backendName() const override { return "fake"; }
+	  bool ensureNativeTexture(const QSize& size, QImage::Format format) override {
+	    if (!size.isValid() || size.width() <= 0 || size.height() <= 0) {
+	      return false;
+	    }
+	    texture_size_ = size;
+	    texture_format_name_ = native_format_name_for_format(format);
+	    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_format(format);
+	    return true;
+	  }
+	  bool upload(const QImage& image) override {
+	    if (image.isNull()) {
+	      return false;
+	    }
+	    texture_size_ = image.size();
+	    texture_format_name_ = native_format_name_for_format(image.format());
+	    texture_bytes_per_pixel_ = native_bytes_per_pixel_for_format(image.format());
     upload_sizes_.push_back(texture_size_);
     ++upload_count_;
     return true;
@@ -998,13 +1025,13 @@ class FakeEditorPreviewTexture final : public EditorPreviewTexture {
   [[nodiscard]] QRect lastPartialUploadRect() const { return last_partial_upload_rect_; }
   [[nodiscard]] QRect lastPatchUploadRect() const { return last_patch_upload_rect_; }
 
- private:
-  [[nodiscard]] static const char* native_format_name_for_image(const QImage& image) {
-    return image.format() == QImage::Format_RGBA16FPx4 ? "rgba16float" : "bgra8unorm";
-  }
-  [[nodiscard]] static int native_bytes_per_pixel_for_image(const QImage& image) {
-    return image.format() == QImage::Format_RGBA16FPx4 ? 8 : 4;
-  }
+	 private:
+	  [[nodiscard]] static const char* native_format_name_for_format(QImage::Format format) {
+	    return format == QImage::Format_RGBA16FPx4 ? "rgba16float" : "bgra8unorm";
+	  }
+	  [[nodiscard]] static int native_bytes_per_pixel_for_format(QImage::Format format) {
+	    return format == QImage::Format_RGBA16FPx4 ? 8 : 4;
+	  }
 
   QSize texture_size_;
   const char* texture_format_name_ = "none";
@@ -1266,6 +1293,58 @@ int main(int argc, char** argv) {
       native_publish_controller.displayPreviewNativeRevision() <= 0 ||
       native_publish_sink.image(QStringLiteral("edited")).isNull()) {
     return fail("native preview upload should keep an edited image-provider publication for QML fallback paths");
+  }
+  const auto target_edge_generation_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          native_publish_controller);
+  const auto target_edge_intent_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+          native_publish_controller);
+  native_publish_controller.setPreviewTargetEdge(1800);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  if (native_publish_controller.previewTargetEdge() != 1800 ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          native_publish_controller) != target_edge_generation_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+          native_publish_controller) != target_edge_intent_count_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_active(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_pending(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_running(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_running(
+          native_publish_controller)) {
+    return fail("layout-only preview target edge changes should not submit render work");
+  }
+  native_publish_controller.setExposure(0.25);
+  const auto full_restore_active_before_viewport =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_running(
+          native_publish_controller);
+  if (!full_restore_active_before_viewport) {
+    return fail("exposure change should schedule a full-resolution restore before viewport test");
+  }
+  native_publish_controller.setPreviewViewport(0.10, 0.10, 0.50, 0.50, 512, true);
+  const auto full_restore_active_after_viewport =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          native_publish_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_running(
+          native_publish_controller);
+  if (!full_restore_active_after_viewport) {
+    return fail("layout-only viewport changes should not cancel full-resolution restore work");
+  }
+  if (!wait_for_preview_idle(native_publish_controller, 4000)) {
+    return fail("native publish controller should settle after viewport restore guard test");
   }
 
   photo_editor::desktop::EditorPreviewController zoom_native_controller;
@@ -2031,6 +2110,12 @@ int main(int argc, char** argv) {
           rapid_slider_controller)) {
     return fail("the first slider edit should schedule a settled full-resolution render");
   }
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_active(
+          rapid_slider_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_interval(
+          rapid_slider_controller) != 0) {
+    return fail("global slider edits should post their visible preview render immediately");
+  }
   const auto first_slider_interactive_request =
       photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(
           rapid_slider_controller);
@@ -2113,6 +2198,109 @@ int main(int argc, char** argv) {
       photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
           rapid_slider_controller) != first_slider_generation) {
     return fail("no-op slider changes should not emit edit intents or schedule renders");
+  }
+
+  photo_editor::desktop::EditorPreviewController masked_global_debounce_controller;
+  masked_global_debounce_controller.loadAsset(
+      QStringLiteral("masked-global-debounce"),
+      rapid_slider_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(masked_global_debounce_controller)) {
+    return fail("masked global debounce controller should finish its initial preview");
+  }
+  masked_global_debounce_controller.addMask(QStringLiteral("linear"));
+  masked_global_debounce_controller.setActiveMaskExposure(0.35);
+  if (!wait_for_preview_idle(masked_global_debounce_controller, 4000)) {
+    return fail("masked global debounce controller should settle its local mask preview");
+  }
+  QThread::msleep(220);
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+  masked_global_debounce_controller.setExposure(0.18);
+  const auto masked_global_full_request =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_request(
+          masked_global_debounce_controller);
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          masked_global_debounce_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_interval(
+          masked_global_debounce_controller) != 700 ||
+      masked_global_full_request.dirty_domain != QStringLiteral("global_tone_color") ||
+      !masked_global_full_request.full_resolution) {
+    return fail("global exposure edits over rendered masks should use the normal full-preview settle delay");
+  }
+  if (!wait_for_preview_idle(masked_global_debounce_controller, 4000)) {
+    return fail("masked global debounce controller should settle after global exposure render");
+  }
+
+  photo_editor::desktop::EditorPreviewController immediate_mask_feedback_controller;
+  immediate_mask_feedback_controller.loadAsset(
+      QStringLiteral("immediate-mask-feedback"),
+      rapid_slider_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(immediate_mask_feedback_controller)) {
+    return fail("immediate mask feedback controller should finish its initial preview");
+  }
+  immediate_mask_feedback_controller.addMask(QStringLiteral("linear"));
+  immediate_mask_feedback_controller.setActiveMaskExposure(0.27);
+  const auto immediate_mask_request =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_request(
+          immediate_mask_feedback_controller);
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_active(
+          immediate_mask_feedback_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_interval(
+          immediate_mask_feedback_controller) != 0 ||
+      immediate_mask_request.render_mode != QStringLiteral("live_preview") ||
+      immediate_mask_request.dirty_domain != QStringLiteral("mask_rasterization") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          immediate_mask_feedback_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          immediate_mask_feedback_controller)) {
+    return fail("active mask edits should post visible preview work immediately without scheduling full-resolution work");
+  }
+  if (!wait_for_preview_idle(immediate_mask_feedback_controller, 4000)) {
+    return fail("immediate mask feedback controller should settle after active mask preview");
+  }
+
+  photo_editor::desktop::EditorPreviewController immediate_layer_feedback_controller;
+  immediate_layer_feedback_controller.loadAsset(
+      QStringLiteral("immediate-layer-feedback"),
+      rapid_slider_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(immediate_layer_feedback_controller)) {
+    return fail("immediate layer feedback controller should finish its initial preview");
+  }
+  immediate_layer_feedback_controller.addMask(QStringLiteral("linear"));
+  if (immediate_layer_feedback_controller.photoLayerCount() != 1 ||
+      !immediate_layer_feedback_controller.setPhotoLayerAdjustmentValue(
+          0,
+          QStringLiteral("exposure"),
+          0.42)) {
+    return fail("immediate layer feedback controller should expose a layer-local exposure adjustment");
+  }
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::
+          photo_layer_adjustment_render_timer_active(immediate_layer_feedback_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              photo_layer_adjustment_render_timer_interval(immediate_layer_feedback_controller) !=
+          0 ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+          immediate_layer_feedback_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          immediate_layer_feedback_controller)) {
+    return fail("layer-local adjustment edits should post visible preview work immediately without scheduling full-resolution work");
+  }
+  if (!wait_for_preview_idle(immediate_layer_feedback_controller, 4000)) {
+    return fail("immediate layer feedback controller should settle after layer-local preview");
   }
 
   photo_editor::desktop::EditorPreviewController stale_full_preview_controller;
@@ -3347,6 +3535,8 @@ int main(int argc, char** argv) {
   const auto brush_raster_telemetry =
       photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
           brush_tile_controller);
+  const auto brush_tile_mask =
+      brush_tile_controller.maskStack().at(brush_tile_controller.activeMaskIndex()).toMap();
   if (brush_raster_telemetry.value(QStringLiteral("operation")).toString() !=
           QStringLiteral("brush_rasterization") ||
       brush_raster_telemetry.value(QStringLiteral("mask_raster_ms")).toLongLong() < 0 ||
@@ -3360,12 +3550,25 @@ int main(int argc, char** argv) {
       brush_raster_telemetry.value(QStringLiteral("dirty_region_width")).toDouble() <= 0.0 ||
       brush_raster_telemetry.value(QStringLiteral("dirty_region_area")).toDouble() <= 0.0 ||
       brush_raster_telemetry.value(QStringLiteral("raster_dirty_width")).toInt() <= 0 ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_final_raster_width")).toInt() !=
+          brush_tile_mask.value(QStringLiteral("segmentationWidth")).toInt() ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_final_raster_height")).toInt() !=
+          brush_tile_mask.value(QStringLiteral("segmentationHeight")).toInt() ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_dirty_rect_width")).toInt() <= 0 ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_dirty_rect_height")).toInt() <= 0 ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_dirty_rect_width")).toInt() !=
+          brush_raster_telemetry.value(QStringLiteral("raster_dirty_width")).toInt() ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_dirty_rect_height")).toInt() !=
+          brush_raster_telemetry.value(QStringLiteral("raster_dirty_height")).toInt() ||
+      !brush_raster_telemetry.value(QStringLiteral("brush_commit_source_revision_hash"))
+           .toString()
+           .startsWith(QStringLiteral("sha1:")) ||
+      brush_raster_telemetry.value(QStringLiteral("brush_commit_source_of_truth")).toString() !=
+          QStringLiteral("brushStrokes") ||
       brush_raster_telemetry.value(QStringLiteral("mask_tile_cache_entries")).toInt() <= 0 ||
       !brush_raster_telemetry.contains(QStringLiteral("fallback_reason"))) {
-    return fail("brush stroke commits should expose mask raster timing, dirty rect, cache, and fallback telemetry");
+    return fail("brush stroke commits should expose mask raster timing, final raster size, dirty rect, source revision, source-of-truth mode, cache, and fallback telemetry");
   }
-  const auto brush_tile_mask =
-      brush_tile_controller.maskStack().at(brush_tile_controller.activeMaskIndex()).toMap();
   const auto brush_tile_full_matte_bytes =
       brush_tile_mask.value(QStringLiteral("segmentationData")).toByteArray().size();
   if (brush_tile_mask.value(QStringLiteral("brushAlphaSourceContract")).toString() !=
@@ -3568,11 +3771,24 @@ int main(int argc, char** argv) {
       source_free_brush_telemetry.value(QStringLiteral("dirty_region_area")).toDouble() >= 0.25 ||
       source_free_brush_telemetry.value(QStringLiteral("raster_dirty_width")).toInt() <= 0 ||
       source_free_brush_telemetry.value(QStringLiteral("raster_dirty_height")).toInt() <= 0 ||
+      source_free_brush_telemetry.value(QStringLiteral("brush_commit_final_raster_width")).toInt() !=
+          source_free_brush_width ||
+      source_free_brush_telemetry.value(QStringLiteral("brush_commit_final_raster_height")).toInt() !=
+          source_free_brush_height ||
+      source_free_brush_telemetry.value(QStringLiteral("brush_commit_dirty_rect_width")).toInt() !=
+          source_free_brush_telemetry.value(QStringLiteral("raster_dirty_width")).toInt() ||
+      source_free_brush_telemetry.value(QStringLiteral("brush_commit_dirty_rect_height")).toInt() !=
+          source_free_brush_telemetry.value(QStringLiteral("raster_dirty_height")).toInt() ||
+      !source_free_brush_telemetry.value(QStringLiteral("brush_commit_source_revision_hash"))
+           .toString()
+           .startsWith(QStringLiteral("sha1:")) ||
+      source_free_brush_telemetry.value(QStringLiteral("brush_commit_source_of_truth")).toString() !=
+          QStringLiteral("brushStrokes") ||
       source_free_brush_telemetry.value(QStringLiteral("raster_dirty_width")).toInt() >=
           source_free_brush_width ||
       source_free_brush_telemetry.value(QStringLiteral("raster_dirty_height")).toInt() >=
           source_free_brush_height) {
-    return fail("manual brush commits with an existing raster matte should update only the dirty raster region without source decode");
+    return fail("manual brush commits with an existing raster matte should report final raster metadata and update only the dirty raster region without source decode");
   }
   if (!wait_for_preview_idle(brush_tile_controller)) {
     return fail("brush tile controller should settle after source-free manual brush rasterization");
@@ -4664,6 +4880,7 @@ int main(int argc, char** argv) {
   photo_editor::desktop::EditorPreviewController base_cache_controller;
   photo_editor::desktop::TestImageSink base_cache_sink;
   base_cache_controller.setImageProvider(&base_cache_sink);
+  base_cache_controller.setDiagnosticOverlaysRequested(true);
   QImage base_cache_source(20, 14, QImage::Format_ARGB32);
   base_cache_source.fill(QColor::fromRgb(112, 126, 138));
   const auto base_cache_path = runtime_root.filePath(QStringLiteral("base-cache-source.png"));
@@ -4756,6 +4973,33 @@ int main(int argc, char** argv) {
   if (display_cache_full_result.histogram_image.isNull() ||
       display_cache_full_result.histogram_image.format() != QImage::Format_RGBA16FPx4) {
     return fail("adjusted preview scopes should receive a high-precision histogram image before display quantization");
+  }
+  auto final_output_policy_request = adjusted_cache_tile_request;
+  final_output_policy_request.state.output_headroom = 2.0;
+  final_output_policy_request.state.output_gamut_mapping_enabled = false;
+  final_output_policy_request.state.output_gamut_mapping_policy = QStringLiteral("Clip");
+  final_output_policy_request.state.black_point_compensation_enabled = true;
+  final_output_policy_request.state.source_black_point = 0.02;
+  final_output_policy_request.state.output_black_point = 0.05;
+  final_output_policy_request.render_reason = QStringLiteral("output_policy_change");
+  final_output_policy_request.dirty_domain = QStringLiteral("display_transform");
+  const auto final_output_policy_result =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_preview_request_sync(
+          final_output_policy_request);
+  if (!final_output_policy_result.success ||
+      !final_output_policy_result.adjusted_cache_hit ||
+      final_output_policy_result.rendered_cache_key.isEmpty() ||
+      final_output_policy_result.rendered_cache_key ==
+          display_cache_full_result.rendered_cache_key) {
+    std::cerr << "final output policy result success=" << final_output_policy_result.success
+              << " adjusted=" << final_output_policy_result.adjusted_cache_hit
+              << " renderedKeyEmpty="
+              << final_output_policy_result.rendered_cache_key.isEmpty()
+              << " sameRenderedKey="
+              << (final_output_policy_result.rendered_cache_key ==
+                  display_cache_full_result.rendered_cache_key)
+              << '\n';
+    return fail("final output color policy should invalidate rendered previews while reusing adjusted working pixels");
   }
   auto superseded_rendered_cache_request = adjusted_cache_tile_request;
   superseded_rendered_cache_request.use_in_memory_preview = true;
@@ -5144,6 +5388,10 @@ int main(int argc, char** argv) {
           mask_preview_controller);
   if (!photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_draft(
           mask_preview_controller) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_active(
+          mask_preview_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_timer_interval(
+          mask_preview_controller) != 0 ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
           mask_preview_controller) ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
@@ -5161,7 +5409,7 @@ int main(int argc, char** argv) {
       active_mask_intent.dirty_domain != QStringLiteral("mask_rasterization") ||
       active_mask_intent.render_reason != QStringLiteral("mask_preview_change") ||
       active_mask_intent.schedule_full_resolution) {
-    return fail("active mask controls should emit preview-only typed mask-rasterization intents before rendering");
+    return fail("active mask controls should immediately emit preview-only typed mask-rasterization intents before rendering");
   }
 
   const auto rapid_mask_setting_intent_count_before =
@@ -5831,6 +6079,9 @@ int main(int argc, char** argv) {
   if (!photo_editor::desktop::EditorPreviewControllerTestAccess::
           photo_layer_adjustment_render_timer_active(layer_adjustment_controller) ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::
+              photo_layer_adjustment_render_timer_interval(layer_adjustment_controller) !=
+          0 ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
               photo_layer_adjustment_render_debounce_count(layer_adjustment_controller) <=
           layer_adjustment_debounce_count_before ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::
@@ -5848,7 +6099,7 @@ int main(int argc, char** argv) {
       photo_editor::desktop::EditorPreviewControllerTestAccess::
               photo_layer_adjustment_render_budget_ms(layer_adjustment_controller) !=
           16) {
-    return fail("rapid layer-local adjustment writes should update the model while deferring preview render submission");
+    return fail("rapid layer-local adjustment writes should update the model while posting preview render submission immediately");
   }
   const auto adjusted_selection_layer = layer_adjustment_controller.photoLayers().at(0).toMap();
   if (!almost_equal(adjusted_selection_layer.value(QStringLiteral("exposure")).toDouble(), 0.72) ||
@@ -6888,12 +7139,15 @@ int main(int argc, char** argv) {
   photo_editor::desktop::EditorPreviewController transaction_controller;
   transaction_controller.loadAsset(
       QStringLiteral("transaction-asset"),
-      QString(),
+      reset_visual_path,
       QString(),
       QString(),
       QString(),
       QString(),
       QString());
+  if (!wait_for_preview_idle(transaction_controller, 4000)) {
+    return fail("transaction controller should finish its initial preview before testing live drag previews");
+  }
   const auto transaction_generation_before =
       photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(transaction_controller);
   photo_editor::desktop::EditorPreviewControllerTestAccess::begin_edit_transaction(transaction_controller);
@@ -6901,12 +7155,24 @@ int main(int argc, char** argv) {
   transaction_controller.setContrast(10.0);
   if (photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(transaction_controller) !=
       transaction_generation_before) {
-    return fail("edit transactions should defer render generation invalidation while controls are changing");
+    return fail("edit transactions should defer final render generation invalidation while controls are changing");
+  }
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::
+          edit_transaction_interactive_preview_timer_active(transaction_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              edit_transaction_interactive_preview_request_count(transaction_controller) != 2) {
+    return fail("edit transactions should queue live interactive previews while coalescing final slider commit work");
   }
   photo_editor::desktop::EditorPreviewControllerTestAccess::end_edit_transaction(transaction_controller);
   if (photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(transaction_controller) !=
       transaction_generation_before + 1) {
     return fail("edit transactions should collapse multiple control changes into one render request");
+  }
+  if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+          edit_transaction_interactive_preview_timer_active(transaction_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+              edit_transaction_interactive_preview_request_count(transaction_controller) != 0) {
+    return fail("committing an edit transaction should cancel stale draft preview work before the exact final render");
   }
   if (!almost_equal(transaction_controller.exposure(), 0.5) ||
       !almost_equal(transaction_controller.contrast(), 10.0)) {
@@ -7116,9 +7382,9 @@ int main(int argc, char** argv) {
     QImage source;
     std::uint64_t expected_hash;
   } built_in_preset_renders[] = {
-      {"Clean Portrait", built_in_preset_portrait_source_image(), 3730896185020213990ULL},
-      {"Landscape Pop", built_in_preset_landscape_source_image(), 7222374135364362881ULL},
-      {"Clean Black and White", built_in_preset_portrait_source_image(), 17993461852248404061ULL},
+      {"Clean Portrait", built_in_preset_portrait_source_image(), 4967665468636011849ULL},
+      {"Landscape Pop", built_in_preset_landscape_source_image(), 17877839669455383664ULL},
+      {"Clean Black and White", built_in_preset_portrait_source_image(), 16607149064084717141ULL},
   };
   for (const auto& preset_render : built_in_preset_renders) {
     const auto rendered =
@@ -11663,6 +11929,75 @@ int main(int argc, char** argv) {
       superseded_smart_telemetry.value(QStringLiteral("cancelled")).toBool()) {
     return fail("superseded smart selection commits should cancel stale results and publish only the newest async job target");
   }
+
+  photo_editor::desktop::EditorPreviewController stale_mask_change_smart_commit_controller;
+  stale_mask_change_smart_commit_controller.loadAsset(
+      QStringLiteral("asset-stale-mask-change-smart-commit"),
+      smart_select_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(stale_mask_change_smart_commit_controller)) {
+    return fail("stale mask-change smart commit controller should finish its initial preview");
+  }
+  const auto stale_mask_change_cancelled_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::smart_selection_cancelled_count(
+          stale_mask_change_smart_commit_controller);
+  stale_mask_change_smart_commit_controller.smartSelectObjectAt(0.18, 0.5, true);
+  const auto stale_mask_change_request_generation =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::smart_selection_job_generation(
+          stale_mask_change_smart_commit_controller);
+  if (!stale_mask_change_smart_commit_controller.processing() ||
+      stale_mask_change_smart_commit_controller.maskCount() != 0) {
+    return fail("smart selection commit should be pending before a mask-stack change invalidates it");
+  }
+  stale_mask_change_smart_commit_controller.startSelectionBrush(false);
+  const auto stale_mask_change_revision_after_brush =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::mask_work_state_revision(
+          stale_mask_change_smart_commit_controller);
+  auto stale_mask_change_elapsed_ms = 0;
+  while (stale_mask_change_elapsed_ms < 2000 &&
+         photo_editor::desktop::EditorPreviewControllerTestAccess::smart_selection_cancelled_count(
+             stale_mask_change_smart_commit_controller) == stale_mask_change_cancelled_before) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    QThread::msleep(25);
+    stale_mask_change_elapsed_ms += 25;
+  }
+  const auto stale_mask_change_telemetry =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
+          stale_mask_change_smart_commit_controller);
+  if (stale_mask_change_smart_commit_controller.maskCount() != 1 ||
+      stale_mask_change_smart_commit_controller.activeMaskKind() != QStringLiteral("brush") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::mask_work_state_revision(
+          stale_mask_change_smart_commit_controller) != stale_mask_change_revision_after_brush ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::smart_selection_cancelled_count(
+          stale_mask_change_smart_commit_controller) != stale_mask_change_cancelled_before + 1 ||
+      stale_mask_change_telemetry.value(QStringLiteral("operation")).toString() !=
+          QStringLiteral("smart_selection") ||
+      !stale_mask_change_telemetry.value(QStringLiteral("cancelled")).toBool() ||
+      stale_mask_change_telemetry.value(QStringLiteral("cancellation_reason")).toString() !=
+          QStringLiteral("stale_result") ||
+      stale_mask_change_telemetry.value(QStringLiteral("stage")).toString() !=
+          QStringLiteral("async_commit_publish") ||
+      stale_mask_change_telemetry.value(QStringLiteral("job_generation")).toInt() !=
+          stale_mask_change_request_generation ||
+      stale_mask_change_telemetry.value(QStringLiteral("async_job_kind")).toString() !=
+          QStringLiteral("smart_selection") ||
+      stale_mask_change_telemetry.value(QStringLiteral("async_job_stage")).toString() !=
+          QStringLiteral("async_commit_publish") ||
+      stale_mask_change_telemetry.value(QStringLiteral("async_job_asset_id")).toString() !=
+          QStringLiteral("asset-stale-mask-change-smart-commit") ||
+      stale_mask_change_telemetry.value(QStringLiteral("async_job_file_path")).toString() !=
+          smart_select_path ||
+      !stale_mask_change_telemetry.value(QStringLiteral("async_job_state_signature"))
+           .toString()
+           .startsWith(QStringLiteral("sha1:")) ||
+      !stale_mask_change_smart_commit_controller.status().contains(QStringLiteral("canceled"))) {
+    return fail("smart selection commits should reject stale async results after the active mask stack changes");
+  }
+
   controller.updateSmartSelectPreview(0.18, 0.5);
   const auto smart_outline_hits_before =
       photo_editor::desktop::EditorPreviewControllerTestAccess::
@@ -15303,6 +15638,12 @@ int main(int argc, char** argv) {
           QStringLiteral("full-resolution-render") ||
       full_res_rebuilt_width != 192 ||
       full_res_rebuilt_height != 128 ||
+      full_res_rebuilt_mask.value(QStringLiteral("scaled_matte_rebuild_ms")).toLongLong() < 0 ||
+      full_res_rebuilt_mask.value(QStringLiteral("scaled_matte_rebuild_pixels")).toLongLong() !=
+          192 * 128 ||
+      full_res_rebuilt_mask.value(QStringLiteral("full_resolution_matte_rebuild_ms")).toLongLong() < 0 ||
+      full_res_rebuilt_mask.value(QStringLiteral("full_resolution_matte_rebuild_pixels")).toLongLong() !=
+          192 * 128 ||
       selected_pixel_count(full_res_rebuilt_data) <= 0 ||
       mask_value_at(full_res_rebuilt_data, full_res_rebuilt_width, full_res_rebuilt_height, 0.34, 0.48) < 96 ||
       mask_value_at(full_res_rebuilt_data, full_res_rebuilt_width, full_res_rebuilt_height, 0.61, 0.65) < 96 ||
@@ -15923,10 +16264,17 @@ int main(int argc, char** argv) {
     return fail("selection refinement preview should return to the refined selection preview");
   }
   refinement_preview_controller.setMaskPreviewMode(QStringLiteral("refine edge"));
+  const auto refinement_edge_trace = refinement_preview_controller.activeMaskOutlineTrace();
   if (refinement_preview_controller.maskPreviewMode() != QStringLiteral("overlay") ||
       !refinement_preview_controller.activeMaskPreviewSource().isEmpty() ||
-      refinement_preview_controller.activeMaskOutlinePaths().isEmpty()) {
-    return fail("selection refinement edge preview requests should normalize to source-free clean overlay rendering");
+      refinement_preview_controller.activeMaskOutlinePaths().isEmpty() ||
+      refinement_edge_trace.value(QStringLiteral("operation")).toString() != QStringLiteral("refine_edge") ||
+      refinement_edge_trace.value(QStringLiteral("stage")).toString() != QStringLiteral("refine_edge") ||
+      refinement_edge_trace.value(QStringLiteral("elapsed_ms")).toLongLong() < 0 ||
+      refinement_edge_trace.value(QStringLiteral("refine_edge_worker_elapsed_ms")).toLongLong() < 0 ||
+      refinement_edge_trace.value(QStringLiteral("source_event")).toString() !=
+          QStringLiteral("active_mask_outline_trace")) {
+    return fail("selection refinement edge preview requests should normalize to source-free clean overlay rendering with standard refine-edge timing telemetry");
   }
 
   photo_editor::desktop::EditorPreviewController no_refinement_delta_controller;

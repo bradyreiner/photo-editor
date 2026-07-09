@@ -26,6 +26,16 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
   [[nodiscard]] bool available() const override { return available_; }
   [[nodiscard]] const char* backendName() const override { return "metal"; }
 
+  bool ensureNativeTexture(const QSize& size, QImage::Format format) override {
+    if (!available_ || !size.isValid() || size.width() <= 0 || size.height() <= 0) {
+      return false;
+    }
+
+    @autoreleasepool {
+      return ensureTexture(size, preferredPixelFormatForImageFormat(format));
+    }
+  }
+
   bool upload(const QImage& image) override {
     if (!available_ || image.isNull() || image.width() <= 0 || image.height() <= 0) {
       clear();
@@ -176,7 +186,11 @@ class MetalEditorPreviewTexture final : public EditorPreviewTexture {
   }
 
   [[nodiscard]] static MTLPixelFormat preferredPixelFormatForImage(const QImage& image) {
-    return isDirectRgba16FloatUploadFormat(image.format())
+    return preferredPixelFormatForImageFormat(image.format());
+  }
+
+  [[nodiscard]] static MTLPixelFormat preferredPixelFormatForImageFormat(QImage::Format format) {
+    return isDirectRgba16FloatUploadFormat(format)
                ? MTLPixelFormatRGBA16Float
                : MTLPixelFormatBGRA8Unorm;
   }
