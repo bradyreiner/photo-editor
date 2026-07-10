@@ -5,7 +5,7 @@
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>PhotoEditor</string>
+  <string>@VIREL_PRODUCT_NAME@</string>
   <key>CFBundleExecutable</key>
   <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
   <key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>PhotoEditor</string>
+  <string>@VIREL_PRODUCT_NAME@</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -21,7 +21,17 @@
   <key>CFBundleVersion</key>
   <string>@PROJECT_VERSION@</string>
   <key>LSMinimumSystemVersion</key>
-  <string>10.13</string>
+  <string>@VIREL_MACOS_MINIMUM_VERSION@</string>
+  <key>CFBundleIconFile</key>
+  <string>VirelStudio</string>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © 2026 @VIREL_VENDOR_NAME@. All rights reserved.</string>
+  <key>VirelSupportURL</key>
+  <string>@VIREL_SUPPORT_URL@</string>
+  <key>VirelPrivacyURL</key>
+  <string>@VIREL_PRIVACY_URL@</string>
+  <key>VirelTermsURL</key>
+  <string>@VIREL_TERMS_URL@</string>
 @PHOTO_EDITOR_MACOS_SPARKLE_PLIST_KEYS@
 </dict>
 </plist>

@@ -52,6 +52,57 @@ struct EditorPreviewControllerTestAccess {
       const EditorPreviewController& controller) {
     return controller.smart_select_preview_timer_.isActive();
   }
+
+  static bool smart_select_commit_request_pending(
+      const EditorPreviewController& controller) {
+    return controller.smart_select_commit_request_pending_;
+  }
+
+  static bool smart_select_commit_pending(
+      const EditorPreviewController& controller) {
+    return controller.smart_select_commit_pending_;
+  }
+
+  static bool interactive_render_pending(const EditorPreviewController& controller) {
+    return controller.interactive_request_pending_;
+  }
+
+  static bool full_render_pending(const EditorPreviewController& controller) {
+    return controller.full_request_pending_;
+  }
+
+  static bool overlay_render_pending(const EditorPreviewController& controller) {
+    return controller.overlay_request_pending_;
+  }
+
+  static int render_generation(const EditorPreviewController& controller) {
+    return controller.render_generation_;
+  }
+
+  static EditIntent last_edit_intent(const EditorPreviewController& controller) {
+    return controller.last_edit_intent_;
+  }
+
+  static void seed_pending_asset_scoped_work(EditorPreviewController& controller) {
+    controller.interactive_request_pending_ = true;
+    controller.full_request_pending_ = true;
+    controller.overlay_request_pending_ = true;
+    controller.pending_interactive_request_ = controller.currentRenderRequest(false);
+    controller.pending_full_request_ = controller.currentRenderRequest(true);
+    controller.pending_overlay_request_ = controller.currentRenderRequest(false);
+    controller.smart_select_preview_request_pending_ = true;
+    controller.pending_smart_select_preview_request_ = {};
+    controller.smart_select_commit_request_pending_ = true;
+    controller.pending_smart_select_commit_request_ = {};
+    controller.smart_select_commit_pending_ = true;
+    controller.smart_select_commit_intent_ = QStringLiteral("selection");
+    controller.smart_select_commit_create_new_ = true;
+    controller.updateProcessingState();
+  }
+
+  static void cancel_pending_asset_scoped_work(EditorPreviewController& controller) {
+    controller.cancelPendingAssetScopedWork();
+  }
 };
 
 }  // namespace photo_editor::desktop
@@ -276,6 +327,46 @@ int main(int argc, char** argv) {
     return fail("smart commit should reject stale async publish results after mask-stack changes");
   }
 
+  photo_editor::desktop::EditorPreviewController asset_switch_cancel_controller;
+  asset_switch_cancel_controller.loadAsset(
+      QStringLiteral("asset-switch-cancel-focused"),
+      source_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  if (!wait_for_preview_idle(asset_switch_cancel_controller)) {
+    return fail("asset switch cancellation proof should start from an idle preview");
+  }
+  const auto asset_switch_generation_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          asset_switch_cancel_controller);
+  photo_editor::desktop::EditorPreviewControllerTestAccess::seed_pending_asset_scoped_work(
+      asset_switch_cancel_controller);
+  if (!asset_switch_cancel_controller.processing()) {
+    return fail("asset switch cancellation proof should seed pending render and smart selection work");
+  }
+  photo_editor::desktop::EditorPreviewControllerTestAccess::cancel_pending_asset_scoped_work(
+      asset_switch_cancel_controller);
+  if (asset_switch_cancel_controller.processing() ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          asset_switch_cancel_controller) <= asset_switch_generation_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::interactive_render_pending(
+          asset_switch_cancel_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+          asset_switch_cancel_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::overlay_render_pending(
+          asset_switch_cancel_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          smart_select_preview_request_pending(asset_switch_cancel_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          smart_select_commit_request_pending(asset_switch_cancel_controller) ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          smart_select_commit_pending(asset_switch_cancel_controller)) {
+    return fail("asset-scoped cancellation should invalidate stale renders and clear queued smart selection work before the next image loads");
+  }
+
   photo_editor::desktop::EditorPreviewController scheduled_preview_controller;
   scheduled_preview_controller.loadAsset(
       QStringLiteral("asset-smart-scheduled-focused"),
@@ -360,6 +451,9 @@ int main(int argc, char** argv) {
   if (!wait_for_mask_count(prompt_parity_controller, 1)) {
     return fail("smart prompt parity commit should publish an object mask");
   }
+  const auto smart_commit_intent =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::last_edit_intent(
+          prompt_parity_controller);
   const auto committed_mask =
       prompt_parity_controller.maskStack().at(prompt_parity_controller.activeMaskIndex()).toMap();
   const auto committed_metadata =
@@ -394,6 +488,12 @@ int main(int argc, char** argv) {
       committed_metadata.value(QStringLiteral("rasterCoordinateSpace")).toString() !=
           QStringLiteral("source-alpha-raster")) {
     return fail("committed smart object selection should store raster, source revision, runtime, prompt, and coordinate-space metadata");
+  }
+  if (smart_commit_intent.operation != QStringLiteral("smart_selection") ||
+      smart_commit_intent.dirty_domain != QStringLiteral("mask_rasterization") ||
+      smart_commit_intent.render_reason != QStringLiteral("mask_commit") ||
+      !smart_commit_intent.schedule_full_resolution) {
+    return fail("committed smart selections should schedule the high-quality mask render instead of a preview-only mask update");
   }
   if (committed_metadata_prompts != hover_prompts ||
       committed_mask.value(QStringLiteral("generatedAlphaPromptType")).toString() !=

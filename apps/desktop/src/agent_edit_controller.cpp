@@ -3942,6 +3942,8 @@ QVariantMap AgentEditController::modelInstallProgress() const {
 
 QVariantMap AgentEditController::lastRunReport() const { return last_run_report_; }
 
+QVariantList AgentEditController::runEvents() const { return run_events_; }
+
 QVariantList AgentEditController::runHistory() const { return run_history_; }
 
 bool AgentEditController::awaitingUserInput() const {
@@ -4052,9 +4054,12 @@ void AgentEditController::reloadStyles() {
 
 void AgentEditController::reloadModels() {
   available_models_ = available_agent_local_models();
-  if (!selected_model_id_.isEmpty() &&
-      model_metadata_by_id(available_models_, selected_model_id_).isEmpty()) {
-    selected_model_id_ = default_agent_local_model_id();
+  const auto preferred_model_id = default_agent_local_model_id();
+  if (selected_model_id_.isEmpty() ||
+      model_metadata_by_id(available_models_, selected_model_id_).isEmpty() ||
+      (selected_model_id_ == QStringLiteral("rulebook-deterministic") &&
+       preferred_model_id != selected_model_id_)) {
+    selected_model_id_ = preferred_model_id;
     emit selectedModelChanged();
   }
   emit availableModelsChanged();
@@ -4105,7 +4110,7 @@ QVariantMap AgentEditController::refreshMcpTools() {
   AgentMcpClient client;
   client.setEndpoint(mcp_endpoint_);
   client.setTimeoutMs(3000);
-  client.setCancellationPredicate([this]() { return cancellation_requested_; });
+  client.setCancellationPredicate([this]() { return cancellation_requested_.load(); });
   const auto tools_report = client.refreshToolCache(QStringLiteral("agent-ui-status"));
   if (!tools_report.value(QStringLiteral("ok")).toBool()) {
     const auto error = tools_report.value(QStringLiteral("error")).toString();
@@ -6432,6 +6437,9 @@ QVariantMap AgentEditController::planDraftForScope(
       mcp_context.value(QStringLiteral("toolPhase"), QStringLiteral("sample")).toString();
   request.strategy_phase = mcp_tool_phase;
   request.memory_packet = memoryPacketForPhase(mcp_tool_phase);
+  request.cancellation_requested = [this]() {
+    return cancellation_requested_.load();
+  };
   const auto mcp_allowed_tools = mcp_context.value(QStringLiteral("allowedTools")).toStringList();
   const auto mcp_tool_budget = mcp_tool_budget_report(
       mcp_tool_phase,
@@ -6449,7 +6457,7 @@ QVariantMap AgentEditController::planDraftForScope(
         mcp_context.value(QStringLiteral("allowedTools")).toStringList(),
         request.available_tool_schemas,
         plan.tool_call_plan,
-        [this]() { return cancellation_requested_; });
+        [this]() { return cancellation_requested_.load(); });
     model_tool_plan_calls = mcp_model_tool_plan_call_records(model_tool_plan);
     auto follow_up_request = request;
     follow_up_request.allow_tool_call_plan = false;
@@ -6466,6 +6474,13 @@ QVariantMap AgentEditController::planDraftForScope(
   }
   if (!plan.ok) {
     auto failed = result_map(false, {plan.error_message});
+    const auto transport = plan.prompt_audit.value(QStringLiteral("transport")).toMap();
+    failed.insert(QStringLiteral("modelId"), plan.model_id);
+    failed.insert(QStringLiteral("modelPromptAudit"), plan.prompt_audit);
+    failed.insert(QStringLiteral("modelRunnerMode"), QStringLiteral("worker-thread"));
+    failed.insert(QStringLiteral("uiEventPumpCount"), worker_result.ui_event_pump_count);
+    failed.insert(QStringLiteral("retryable"), transport.value(QStringLiteral("retryable")));
+    failed.insert(QStringLiteral("errorCode"), transport.value(QStringLiteral("errorCode")));
     failed.insert(QStringLiteral("mcpToolPhase"), mcp_tool_phase);
     failed.insert(QStringLiteral("mcpAllowedToolNames"), mcp_allowed_tools);
     failed.insert(QStringLiteral("mcpAvailableToolCount"), request.available_tool_schemas.size());
@@ -6711,7 +6726,67 @@ QVariantMap AgentEditController::runDraftForScope(
   setRunning(true);
   setErrorMessage(QString());
   setStatus(QStringLiteral("Planning draft"));
+  beginRunEvents(scope);
   rollback_on_cancel_ = false;
+  const auto selected_model = model_metadata_by_id(available_models_, selected_model_id_);
+  const auto fake_model_transport =
+      !qEnvironmentVariable("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON").trimmed().isEmpty() ||
+      !qEnvironmentVariable("PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_SEQUENCE_JSON").trimmed().isEmpty();
+  if (selected_model.value(QStringLiteral("backend")).toString() == QStringLiteral("ollama") &&
+      !fake_model_transport) {
+    appendRunEvent(
+        QStringLiteral("connect"),
+        QStringLiteral("Connect"),
+        QStringLiteral("running"),
+        QStringLiteral("Checking the local model before preparing the edit."),
+        QVariantMap{{QStringLiteral("modelId"), selected_model_id_}});
+    const auto model_probe = probeSelectedModel();
+    if (!model_probe.value(QStringLiteral("ok")).toBool()) {
+      const auto reason = model_probe
+                              .value(
+                                  QStringLiteral("statusReason"),
+                                  QStringLiteral("The selected local model is not reachable."))
+                              .toString();
+      const auto transport = model_probe.value(QStringLiteral("transport")).toMap();
+      appendRunEvent(
+          QStringLiteral("connect"),
+          QStringLiteral("Connect"),
+          QStringLiteral("failed"),
+          reason,
+          transport);
+      auto unavailable = result_map(false, {reason});
+      const auto run_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+      unavailable.insert(QStringLiteral("mode"), QStringLiteral("draft"));
+      unavailable.insert(QStringLiteral("runId"), run_id);
+      unavailable.insert(QStringLiteral("scope"), normalized_agent_scope(scope));
+      unavailable.insert(QStringLiteral("modelId"), selected_model_id_);
+      unavailable.insert(QStringLiteral("modelBackend"), QStringLiteral("ollama"));
+      unavailable.insert(QStringLiteral("modelProbe"), model_probe);
+      unavailable.insert(
+          QStringLiteral("errorCode"),
+          transport.value(QStringLiteral("errorCode"), QStringLiteral("connection_failed")));
+      unavailable.insert(QStringLiteral("retryable"), true);
+      unavailable.insert(QStringLiteral("draftActive"), draftActive());
+      unavailable.insert(QStringLiteral("runEvents"), run_events_);
+      finalize_timing(&unavailable, started_at_utc, run_timer.elapsed(), {});
+      write_agent_run_manifest(
+          &unavailable,
+          selectedStyle(),
+          selected_model,
+          selected_model_id_);
+      setRunning(false);
+      setStatus(QStringLiteral("Local model unavailable"));
+      setErrorMessage(reason);
+      setLastRunReport(unavailable);
+      return unavailable;
+    }
+    appendRunEvent(
+        QStringLiteral("connect"),
+        QStringLiteral("Connect"),
+        QStringLiteral("complete"),
+        QStringLiteral("The local model is ready."),
+        model_probe.value(QStringLiteral("transport")).toMap());
+  }
   QElapsedTimer mcp_timer;
   mcp_timer.start();
   auto mcp_discovery = ensureMcpReady(QStringLiteral("draft-run"), 3);
@@ -6734,9 +6809,27 @@ QVariantMap AgentEditController::runDraftForScope(
       mcp_endpoint_,
       mcp_endpoint_kind_,
       QStringLiteral("agent-run-observe"),
-      [this]() { return cancellation_requested_; });
+      [this]() { return cancellation_requested_.load(); });
   mcp_observation.insert(QStringLiteral("durationMs"), mcp_observation_timer.elapsed());
   const auto mcp_observation_tool_calls = mcp_observation_tool_call_records(mcp_observation);
+  appendRunEvent(
+      QStringLiteral("observe"),
+      QStringLiteral("Observe"),
+      QStringLiteral("complete"),
+      QStringLiteral("Collected photo context and inspected the editor tools available for this run."),
+      QVariantMap{
+          {QStringLiteral("assetCount"), mcp_phase_asset_count},
+          {QStringLiteral("mcpReady"), mcp_discovery.value(QStringLiteral("ready"))},
+          {QStringLiteral("toolCount"), mcp_discovery.value(QStringLiteral("toolCount"))},
+      });
+  appendRunEvent(
+      QStringLiteral("plan"),
+      QStringLiteral("Plan"),
+      QStringLiteral("running"),
+      QStringLiteral("Asking the selected local model for a constrained edit plan."),
+      QVariantMap{{QStringLiteral("modelId"), selected_model_id_}});
+  const auto model_tool_planning_enabled =
+      selected_model.value(QStringLiteral("toolCallPlanning"), true).toBool();
   const QVariantMap mcp_planning_context{
       {QStringLiteral("endpoint"), mcp_endpoint_},
       {QStringLiteral("endpointKind"), mcp_endpoint_kind_},
@@ -6744,9 +6837,20 @@ QVariantMap AgentEditController::runDraftForScope(
       {QStringLiteral("toolPhase"), mcp_tool_phase},
       {QStringLiteral("allowedTools"), mcp_allowed_tool_names},
       {QStringLiteral("allowToolCallPlan"),
-       mcp_discovery.value(QStringLiteral("ready")).toBool() && !mcp_available_tool_schemas.isEmpty()},
-      {QStringLiteral("availableToolSchemas"), mcp_available_tool_schemas},
-      {QStringLiteral("priorToolResults"), mcp_observation.value(QStringLiteral("toolReports"))},
+       model_tool_planning_enabled &&
+           mcp_discovery.value(QStringLiteral("ready")).toBool() &&
+           !mcp_available_tool_schemas.isEmpty()},
+      {QStringLiteral("availableToolSchemas"),
+       model_tool_planning_enabled ? mcp_available_tool_schemas : QVariantList{}},
+      {QStringLiteral("priorToolResults"),
+       QVariantList{
+           QVariantMap{
+               {QStringLiteral("kind"), QStringLiteral("mcp-observation-summary")},
+               {QStringLiteral("ready"), mcp_discovery.value(QStringLiteral("ready"))},
+               {QStringLiteral("successCount"), mcp_observation.value(QStringLiteral("successCount"))},
+               {QStringLiteral("toolNames"), mcp_observation.value(QStringLiteral("toolNames"))},
+           },
+       }},
   };
   QElapsedTimer plan_timer;
   plan_timer.start();
@@ -6760,7 +6864,16 @@ QVariantMap AgentEditController::runDraftForScope(
   plan.insert(QStringLiteral("mcpAllowedToolNames"), mcp_allowed_tool_names);
   plan.insert(QStringLiteral("mcpAvailableToolCount"), mcp_available_tool_schemas.size());
   plan.insert(QStringLiteral("mcpEndpointKind"), mcp_discovery.value(QStringLiteral("endpointKind")));
-  if (!plan.value(QStringLiteral("ok")).toBool()) {
+  const auto planning_cancelled =
+      cancellation_requested_.load() ||
+      plan.value(QStringLiteral("errorCode")).toString() == QStringLiteral("cancelled");
+  if (!plan.value(QStringLiteral("ok")).toBool() && !planning_cancelled) {
+    appendRunEvent(
+        QStringLiteral("plan"),
+        QStringLiteral("Plan"),
+        QStringLiteral("failed"),
+        plan.value(QStringLiteral("errors")).toStringList().join(QStringLiteral("; ")),
+        QVariantMap{{QStringLiteral("modelId"), selected_model_id_}});
     const auto errors = plan.value(QStringLiteral("errors")).toStringList();
     QVariantList failure_tool_calls{tool_call_record(
         QStringLiteral("mcp.tools/list"),
@@ -6802,6 +6915,25 @@ QVariantMap AgentEditController::runDraftForScope(
     setErrorMessage(errors.join(QStringLiteral("; ")));
     setLastRunReport(plan);
     return plan;
+  }
+  if (planning_cancelled) {
+    appendRunEvent(
+        QStringLiteral("plan"),
+        QStringLiteral("Plan"),
+        QStringLiteral("canceled"),
+        QStringLiteral("Stopped the local model request. No edits were applied."),
+        QVariantMap{{QStringLiteral("modelId"), selected_model_id_}});
+  } else {
+    appendRunEvent(
+        QStringLiteral("plan"),
+        QStringLiteral("Plan"),
+        QStringLiteral("complete"),
+        plan.value(QStringLiteral("planSummary")).toString(),
+        QVariantMap{
+            {QStringLiteral("modelId"), plan.value(QStringLiteral("modelId"))},
+            {QStringLiteral("citationCount"),
+             plan.value(QStringLiteral("styleConstraintCitations")).toList().size()},
+        });
   }
   if (cancellation_requested_) {
     const auto cancellation_reason = cancellation_reason_.trimmed().isEmpty()
@@ -6924,6 +7056,9 @@ QVariantMap AgentEditController::runDraftForScope(
       request.user_instructions = plan_instructions;
       request.strategy_phase = QStringLiteral("batch");
       request.memory_packet = memoryPacketForPhase(QStringLiteral("batch"));
+      request.cancellation_requested = [this]() {
+        return cancellation_requested_.load();
+      };
       const auto worker_result = plan_agent_recipe_patch_on_worker(request);
       if (cancellation_requested_) {
         break;
@@ -7577,6 +7712,20 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
   setRunning(true);
   setErrorMessage(QString());
   setStatus(QStringLiteral("Applying draft"));
+  appendRunEvent(
+      QStringLiteral("constrain"),
+      QStringLiteral("Constrain"),
+      QStringLiteral("complete"),
+      QStringLiteral("Checked the proposed recipe against style rules, permissions, and recipe schemas."),
+      QVariantMap{
+          {QStringLiteral("patchGroupCount"), patch.size()},
+          {QStringLiteral("perAssetPatchCount"), patches_by_asset_id.size()},
+      });
+  appendRunEvent(
+      QStringLiteral("act"),
+      QStringLiteral("Apply draft"),
+      QStringLiteral("running"),
+      QStringLiteral("Rendering a reversible draft without committing it."));
 
   QStringList errors;
   if (catalog_model_ == nullptr) {
@@ -7835,6 +7984,15 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
         break;
       }
 
+      appendRunEvent(
+          QStringLiteral("render"),
+          QStringLiteral("Render proof"),
+          QStringLiteral("running"),
+          QStringLiteral("Rendering attempt %1 for %2.").arg(iteration + 1).arg(asset_id),
+          QVariantMap{
+              {QStringLiteral("assetId"), asset_id},
+              {QStringLiteral("attempt"), iteration + 1},
+          });
       image_validation = render_agent_proof_artifacts(
           asset.value(QStringLiteral("filePath")).toString(),
           original_state,
@@ -7847,6 +8005,27 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       auto iteration_warnings =
           image_validation.value(QStringLiteral("warnings")).toStringList();
       const auto quality_score = edit_loop_quality_score(image_validation);
+      appendRunEvent(
+          QStringLiteral("validate"),
+          QStringLiteral("Verify result"),
+          image_validation.value(QStringLiteral("ok")).toBool()
+              ? QStringLiteral("complete")
+              : QStringLiteral("failed"),
+          image_validation.value(QStringLiteral("warnings")).toStringList().isEmpty()
+              ? QStringLiteral("The rendered proof passed deterministic image and recipe checks.")
+              : image_validation.value(QStringLiteral("warnings")).toStringList().first(),
+          QVariantMap{
+              {QStringLiteral("assetId"), asset_id},
+              {QStringLiteral("attempt"), iteration + 1},
+              {QStringLiteral("qualityScorePercent"),
+               static_cast<int>(std::round(quality_score * 100.0))},
+              {QStringLiteral("warningCount"),
+               image_validation.value(QStringLiteral("warnings")).toStringList().size()},
+              {QStringLiteral("afterProofPath"),
+               image_validation.value(QStringLiteral("artifacts"))
+                   .toMap()
+                   .value(QStringLiteral("afterProofPath"))},
+          });
       const auto previous_best_quality_score = best_quality_score;
       final_quality_score = quality_score;
       if (quality_score > best_quality_score) {
@@ -7870,6 +8049,9 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
             repair_context.value(QStringLiteral("userInstructions")).toString();
         critique_request.validation_report = image_validation;
         critique_request.previous_attempts = edit_loop_attempts;
+        critique_request.cancellation_requested = [this]() {
+          return cancellation_requested_.load();
+        };
         const auto critique = critique_agent_rendered_proof(critique_request);
         model_proof_critique.insert(QStringLiteral("mode"), QStringLiteral("model-proof-critique"));
         model_proof_critique.insert(QStringLiteral("ok"), critique.ok);
@@ -7922,6 +8104,20 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
                 {QStringLiteral("issueCount"), critique.issues.size()},
                 {QStringLiteral("repairHintCount"), critique.repair_hints.size()},
                 {QStringLiteral("error"), critique.error_message},
+            });
+        appendRunEvent(
+            QStringLiteral("model-review"),
+            QStringLiteral("Model review"),
+            critique.ok && critique.pass ? QStringLiteral("complete")
+                                         : critique.ok ? QStringLiteral("warning")
+                                                       : QStringLiteral("failed"),
+            critique.summary.trimmed().isEmpty() ? critique.error_message : critique.summary,
+            QVariantMap{
+                {QStringLiteral("assetId"), asset_id},
+                {QStringLiteral("attempt"), iteration + 1},
+                {QStringLiteral("modelId"), critique.model_id},
+                {QStringLiteral("pass"), critique.pass},
+                {QStringLiteral("needsUserReview"), critique.needs_user_review},
             });
       }
       const auto attempt_needs_user_review =
@@ -8033,6 +8229,16 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
       auto revised_patch = QVariantMap{};
       auto model_repair_used_this_iteration = false;
       if (model_repair_count < kMaxModelRepairTurnsPerAsset && !repair_context.isEmpty()) {
+        appendRunEvent(
+            QStringLiteral("repair"),
+            QStringLiteral("Repair"),
+            QStringLiteral("running"),
+            QStringLiteral("Sending compact validation feedback back to the local model."),
+            QVariantMap{
+                {QStringLiteral("assetId"), asset_id},
+                {QStringLiteral("attempt"), iteration + 1},
+                {QStringLiteral("warningCount"), iteration_warnings.size()},
+            });
         auto repair_report = model_repair_recipe_patch_from_validation(
             repair_context,
             asset,
@@ -8061,6 +8267,22 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
           ++model_repair_count;
           model_repair_used_this_iteration = true;
         }
+        appendRunEvent(
+            QStringLiteral("repair"),
+            QStringLiteral("Repair"),
+            repair_report.value(QStringLiteral("ok")).toBool()
+                ? QStringLiteral("complete")
+                : QStringLiteral("warning"),
+            repair_report.value(QStringLiteral("ok")).toBool()
+                ? QStringLiteral("The model produced a revised constrained patch for the next proof.")
+                : repair_report.value(QStringLiteral("errors"))
+                      .toStringList()
+                      .join(QStringLiteral("; ")),
+            QVariantMap{
+                {QStringLiteral("assetId"), asset_id},
+                {QStringLiteral("attempt"), iteration + 1},
+                {QStringLiteral("modelId"), repair_context.value(QStringLiteral("modelId"))},
+            });
       }
       if (revised_patch.isEmpty()) {
         revised_patch = revise_recipe_patch_from_validation(final_patch, image_validation);
@@ -8559,6 +8781,24 @@ QVariantMap AgentEditController::applyDraftRecipePatchesForScope(
        {QStringLiteral("asset_count"), asset_ids.size()},
        {QStringLiteral("has_before_after"), !report.value(QStringLiteral("afterProofPath")).toString().isEmpty()},
        {QStringLiteral("has_recipe_diff"), !report.value(QStringLiteral("recipeDiff")).toMap().isEmpty()}});
+  appendRunEvent(
+      QStringLiteral("act"),
+      QStringLiteral("Apply draft"),
+      QStringLiteral("complete"),
+      QStringLiteral("Applied a reversible draft to %1 photo%2.")
+          .arg(asset_ids.size())
+          .arg(asset_ids.size() == 1 ? QString() : QStringLiteral("s")),
+      QVariantMap{{QStringLiteral("assetCount"), asset_ids.size()}});
+  appendRunEvent(
+      QStringLiteral("review"),
+      QStringLiteral("Review"),
+      QStringLiteral("ready"),
+      QStringLiteral("The draft is ready for your approval. Nothing has been committed yet."),
+      QVariantMap{
+          {QStringLiteral("beforeProofPath"), report.value(QStringLiteral("beforeProofPath"))},
+          {QStringLiteral("afterProofPath"), report.value(QStringLiteral("afterProofPath"))},
+          {QStringLiteral("warningCount"), report_warnings.size()},
+      });
   setStatus(asset_ids.size() > 1 ? QStringLiteral("Batch draft ready") : QStringLiteral("Draft ready"));
   rollback_on_cancel_ = false;
   setRunning(false);
@@ -9032,6 +9272,7 @@ QVariantMap AgentEditController::rollbackDraft() {
       asset_ids.size() > 1 ? QStringLiteral("selected-assets") : QStringLiteral("current-photo"));
   report.insert(QStringLiteral("restoredCount"), restored_count);
   report.insert(QStringLiteral("draftActive"), false);
+  report.insert(QStringLiteral("draftReport"), last_run_report_);
   report.insert(
       QStringLiteral("batchTransaction"),
       batch_transaction(
@@ -9045,6 +9286,13 @@ QVariantMap AgentEditController::rollbackDraft() {
       QStringLiteral("agent.edit.rollback"),
       {{QStringLiteral("run_id"), draft_run_id_},
        {QStringLiteral("restored_count"), restored_count}});
+  appendRunEvent(
+      QStringLiteral("review"),
+      QStringLiteral("Review"),
+      QStringLiteral("rejected"),
+      QStringLiteral("Rejected the draft and restored %1 photo%2.")
+          .arg(restored_count)
+          .arg(restored_count == 1 ? QString() : QStringLiteral("s")));
   draft_original_recipes_.clear();
   draft_run_id_.clear();
   setStatus(QStringLiteral("Rolled back"));
@@ -9128,6 +9376,7 @@ QVariantMap AgentEditController::commitDraft(bool confirmed) {
   report.insert(QStringLiteral("committedCount"), asset_ids.size());
   report.insert(QStringLiteral("confirmed"), true);
   report.insert(QStringLiteral("draftActive"), false);
+  report.insert(QStringLiteral("draftReport"), last_run_report_);
   report.insert(QStringLiteral("assetReports"), asset_reports);
   report.insert(QStringLiteral("batchConcurrencyLimit"), kAgentBatchConcurrencyLimit);
   report.insert(
@@ -9152,6 +9401,13 @@ QVariantMap AgentEditController::commitDraft(bool confirmed) {
       {{QStringLiteral("run_id"), draft_run_id_},
        {QStringLiteral("asset_count"), asset_ids.size()},
        {QStringLiteral("committed_count"), asset_ids.size()}});
+  appendRunEvent(
+      QStringLiteral("commit"),
+      QStringLiteral("Commit"),
+      QStringLiteral("complete"),
+      QStringLiteral("Approved and committed %1 photo%2.")
+          .arg(asset_ids.size())
+          .arg(asset_ids.size() == 1 ? QString() : QStringLiteral("s")));
   draft_original_recipes_.clear();
   draft_run_id_.clear();
   setStatus(QStringLiteral("Committed"));
@@ -9184,8 +9440,48 @@ void AgentEditController::setRunning(bool running) {
   emit runningChanged();
 }
 
+void AgentEditController::beginRunEvents(const QString& scope) {
+  run_events_.clear();
+  emit runEventsChanged();
+  appendRunEvent(
+      QStringLiteral("observe"),
+      QStringLiteral("Observe"),
+      QStringLiteral("running"),
+      QStringLiteral("Gathering the selected photos, active style, recipe state, and local context."),
+      QVariantMap{{QStringLiteral("scope"), normalized_agent_scope(scope)}});
+}
+
+void AgentEditController::appendRunEvent(
+    const QString& stage,
+    const QString& label,
+    const QString& status,
+    const QString& detail,
+    const QVariantMap& evidence) {
+  QVariantMap event{
+      {QStringLiteral("stage"), stage},
+      {QStringLiteral("label"), label},
+      {QStringLiteral("status"), status},
+      {QStringLiteral("detail"), detail},
+      {QStringLiteral("atUtc"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+  };
+  if (!evidence.isEmpty()) {
+    event.insert(QStringLiteral("evidence"), evidence);
+  }
+  run_events_.append(event);
+  while (run_events_.size() > 64) {
+    run_events_.removeFirst();
+  }
+  emit runEventsChanged();
+  if (QCoreApplication::instance() != nullptr) {
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+  }
+}
+
 void AgentEditController::setLastRunReport(const QVariantMap& report) {
   auto enriched_report = report;
+  if (!run_events_.isEmpty() && !enriched_report.contains(QStringLiteral("runEvents"))) {
+    enriched_report.insert(QStringLiteral("runEvents"), run_events_);
+  }
   const auto run_id = enriched_report.value(QStringLiteral("runId")).toString();
   const auto mode = enriched_report.value(QStringLiteral("mode")).toString();
   if (!run_id.trimmed().isEmpty() &&

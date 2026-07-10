@@ -1,37 +1,39 @@
 (function () {
-  const config = window.PhotoEditorDownloads || {};
+  "use strict";
+
+  const config = window.VirelDownloads || {};
   const state = {
     version: config.fallbackVersion || "0.1.0",
     updatedAt: config.updatedAt || "",
-    macUrl: config.directDownloads?.mac || "",
-    windowsUrl: config.directDownloads?.windows || "",
     notesUrl: config.releaseNotesUrl || "",
-    macLabel: config.labels?.mac || "DMG installer",
-    windowsLabel: config.labels?.windows || "Windows installer",
+    macArmUrl: config.directDownloads?.macArm || "",
+    macIntelUrl: config.directDownloads?.macIntel || "",
+    windowsUrl: config.directDownloads?.windows || "",
+    macArmLabel: "Signed and notarized DMG",
+    macIntelLabel: "Signed and notarized DMG",
+    windowsLabel: "Signed App Installer",
     errorMessage: ""
   };
 
   const elements = {
     body: document.body,
     channel: document.getElementById("channel-pill"),
-    macButton: document.getElementById("mac-download"),
+    macArmButton: document.getElementById("mac-arm-download"),
+    macIntelButton: document.getElementById("mac-intel-download"),
     windowsButton: document.getElementById("windows-download"),
-    macLabel: document.getElementById("mac-label"),
+    macArmLabel: document.getElementById("mac-arm-label"),
+    macIntelLabel: document.getElementById("mac-intel-label"),
     windowsLabel: document.getElementById("windows-label"),
-    macChecksum: document.getElementById("mac-checksum"),
-    windowsChecksum: document.getElementById("windows-checksum"),
     status: document.getElementById("release-status"),
     version: document.getElementById("version-value"),
     updated: document.getElementById("updated-value"),
     access: document.getElementById("access-value"),
-    channelValue: document.getElementById("channel-value"),
     notes: document.getElementById("release-notes"),
     support: document.getElementById("support-link"),
     macRequirement: document.getElementById("mac-requirement"),
     windowsRequirement: document.getElementById("windows-requirement"),
-    accessNote: document.getElementById("access-note"),
-    previewPanel: document.querySelector(".app-preview"),
-    previewImage: document.getElementById("app-screenshot")
+    supportPayment: document.getElementById("support-payment"),
+    purchase: document.getElementById("purchase-button")
   };
 
   function normalizePattern(pattern, fallback) {
@@ -42,23 +44,10 @@
     }
   }
 
-  function formatVersion(value) {
-    if (!value) {
-      return state.version;
-    }
-    return value.replace(/^v/i, "");
-  }
-
   function formatDate(value) {
-    if (!value) {
-      return "Not published";
-    }
-
+    if (!value) return "Not published";
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return value;
-    }
-
+    if (Number.isNaN(date.getTime())) return value;
     return new Intl.DateTimeFormat(undefined, {
       month: "short",
       day: "numeric",
@@ -70,118 +59,67 @@
     return assets.find((asset) => pattern.test(asset.name || ""));
   }
 
-  function detectPlatform() {
-    const platform = navigator.userAgentData?.platform || navigator.platform || "";
-    const normalized = platform.toLowerCase();
-    if (normalized.includes("mac")) {
-      elements.body.classList.add("platform-mac");
-      elements.macButton.classList.add("primary");
-      elements.windowsButton.classList.remove("primary");
-    }
-    if (normalized.includes("win")) {
-      elements.body.classList.add("platform-windows");
-      elements.windowsButton.classList.add("primary");
-      elements.macButton.classList.remove("primary");
-    }
-  }
-
-  function enableDownload(anchor, label, url, labelText) {
-    if (!url) {
-      label.textContent = "Not configured yet";
-      return;
-    }
-
+  function enableLink(anchor, url, label, labelElement) {
+    if (!anchor || !url) return;
     anchor.href = url;
     anchor.classList.remove("disabled");
     anchor.removeAttribute("aria-disabled");
     anchor.removeAttribute("tabindex");
-    label.textContent = labelText;
+    if (labelElement && label) labelElement.textContent = label;
   }
 
-  function setChecksum(element, value) {
-    if (!value) {
-      element.textContent = "";
+  function detectPlatform() {
+    const platform = (navigator.userAgentData?.platform || navigator.platform || "").toLowerCase();
+    if (platform.includes("win")) {
+      elements.body.classList.add("platform-windows");
+      elements.windowsButton?.classList.add("primary");
+      elements.macArmButton?.classList.remove("primary");
       return;
     }
-    element.textContent = `SHA256 ${value}`;
+    if (platform.includes("mac")) {
+      elements.body.classList.add("platform-mac");
+      elements.macArmButton?.classList.add("primary");
+    }
   }
 
   function renderStaticConfig() {
-    elements.channel.textContent = config.channel || "Private alpha";
-    elements.channelValue.textContent = config.channel || "Alpha";
-    elements.access.textContent = config.accessLabel || "Invited testers";
-    elements.macRequirement.textContent =
-      config.requirements?.mac || "macOS 14 or newer recommended.";
-    elements.windowsRequirement.textContent =
-      config.requirements?.windows || "Windows 10 22H2 or newer recommended.";
-    elements.accessNote.textContent = config.accessNote || elements.accessNote.textContent;
+    elements.channel.textContent = config.channel || "Public alpha";
+    elements.access.textContent = config.accessLabel || "Public alpha";
+    elements.macRequirement.textContent = config.requirements?.mac || elements.macRequirement.textContent;
+    elements.windowsRequirement.textContent = config.requirements?.windows || elements.windowsRequirement.textContent;
 
     if (config.supportEmail) {
       elements.support.href = `mailto:${config.supportEmail}`;
-      elements.support.removeAttribute("aria-disabled");
       elements.support.textContent = config.supportEmail;
     }
-  }
-
-  function initializeScreenshotPreview() {
-    if (!elements.previewPanel || !elements.previewImage) {
-      return;
-    }
-
-    function showRealScreenshot() {
-      elements.previewPanel.classList.add("has-real-screenshot");
-    }
-
-    function showCssPreview() {
-      elements.previewPanel.classList.remove("has-real-screenshot");
-      elements.previewImage.removeAttribute("src");
-    }
-
-    elements.previewImage.addEventListener("load", showRealScreenshot);
-    elements.previewImage.addEventListener("error", showCssPreview);
-
-    if (elements.previewImage.complete) {
-      if (elements.previewImage.naturalWidth > 0) {
-        showRealScreenshot();
-      } else {
-        showCssPreview();
-      }
-    }
+    enableLink(elements.supportPayment, config.supportPaymentUrl, "Support development");
+    enableLink(elements.purchase, config.purchaseUrl, "Buy a supporter license");
+    if (!config.purchaseUrl) elements.purchase.hidden = true;
   }
 
   function render() {
-    elements.version.textContent = state.version;
+    elements.version.textContent = state.version.replace(/^v/i, "");
     elements.updated.textContent = formatDate(state.updatedAt);
-
-    enableDownload(elements.macButton, elements.macLabel, state.macUrl, state.macLabel);
-    enableDownload(
-      elements.windowsButton,
-      elements.windowsLabel,
-      state.windowsUrl,
-      state.windowsLabel
-    );
-    setChecksum(elements.macChecksum, config.checksums?.mac);
-    setChecksum(elements.windowsChecksum, config.checksums?.windows);
+    enableLink(elements.macArmButton, state.macArmUrl, state.macArmLabel, elements.macArmLabel);
+    enableLink(elements.macIntelButton, state.macIntelUrl, state.macIntelLabel, elements.macIntelLabel);
+    enableLink(elements.windowsButton, state.windowsUrl, state.windowsLabel, elements.windowsLabel);
 
     if (state.notesUrl) {
       elements.notes.href = state.notesUrl;
       elements.notes.removeAttribute("aria-disabled");
-      elements.notes.textContent = "View release notes";
+      elements.notes.textContent = "Read release notes and checksums";
     }
 
-    if (state.macUrl || state.windowsUrl) {
-      const available = [
-        state.macUrl ? "macOS" : "",
-        state.windowsUrl ? "Windows" : ""
-      ].filter(Boolean);
-      elements.status.textContent =
-        state.errorMessage || `Latest ${state.version} build ready for ${available.join(" and ")}.`;
-      return;
+    const available = [
+      state.macArmUrl ? "Apple silicon Mac" : "",
+      state.macIntelUrl ? "Intel Mac" : "",
+      state.windowsUrl ? "Windows" : ""
+    ].filter(Boolean);
+    if (available.length) {
+      elements.status.textContent = state.errorMessage || `Signed ${state.version} builds are ready for ${available.join(", ")}.`;
+    } else {
+      elements.status.textContent = state.errorMessage || "The first signed public build has not been published yet.";
     }
-
-    elements.status.textContent =
-      state.errorMessage ||
-      "Downloads are not configured yet. Add release URLs in download-config.js.";
   }
 
   async function loadLatestRelease() {
@@ -190,35 +128,37 @@
       return;
     }
 
-    const apiUrl = `https://api.github.com/repos/${config.githubOwner}/${config.githubRepo}/releases/latest`;
-    const response = await fetch(apiUrl, { headers: { Accept: "application/vnd.github+json" } });
-    if (!response.ok) {
-      throw new Error(`GitHub returned ${response.status}`);
-    }
+    const response = await fetch(
+      `https://api.github.com/repos/${config.githubOwner}/${config.githubRepo}/releases/latest`,
+      { headers: { Accept: "application/vnd.github+json" } }
+    );
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}`);
 
     const release = await response.json();
     const assets = Array.isArray(release.assets) ? release.assets : [];
-    const macPattern = normalizePattern(config.macAssetPattern, "\\.(dmg|zip)$");
-    const windowsPattern = normalizePattern(config.windowsAssetPattern, "\\.(msix|exe|msi)$");
-    const macAsset = findAsset(assets, macPattern);
-    const windowsAsset = findAsset(assets, windowsPattern);
+    const patterns = config.assetPatterns || {};
+    const macArm = findAsset(assets, normalizePattern(patterns.macArm, "Darwin-arm64.*\\.dmg$"));
+    const macIntel = findAsset(assets, normalizePattern(patterns.macIntel, "Darwin-x86_64.*\\.dmg$"));
+    const windowsInstaller = findAsset(assets, normalizePattern(patterns.windowsInstaller, "\\.appinstaller$"));
+    const windowsPackage = findAsset(assets, normalizePattern(patterns.windows, "\\.msix$"));
 
-    state.version = formatVersion(release.tag_name || release.name);
+    state.version = release.tag_name || release.name || state.version;
     state.updatedAt = release.published_at || release.created_at || state.updatedAt;
     state.notesUrl = config.releaseNotesUrl || release.html_url || state.notesUrl;
-    state.macUrl = state.macUrl || macAsset?.browser_download_url || "";
-    state.windowsUrl = state.windowsUrl || windowsAsset?.browser_download_url || "";
-    state.macLabel = macAsset?.name || state.macLabel;
-    state.windowsLabel = windowsAsset?.name || state.windowsLabel;
+    state.macArmUrl = state.macArmUrl || macArm?.browser_download_url || "";
+    state.macIntelUrl = state.macIntelUrl || macIntel?.browser_download_url || "";
+    state.windowsUrl = state.windowsUrl || windowsInstaller?.browser_download_url || windowsPackage?.browser_download_url || "";
+    state.macArmLabel = macArm?.name || state.macArmLabel;
+    state.macIntelLabel = macIntel?.name || state.macIntelLabel;
+    state.windowsLabel = windowsInstaller?.name || windowsPackage?.name || state.windowsLabel;
     render();
   }
 
   detectPlatform();
   renderStaticConfig();
-  initializeScreenshotPreview();
+  render();
   loadLatestRelease().catch(() => {
-    state.errorMessage =
-      "Could not read the latest release. Check download-config.js or use direct URLs.";
+    state.errorMessage = "The release service could not be reached. Try again shortly or contact support.";
     render();
   });
 })();

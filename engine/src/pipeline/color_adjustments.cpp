@@ -786,7 +786,27 @@ struct InputStageParameters final {
 }
 
 [[nodiscard, maybe_unused]] bool metal_color_pipeline_supported(const ColorAdjustmentState& state) {
-  return state.color_pipeline.working_profile.kind == WorkingTransformKind::LinearSrgb &&
+  const auto has_local_white_balance = std::any_of(
+      state.local_masks.cbegin(),
+      state.local_masks.cend(),
+      [](const LocalMask& mask) {
+        return std::abs(mask.temperature) > 1.0e-9 || std::abs(mask.tint) > 1.0e-9;
+      }) || std::any_of(
+      state.local_mask_sets.cbegin(),
+      state.local_mask_sets.cend(),
+      [](const LocalMaskSet& mask_set) {
+        return std::abs(mask_set.temperature) > 1.0e-9 || std::abs(mask_set.tint) > 1.0e-9;
+      });
+
+  // The accelerated pre-tone kernel currently has only diagonal RGB white-
+  // balance multipliers. Use the CPU path whenever a Bradford/CAT16 matrix is
+  // required so preview and export cannot disagree on adapted colors.
+  return std::abs(effective_input_temperature(state)) <= 1.0e-9 &&
+         std::abs(effective_input_tint(state)) <= 1.0e-9 &&
+         std::abs(state.linear_mask_temperature) <= 1.0e-9 &&
+         std::abs(state.radial_mask_temperature) <= 1.0e-9 &&
+         !has_local_white_balance &&
+         state.color_pipeline.working_profile.kind == WorkingTransformKind::LinearSrgb &&
          state.color_pipeline.render_intent == RenderIntent::Perceptual &&
          state.color_pipeline.output_gamut_mapping_enabled &&
          state.color_pipeline.output_gamut_mapping_policy == GamutMappingPolicy::Perceptual &&
@@ -5888,11 +5908,9 @@ void composite_layer_pixel(
 
   const auto master_curve = build_curve_data(layer.master_curve_points);
   if (master_curve.points.size() >= 2) {
-    pixel = apply_layer_luminance_point_curve(
-        pixel,
-        master_curve,
-        kLayerCurveOutputHeadroom,
-        context);
+    pixel.red = static_cast<float>(apply_layer_perceptual_point_curve(pixel.red, master_curve));
+    pixel.green = static_cast<float>(apply_layer_perceptual_point_curve(pixel.green, master_curve));
+    pixel.blue = static_cast<float>(apply_layer_perceptual_point_curve(pixel.blue, master_curve));
   }
 
   const auto luma_curve = build_curve_data(layer.luma_curve_points);
@@ -6912,6 +6930,7 @@ std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
          std::abs(adjustments.shadows) <= 1e-6 &&
          std::abs(adjustments.whites) <= 1e-6 &&
          std::abs(adjustments.blacks) <= 1e-6 &&
+         std::abs(adjustments.temperature) <= 1e-6 &&
          std::abs(adjustments.tint) <= 1e-6 &&
          std::abs(adjustments.vibrance) <= 1e-6 &&
          std::abs(adjustments.saturation) <= 1e-6 &&
@@ -6927,6 +6946,7 @@ std::vector<std::uint8_t> rasterize_local_mask_set_alpha_impl(
          std::abs(mask_set.shadows) <= 1e-6 &&
          std::abs(mask_set.whites) <= 1e-6 &&
          std::abs(mask_set.blacks) <= 1e-6 &&
+         std::abs(mask_set.temperature) <= 1e-6 &&
          std::abs(mask_set.tint) <= 1e-6 &&
          std::abs(mask_set.vibrance) <= 1e-6 &&
          std::abs(mask_set.saturation) <= 1e-6 &&
@@ -7166,6 +7186,25 @@ double perceptual_delta(
 
 double apply_perceptual_point_curve(double value, const CurveEvaluationData& curve) {
   return srgb_to_linear(evaluate_curve_data(linear_to_srgb(value), curve));
+}
+
+[[nodiscard]] ColorPixel apply_master_rgb_point_curve(
+    const ColorPixel& pixel,
+    const CurveEvaluationData& curve) {
+  if (curve.points.size() < 2) {
+    return pixel;
+  }
+
+  // The composite RGB curve is a display-referred curve applied to all three
+  // working RGB channels. This intentionally differs from the Luma curve,
+  // which remaps Y and preserves chromatic ratios. Keeping that distinction is
+  // also required for CPU/export parity with the Metal post-color kernel.
+  return ColorPixel{
+      .red = static_cast<float>(apply_perceptual_point_curve(pixel.red, curve)),
+      .green = static_cast<float>(apply_perceptual_point_curve(pixel.green, curve)),
+      .blue = static_cast<float>(apply_perceptual_point_curve(pixel.blue, curve)),
+      .alpha = pixel.alpha,
+  };
 }
 
 [[nodiscard]] ColorPixel apply_luminance_point_curve(
@@ -7590,7 +7629,7 @@ ColorPixel apply_global_color_pipeline(
   pixel = scale_pixel_to_luminance_with_headroom(pixel, curve_target, output_headroom, context);
 
   if (master_curve.points.size() >= 2) {
-    pixel = apply_luminance_point_curve(pixel, master_curve, output_headroom, context);
+    pixel = apply_master_rgb_point_curve(pixel, master_curve);
   }
   if (luma_curve.points.size() >= 2) {
     pixel = apply_luminance_point_curve(pixel, luma_curve, output_headroom, context);
@@ -9570,11 +9609,7 @@ void apply_color_adjustments(
     const auto index = row_offset + static_cast<std::size_t>(x);
     auto& pixel = (*pixels)[index];
     if (master_curve.points.size() >= 2) {
-      pixel = apply_luminance_point_curve(
-          pixel,
-          master_curve,
-          final_output_headroom,
-          color_context);
+      pixel = apply_master_rgb_point_curve(pixel, master_curve);
     }
     if (luma_curve.points.size() >= 2) {
       pixel = apply_luminance_point_curve(

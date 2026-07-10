@@ -1,10 +1,12 @@
 #include "app_shell_controller.h"
 
 #include <QDesktopServices>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSysInfo>
 #include <QSettings>
 #include <QUrl>
 #include <QVariant>
@@ -17,6 +19,22 @@ namespace {
 
 #ifndef PHOTO_EDITOR_APP_VERSION
 #define PHOTO_EDITOR_APP_VERSION "0.0.0"
+#endif
+
+#ifndef VIREL_PRODUCT_NAME
+#define VIREL_PRODUCT_NAME "Virel Studio"
+#endif
+
+#ifndef VIREL_SUPPORT_URL
+#define VIREL_SUPPORT_URL "https://virel.studio/support"
+#endif
+
+#ifndef VIREL_PRIVACY_URL
+#define VIREL_PRIVACY_URL "https://virel.studio/privacy"
+#endif
+
+#ifndef VIREL_TERMS_URL
+#define VIREL_TERMS_URL "https://virel.studio/terms"
 #endif
 
 constexpr int kDefaultStartupWorkspace = 0;
@@ -98,6 +116,18 @@ QString AppShellController::cacheLocation() const { return AppBootstrap::cacheLo
 QString AppShellController::logLocation() const { return AppBootstrap::logLocation(); }
 QString AppShellController::backupLocation() const { return AppBootstrap::backupLocation(); }
 QString AppShellController::appVersion() const { return QStringLiteral(PHOTO_EDITOR_APP_VERSION); }
+QString AppShellController::productName() const { return QStringLiteral(VIREL_PRODUCT_NAME); }
+QString AppShellController::supportUrl() const { return QStringLiteral(VIREL_SUPPORT_URL); }
+QString AppShellController::privacyUrl() const { return QStringLiteral(VIREL_PRIVACY_URL); }
+QString AppShellController::termsUrl() const { return QStringLiteral(VIREL_TERMS_URL); }
+
+bool AppShellController::localDiagnosticsEnabled() const {
+#if defined(PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS) && PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS
+  return true;
+#else
+  return false;
+#endif
+}
 
 void AppShellController::setStartupWorkspace(int workspace_index) {
   const auto sanitized = sanitizedWorkspaceIndex(workspace_index);
@@ -179,6 +209,60 @@ bool AppShellController::openAppDataFolder() const { return revealPath(appDataLo
 bool AppShellController::openCacheFolder() const { return revealPath(cacheLocation()); }
 bool AppShellController::openLogFolder() const { return revealPath(logLocation()); }
 bool AppShellController::openBackupFolder() const { return revealPath(backupLocation()); }
+bool AppShellController::openSupportPage() const { return QDesktopServices::openUrl(QUrl(supportUrl())); }
+bool AppShellController::openPrivacyPage() const { return QDesktopServices::openUrl(QUrl(privacyUrl())); }
+bool AppShellController::openTermsPage() const { return QDesktopServices::openUrl(QUrl(termsUrl())); }
+
+QString AppShellController::createSupportBundle() const {
+  const auto timestamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMddTHHmmssZ"));
+  const auto bundle_path =
+      QDir(backupLocation()).filePath(QStringLiteral("support/VirelSupport-%1").arg(timestamp));
+  if (!QDir().mkpath(bundle_path)) {
+    return {};
+  }
+
+  QJsonObject manifest{
+      {QStringLiteral("product"), productName()},
+      {QStringLiteral("version"), appVersion()},
+      {QStringLiteral("createdAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+      {QStringLiteral("os"), QSysInfo::prettyProductName()},
+      {QStringLiteral("kernelType"), QSysInfo::kernelType()},
+      {QStringLiteral("kernelVersion"), QSysInfo::kernelVersion()},
+      {QStringLiteral("cpuArchitecture"), QSysInfo::currentCpuArchitecture()},
+      {QStringLiteral("localDiagnosticsOnly"), true},
+      {QStringLiteral("containsPhotos"), false},
+      {QStringLiteral("privacyNotice"),
+       QStringLiteral("Review the included logs before sharing. They may contain local file paths but never include photo bytes.")},
+  };
+  QFile manifest_file(QDir(bundle_path).filePath(QStringLiteral("support-manifest.json")));
+  if (!manifest_file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    QDir(bundle_path).removeRecursively();
+    return {};
+  }
+  manifest_file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
+  manifest_file.close();
+
+  const QDir runs_root(QDir(logLocation()).filePath(QStringLiteral("runs")));
+  const auto runs = runs_root.entryInfoList(
+      QDir::Dirs | QDir::NoDotAndDotDot,
+      QDir::Time);
+  const auto included_run_count = qMin(3, runs.size());
+  for (int run_index = 0; run_index < included_run_count; ++run_index) {
+    const auto& run = runs.at(run_index);
+    const auto destination = QDir(bundle_path).filePath(QStringLiteral("logs/%1").arg(run.fileName()));
+    QDir().mkpath(destination);
+    const QDir source(run.absoluteFilePath());
+    const auto files = source.entryInfoList(QDir::Files | QDir::Readable, QDir::Name);
+    for (const auto& file : files) {
+      if (file.size() <= 10 * 1024 * 1024) {
+        QFile::copy(file.absoluteFilePath(), QDir(destination).filePath(file.fileName()));
+      }
+    }
+  }
+
+  revealPath(bundle_path);
+  return bundle_path;
+}
 
 void AppShellController::resetTimelineWorkspaceSettings() {
   QSettings settings;

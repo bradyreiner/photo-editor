@@ -5,17 +5,17 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$OutputDir,
 
-    [string]$PackageName = "PhotoEditor.Desktop",
-    [string]$PackageDisplayName = "PhotoEditor",
-    [string]$Publisher = "CN=PhotoEditor",
-    [string]$PublisherDisplayName = "PhotoEditor",
-    [string]$Description = "PhotoEditor desktop application",
+    [string]$PackageName = "Virel.Studio",
+    [string]$PackageDisplayName = "Virel Studio",
+    [string]$Publisher = "",
+    [string]$PublisherDisplayName = "Virel",
+    [string]$Description = "Virel Studio professional photo editor",
     [string]$Version = "0.1.0",
     [string]$Architecture = "x64",
-    [string]$Executable = "bin\PhotoEditor.exe",
-    [string]$AppId = "PhotoEditor",
-    [string]$MinVersion = "10.0.19041.0",
-    [string]$MaxVersionTested = "10.0.19041.0",
+    [string]$Executable = "bin\VirelStudio.exe",
+    [string]$AppId = "VirelStudio",
+    [string]$MinVersion = "10.0.19045.0",
+    [string]$MaxVersionTested = "10.0.26100.0",
     [string]$BackgroundColor = "transparent",
     [string]$CertificatePath = "",
     [string]$CertificatePassword = "",
@@ -91,46 +91,6 @@ function Convert-ToQuadVersion {
     return ($parts[0..3] -join ".")
 }
 
-function New-PlaceholderPng {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-
-        [Parameter(Mandatory = $true)]
-        [int]$Size,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Label
-    )
-
-    Add-Type -AssemblyName System.Drawing
-
-    $bitmap = New-Object System.Drawing.Bitmap $Size, $Size
-    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $graphics.Clear([System.Drawing.Color]::FromArgb(255, 24, 33, 43))
-
-    $accentBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 219, 183, 127))
-    $textBrush = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 245, 239, 227))
-    $fontSize = [Math]::Max([int]($Size * 0.22), 10)
-    $font = New-Object System.Drawing.Font("Segoe UI", $fontSize, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-
-    $graphics.FillRectangle($accentBrush, 0, 0, $Size, [Math]::Max([int]($Size * 0.16), 4))
-    $stringFormat = New-Object System.Drawing.StringFormat
-    $stringFormat.Alignment = [System.Drawing.StringAlignment]::Center
-    $stringFormat.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $graphics.DrawString($Label, $font, $textBrush, (New-Object System.Drawing.RectangleF 0, 0, $Size, $Size), $stringFormat)
-
-    $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
-
-    $font.Dispose()
-    $accentBrush.Dispose()
-    $textBrush.Dispose()
-    $stringFormat.Dispose()
-    $graphics.Dispose()
-    $bitmap.Dispose()
-}
-
 function Join-Uri {
     param(
         [string]$Base,
@@ -161,23 +121,22 @@ if (-not (Test-Path $InstallRoot)) {
     throw "Install root not found: $InstallRoot"
 }
 
-$PackageName = Get-DefaultIfEmpty -Value $PackageName -Fallback "PhotoEditor.Desktop"
-$PackageDisplayName = Get-DefaultIfEmpty -Value $PackageDisplayName -Fallback "PhotoEditor"
-$Publisher = Get-DefaultIfEmpty -Value $Publisher -Fallback "CN=PhotoEditor"
-$PublisherDisplayName = Get-DefaultIfEmpty -Value $PublisherDisplayName -Fallback "PhotoEditor"
-$Description = Get-DefaultIfEmpty -Value $Description -Fallback "PhotoEditor desktop application"
-$Executable = Get-DefaultIfEmpty -Value $Executable -Fallback "bin\PhotoEditor.exe"
-$AppId = Get-DefaultIfEmpty -Value $AppId -Fallback "PhotoEditor"
+$PackageName = Get-DefaultIfEmpty -Value $PackageName -Fallback "Virel.Studio"
+$PackageDisplayName = Get-DefaultIfEmpty -Value $PackageDisplayName -Fallback "Virel Studio"
+$PublisherDisplayName = Get-DefaultIfEmpty -Value $PublisherDisplayName -Fallback "Virel"
+$Description = Get-DefaultIfEmpty -Value $Description -Fallback "Virel Studio professional photo editor"
+$Executable = Get-DefaultIfEmpty -Value $Executable -Fallback "bin\VirelStudio.exe"
+$AppId = Get-DefaultIfEmpty -Value $AppId -Fallback "VirelStudio"
 $Architecture = Get-DefaultIfEmpty -Value $Architecture -Fallback "x64"
-$MinVersion = Get-DefaultIfEmpty -Value $MinVersion -Fallback "10.0.19041.0"
-$MaxVersionTested = Get-DefaultIfEmpty -Value $MaxVersionTested -Fallback "10.0.19041.0"
+$MinVersion = Get-DefaultIfEmpty -Value $MinVersion -Fallback "10.0.19045.0"
+$MaxVersionTested = Get-DefaultIfEmpty -Value $MaxVersionTested -Fallback "10.0.26100.0"
 $BackgroundColor = Get-DefaultIfEmpty -Value $BackgroundColor -Fallback "transparent"
 
 $resolvedInstallRoot = (Resolve-Path $InstallRoot).Path
 $resolvedOutputDir = [System.IO.Path]::GetFullPath($OutputDir)
 $packageVersion = Convert-ToQuadVersion $Version
-$packageFileName = "PhotoEditor-$packageVersion-$Architecture.msix"
-$appInstallerFileName = "PhotoEditor-$packageVersion.appinstaller"
+$packageFileName = "VirelStudio-$packageVersion-$Architecture.msix"
+$appInstallerFileName = "VirelStudio.appinstaller"
 $stagingRoot = Join-Path $resolvedOutputDir "msix-root"
 $assetsDir = Join-Path $stagingRoot "Assets"
 $packagePath = Join-Path $resolvedOutputDir $packageFileName
@@ -192,15 +151,28 @@ New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 Copy-Item -Path (Join-Path $resolvedInstallRoot "*") -Destination $stagingRoot -Recurse -Force
 New-Item -ItemType Directory -Force -Path $assetsDir | Out-Null
 
+$sourceAssetsDir = Join-Path $PSScriptRoot "..\apps\desktop\assets\windows"
 $square44Path = Join-Path $assetsDir "Square44x44Logo.png"
 $square44AltPath = Join-Path $assetsDir "Square44x44Logo.targetsize-44_altform-unplated.png"
 $square150Path = Join-Path $assetsDir "Square150x150Logo.png"
 $storeLogoPath = Join-Path $assetsDir "StoreLogo.png"
 
-New-PlaceholderPng -Path $square44Path -Size 44 -Label "PE"
-Copy-Item $square44Path $square44AltPath -Force
-New-PlaceholderPng -Path $square150Path -Size 150 -Label "PE"
-New-PlaceholderPng -Path $storeLogoPath -Size 50 -Label "PE"
+foreach ($assetName in @(
+    "Square44x44Logo.png",
+    "Square44x44Logo.targetsize-44_altform-unplated.png",
+    "Square150x150Logo.png",
+    "StoreLogo.png"
+)) {
+    $sourceAsset = Join-Path $sourceAssetsDir $assetName
+    if (-not (Test-Path $sourceAsset)) {
+        throw "Production package asset is missing: $sourceAsset"
+    }
+    Copy-Item $sourceAsset (Join-Path $assetsDir $assetName) -Force
+}
+
+if ([string]::IsNullOrWhiteSpace($Publisher)) {
+    throw "Publisher must match the subject of the production code-signing certificate. Set PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER."
+}
 
 $manifestPath = Join-Path $stagingRoot "AppxManifest.xml"
 $manifestXml = @"

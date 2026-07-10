@@ -1069,6 +1069,56 @@ int main(int argc, char** argv) {
   qputenv("PHOTO_EDITOR_APP_DATA_DIR", runtime_root.path().toUtf8());
   qputenv("PHOTO_EDITOR_TEST_FAKE_SEGMENTATION", "1");
 
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_TEST_CROP_WORKFLOW_ONLY")) {
+    const auto crop_path = runtime_root.filePath(QStringLiteral("crop-workflow-proof.png"));
+    QImage crop_source(32, 20, QImage::Format_ARGB32);
+    crop_source.fill(QColor::fromRgb(112, 128, 144));
+    if (!crop_source.save(crop_path)) {
+      return fail("crop workflow proof source should be writable");
+    }
+
+    photo_editor::desktop::EditorPreviewController crop_controller;
+    crop_controller.loadAsset(
+        QStringLiteral("crop-workflow-proof"),
+        crop_path,
+        QString(),
+        QString(),
+        QString(),
+        QString(),
+        QString());
+    crop_controller.setCropPreset(QStringLiteral("1:1"));
+    const auto square_pixel_width = crop_controller.cropRectWidth() * crop_source.width();
+    const auto square_pixel_height = crop_controller.cropRectHeight() * crop_source.height();
+    if (!almost_equal(crop_controller.cropAspectRatio(), 1.0) ||
+        !almost_equal(square_pixel_width, square_pixel_height)) {
+      return fail("1:1 crop should produce square pixel geometry on a landscape source");
+    }
+
+    crop_controller.setCropPreset(QStringLiteral("Original"));
+    const auto source_ratio =
+        static_cast<double>(crop_source.width()) / static_cast<double>(crop_source.height());
+    const auto original_pixel_ratio =
+        (crop_controller.cropRectWidth() * crop_source.width()) /
+        (crop_controller.cropRectHeight() * crop_source.height());
+    if (!almost_equal(crop_controller.cropAspectRatio(), source_ratio) ||
+        !almost_equal(original_pixel_ratio, source_ratio)) {
+      return fail("Original crop should lock to the source pixel aspect");
+    }
+
+    crop_controller.setCropZoom(1.5);
+    crop_controller.updateCropRect(0.1, 0.2, 0.5, 0.6);
+    crop_controller.resetCropRect();
+    if (!almost_equal(crop_controller.cropRectX(), 0.0) ||
+        !almost_equal(crop_controller.cropRectY(), 0.0) ||
+        !almost_equal(crop_controller.cropRectWidth(), 1.0) ||
+        !almost_equal(crop_controller.cropRectHeight(), 1.0) ||
+        !almost_equal(crop_controller.cropZoom(), 1.0) ||
+        crop_controller.cropPreset() != QStringLiteral("Original")) {
+      return fail("Reset Crop should restore full bounds, source aspect, and neutral crop tightening");
+    }
+    return EXIT_SUCCESS;
+  }
+
   const auto metal_brush_preview_source =
       read_repo_text_file(QStringLiteral("apps/desktop/src/brush_preview_compositor_metal.mm"));
   if (metal_brush_preview_source.isEmpty() ||
@@ -4257,8 +4307,8 @@ int main(int argc, char** argv) {
       !almost_equal(rapid_crop_state.crop_rect_y, 0.0) ||
       !almost_equal(rapid_crop_state.crop_rect_width, 0.0) ||
       !almost_equal(rapid_crop_state.crop_rect_height, 0.0) ||
-      !almost_equal(rapid_crop_state.crop_zoom, 1.5) ||
-      rapid_crop_state.crop_preset != QStringLiteral("1:1") ||
+      !almost_equal(rapid_crop_state.crop_zoom, 1.0) ||
+      rapid_crop_state.crop_preset != QStringLiteral("Original") ||
       rapid_crop_intent.operation != QStringLiteral("reset_crop_rect") ||
       rapid_crop_intent.dirty_domain != QStringLiteral("geometry_transform") ||
       rapid_crop_intent.render_reason != QStringLiteral("crop_change") ||
@@ -4621,6 +4671,45 @@ int main(int argc, char** argv) {
   }
   if (!wait_for_preview_idle(layer_intent_controller)) {
     return fail("layer intent controller should settle after fill-layer render");
+  }
+  (void)layer_intent_controller.photoLayers();
+  const auto layer_metadata_generation_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          layer_intent_controller);
+  const auto layer_metadata_intent_count_before =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+          layer_intent_controller);
+  if (!layer_intent_controller.renamePhotoLayer(0, QStringLiteral("Renamed Proof Fill")) ||
+      !layer_intent_controller.setPhotoLayerLocked(0, true) ||
+      !layer_intent_controller.setPhotoLayerLocked(0, false) ||
+      layer_intent_controller.photoLayers().at(0).toMap().value(QStringLiteral("displayName")).toString() !=
+          QStringLiteral("Renamed Proof Fill") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+          layer_intent_controller) != layer_metadata_generation_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+          layer_intent_controller) != layer_metadata_intent_count_before ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::photo_layer_thumbnail_cache_dirty(
+          layer_intent_controller)) {
+    return fail("layer rename and lock metadata should update immediately without image or thumbnail renders");
+  }
+  if (!layer_intent_controller.requestLayerFullResolutionPreview()) {
+    return fail("selecting an editable layer should request a full-resolution preview restore");
+  }
+  const auto layer_target_restore_intent =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::last_edit_intent(
+          layer_intent_controller);
+  if (layer_target_restore_intent.operation != QStringLiteral("layer_target_selected") ||
+      layer_target_restore_intent.dirty_domain != QStringLiteral("layers_composite") ||
+      layer_target_restore_intent.render_reason != QStringLiteral("photo_layer_change") ||
+      !layer_target_restore_intent.schedule_full_resolution ||
+      (!photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_timer_active(
+           layer_intent_controller) &&
+       !photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_pending(
+           layer_intent_controller))) {
+    return fail("Edit Layer should explicitly queue a max-preview layer-composite request");
+  }
+  if (!wait_for_preview_idle(layer_intent_controller)) {
+    return fail("layer target full-resolution restore should settle before later stack edits");
   }
   const auto layer_stack_generation_before =
       photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
@@ -6132,7 +6221,7 @@ int main(int argc, char** argv) {
       layer_adjustment_debounced_intent.operation != QStringLiteral("photo_layer_adjustment") ||
       layer_adjustment_debounced_intent.dirty_domain != QStringLiteral("layers_composite") ||
       layer_adjustment_debounced_intent.render_reason != QStringLiteral("photo_layer_change") ||
-      layer_adjustment_debounced_intent.schedule_full_resolution ||
+      !layer_adjustment_debounced_intent.schedule_full_resolution ||
       photo_editor::desktop::EditorPreviewControllerTestAccess::
               photo_layer_adjustment_render_pending_write_count(layer_adjustment_controller) !=
           0 ||
@@ -6151,7 +6240,7 @@ int main(int argc, char** argv) {
                photo_layer_adjustment_render_last_flush_elapsed_ms(layer_adjustment_controller) <=
            photo_editor::desktop::EditorPreviewControllerTestAccess::
                photo_layer_adjustment_render_budget_ms(layer_adjustment_controller))) {
-    return fail("debounced layer-local adjustment edits should coalesce to one preview-only layer composite intent");
+    return fail("debounced layer-local adjustment edits should coalesce to immediate feedback plus one full-resolution layer composite restore");
   }
   if (!layer_adjustment_controller.setPhotoLayerAdjustmentValue(
           0,
@@ -10650,6 +10739,31 @@ int main(int argc, char** argv) {
       QString(),
       QString(),
       QString());
+  crop_precision_controller.setCropPreset(QStringLiteral("1:1"));
+  const auto square_crop_pixel_width =
+      crop_precision_controller.cropRectWidth() * crop_precision_source.width();
+  const auto square_crop_pixel_height =
+      crop_precision_controller.cropRectHeight() * crop_precision_source.height();
+  if (!almost_equal(crop_precision_controller.cropAspectRatio(), 1.0) ||
+      !almost_equal(square_crop_pixel_width, square_crop_pixel_height)) {
+    return fail("1:1 crop presets should produce square pixel geometry on non-square sources");
+  }
+  crop_precision_controller.setCropPreset(QStringLiteral("Original"));
+  const auto original_crop_pixel_width =
+      crop_precision_controller.cropRectWidth() * crop_precision_source.width();
+  const auto original_crop_pixel_height =
+      crop_precision_controller.cropRectHeight() * crop_precision_source.height();
+  if (!almost_equal(
+          crop_precision_controller.cropAspectRatio(),
+          static_cast<double>(crop_precision_source.width()) /
+              static_cast<double>(crop_precision_source.height())) ||
+      !almost_equal(
+          original_crop_pixel_width / original_crop_pixel_height,
+          static_cast<double>(crop_precision_source.width()) /
+              static_cast<double>(crop_precision_source.height()))) {
+    return fail("Original crop preset should lock to the source pixel aspect instead of becoming unconstrained");
+  }
+  crop_precision_controller.resetCropRect();
   crop_precision_controller.updateCropRect(0.12, 0.14, 0.52, 0.62);
   crop_precision_controller.setPerspectiveVertical(-18.0);
   crop_precision_controller.setPerspectiveHorizontal(12.0);
@@ -10665,6 +10779,8 @@ int main(int argc, char** argv) {
       !almost_equal(crop_precision_controller.cropRectY(), 0.0) ||
       !almost_equal(crop_precision_controller.cropRectWidth(), 1.0) ||
       !almost_equal(crop_precision_controller.cropRectHeight(), 1.0) ||
+      !almost_equal(crop_precision_controller.cropZoom(), 1.0) ||
+      crop_precision_controller.cropPreset() != QStringLiteral("Original") ||
       !almost_equal(crop_precision_controller.transformRotation(), 4.5) ||
       !almost_equal(crop_precision_controller.transformScale(), 1.35) ||
       !almost_equal(crop_precision_controller.transformSkewX(), -22.0) ||
@@ -12398,13 +12514,13 @@ int main(int argc, char** argv) {
   if (smart_mask.value(QStringLiteral("matteCleanupSchemaVersion")).toInt() != 1 ||
       smart_mask.value(QStringLiteral("matteCleanupProfile")).toString() != QStringLiteral("object-hard-edge") ||
       !smart_mask.value(QStringLiteral("matteCleanupDefaultsApplied")).toBool() ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionSmooth")).toDouble(), 3.0) ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionDespeckle")).toDouble(), 6.0) ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionFillHoles")).toDouble(), 8.0) ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionRemoveIslands")).toDouble(), 10.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionSmooth")).toDouble(), 0.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionDespeckle")).toDouble(), 0.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionFillHoles")).toDouble(), 0.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionRemoveIslands")).toDouble(), 0.0) ||
       !almost_equal(smart_mask.value(QStringLiteral("generatedMaskHoleFillThreshold")).toDouble(), 0.0060) ||
       !almost_equal(smart_mask.value(QStringLiteral("generatedMaskIslandRemovalThreshold")).toDouble(), 0.0025)) {
-    return fail("smart object selections should inherit object matte cleanup defaults");
+    return fail("smart object selections should keep their visible refinement controls neutral while retaining raster cleanup metadata");
   }
   const auto object_aware_metadata =
       smart_mask.value(QStringLiteral("generatedMaskMetadata")).toMap();
@@ -12412,18 +12528,19 @@ int main(int argc, char** argv) {
       object_aware_metadata.value(QStringLiteral("objectAwareRefinementMode")).toString() !=
           QStringLiteral("object-soft-boundary") ||
       object_aware_metadata.value(QStringLiteral("objectAwareRefinementRuntime")).toString().isEmpty() ||
-      !object_aware_metadata.value(QStringLiteral("objectAwareDefaultsApplied")).toBool() ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionFineEdge")).toDouble(), 42.0) ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionFeather")).toDouble(), 8.0)) {
-    return fail("runtime-backed object selections should get object-aware soft-boundary refinement defaults");
+      object_aware_metadata.value(QStringLiteral("objectAwareDefaultsApplied")).toBool() ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionFineEdge")).toDouble(), 0.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionFeather")).toDouble(), 0.0) ||
+      !almost_equal(smart_mask.value(QStringLiteral("feather")).toDouble(), 0.0)) {
+    return fail("runtime-backed object selections should start with neutral visible edge refinement for an exact and immediate preview");
   }
   if (!object_aware_metadata.value(QStringLiteral("colorAwareRefinement")).toBool() ||
       object_aware_metadata.value(QStringLiteral("colorAwareRefinementMode")).toString() !=
           QStringLiteral("high-contrast-hard-edge") ||
       object_aware_metadata.value(QStringLiteral("colorAwareRefinementRuntime")).toString().isEmpty() ||
-      !object_aware_metadata.value(QStringLiteral("colorAwareDefaultsApplied")).toBool() ||
-      !almost_equal(smart_mask.value(QStringLiteral("selectionEdgeContrast")).toDouble(), 24.0)) {
-    return fail("high-contrast object selections should get color-aware hard-edge refinement defaults");
+      object_aware_metadata.value(QStringLiteral("colorAwareDefaultsApplied")).toBool() ||
+      !almost_equal(smart_mask.value(QStringLiteral("selectionEdgeContrast")).toDouble(), 0.0)) {
+    return fail("high-contrast object selections should report color-aware capability without silently changing the generated matte");
   }
   if (controller.maskSetCount() != 1 ||
       controller.maskSets().at(0).toMap().value(QStringLiteral("sources")).toList().size() != 1) {

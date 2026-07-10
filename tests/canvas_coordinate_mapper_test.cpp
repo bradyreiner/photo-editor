@@ -223,6 +223,38 @@ int main(int argc, char** argv) {
     return fail("CanvasCoordinateMapper.qml should create a mapper object");
   }
 
+  const auto crop_overlay_qml_path =
+      QDir(QStringLiteral(PHOTO_EDITOR_SOURCE_DIR))
+          .filePath(QStringLiteral("apps/desktop/qml/components/CropOverlay.qml"));
+  QQmlComponent crop_overlay_component(
+      &engine,
+      QUrl::fromLocalFile(crop_overlay_qml_path));
+  if (crop_overlay_component.isError()) {
+    for (const auto& error : crop_overlay_component.errors()) {
+      std::cerr << error.toString().toStdString() << '\n';
+    }
+    return fail("CropOverlay.qml should load for the deep-zoom canvas memory guard");
+  }
+  std::unique_ptr<QObject> crop_overlay(crop_overlay_component.create());
+  if (!crop_overlay) {
+    return fail("CropOverlay.qml should instantiate for the deep-zoom canvas memory guard");
+  }
+  crop_overlay->setProperty("width", 1200.0);
+  crop_overlay->setProperty("height", 800.0);
+  crop_overlay->setProperty("active", true);
+  crop_overlay->setProperty("imageWidth", 307200.0);
+  crop_overlay->setProperty("imageHeight", 204800.0);
+  crop_overlay->setProperty("guideMode", QStringLiteral("Golden Spiral"));
+  QCoreApplication::processEvents();
+  auto* crop_spiral_canvas =
+      crop_overlay->findChild<QObject*>(QStringLiteral("cropGoldenSpiralCanvas"));
+  if (crop_spiral_canvas == nullptr ||
+      crop_spiral_canvas->property("width").toDouble() != 1.0 ||
+      crop_spiral_canvas->property("height").toDouble() != 1.0 ||
+      crop_spiral_canvas->property("visible").toBool()) {
+    return fail("a 256x zoom-sized crop overlay must keep its hidden Canvas at 1x1 instead of allocating a hundreds-of-gigabytes backing store");
+  }
+
   const auto contract =
       mapper->property("coordinateTransformContract").toString();
   if (!contract.contains(QStringLiteral("view-to-image:true")) ||
@@ -366,6 +398,9 @@ int main(int argc, char** argv) {
       !mask_view_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("mask-canvas-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function imagePointFromItem(")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("function previewOutlinePoint(normalizedX, normalizedY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("const point = root.viewPointForImage(normalizedX, normalizedY)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("const firstPoint = root.previewOutlinePoint(")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("fitMode: \"fit\"")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("fitMode: \"overlay\"")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("const point = root.imagePointFromLocal(mouseX, mouseY)")) ||
@@ -373,6 +408,8 @@ int main(int argc, char** argv) {
       !shared_mask_overlay_source.contains(QStringLiteral("const previousViewPoint = root.viewPointForImage(")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("const firstViewPoint = root.viewPointForImage(")) ||
       shared_mask_overlay_source.contains(QStringLiteral("activeOutlineClicked(root.clamp(mouseX /")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("root.previewPointX(root.pointXValue(")) ||
+      mask_canvas_overlay_source.contains(QStringLiteral("root.previewPointY(root.pointYValue(")) ||
       shared_mask_overlay_source.contains(QStringLiteral("root.width * root.pointXValue(")) ||
       shared_mask_overlay_source.contains(QStringLiteral("root.height * root.pointYValue("))) {
     return fail("Studio, MaskView, MaskCanvasOverlay, and SharedMaskOverlay should expose mapper-backed pointer contracts with explicit layout modes");
@@ -565,7 +602,7 @@ int main(int argc, char** argv) {
     return fail("Range sample patches and retouch source/target guides should use image-to-view mapping and mapper-backed drag coordinates");
   }
   const QStringList pixel_grid_alignment_contract = {
-      QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\""),
+      QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v5|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\""),
       QStringLiteral("readonly property bool pixelGridFullResolutionBacked: (nativePreviewActive &&\n                                                              editorPreview.displayPreviewNativeFullResolution) ||"),
       QStringLiteral("Number(editorPreview.sourceImageWidth || 0) <= editorPreview.previewTargetEdge"),
       QStringLiteral("Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge"),
@@ -584,12 +621,12 @@ int main(int argc, char** argv) {
       QStringLiteral("const rect = viewRectForImage(\n                        pixelX / sourceWidth,\n                        pixelY / sourceHeight,\n                        1.0 / sourceWidth,\n                        1.0 / sourceHeight)"),
       QStringLiteral("readonly property string pixelBrushCursorSnapContract: \"pixel-brush-cursor:v2|source-cell:floor|screen-rect:mapper|visible:pixel-grid|source-backed:pixelGridFullResolutionBacked\""),
       QStringLiteral("visible: root.pixelExactToolReady() && viewport.pixelGridVisible && cell.valid"),
-      QStringLiteral("const contentLeft = viewport.paintedContentX"),
-      QStringLiteral("const contentTop = viewport.paintedContentY"),
-      QStringLiteral("const startXIndex = Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))"),
-      QStringLiteral("const startYIndex = Math.max(0, Math.floor((visibleTop - contentTop) / stepY))"),
-      QStringLiteral("const lineX = Math.round(contentLeft + xIndex * stepX) + 0.5"),
-      QStringLiteral("const lineY = Math.round(contentTop + yIndex * stepY) + 0.5")};
+      QStringLiteral("readonly property real contentLeft: viewport.paintedContentX"),
+      QStringLiteral("readonly property real contentTop: viewport.paintedContentY"),
+      QStringLiteral("Math.floor((visibleLeft - contentLeft) / stepX)"),
+      QStringLiteral("Math.floor((visibleTop - contentTop) / stepY)"),
+      QStringLiteral("Math.round(pixelGridOverlay.contentLeft + sourceIndex * pixelGridOverlay.stepX)"),
+      QStringLiteral("Math.round(pixelGridOverlay.contentTop + sourceIndex * pixelGridOverlay.stepY)")};
   if (!require_source_patterns(
           studio_workspace_source,
           pixel_grid_alignment_contract,

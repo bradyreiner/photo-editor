@@ -526,11 +526,11 @@ static float interpolate_tone_anchors(float stops, thread const float* input_sto
   if (stops <= input_stops[0]) {
     return stops + (output_stops[0] - input_stops[0]);
   }
-  if (stops >= input_stops[6]) {
-    return stops + (output_stops[6] - input_stops[6]) * 0.72f;
+  if (stops >= input_stops[8]) {
+    return stops + (output_stops[8] - input_stops[8]) * 0.72f;
   }
 
-  for (int index = 0; index < 6; ++index) {
+  for (int index = 0; index < 8; ++index) {
     if (stops < input_stops[index] || stops > input_stops[index + 1]) {
       continue;
     }
@@ -645,32 +645,38 @@ static float apply_photographic_tone_curve(float value, constant PreToneUniforms
   const float blacks = gentle_signed_response(clamp(uniforms.blacks, -1.0f, 1.0f));
   const float brightness = gentle_signed_response(clamp(uniforms.brightness, -1.0f, 1.0f));
 
-  float input_stops[7] = {-8.0f, -4.6f, -2.15f, 0.0f, 1.15f, 2.45f, 5.25f};
-  float contrast_weights[7] = {0.05f, 0.20f, 0.62f, 0.0f, 1.0f, 0.04f, 0.02f};
-  float output_stops[7];
+  // Keep these anchors exactly aligned with apply_photographic_tone_curve on
+  // the CPU. Preview and export must not use different tonal zone models.
+  float input_stops[9] = {-8.0f, -5.25f, -3.20f, -1.45f, 0.0f, 1.35f, 2.55f, 4.25f, 6.50f};
+  float contrast_weights[9] = {0.02f, 0.08f, 0.34f, 0.82f, 0.0f, 0.86f, 0.46f, 0.10f, 0.03f};
+  float output_stops[9];
   const float contrast_scale = contrast >= 0.0f ? 0.44f : 0.58f;
-  for (int index = 0; index < 7; ++index) {
+  for (int index = 0; index < 9; ++index) {
     const float local_slope =
         clamp(1.0f + contrast * contrast_scale * contrast_weights[index], 0.56f, 1.42f);
     output_stops[index] = input_stops[index] * local_slope;
   }
 
-  output_stops[0] += blacks * 1.35f;
-  output_stops[1] += blacks * 0.68f + shadows * 1.35f;
-  output_stops[2] += shadows * 1.10f + blacks * 0.18f;
-  output_stops[3] += brightness * 0.90f;
-  output_stops[4] += brightness * 0.65f + highlights * 0.18f;
-  output_stops[5] += highlights * 0.70f + whites * 0.26f;
-  output_stops[6] += whites * 1.02f + highlights * 0.32f;
+  output_stops[0] += blacks * 2.80f;
+  output_stops[1] += blacks * 2.60f;
+  output_stops[2] += blacks * 3.60f + shadows * 0.42f;
+  output_stops[3] += shadows * 1.14f + blacks * 0.30f;
+  output_stops[4] += brightness * 0.90f;
+  output_stops[5] += brightness * 0.65f + highlights * 0.68f;
+  output_stops[6] += highlights * 1.04f + whites * 0.18f;
+  output_stops[7] += whites * 0.82f + highlights * 0.16f;
+  output_stops[8] += whites * 1.12f;
 
   const float zone_offset = zone_exposure_delta(input_stop, uniforms) * 0.75f;
-  output_stops[1] += zone_offset * 0.55f;
-  output_stops[2] += zone_offset * 0.82f;
-  output_stops[3] += zone_offset * 0.74f;
-  output_stops[4] += zone_offset * 0.68f;
-  output_stops[5] += zone_offset * 0.60f;
+  output_stops[1] += zone_offset * 0.40f;
+  output_stops[2] += zone_offset * 0.68f;
+  output_stops[3] += zone_offset * 0.82f;
+  output_stops[4] += zone_offset * 0.74f;
+  output_stops[5] += zone_offset * 0.68f;
+  output_stops[6] += zone_offset * 0.58f;
+  output_stops[7] += zone_offset * 0.34f;
 
-  for (int index = 1; index < 7; ++index) {
+  for (int index = 1; index < 9; ++index) {
     output_stops[index] = max(output_stops[index], output_stops[index - 1] + 0.18f);
   }
 
@@ -1119,11 +1125,11 @@ kernel void apply_post_color(
         ? rgb_hue_for_selection(pixel.rgb)
         : normalized_hue;
     if (mixer_hue_for_selection >= 0.0f) {
-      const float hue_scale = uniforms.color_mixer_model == 2 ? 0.16f : 0.14f;
+      const float hue_scale = uniforms.color_mixer_model == 2 ? 0.16f : 0.22f;
       const float saturation_scale = uniforms.color_mixer_model == 3 ? 0.72f
-          : (uniforms.color_mixer_model == 2 ? 0.92f : 0.80f);
+          : (uniforms.color_mixer_model == 2 ? 0.92f : 1.15f);
       const float luminance_scale = uniforms.color_mixer_model == 2 ? 0.14f
-          : (uniforms.color_mixer_model == 3 ? 0.20f : 0.18f);
+          : (uniforms.color_mixer_model == 3 ? 0.20f : 0.30f);
       for (int ch = 0; ch < 8; ++ch) {
         const float mixer_weight = channel_weight_for_index(mixer_hue_for_selection, ch);
         if (mixer_weight > 0.0f) {

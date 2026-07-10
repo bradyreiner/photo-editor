@@ -12,7 +12,7 @@ require_signature=0
 
 usage() {
   cat <<'EOF'
-Verify a packaged macOS PhotoEditor DMG.
+Verify a packaged macOS Virel Studio DMG.
 
 Usage:
   scripts/verify-macos-release.sh [options]
@@ -67,7 +67,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "${dmg_path}" ]; then
-  dmg_path="${package_dir}/PhotoEditor-${version}-Darwin.dmg"
+  dmg_path="$(find "${package_dir}" -maxdepth 2 -type f -name "VirelStudio-${version}-Darwin-*.dmg" | head -n 1)"
 fi
 
 [ -f "${dmg_path}" ] || fail "DMG not found: ${dmg_path}"
@@ -91,11 +91,11 @@ trap detach EXIT
 log "Mounting DMG read-only"
 hdiutil attach -readonly -nobrowse -mountpoint "${mount_point}" "${dmg_path}" >/dev/null
 
-app_path="${mount_point}/PhotoEditor.app"
-[ -d "${app_path}" ] || fail "PhotoEditor.app not found inside DMG"
+app_path="${mount_point}/VirelStudio.app"
+[ -d "${app_path}" ] || fail "VirelStudio.app not found inside DMG"
 
 for helper in \
-  PhotoEditor \
+  VirelStudio \
   catalog_carousel_documents \
   catalog_export_jobs \
   catalog_local_db \
@@ -108,16 +108,31 @@ for helper in \
   [ -x "${app_path}/Contents/MacOS/${helper}" ] || fail "missing executable helper: ${helper}"
 done
 
-for postgres_tool in initdb pg_ctl; do
+for postgres_tool in initdb pg_ctl pg_dump pg_restore; do
   [ -x "${app_path}/Contents/Resources/postgres/bin/${postgres_tool}" ] || fail "missing bundled PostgreSQL tool: ${postgres_tool}"
 done
 
 [ -d "${app_path}/Contents/Frameworks" ] || fail "Qt frameworks were not bundled under Contents/Frameworks"
+[ -f "${app_path}/Contents/Resources/licenses/LICENSE" ] || fail "application license is missing"
+[ -f "${app_path}/Contents/Resources/licenses/THIRD_PARTY_NOTICES.md" ] || fail "third-party notices are missing"
 
 log "Checking Mach-O dynamic library paths"
 while IFS= read -r -d '' candidate; do
   if file -b "${candidate}" | grep -q 'Mach-O'; then
-    bad_paths="$(otool -L "${candidate}" | grep -E '/opt/homebrew|/usr/local/opt' || true)"
+    install_id="$(otool -D "${candidate}" 2>/dev/null | sed -n '2p' || true)"
+    bad_paths="$(
+      otool -L "${candidate}" | sed '1d' | awk '{print $1}' |
+        while IFS= read -r dependency; do
+          if [ "${dependency}" = "${install_id}" ]; then
+            continue
+          fi
+          case "${dependency}" in
+            /opt/homebrew/*|/usr/local/opt/*)
+              printf '%s\n' "${dependency}"
+              ;;
+          esac
+        done
+    )"
     if [ -n "${bad_paths}" ]; then
       printf '%s\n' "${bad_paths}" >&2
       fail "${candidate#${app_path}/} still links to local package-manager paths"

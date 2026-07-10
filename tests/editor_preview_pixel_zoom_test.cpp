@@ -4,6 +4,7 @@
 
 #include <QCoreApplication>
 #include <QColor>
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QEventLoop>
@@ -387,11 +388,20 @@ int main(int argc, char** argv) {
       read_source_file(QStringLiteral("apps/desktop/src/editor_preview_texture.h"));
   const auto mask_inspector_source =
       read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskInspectorSections.qml"));
-	  if (studio_workspace_source.isEmpty() ||
-	      controller_source.isEmpty() ||
+  const auto shared_mask_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/SharedMaskOverlay.qml"));
+  const auto crop_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/components/CropOverlay.qml"));
+  const auto mask_canvas_overlay_source =
+      read_source_file(QStringLiteral("apps/desktop/qml/workspaces/MaskCanvasOverlay.qml"));
+  if (studio_workspace_source.isEmpty() ||
+      controller_source.isEmpty() ||
 	      controller_header_source.isEmpty() ||
 	      texture_header_source.isEmpty() ||
 	      mask_inspector_source.isEmpty() ||
+	      shared_mask_overlay_source.isEmpty() ||
+	      crop_overlay_source.isEmpty() ||
+	      mask_canvas_overlay_source.isEmpty() ||
 	      !controller_source.contains(QStringLiteral("const auto source_size = sourceImageSize();\n  if (source_size.width() > 0)")) ||
 	      !controller_source.contains(QStringLiteral("const auto source_size = sourceImageSize();\n  if (source_size.height() > 0)")) ||
 	      !studio_workspace_source.contains(QStringLiteral("readonly property bool pixelGridFullResolutionBacked: (nativePreviewActive &&")) ||
@@ -401,7 +411,9 @@ int main(int argc, char** argv) {
 		      !studio_workspace_source.contains(QStringLiteral("readonly property bool pixelGridVisible: pixelInspectionActive")) ||
 			      !studio_workspace_source.contains(QStringLiteral("readonly property bool highCostInspectionOverlaysVisible: true")) ||
 			      !studio_workspace_source.contains(QStringLiteral("pixel-inspection-performance:v3|allow-loupe-and-analysis-overlays-while-source-pixels-visible:true|viewport-publish-signature-dedup:true|callLater-coalesced:true|deferred-source-patch-refresh:520ms")) ||
-			      !studio_workspace_source.contains(QStringLiteral("pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked")) ||
+			      !studio_workspace_source.contains(QStringLiteral("pixel-grid-render:v5|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked")) ||
+			      !studio_workspace_source.contains(QStringLiteral("readonly property bool gridGeometryValid:")) ||
+			      studio_workspace_source.contains(QStringLiteral("id: pixelGridPaintTimer")) ||
 		      !studio_workspace_source.contains(QStringLiteral("(zoom <= 1.01 && !pixelInspectionActive)")) ||
 		      !studio_workspace_source.contains(QStringLiteral("property string lastPublishedPreviewViewportSignature: \"\"")) ||
 		      !studio_workspace_source.contains(QStringLiteral("function publishedPreviewViewportSignature(")) ||
@@ -417,7 +429,24 @@ int main(int argc, char** argv) {
 				      !studio_workspace_source.contains(QStringLiteral("if (pixelInspectionActive)\n                return")) ||
 			      !studio_workspace_source.contains(QStringLiteral("function onPreviewChanged() { viewport.schedulePreviewChangedViewportUpdate() }")) ||
 			      !controller_source.contains(QStringLiteral("preview.render.visible_tile_result_skipped")) ||
-			      !controller_source.contains(QStringLiteral("render_complete_to_handle_ms >= 500")) ||
+		      controller_source.contains(QStringLiteral("render_complete_to_handle_ms >= 500")) ||
+		      !controller_source.contains(QStringLiteral("pending_visible_viewport_request")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("deep-zoom-canvas:v2|item:viewport-bounded|coordinates:window-translated|hidden:skip-paint")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("readonly property rect visibleCanvasWindow:")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("x: root.visibleCanvasWindow.x")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("firstViewPoint.x - resolvedOffsetX")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("readonly property bool deepZoomCanvasMode:")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("function boundedCanvasCoordinate(")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("!root.deepZoomCanvasMode")) ||
+		      !shared_mask_overlay_source.contains(QStringLiteral("readonly property int maximumCanvasBackingEdge: 2048")) ||
+		      !crop_overlay_source.contains(QStringLiteral("crop-canvas-memory:v1|max-backing-edge:2048|hidden-or-oversized:1x1|repaint:visible-safe-only")) ||
+		      !crop_overlay_source.contains(QStringLiteral("width: backingAllowed ? parent.width : 1")) ||
+		      !crop_overlay_source.contains(QStringLiteral("function scheduleSafePaint()")) ||
+		      !mask_canvas_overlay_source.contains(QStringLiteral("mask-canvas-memory:v1|max-backing-edge:2048|hidden-or-oversized:1x1|repaint:visible-safe-only")) ||
+		      !mask_canvas_overlay_source.contains(QStringLiteral("function canvasBackingExtent(requestedExtent)")) ||
+		      !mask_canvas_overlay_source.contains(QStringLiteral("width: root.canvasBackingExtent(parent.width)")) ||
+		      shared_mask_overlay_source.contains(QStringLiteral("ctx.translate(-x, -y)")) ||
+		      shared_mask_overlay_source.contains(QStringLiteral("canvasWindow: root.visibleCanvasWindow")) ||
 			      !studio_workspace_source.contains(QStringLiteral("visible: root.loupeEnabled && viewport.loupeEnabled &&\n                     viewport.highCostInspectionOverlaysVisible")) ||
 		      !studio_workspace_source.contains(QStringLiteral("visible: root.focusPeakingOverlayEnabled && viewport.focusPeakingOverlayEnabled &&\n                     viewport.highCostInspectionOverlaysVisible")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function startPixelBrushSource(operationName)")) ||
@@ -634,6 +663,31 @@ int main(int argc, char** argv) {
 	    return fail("pixel inspection viewport should schedule a source-resolution visible-tile max preview request");
 	  }
 
+  const QRectF latest_viewport_rect(0.75, 0.75, 0.125, 0.125);
+  viewport_controller.setPreviewViewport(
+      latest_viewport_rect.x(),
+      latest_viewport_rect.y(),
+      latest_viewport_rect.width(),
+      latest_viewport_rect.height(),
+      128,
+      true);
+  const auto latest_visible_request =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::
+          pending_full_render_request(viewport_controller);
+  if (photo_editor::desktop::EditorPreviewControllerTestAccess::
+              viewport_max_preview_schedule_count(viewport_controller) !=
+          schedule_count_before + 2 ||
+      latest_visible_request.tile_visible_region != latest_viewport_rect ||
+      (!photo_editor::desktop::EditorPreviewControllerTestAccess::
+           full_render_pending(viewport_controller) &&
+       !photo_editor::desktop::EditorPreviewControllerTestAccess::
+           full_render_running(viewport_controller))) {
+    return fail("deep zoom should retain the latest visible-tile request while an older viewport tile is rendering");
+  }
+  if (!wait_for_preview_idle(viewport_controller)) {
+    return fail("queued deep-zoom visible-tile requests should settle");
+  }
+
   photo_editor::desktop::EditorPreviewController native_patch_controller;
   auto native_patch_texture =
       std::make_unique<photo_editor::desktop::FakeEditorPreviewTexture>();
@@ -659,6 +713,18 @@ int main(int argc, char** argv) {
   visible_patch_result.output_height = viewport_source.height();
   visible_patch_result.source_width = viewport_source.width();
   visible_patch_result.source_height = viewport_source.height();
+  const QRectF visible_patch_viewport(0.25, 0.25, 0.125, 0.125);
+  visible_patch_result.tile_visible_region_active = true;
+  visible_patch_result.tile_visible_region = visible_patch_viewport;
+  visible_patch_result.render_completed_at_msecs =
+      QDateTime::currentMSecsSinceEpoch() - 1000;
+  native_patch_controller.setPreviewViewport(
+      visible_patch_viewport.x(),
+      visible_patch_viewport.y(),
+      visible_patch_viewport.width(),
+      visible_patch_viewport.height(),
+      128,
+      true);
   photo_editor::desktop::EditorPreviewControllerTestAccess::handle_render_result(
       native_patch_controller,
       true,

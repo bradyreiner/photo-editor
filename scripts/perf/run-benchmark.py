@@ -17,7 +17,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_APP = REPO_ROOT / "build/dev-macos-debug/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
+DEFAULT_APP = REPO_ROOT / "build/dev-macos-debug/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "perf-artifacts"
 DEFAULT_SCENARIOS = (
     "perf-startup",

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include <QString>
 #include <QStringList>
 #include <QVariantList>
@@ -19,6 +21,7 @@ struct AgentLocalModelPlanRequest final {
   QVariantMap memory_packet;
   QVariantList few_shot_examples;
   bool allow_tool_call_plan = false;
+  std::function<bool()> cancellation_requested;
 };
 
 struct AgentLocalModelPlanResult final {
@@ -43,6 +46,7 @@ struct AgentLocalModelProofCritiqueRequest final {
   QString user_instructions;
   QVariantMap validation_report;
   QVariantList previous_attempts;
+  std::function<bool()> cancellation_requested;
 };
 
 struct AgentLocalModelProofCritiqueResult final {

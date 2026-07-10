@@ -13,6 +13,10 @@ namespace photo_editor::desktop {
 
 namespace {
 
+#ifndef PHOTO_EDITOR_APP_VERSION
+#define PHOTO_EDITOR_APP_VERSION "0.0.0"
+#endif
+
 QString ensure_directory(const QString& path) {
   if (path.isEmpty()) {
     return {};
@@ -143,6 +147,8 @@ QString friendly_helper_error(const QString& binary_name, const QString& failure
 
 QProcessEnvironment base_environment() {
   auto environment = QProcessEnvironment::systemEnvironment();
+  environment.insert(QStringLiteral("PHOTO_EDITOR_APP_VERSION"), QStringLiteral(PHOTO_EDITOR_APP_VERSION));
+  environment.insert(QStringLiteral("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP"), QStringLiteral("1"));
   environment.insert(QStringLiteral("PHOTO_EDITOR_APP_DATA_DIR"), app_data_root());
   environment.insert(QStringLiteral("PHOTO_EDITOR_LOG_DIR"), QDir(app_data_root()).filePath(QStringLiteral("logs")));
   environment.insert(

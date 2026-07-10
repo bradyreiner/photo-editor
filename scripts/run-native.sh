@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIGURE_PRESET="dev-macos-debug"
 BUILD_PRESET="build-dev-macos-debug"
 BUILD_DIR="${REPO_ROOT}/build/${CONFIGURE_PRESET}"
-APP_BINARY="${BUILD_DIR}/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
+APP_BINARY="${BUILD_DIR}/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
 NATIVE_LOG_STYLE="${PHOTO_EDITOR_NATIVE_LOG_STYLE:-pretty}"
 LOG_COLOR_MODE="${PHOTO_EDITOR_LOG_COLOR:-auto}"
 
@@ -186,7 +186,7 @@ run_step "Desktop configure" \
 run_step "Desktop build" \
   cmake --build --preset "${BUILD_PRESET}"
 
-EXISTING_APP_PIDS="$(pgrep -f "${BUILD_DIR}/apps/desktop/(photo_editor_app|PhotoEditor.app/Contents/MacOS/PhotoEditor)" || true)"
+EXISTING_APP_PIDS="$(pgrep -f "${BUILD_DIR}/apps/desktop/(photo_editor_app|VirelStudio.app/Contents/MacOS/VirelStudio)" || true)"
 if [ -n "${EXISTING_APP_PIDS}" ]; then
   warn "Stopping existing PhotoEditor instance before launch"
   while IFS= read -r pid; do

@@ -106,6 +106,7 @@ Rectangle {
         source: root.thumbnailSource
         sourceSize.width: root.screenAwareThumbnailSourceSize
         sourceSize.height: root.screenAwareThumbnailSourceSize
+        asynchronous: true
         cache: false
     }
 

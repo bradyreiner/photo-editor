@@ -207,10 +207,41 @@ if(PHOTO_EDITOR_BUILD_DESKTOP)
     agent_local_model_test
     PRIVATE
       Qt6::Core
+      Qt6::Gui
       Qt6::Network)
   photo_editor_apply_warnings(agent_local_model_test)
 
   add_test(NAME agent_local_model_test COMMAND agent_local_model_test)
+
+  add_executable(
+    agent_live_model_smoke_test
+    agent_live_model_smoke_test.cpp
+    ../apps/desktop/src/agent_local_model.h
+    ../apps/desktop/src/agent_local_model.cpp
+    ../apps/desktop/src/agent_edit_recipe_patch.h
+    ../apps/desktop/src/agent_edit_recipe_patch.cpp
+    ../apps/desktop/src/agent_edit_style.h
+    ../apps/desktop/src/agent_edit_style.cpp)
+  target_include_directories(
+    agent_live_model_smoke_test
+    PRIVATE
+      ../apps/desktop/src)
+  target_link_libraries(
+    agent_live_model_smoke_test
+    PRIVATE
+      Qt6::Core
+      Qt6::Gui
+      Qt6::Network)
+  photo_editor_apply_warnings(agent_live_model_smoke_test)
+
+  add_executable(agent_walkthrough_contract_test agent_walkthrough_contract_test.cpp)
+  target_compile_definitions(
+    agent_walkthrough_contract_test
+    PRIVATE
+      PHOTO_EDITOR_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+  photo_editor_apply_warnings(agent_walkthrough_contract_test)
+
+  add_test(NAME agent_walkthrough_contract_test COMMAND agent_walkthrough_contract_test)
 
   add_executable(
     agent_image_validation_test

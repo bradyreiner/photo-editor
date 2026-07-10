@@ -223,6 +223,7 @@ Rectangle {
                 visible: root.thumbnailReady
                 fillMode: Image.PreserveAspectCrop
                 smooth: true
+                asynchronous: true
                 cache: false
             }
 

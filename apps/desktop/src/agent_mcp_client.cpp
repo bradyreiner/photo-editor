@@ -246,7 +246,7 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
   http_request.append(url.host().toUtf8());
   http_request.append(':');
   http_request.append(QByteArray::number(url.port()));
-  http_request.append("\r\nOrigin: http://127.0.0.1\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nContent-Length: ");
+  http_request.append("\r\nOrigin: http://127.0.0.1\r\nAccept: application/json, text/event-stream\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: ");
   http_request.append(QByteArray::number(body.size()));
   http_request.append("\r\n\r\n");
   http_request.append(body);
@@ -293,17 +293,24 @@ QVariantMap AgentMcpClient::postJsonRpc(const QVariantMap& request) {
     if (QCoreApplication::instance() != nullptr) {
       QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
     }
-    if (socket.waitForReadyRead(10)) {
+    if (socket.bytesAvailable() > 0) {
       response.append(socket.readAll());
-      const auto header_end = response.indexOf("\r\n\r\n");
-      if (header_end < 0) {
-        continue;
-      }
+    }
+    const auto header_end = response.indexOf("\r\n\r\n");
+    if (header_end >= 0) {
       const auto header = response.left(header_end);
       const auto content_length = content_length_from_header(header);
       if (content_length >= 0 && response.size() >= header_end + 4 + content_length) {
         break;
       }
+    }
+    if (socket.state() == QAbstractSocket::UnconnectedState) {
+      response.append(socket.readAll());
+      break;
+    }
+    socket.waitForReadyRead(25);
+    if (socket.bytesAvailable() > 0) {
+      response.append(socket.readAll());
     }
   }
 

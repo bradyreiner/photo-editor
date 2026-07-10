@@ -36,10 +36,11 @@ namespace photo_editor::desktop::observability {
 
 namespace {
 
-#if defined(PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY) && PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY
-constexpr bool kDevObservabilityEnabled = true;
+#if (defined(PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY) && PHOTO_EDITOR_ENABLE_DEV_OBSERVABILITY) || \
+    (defined(PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS) && PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS)
+constexpr bool kLocalObservabilityEnabled = true;
 #else
-constexpr bool kDevObservabilityEnabled = false;
+constexpr bool kLocalObservabilityEnabled = false;
 #endif
 
 struct ObservabilityState final {
@@ -601,7 +602,7 @@ void observability_message_handler(
 }
 
 void ensure_initialized_locked() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return;
   }
   if (g_state.initialized) {
@@ -648,10 +649,10 @@ void ensure_initialized_locked() {
 
 }  // namespace
 
-bool enabled() { return kDevObservabilityEnabled; }
+bool enabled() { return kLocalObservabilityEnabled; }
 
 void initialize() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     qunsetenv(kEnabledEnv);
     qunsetenv(kSessionIdEnv);
     qunsetenv(kLogLevelEnv);
@@ -665,7 +666,7 @@ void initialize() {
 }
 
 QString sessionId() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return {};
   }
   QMutexLocker locker(&g_state.mutex);
@@ -674,7 +675,7 @@ QString sessionId() {
 }
 
 QString logLevel() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return {};
   }
   QMutexLocker locker(&g_state.mutex);
@@ -683,7 +684,7 @@ QString logLevel() {
 }
 
 QString runDirectory() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return {};
   }
   QMutexLocker locker(&g_state.mutex);
@@ -692,7 +693,7 @@ QString runDirectory() {
 }
 
 QString desktopLogFilePath() {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return {};
   }
   QMutexLocker locker(&g_state.mutex);
@@ -734,14 +735,14 @@ QString structuredMessage(const QString& event_name, const QVariantMap& fields) 
 }
 
 void logInfo(const QLoggingCategory& category, const QString& event_name, const QVariantMap& fields) {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return;
   }
   qCInfo(category).noquote() << structuredMessage(event_name, fields);
 }
 
 void logWarning(const QLoggingCategory& category, const QString& event_name, const QVariantMap& fields) {
-  if (!kDevObservabilityEnabled) {
+  if (!kLocalObservabilityEnabled) {
     return;
   }
   qCWarning(category).noquote() << structuredMessage(event_name, fields);

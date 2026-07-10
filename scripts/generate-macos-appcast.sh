@@ -4,6 +4,8 @@ set -euo pipefail
 
 distribution_dir="${PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR:-}"
 package_dir="${PHOTO_EDITOR_MACOS_PACKAGE_DIR:-}"
+private_key_file="${PHOTO_EDITOR_SPARKLE_PRIVATE_KEY_FILE:-}"
+download_url_prefix="${PHOTO_EDITOR_SPARKLE_DOWNLOAD_URL_PREFIX:-}"
 
 usage() {
   cat <<'EOF'
@@ -12,6 +14,8 @@ Generate a Sparkle appcast from packaged macOS release artifacts.
 Inputs via environment:
   PHOTO_EDITOR_SPARKLE_DISTRIBUTION_DIR  Sparkle distribution root containing bin/generate_appcast
   PHOTO_EDITOR_MACOS_PACKAGE_DIR         Directory containing packaged archives (for example DMGs)
+  PHOTO_EDITOR_SPARKLE_PRIVATE_KEY_FILE  Exported EdDSA private key file. Use '-' to read from stdin in CI.
+  PHOTO_EDITOR_SPARKLE_DOWNLOAD_URL_PREFIX  HTTPS prefix for enclosure URLs.
   PHOTO_EDITOR_ALLOW_UNSIGNED_APPCAST    Set to 1 to generate an appcast for unsigned local test artifacts
 EOF
 }
@@ -54,4 +58,16 @@ if [ "${PHOTO_EDITOR_ALLOW_UNSIGNED_APPCAST:-0}" != "1" ]; then
   done
 fi
 
-"${tool}" "${package_dir}"
+arguments=()
+if [ -n "${private_key_file}" ]; then
+  arguments+=(--ed-key-file "${private_key_file}")
+fi
+if [ -n "${download_url_prefix}" ]; then
+  arguments+=(--download-url-prefix "${download_url_prefix}")
+fi
+"${tool}" "${arguments[@]}" "${package_dir}"
+
+if ! grep -R "sparkle:edSignature" "${package_dir}"/*.xml >/dev/null 2>&1; then
+  echo "Generated appcast does not contain an EdDSA signature." >&2
+  exit 1
+fi

@@ -30,7 +30,7 @@ DEFAULT_ACTUAL_APP_WORKFLOW_APP = (
     REPO_ROOT / "build/dev-macos-debug/tests/actual_app_workflow_benchmark_driver"
 )
 DEFAULT_DESKTOP_APP = (
-    REPO_ROOT / "build/dev-macos-debug/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
+    REPO_ROOT / "build/dev-macos-debug/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
 )
 
 

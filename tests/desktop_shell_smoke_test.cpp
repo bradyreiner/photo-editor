@@ -1893,16 +1893,21 @@ int main(int argc, char** argv) {
       !editor_preview_controller_source.contains(QStringLiteral("return QColor(QStringLiteral(\"#24dcc2\"));")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function selectionOperationOverlayColor(operationName)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function resolvedMaskOverlayColor()")) ||
-      !mask_canvas_overlay_source.contains(QStringLiteral("settledMaskOutlineContract: \"outline-only|fragment-filtered|no-fill:v1\"")) ||
-      !shared_mask_overlay_source.contains(QStringLiteral("settledMaskOutlineContract: \"outline-only|fragment-filtered|no-fill:v1\"")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("settledMaskOutlineContract: \"final-alpha-contour|overlay-fill|marching-ants:v2\"")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("settledMaskOutlineContract: \"final-alpha-contour|overlay-fill|marching-ants:v2\"")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("function displayOutlinePathLargeEnough(points, isCandidate)")) ||
       !shared_mask_overlay_source.contains(QStringLiteral("function displayOutlinePathLargeEnough(points)")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("readonly property color overlayAccent: root.resolvedMaskOverlayColor()")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("return resolvedMaskOverlayColor()")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("GradientStop { position: 0.0; color: Qt.alpha(overlayAccent")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("root.strokeOutlinePaths(ctx, outlinePaths, root.resolvedMaskOverlayColor(), false)")) ||
-      mask_canvas_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(ctx, outlinePaths, overlayAccent, 0.18)")) ||
-      shared_mask_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(ctx, outlinePaths)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(ctx, outlinePaths)")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("property bool selectionFillVisible: false")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("property bool selectionFillVisible: false")) ||
+      !mask_canvas_overlay_source.contains(QStringLiteral("return root.selectionFillVisible &&")) ||
+      !shared_mask_overlay_source.contains(QStringLiteral("if (!root.selectionFillVisible ||")) ||
+      !studio_workspace_source.contains(QStringLiteral("selectionFillVisible: root.editInspectorTab === \"layers\"")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("return selectionOperationOverlayColor(\"subtract\")")) ||
       !mask_canvas_overlay_source.contains(QStringLiteral("root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)")) ||
       !mask_view_source.contains(QStringLiteral("function selectionOperationOverlayColor(operationName)")) ||
@@ -1913,7 +1918,7 @@ int main(int argc, char** argv) {
       !edit_view_source.contains(QStringLiteral("return selectionOperationOverlayColor(mask.operation)")) ||
       !studio_workspace_source.contains(QStringLiteral("function selectionOperationOverlayColor(operationName)")) ||
       !studio_workspace_source.contains(QStringLiteral("border.color: root.selectionOperationOverlayColor(editorPreview.activeMaskOperation)"))) {
-    return fail("selection overlays should use one solid custom-overridable color for live/candidate drawing and outline-only fragment-filtered settled masks");
+    return fail("selection overlays should use one solid custom-overridable color with final-alpha contour fill and marching-ants support");
   }
   if (!mask_inspector_source.contains(QStringLiteral("maskPreviewOverlayButton")) ||
       !mask_inspector_source.contains(QStringLiteral("Color Overlay")) ||
@@ -1967,8 +1972,9 @@ int main(int argc, char** argv) {
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"color-on-bw\"")) ||
       edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"image-on-bw\"")) ||
       !edit_view_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"marching-ants\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("if (editorPreview.maskPreviewDisplayMode !== \"marching-ants\")")) ||
-      !studio_workspace_source.contains(QStringLiteral("editorPreview.maskPreviewMode = editorPreview.maskPreviewDisplayMode === \"outline\" ? \"overlay\" : \"outline\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.maskPreviewMode = editorPreview.maskPreviewDisplayMode === \"marching-ants\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("? \"overlay\"")) ||
+      !studio_workspace_source.contains(QStringLiteral(": \"marching-ants\"")) ||
       !studio_workspace_source.contains(QStringLiteral("root.setActiveMaskPreviewVisible(editorPreview.maskPreviewDisplayMode === \"hidden\")")) ||
       !studio_workspace_source.contains(QStringLiteral("\"|preview:\" + String(editorPreview.maskPreviewDisplayMode || \"overlay\")")) ||
       !studio_workspace_source.contains(QStringLiteral("const mode = String(editorPreview.maskPreviewDisplayMode || \"overlay\").trim().toLowerCase()")) ||
@@ -1978,7 +1984,7 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("previewActive: editorPreview.maskPreviewDisplayMode !== \"hidden\"")) ||
       !brush_context_panel_source.contains(QStringLiteral("active: root.previewActive")) ||
       !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"overlay\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"outline\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"marching-ants\"")) ||
       !studio_workspace_source.contains(QStringLiteral("active: editorPreview.maskPreviewDisplayMode === \"hidden\"")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"hidden\"")) ||
       studio_workspace_source.contains(QStringLiteral("editorPreview.maskPreviewMode = \"none\"")) ||
@@ -2807,7 +2813,12 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstOutlineButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstHiddenButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstEditLayerButton\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("root.selectMaskSetAndLayer(root.activeMaskSetData(), true, true)")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.selectMaskSetAndLayer(root.activeMaskSetData(), true, false)")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.requestLayerFullResolutionPreview()")) ||
+      !editor_preview_controller_source.contains(QStringLiteral("EditorPreviewController::requestLayerFullResolutionPreview()")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Marching\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 100.0)")) ||
+      !studio_workspace_source.contains(QStringLiteral("value: root.clamp(editorPreview.activeMaskSelectionFineEdge, 0.0, 100.0)")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstVisibilityButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstInvertButton\"")) ||
       !studio_workspace_source.contains(QStringLiteral("objectName: \"maskFirstFeatherSlider\"")) ||
@@ -2900,7 +2911,12 @@ int main(int argc, char** argv) {
       !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerOpacityLabel\"")) ||
       !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerVisibilityButton\"")) ||
       !layer_row_action_zone_source.contains(QStringLiteral("objectName: \"photoLayerRowMoreMenuButton\"")) ||
-	      !studio_workspace_source.contains(QStringLiteral("reorderContract: \"layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("reorderContract: \"layer-reorder:v2|drag-release:any-distance:true|keyboard:true|menu:true|selection-preserved:true|locked:blocked\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function selectPhotoLayerWithModifiers(index, modifiers)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function beginInlinePhotoLayerRename(index)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerInlineNameField\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("drag.target: photoLayerReorderDragProxy")) ||
+	      !studio_workspace_source.contains(QStringLiteral("asynchronous: true")) ||
 	      !studio_workspace_source.contains(QStringLiteral("actionVisibilityContract: \"layer-actions:v2|lazy:true|active:false|hover-instantiates:false|precision-controls:properties-panel|keyboard-accessible:properties-panel|disabled-reasons:true\"")) ||
 	      !studio_workspace_source.contains(QStringLiteral("actionVisibilityContract: \"layer-structure-actions:v2|lazy:true|active:false|hover-instantiates:false|reorder:properties-menu|overflow-menu:true|destructive-separated:true|disabled-reasons:true\"")) ||
 	      !studio_workspace_source.contains(QStringLiteral("objectName: \"photoLayerInlineActions\"")) ||
@@ -3785,8 +3801,10 @@ int main(int argc, char** argv) {
       !library_view_source.contains(QStringLiteral("objectName: \"libraryImportBrowser\"")) ||
       !library_view_source.contains(QStringLiteral("objectName: \"libraryInspectorPanel\"")) ||
       !library_view_source.contains(QStringLiteral("surfaceContract: \"library-inspector:v1|preview:always|metadata:selection|review:single-selection|source-actions:selection|batch-summary:multi-selection|no-elide:true|no-overlap:true\"")) ||
-      !studio_workspace_source.contains(QStringLiteral("libraryWorkflowPolishContract: \"library-workflow-polish:v2|first-glance:justified-grid-dominant-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:compact-import-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved\"")) ||
-	      !studio_workspace_source.contains(QStringLiteral("libraryPageCompletionContract: \"page-completion:v2|library|sidebar:compact-import-status|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("libraryWorkflowPolishContract: \"library-workflow-polish:v3|first-glance:justified-grid-dominant-toolbar-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:no-empty-sources-rail-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("libraryPageCompletionContract: \"page-completion:v3|library|sidebar:none|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-batch|toolbar:search-filters-import-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioLibraryImportButton\"")) ||
+	      studio_workspace_source.contains(QStringLiteral("objectName: \"librarySourcesPanel\"")) ||
 	      !studio_workspace_source.contains(QStringLiteral("objectName: \"studioLibraryGalleryGrid\"")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function libraryGalleryRows(viewWidth)")) ||
 	      !studio_workspace_source.contains(QStringLiteral("property var galleryRows: []")) ||
@@ -5089,9 +5107,13 @@ int main(int argc, char** argv) {
 	      !tool_rail_source.contains(QStringLiteral("root.toolTriggered(tool)")) ||
 	      !tool_rail_source.contains(QStringLiteral("objectName: String(toolDelegate.tool.railObjectName || toolDelegate.tool.objectName || \"\")")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function beginEditToolSwitch(nextToolName)")) ||
-	      !studio_workspace_source.contains(QStringLiteral("layerMaskActivationLatencyContract: \"layer-mask-activation-latency:v1|panel-first:true|outline-trace:deferred|delay-ms:120|no-click-frame-outline-getter:true\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("layerMaskActivationLatencyContract: \"layer-mask-activation-latency:v2|panel-first:true|outline-trace:next-event-loop|delay-ms:0|no-click-frame-outline-getter:true\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("id: maskOutlineActivationTimer\n        interval: 0")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function deferMaskOutlineActivation()")) ||
 	      !studio_workspace_source.contains(QStringLiteral("root.deferMaskOutlineActivation()")) ||
+	      !studio_workspace_source.contains(QStringLiteral("return (toolName === \"adjust\" || toolName === \"layers\") &&")) ||
+	      !studio_workspace_source.contains(QStringLiteral("root.selectedEditTargetMaskSetId().length > 0")) ||
+	      !studio_workspace_source.contains(QStringLiteral("masked: editorPreview.hasActiveMask")) ||
 	      !studio_workspace_source.contains(QStringLiteral("|target-preservation:appropriate|selected-target:")) ||
       !studio_workspace_source.contains(QStringLiteral("|mask-tools-keep-active-selection:\" + String(root.maskToolKeepsActiveMask(root.editTool))")) ||
       !studio_workspace_source.contains(QStringLiteral("|non-mask-tools-clear-transient-mask-only:true|inspector-transient:reset")) ||
@@ -5101,11 +5123,11 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("root.startRetouchTool(root.editToolLastUsedVariant(\"retouch\", \"remove\"), true)")) ||
       !studio_workspace_source.contains(QStringLiteral("function startRetouchTool(modeName, switchAlreadyPrepared)")) ||
 	      !studio_workspace_source.contains(QStringLiteral("if (switchAlreadyPrepared !== true)")) ||
-	      !studio_workspace_source.contains(QStringLiteral("function cropHudModeLabel()")) ||
-	      !studio_workspace_source.contains(QStringLiteral("function cropHudModeMenuItems()")) ||
-	      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudModeMenuButton\"")) ||
-	      !studio_workspace_source.contains(QStringLiteral("menuItems: root.cropHudModeMenuItems()")) ||
-	      !studio_workspace_source.contains(QStringLiteral("onMenuItemTriggered: function(key) { root.handleEditRailMenuAction(\"crop\", key) }")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudCropButton\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudHorizonButton\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("objectName: \"cropHudTransformButton\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function cropInstructionText()")) ||
+	      !studio_workspace_source.contains(QStringLiteral("function swapCropAspectOrientation()")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function retouchModeVisibilityState(modeName)")) ||
 	      !studio_workspace_source.contains(QStringLiteral("function retouchHudModeMenuItems()")) ||
       !studio_workspace_source.contains(QStringLiteral("ToolCommandBar {")) ||
@@ -6974,7 +6996,7 @@ int main(int argc, char** argv) {
         photo_layers_group != nullptr &&
         photo_layers_group->property("sparseLayerUiContract")
             .toString()
-            .contains(QStringLiteral("layer-sparse-ui:v2"));
+            .contains(QStringLiteral("layer-sparse-ui:v3"));
     if (!sparse_layer_stack_mode ||
         photo_layer_inline_actions == nullptr ||
         photo_layer_structure_actions == nullptr ||
@@ -7079,7 +7101,7 @@ int main(int argc, char** argv) {
       expect_slider("colorReplaceSkinProtectionSlider", 0.0, 100.0, 0.0, "color replacement skin protection slider") !=
           EXIT_SUCCESS ||
       expect_slider("skinToneLineHueSlider", 0.0, 1.0, 0.08, "skin tone line hue slider") != EXIT_SUCCESS ||
-      expect_slider("cropZoomSlider", 0.5, 4.0, 1.0, "crop zoom slider") != EXIT_SUCCESS ||
+      expect_slider("cropZoomSlider", 1.0, 3.0, 1.0, "crop tightening slider") != EXIT_SUCCESS ||
       expect_slider("cropRectXSlider", 0.0, 100.0, 0.0, "crop rectangle x slider") !=
           EXIT_SUCCESS ||
       expect_slider("cropRectYSlider", 0.0, 100.0, 0.0, "crop rectangle y slider") !=
@@ -8278,12 +8300,14 @@ int main(int argc, char** argv) {
   }
   auto* crop_inspector_group = find_named_object(edit_workspace, QStringLiteral("cropInspectorGroup"));
   auto* crop_box_group = find_named_object(edit_workspace, QStringLiteral("cropBoxGroup"));
+  auto* crop_precision_group = find_named_object(edit_workspace, QStringLiteral("cropPrecisionGroup"));
   auto* crop_guide_aspect_group = find_named_object(edit_workspace, QStringLiteral("cropGuideAspectGroup"));
   auto* crop_transform_group = find_named_object(edit_workspace, QStringLiteral("cropTransformGroup"));
   auto* crop_liquify_group = find_named_object(edit_workspace, QStringLiteral("cropLiquifyGroup"));
   auto* detail_inspector_group = find_named_object(edit_workspace, QStringLiteral("detailInspectorGroup"));
   auto* lens_inspector_group = find_named_object(edit_workspace, QStringLiteral("lensInspectorGroup"));
-  if (crop_inspector_group == nullptr || crop_box_group == nullptr || crop_guide_aspect_group == nullptr ||
+  if (crop_inspector_group == nullptr || crop_box_group == nullptr || crop_precision_group == nullptr ||
+      crop_guide_aspect_group == nullptr ||
       crop_transform_group == nullptr || crop_liquify_group == nullptr || detail_inspector_group == nullptr ||
       lens_inspector_group == nullptr ||
       crop_inspector_group->property("visible").toBool() ||
@@ -8328,12 +8352,14 @@ int main(int argc, char** argv) {
       detail_inspector_tab->property("active").toBool() ||
       detail_inspector_group->property("visible").toBool() ||
       lens_inspector_group->property("visible").toBool() ||
-      crop_box_group->property("title").toString() != QStringLiteral("Crop Box") ||
-      crop_guide_aspect_group->property("title").toString() != QStringLiteral("Guides & Aspect") ||
-      crop_transform_group->property("title").toString() != QStringLiteral("Transform & Upright") ||
+      crop_box_group->property("title").toString() != QStringLiteral("Crop & Composition") ||
+      crop_precision_group->property("title").toString() != QStringLiteral("Position & Size") ||
+      crop_guide_aspect_group->property("title").toString() != QStringLiteral("Custom Aspect Ratio") ||
+      crop_transform_group->property("title").toString() != QStringLiteral("Perspective & Transform") ||
       crop_liquify_group->property("title").toString() != QStringLiteral("Liquify") ||
       !crop_box_group->property("expanded").toBool() ||
-      !crop_guide_aspect_group->property("expanded").toBool() ||
+      crop_precision_group->property("expanded").toBool() ||
+      crop_guide_aspect_group->property("expanded").toBool() ||
       crop_transform_group->property("expanded").toBool() ||
       crop_liquify_group->property("expanded").toBool() ||
       crop_liquify_group->property("visible").toBool()) {
@@ -8400,7 +8426,9 @@ int main(int argc, char** argv) {
 	  auto* crop_tool_hud = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHud"));
 	  auto* crop_tool_header_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolHeaderLabel"));
 	  auto* crop_tool_aspect_label = edit_workspace->findChild<QObject*>(QStringLiteral("cropToolAspectLabel"));
-	  auto* crop_mode_menu_button = find_named_object(edit_workspace, QStringLiteral("cropHudModeMenuButton"));
+	  auto* crop_hud_crop_button = find_named_object(edit_workspace, QStringLiteral("cropHudCropButton"));
+	  auto* crop_hud_horizon_button = find_named_object(edit_workspace, QStringLiteral("cropHudHorizonButton"));
+	  auto* crop_hud_transform_button = find_named_object(edit_workspace, QStringLiteral("cropHudTransformButton"));
 	  auto* crop_active_canvas_border = edit_workspace->findChild<QObject*>(QStringLiteral("cropActiveCanvasBorder"));
 	  auto* crop_box_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropBoxOverlay"));
 	  auto* crop_horizon_overlay = edit_workspace->findChild<QObject*>(QStringLiteral("cropHorizonOverlay"));
@@ -8412,14 +8440,15 @@ int main(int argc, char** argv) {
   editor_preview.setCropPreset(QStringLiteral("4x5"));
   QCoreApplication::processEvents();
 	  if (crop_tool_hud == nullptr || crop_tool_header_label == nullptr || crop_tool_aspect_label == nullptr ||
-	      crop_mode_menu_button == nullptr ||
+	      crop_hud_crop_button == nullptr || crop_hud_horizon_button == nullptr ||
+	      crop_hud_transform_button == nullptr ||
 	      crop_active_canvas_border == nullptr ||
 	      crop_box_overlay == nullptr || crop_horizon_overlay == nullptr || crop_transform_overlay == nullptr ||
 	      edit_zoom_toolbar_for_crop == nullptr || edit_action_toolbar_for_crop == nullptr ||
 	      edit_context_panel_for_crop == nullptr || edit_filmstrip_for_crop == nullptr ||
-	      !crop_tool_hud->property("visible").toBool() || !crop_active_canvas_border->property("visible").toBool() ||
-      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v1|tool:crop")) ||
-      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("mode-switch:true")) ||
+	      !crop_tool_hud->property("visible").toBool() || crop_active_canvas_border->property("visible").toBool() ||
+      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("specialized-tool-hud:v2|tool:crop")) ||
+      !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("modes:visible")) ||
       !crop_tool_hud->property("hudContract").toString().contains(QStringLiteral("no-elide:true")) ||
       !edit_workspace->property("activeCanvasToolChromeReduced").toBool() ||
       edit_workspace->property("editContextPanelActive").toBool() ||
@@ -8429,15 +8458,11 @@ int main(int argc, char** argv) {
       edit_action_toolbar_for_crop->property("visible").toBool() ||
 	      edit_workspace->property("cropToolMode").toString() !=
 	          QStringLiteral("transform") ||
-	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / TRANSFORM") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP") ||
 	      crop_tool_aspect_label->property("text").toString() != QStringLiteral("Aspect 4x5") ||
-	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Transform") ||
-	      !crop_mode_menu_button->property("visible").toBool() ||
-	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("items:4")) ||
-	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("checked:1")) ||
-	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("disabled:0")) ||
-	      !crop_mode_menu_button->property("menuContract").toString().contains(QStringLiteral("danger:0")) ||
-	      !crop_mode_menu_button->property("tooltipText").toString().contains(QStringLiteral("reset crop")) ||
+	      !crop_hud_transform_button->property("active").toBool() ||
+	      crop_hud_crop_button->property("active").toBool() ||
+	      crop_hud_horizon_button->property("active").toBool() ||
 	      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
 	      !crop_transform_overlay->property("active").toBool()) {
 	    return fail("crop transform mode should own the canvas HUD, show aspect, and reduce persistent edit chrome");
@@ -8453,8 +8478,8 @@ int main(int argc, char** argv) {
   constexpr auto kPi = 3.14159265358979323846;
   const auto expected_horizon_angle = std::atan2(0.2, 0.8) * 180.0 / kPi;
 	  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("horizon") ||
-	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / HORIZON") ||
-	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Horizon") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP") ||
+	      !crop_hud_horizon_button->property("active").toBool() ||
 	      editor_preview.cropEditing() || crop_box_overlay->property("active").toBool() ||
 	      crop_transform_overlay->property("active").toBool() ||
 	      !crop_horizon_overlay->property("active").toBool() ||
@@ -8486,8 +8511,8 @@ int main(int argc, char** argv) {
   }
   QCoreApplication::processEvents();
 	  if (edit_workspace->property("cropToolMode").toString() != QStringLiteral("crop") ||
-	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP / BOX") ||
-	      crop_mode_menu_button->property("text").toString() != QStringLiteral("Crop Box") ||
+	      crop_tool_header_label->property("text").toString() != QStringLiteral("CROP") ||
+	      !crop_hud_crop_button->property("active").toBool() ||
 	      !editor_preview.cropEditing() || !crop_box_overlay->property("active").toBool() ||
 	      crop_transform_overlay->property("active").toBool()) {
     return fail("crop-box mode should reactivate direct crop editing and hide transform handles");
@@ -8502,7 +8527,9 @@ int main(int argc, char** argv) {
   crop_box_overlay->setProperty("cropHeight", 0.5);
   QCoreApplication::processEvents();
   QVariant near_corner_hit_mode;
+  QVariant top_edge_hit_mode;
   QVariant center_hit_mode;
+  QVariant normalized_aspect_ratio;
   if (crop_box_overlay->property("handleHitSize").toDouble() < 28.0 ||
       crop_box_overlay->property("handleVisualSize").toDouble() > 16.0 ||
       !QMetaObject::invokeMethod(
@@ -8515,11 +8542,23 @@ int main(int argc, char** argv) {
       !QMetaObject::invokeMethod(
           crop_box_overlay,
           "testHitMode",
+          Q_RETURN_ARG(QVariant, top_edge_hit_mode),
+          Q_ARG(QVariant, 100.0),
+          Q_ARG(QVariant, 20.0)) ||
+      top_edge_hit_mode.toString() != QStringLiteral("top") ||
+      !QMetaObject::invokeMethod(
+          crop_box_overlay,
+          "constraintAspectRatio",
+          Q_RETURN_ARG(QVariant, normalized_aspect_ratio)) ||
+      std::abs(normalized_aspect_ratio.toDouble() - 0.4) > 1e-6 ||
+      !QMetaObject::invokeMethod(
+          crop_box_overlay,
+          "testHitMode",
           Q_RETURN_ARG(QVariant, center_hit_mode),
           Q_ARG(QVariant, 100.0),
           Q_ARG(QVariant, 45.0)) ||
       center_hit_mode.toString() != QStringLiteral("move")) {
-    return fail("crop-box overlay should expose forgiving handle hit targets without turning the whole crop into a handle");
+    return fail("crop-box overlay should expose forgiving corner and edge targets with source-correct aspect constraints");
   }
   const QStringList guide_modes{
       QStringLiteral("Off"),
@@ -8541,6 +8580,9 @@ int main(int argc, char** argv) {
     }
   }
   trace_smoke_progress("crop tool modes checked");
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_CROP_WORKFLOW")) {
+    return EXIT_SUCCESS;
+  }
   if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_VISIBLE_SURFACE_COUNTS")) {
     QVariant crop_surface_signature;
     if (!QMetaObject::invokeMethod(
@@ -12131,10 +12173,10 @@ int main(int argc, char** argv) {
   if (crop_rect_reset_button == nullptr || transform_reset_button == nullptr || crop_aspect_combo == nullptr ||
       crop_aspect_input == nullptr || crop_aspect_add_button == nullptr || crop_aspect_remove_button == nullptr ||
       !crop_rect_reset_button->property("visible").toBool() ||
-      !transform_reset_button->property("visible").toBool() ||
+      transform_reset_button->property("visible").toBool() ||
       crop_aspect_combo->property("count").toInt() < 6 ||
       !crop_aspect_combo->property("visible").toBool()) {
-    return fail("crop inspector should expose separate crop/transform resets and a discoverable aspect preset menu");
+    return fail("crop inspector should prioritize crop, aspect, and reset while keeping transform reset in advanced controls");
   }
   trace_smoke_progress("crop inspector checked");
   editor_preview.removeCustomCropAspectPreset(QStringLiteral("13:7"));
@@ -12184,6 +12226,43 @@ int main(int argc, char** argv) {
   for (auto iteration = 0; iteration < 6; ++iteration) {
     QCoreApplication::processEvents();
   }
+  QVariant pointer_range_selected;
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "selectPhotoLayerWithModifiers",
+          Q_RETURN_ARG(QVariant, pointer_range_selected),
+          Q_ARG(QVariant, QVariant(1)),
+          Q_ARG(QVariant, QVariant(static_cast<int>(Qt::ShiftModifier)))) ||
+      !pointer_range_selected.toBool() ||
+      edit_workspace->property("selectedPhotoLayerIndices").toList().size() != 2) {
+    return fail("Shift-click layer selection should select the contiguous layer range");
+  }
+  QVariant inline_rename_started;
+  QVariant inline_rename_committed;
+  if (!QMetaObject::invokeMethod(
+          edit_workspace,
+          "beginInlinePhotoLayerRename",
+          Q_RETURN_ARG(QVariant, inline_rename_started),
+          Q_ARG(QVariant, QVariant(0))) ||
+      !inline_rename_started.toBool() ||
+      !QMetaObject::invokeMethod(
+          edit_workspace,
+          "commitInlinePhotoLayerRename",
+          Q_RETURN_ARG(QVariant, inline_rename_committed),
+          Q_ARG(QVariant, QVariant(0)),
+          Q_ARG(QVariant, QVariant(QStringLiteral("Smoke Text Renamed")))) ||
+      !inline_rename_committed.toBool() ||
+      editor_preview.photoLayers().at(0).toMap().value(QStringLiteral("displayName")).toString() !=
+          QStringLiteral("Smoke Text Renamed")) {
+    return fail("layer rows should support committed inline rename without opening properties");
+  }
+  QVariant restore_single_layer_selection;
+  QMetaObject::invokeMethod(
+      edit_workspace,
+      "setActivePhotoLayerSelection",
+      Q_RETURN_ARG(QVariant, restore_single_layer_selection),
+      Q_ARG(QVariant, QVariant(0)),
+      Q_ARG(QVariant, QVariant(false)));
   if (edit_inspector_panel->property("title").toString() != QStringLiteral("Layers") ||
       !layers_inspector_tab->property("active").toBool() ||
       !photo_layers_group->property("visible").toBool() ||
@@ -12220,7 +12299,7 @@ int main(int argc, char** argv) {
           "layerStackAcceptanceSignature",
           Q_RETURN_ARG(QVariant, live_layer_stack_acceptance_signature)) ||
       !live_layer_stack_acceptance_signature.toString().contains(
-          QStringLiteral("layer-stack-acceptance:v1|select:true|rename:properties|reorder:move-buttons-menu")) ||
+          QStringLiteral("layer-stack-acceptance:v2|select:pointer-modifiers-keyboard|rename:inline-f2-properties|reorder:drag-keyboard-menu")) ||
       !live_layer_stack_acceptance_signature.toString().contains(
           QStringLiteral("|visibility:toggle-and-state|opacity:fixed-readout|mask-select:inspector-context|transform:entry-exit|escape:transient-first")) ||
       photo_layers_group->property("layerStackAcceptanceContract").toString() !=
@@ -12557,14 +12636,17 @@ int main(int argc, char** argv) {
       photo_layers_group != nullptr &&
       photo_layers_group->property("sparseLayerUiContract")
           .toString()
-          .contains(QStringLiteral("layer-sparse-ui:v2"));
+          .contains(QStringLiteral("layer-sparse-ui:v3"));
   if (sparse_layer_stack_mode &&
       (photo_layer_sparse_header == nullptr ||
        photo_layer_properties_panel == nullptr ||
        !photo_layer_properties_panel->property("visible").toBool() ||
        !photo_layer_properties_panel->property("sparsePropertiesContract")
             .toString()
-            .contains(QStringLiteral("layer-properties:v1|source:active-layer")) ||
+            .contains(QStringLiteral("layer-properties:v2|source:active-layer")) ||
+       !photo_layer_properties_panel->property("sparsePropertiesContract")
+            .toString()
+            .contains(QStringLiteral("quick-actions:mask-lock-duplicate-delete")) ||
        !photo_layer_properties_panel->property("sparsePropertiesContract")
             .toString()
             .contains(QStringLiteral("progressive:true")) ||
@@ -12572,6 +12654,7 @@ int main(int argc, char** argv) {
        photo_layer_blend_combo == nullptr ||
        photo_layer_clip_button == nullptr ||
        photo_layer_mask_button == nullptr ||
+       !photo_layer_mask_button->property("visible").toBool() ||
        photo_layer_transform_button == nullptr ||
        photo_layer_row_solo_button == nullptr ||
        photo_layer_selection_button == nullptr ||
@@ -12580,6 +12663,12 @@ int main(int argc, char** argv) {
        paste_global_adjustments_to_photo_layer_button == nullptr ||
        toggle_photo_layer_adjustments_preview_button == nullptr ||
        sync_photo_layer_adjustments_button == nullptr ||
+       photo_layer_lock_button == nullptr ||
+       !photo_layer_lock_button->property("visible").toBool() ||
+       photo_layer_duplicate_button == nullptr ||
+       !photo_layer_duplicate_button->property("visible").toBool() ||
+       photo_layer_delete_button == nullptr ||
+       !photo_layer_delete_button->property("visible").toBool() ||
        photo_layer_row == nullptr ||
        photo_layer_row->property("height").toDouble() > 54.0 ||
        !photo_layer_row->property("layoutFits").toBool() ||
@@ -12671,7 +12760,7 @@ int main(int argc, char** argv) {
       photo_layer_structure_actions_contract !=
           QStringLiteral("layer-structure-actions:v2|lazy:true|active:false|hover-instantiates:false|reorder:properties-menu|overflow-menu:true|destructive-separated:true|disabled-reasons:true") ||
       photo_layer_reorder_contract !=
-          QStringLiteral("layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true") ||
+          QStringLiteral("layer-reorder:v2|drag-release:any-distance:true|keyboard:true|menu:true|selection-preserved:true|locked:blocked") ||
       photo_layer_row == nullptr || photo_layer_thumbnail == nullptr ||
       photo_layer_thumbnail_image == nullptr || photo_layer_type_icon == nullptr ||
       photo_layer_name_field == nullptr || photo_layer_state_label == nullptr ||
@@ -16945,16 +17034,18 @@ int main(int argc, char** argv) {
               << page_visibility_audit_signature.toString().toStdString() << '\n';
     return fail("App shell visibility audit should report Library as the active preserved-function page");
   }
-  auto* library_sources_panel = library_workspace->findChild<QObject*>(QStringLiteral("librarySourcesPanel"));
+  auto* studio_library_import_button =
+      find_named_object(library_workspace, QStringLiteral("studioLibraryImportButton"));
   auto* library_inspector_panel = library_workspace->findChild<QObject*>(QStringLiteral("libraryInspectorPanel"));
   QVariant library_workflow_polish_signature;
-  if (library_sources_panel == nullptr || library_inspector_panel == nullptr ||
-      library_sources_panel->property("title").toString() != QStringLiteral("Sources") ||
+  if (studio_library_import_button == nullptr || library_inspector_panel == nullptr ||
+      !studio_library_import_button->property("visible").toBool() ||
+      studio_library_import_button->property("text").toString() != QStringLiteral("Import") ||
       library_inspector_panel->property("title").toString() != QStringLiteral("Inspector") ||
       library_workspace->property("libraryWorkflowPolishContract").toString() !=
-          QStringLiteral("library-workflow-polish:v2|first-glance:justified-grid-dominant-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:compact-import-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved") ||
+          QStringLiteral("library-workflow-polish:v3|first-glance:justified-grid-dominant-toolbar-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:no-empty-sources-rail-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved") ||
       library_workspace->property("libraryPageCompletionContract").toString() !=
-          QStringLiteral("page-completion:v2|library|sidebar:compact-import-status|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline") ||
+          QStringLiteral("page-completion:v3|library|sidebar:none|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-batch|toolbar:search-filters-import-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline") ||
       !QMetaObject::invokeMethod(
           library_workspace,
           "libraryWorkflowPolishSignature",
@@ -16962,12 +17053,12 @@ int main(int argc, char** argv) {
       !library_workflow_polish_signature.toString().contains(
           QStringLiteral("library-workflow-polish:v1|search:idle|filters:clear|selection-mode:false|selected:0|view:grid")) ||
       !library_workflow_polish_signature.toString().contains(
-          QStringLiteral("|sources:true|inspector:true|inspector-state:single|import:false|activity:false")) ||
+          QStringLiteral("|sources:false|inspector:true|inspector-state:single|import:false|activity:false")) ||
       !library_workflow_polish_signature.toString().contains(
           QStringLiteral("|preserve:search-filter-select-rate-pick-reject-edit-import-compare-export"))) {
     std::cerr << "Library workflow polish: "
               << library_workflow_polish_signature.toString().toStdString() << '\n';
-    return fail("library side panels should use readable labels and the page should expose live workflow-polish completion state");
+    return fail("library toolbar import and inspector should use readable labels and expose live workflow-polish completion state");
   }
   auto* studio_library_gallery_grid =
       find_named_object(library_workspace, QStringLiteral("studioLibraryGalleryGrid"));
@@ -16975,26 +17066,42 @@ int main(int argc, char** argv) {
   library_workspace->setProperty("libraryInspectorPanelVisible", true);
   library_workspace->setProperty("catalogViewMode", QStringLiteral("grid"));
   process_layout_events(4);
+  const auto studio_library_gallery_grid_width =
+      studio_library_gallery_grid == nullptr
+          ? -1
+          : studio_library_gallery_grid->property("width").toInt();
+  const auto studio_library_gallery_viewport_width =
+      studio_library_gallery_grid == nullptr
+          ? -1
+          : studio_library_gallery_grid->property("galleryViewportWidth").toInt();
   if (studio_library_gallery_grid == nullptr ||
       !QMetaObject::invokeMethod(
           library_workspace,
           "libraryGalleryLayoutSignature",
           Q_RETURN_ARG(QVariant, library_gallery_layout_signature),
-          Q_ARG(QVariant, 620),
+          Q_ARG(QVariant, 800),
           Q_ARG(QVariant, 14)) ||
       !library_gallery_layout_signature.toString().contains(
-          QStringLiteral("library-gallery-layout:v1|raw:620|gutter:14|viewport:606")) ||
+          QStringLiteral("library-gallery-layout:v1|raw:800|gutter:14|viewport:786")) ||
+      !library_gallery_layout_signature.toString().contains(QStringLiteral("|last-justified:false|")) ||
       !library_gallery_layout_signature.toString().contains(QStringLiteral("|overflow:false")) ||
-      studio_library_gallery_grid->property("galleryViewportWidth").toInt() >=
-          studio_library_gallery_grid->property("width").toInt()) {
+      studio_library_gallery_viewport_width >= studio_library_gallery_grid_width) {
     std::cerr << "Library gallery layout: "
               << library_gallery_layout_signature.toString().toStdString()
               << " gridWidth="
-              << studio_library_gallery_grid->property("width").toInt()
+              << studio_library_gallery_grid_width
               << " viewport="
-              << studio_library_gallery_grid->property("galleryViewportWidth").toInt()
+              << studio_library_gallery_viewport_width
               << '\n';
-    return fail("library gallery rows should reserve a right gutter so inspector-open thumbnails are not clipped");
+    return fail("library gallery rows should reserve a right gutter and keep the final incomplete row at normal size");
+  }
+  if (qEnvironmentVariableIsSet("PHOTO_EDITOR_SMOKE_STOP_AFTER_LIBRARY_GALLERY_LAYOUT")) {
+    qunsetenv("PHOTO_EDITOR_DATABASE_URL");
+    qunsetenv("PHOTO_EDITOR_CACHE_DIR");
+    qunsetenv("PHOTO_EDITOR_APP_DATA_DIR");
+    editor_preview.setImageProvider(nullptr);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    return EXIT_SUCCESS;
   }
   auto* studio_library_search_input =
       find_named_object(library_workspace, QStringLiteral("studioLibrarySearchInput"));

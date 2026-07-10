@@ -27,15 +27,19 @@ Item {
     property real transformRotation: editorPreview.transformRotation
     property real genericTintOpacity: 0.18
     property bool outlineActivationDeferred: false
+    property bool selectionFillVisible: false
     readonly property int sharedOverlayVersion: 1
     readonly property string overlayGeometryContract: "image-rect-clipped|crop-rotation-aware:v1"
     readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
+    readonly property string outlineScaleBucketContract: "outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale"
     readonly property string outlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
     readonly property string handleReadabilityContract: "dual-contrast-halo|large-hit-target|color-independent:v1"
     readonly property string maskOverlayColorContract: "single-solid-default|custom-color-override|retouch-exception:v1"
-    readonly property string maskRasterPreviewPolicy: "editor-canvas-raster-mask-disabled|clean-exterior-vector-outline:v2"
+    readonly property string maskRasterPreviewPolicy: "editor-canvas-vector-mask-preview|final-alpha-contour-fill-and-outline:v3"
     readonly property string liveOverlayPerformanceContract: "live-brush-overlay|ui-frame-budget:16ms|point-budget:512|no-preview-render-block:v1"
-    readonly property string settledMaskOutlineContract: "outline-only|fragment-filtered|no-fill:v1"
+    readonly property string deepZoomCanvasPerformanceContract: "deep-zoom-canvas:v2|item:viewport-bounded|coordinates:window-translated|hidden:skip-paint"
+    readonly property int maximumCanvasBackingEdge: 2048
+    readonly property string settledMaskOutlineContract: "final-alpha-contour|overlay-fill|marching-ants:v2"
     readonly property string outlineTraceContract: "public-outline-trace|source|tolerance|provider|path-count|image-normalized|final-alpha:v2"
     readonly property var activeOutlineTrace: outlineActivationDeferred ? ({}) : (editorPreview.activeMaskOutlineTrace || ({}))
     readonly property string activeOutlineTraceSource: String(activeOutlineTrace.outline_trace_source || "")
@@ -53,9 +57,25 @@ Item {
     readonly property color defaultMaskOverlayColor: "#24dcc2"
     readonly property color activeOperationColor: resolvedOverlayColor(
                                                       defaultMaskOverlayColor)
+    readonly property bool deepZoomCanvasMode: Number(outlineVisualScale || 1.0) > 16.0
     property bool liveBrushVectorCanvasPaintPending: false
     property bool geometricMaskCanvasPaintPending: false
     property bool activeSelectionOutlinePaintPending: false
+    readonly property rect visibleCanvasWindow: {
+        const parentWidth = root.parent ? Math.max(0, Number(root.parent.width || 0)) : Math.max(0, root.width)
+        const parentHeight = root.parent ? Math.max(0, Number(root.parent.height || 0)) : Math.max(0, root.height)
+        const left = root.clamp(-root.x, 0, Math.max(0, root.width))
+        const top = root.clamp(-root.y, 0, Math.max(0, root.height))
+        const right = Math.min(
+                    root.clamp(parentWidth - root.x, 0, Math.max(0, root.width)),
+                    left + root.maximumCanvasBackingEdge)
+        const bottom = Math.min(
+                    root.clamp(parentHeight - root.y, 0, Math.max(0, root.height)),
+                    top + root.maximumCanvasBackingEdge)
+        if (right <= left || bottom <= top)
+            return Qt.rect(0, 0, 1, 1)
+        return Qt.rect(left, top, right - left, bottom - top)
+    }
 
     signal activeOutlineClicked(real normalizedX, real normalizedY)
 
@@ -64,11 +84,13 @@ Item {
         interval: 0
         repeat: false
         onTriggered: {
-            if (root.liveBrushVectorCanvasPaintPending)
+            if (root.liveBrushVectorCanvasPaintPending &&
+                    maskCanvasOverlay.visible && liveBrushVectorCanvas.visible)
                 liveBrushVectorCanvas.requestPaint()
-            if (root.geometricMaskCanvasPaintPending)
+            if (root.geometricMaskCanvasPaintPending &&
+                    maskCanvasOverlay.visible && geometricMaskCanvas.visible)
                 geometricMaskCanvas.requestPaint()
-            if (root.activeSelectionOutlinePaintPending)
+            if (root.activeSelectionOutlinePaintPending && activeSelectionOutline.visible)
                 activeSelectionOutline.requestPaint()
             root.liveBrushVectorCanvasPaintPending = false
             root.geometricMaskCanvasPaintPending = false
@@ -107,6 +129,12 @@ Item {
         root.activeSelectionOutlinePaintPending = true
         if (!sharedCanvasPaintTimer.running)
             sharedCanvasPaintTimer.start()
+    }
+
+    onVisibleCanvasWindowChanged: {
+        scheduleLiveBrushVectorCanvasPaint()
+        scheduleGeometricMaskCanvasPaint()
+        scheduleActiveSelectionOutlinePaint()
     }
 
     function overlayObjectName(suffix, fallback) {
@@ -172,7 +200,8 @@ Item {
 
     function outlineScaleFactor() {
         const scale = Number(outlineVisualScale || 1.0)
-        return Math.max(0.25, isFinite(scale) ? scale : 1.0)
+        const safeScale = Math.max(1.0, Math.min(256.0, isFinite(scale) ? scale : 1.0))
+        return Math.pow(2.0, Math.ceil(Math.log(safeScale) / Math.LN2))
     }
 
     Binding {
@@ -197,6 +226,12 @@ Item {
     function pixelAligned(value) {
         const ratio = Math.max(1.0, Number(Screen.devicePixelRatio || 1.0))
         return (Math.round(Number(value || 0) * ratio) + 0.5) / ratio
+    }
+
+    function boundedCanvasCoordinate(value, visibleEdge) {
+        const edge = Math.max(1, Number(visibleEdge || 1))
+        const padding = Math.max(2048, edge * 2)
+        return root.clamp(Number(value || 0), -padding, edge + padding)
     }
 
     function pointXValue(point, fallback) {
@@ -245,21 +280,31 @@ Item {
     }
 
     function buildOutlinePath(ctx, points) {
+        return buildOutlinePathWithOffset(ctx, points, 0, 0)
+    }
+
+    function buildOutlinePathWithOffset(ctx, points, offsetX, offsetY) {
         const count = points.length
         if (count < 2)
             return false
+        const resolvedOffsetX = Number(offsetX || 0)
+        const resolvedOffsetY = Number(offsetY || 0)
         ctx.beginPath()
         const firstViewPoint = root.viewPointForImage(
                 root.pointXValue(points[0]),
                 root.pointYValue(points[0]))
-        ctx.moveTo(root.pixelAligned(firstViewPoint.x),
-                   root.pixelAligned(firstViewPoint.y))
+        ctx.moveTo(root.pixelAligned(root.boundedCanvasCoordinate(
+                       firstViewPoint.x - resolvedOffsetX, root.visibleCanvasWindow.width)),
+                   root.pixelAligned(root.boundedCanvasCoordinate(
+                       firstViewPoint.y - resolvedOffsetY, root.visibleCanvasWindow.height)))
         for (let i = 1; i < count; ++i) {
             const viewPoint = root.viewPointForImage(
                     root.pointXValue(points[i]),
                     root.pointYValue(points[i]))
-            ctx.lineTo(root.pixelAligned(viewPoint.x),
-                       root.pixelAligned(viewPoint.y))
+            ctx.lineTo(root.pixelAligned(root.boundedCanvasCoordinate(
+                           viewPoint.x - resolvedOffsetX, root.visibleCanvasWindow.width)),
+                       root.pixelAligned(root.boundedCanvasCoordinate(
+                           viewPoint.y - resolvedOffsetY, root.visibleCanvasWindow.height)))
         }
         if (count >= 3)
             ctx.closePath()
@@ -287,6 +332,10 @@ Item {
     }
 
     function strokeOutlinePaths(ctx, outlinePaths) {
+        strokeOutlinePathsWithOffset(ctx, outlinePaths, 0, 0)
+    }
+
+    function strokeOutlinePathsWithOffset(ctx, outlinePaths, offsetX, offsetY) {
         if (!outlinePaths || outlinePaths.length === 0)
             return
         const marching = editorPreview.maskPreviewMode === "marching-ants"
@@ -303,7 +352,7 @@ Item {
             const points = outlinePaths[pathIndex]
             if (!root.displayOutlinePathLargeEnough(points))
                 continue
-            if (!root.buildOutlinePath(ctx, points))
+            if (!root.buildOutlinePathWithOffset(ctx, points, offsetX, offsetY))
                 continue
             if (ctx.setLineDash)
                 ctx.setLineDash(marching ? [dashOn, dashOff] : [])
@@ -317,16 +366,21 @@ Item {
     }
 
     function fillOutlinePaths(ctx, outlinePaths) {
-        if (editorPreview.maskPreviewMode === "none" ||
+        fillOutlinePathsWithOffset(ctx, outlinePaths, 0, 0)
+    }
+
+    function fillOutlinePathsWithOffset(ctx, outlinePaths, offsetX, offsetY) {
+        if (!root.selectionFillVisible ||
+                editorPreview.maskPreviewMode === "none" ||
                 editorPreview.maskPreviewMode === "outline" ||
                 editorPreview.maskPreviewMode === "marching-ants" ||
                 !outlinePaths || outlinePaths.length === 0)
             return
         ctx.fillStyle = Qt.alpha(root.resolvedOverlayColor(root.activeOperationColor),
-                                 0.18 * root.overlayOpacityScale())
+                                 0.46 * root.overlayOpacityScale())
         for (let pathIndex = 0; pathIndex < outlinePaths.length; ++pathIndex) {
             const points = outlinePaths[pathIndex]
-            if (!root.buildOutlinePath(ctx, points))
+            if (!root.buildOutlinePathWithOffset(ctx, points, offsetX, offsetY))
                 continue
             ctx.fill()
         }
@@ -451,6 +505,7 @@ Item {
     }
 
     Item {
+        id: maskCanvasOverlay
         objectName: root.overlayObjectName("MaskCanvasOverlay", "maskCanvasOverlay")
         anchors.fill: parent
         readonly property string previewSource: ""
@@ -511,25 +566,29 @@ Item {
 
         Canvas {
             id: liveBrushVectorCanvas
-            anchors.fill: parent
-            visible: parent.vectorLiveBrushPreviewVisible
+            x: root.visibleCanvasWindow.x
+            y: root.visibleCanvasWindow.y
+            width: root.visibleCanvasWindow.width
+            height: root.visibleCanvasWindow.height
+            visible: parent.vectorLiveBrushPreviewVisible && !root.deepZoomCanvasMode
             opacity: Math.max(root.previewSourceOpacity(true), 0.54)
 
             function pointX(point) {
-                return root.pointXValue(point) * width
+                return root.pointXValue(point) * root.width - x
             }
 
             function pointY(point) {
-                return root.pointYValue(point) * height
+                return root.pointYValue(point) * root.height - y
             }
 
             function pointDiameter(point) {
-                return Math.max(6, Math.min(width, height) * root.pointSizeValue(point, 0.08) * 2)
+                return Math.max(6, Math.min(root.width, root.height) * root.pointSizeValue(point, 0.08) * 2)
             }
 
             onPaint: {
                 const ctx = getContext("2d")
                 ctx.reset()
+                ctx.clearRect(0, 0, width, height)
                 const points = parent.liveBrushPoints || []
                 if (points.length === 0)
                     return
@@ -580,7 +639,10 @@ Item {
             id: geometricMaskCanvas
             objectName: root.overlayObjectName("GeometricMaskCanvas", "geometricMaskCanvas")
             antialiasing: true
-            anchors.fill: parent
+            x: root.visibleCanvasWindow.x
+            y: root.visibleCanvasWindow.y
+            width: root.visibleCanvasWindow.width
+            height: root.visibleCanvasWindow.height
             readonly property string outlineRenderContract: root.outlineRenderContract
             readonly property string liveLassoRenderContract: "live-lasso|solid-fill|high-contrast-outline:v1"
             readonly property bool liveLassoFillVisible:
@@ -593,7 +655,9 @@ Item {
                 editorPreview.activeMaskKind === "lasso" &&
                 editorPreview.activeMaskPolygonPointCount > 0 &&
                 parent.geometricStrokeOpacity > 0.0
-            visible: parent.previewSource.length === 0 && !parent.activeBrushPainting
+            visible: parent.previewSource.length === 0 &&
+                     !parent.activeBrushPainting &&
+                     !root.deepZoomCanvasMode
             opacity: parent.activeBrushPainting ? 0.0 : parent.geometricOverlayOpacity
             readonly property bool polygonFeatherVisualizationActive:
                 visible &&
@@ -637,14 +701,14 @@ Item {
                             ctx.setLineDash(count >= 3 ? [] : [6, 5])
                         ctx.beginPath()
                         let firstViewPoint = root.viewPointForImage(Number(points[0].x || 0), Number(points[0].y || 0))
-                        ctx.moveTo(root.pixelAligned(firstViewPoint.x),
-                                   root.pixelAligned(firstViewPoint.y))
+                        ctx.moveTo(root.pixelAligned(firstViewPoint.x - x),
+                                   root.pixelAligned(firstViewPoint.y - y))
                         for (let i = 1; i < count; ++i) {
                             const viewPoint = root.viewPointForImage(
                                         Number(points[i].x || 0),
                                         Number(points[i].y || 0))
-                            ctx.lineTo(root.pixelAligned(viewPoint.x),
-                                       root.pixelAligned(viewPoint.y))
+                            ctx.lineTo(root.pixelAligned(viewPoint.x - x),
+                                       root.pixelAligned(viewPoint.y - y))
                         }
                         if (count >= 3) {
                             ctx.closePath()
@@ -669,8 +733,8 @@ Item {
                                         Number(points[pointIndex].x || 0),
                                         Number(points[pointIndex].y || 0))
                             ctx.beginPath()
-                            ctx.arc(root.pixelAligned(pointViewPoint.x),
-                                    root.pixelAligned(pointViewPoint.y),
+                            ctx.arc(root.pixelAligned(pointViewPoint.x - x),
+                                    root.pixelAligned(pointViewPoint.y - y),
                                     radius, 0, Math.PI * 2)
                             ctx.fillStyle = pointIndex === 0 && count >= 3
                                             ? theme.alpha(theme.ink950, 0.88)
@@ -684,10 +748,10 @@ Item {
                         }
                     }
                 } else if (editorPreview.activeMaskKind === "rectangle") {
-                    const cx = width * editorPreview.activeMaskCenterX
-                    const cy = height * editorPreview.activeMaskCenterY
-                    const rx = Math.max(12, width * editorPreview.activeMaskRadiusX)
-                    const ry = Math.max(12, height * editorPreview.activeMaskRadiusY)
+                    const cx = root.width * editorPreview.activeMaskCenterX - x
+                    const cy = root.height * editorPreview.activeMaskCenterY - y
+                    const rx = Math.max(12, root.width * editorPreview.activeMaskRadiusX)
+                    const ry = Math.max(12, root.height * editorPreview.activeMaskRadiusY)
                     ctx.save()
                     ctx.translate(cx, cy)
                     ctx.rotate(editorPreview.activeMaskRotation * Math.PI / 180.0)
@@ -697,24 +761,22 @@ Item {
                     ctx.stroke()
                     ctx.restore()
                 } else if (editorPreview.activeMaskKind === "radial" || editorPreview.activeMaskKind === "ellipse") {
-                    const cx = width * editorPreview.activeMaskCenterX
-                    const cy = height * editorPreview.activeMaskCenterY
-                    const rx = Math.max(12, width * editorPreview.activeMaskRadiusX)
-                    const ry = Math.max(12, height * editorPreview.activeMaskRadiusY)
+                    const cx = root.width * editorPreview.activeMaskCenterX - x
+                    const cy = root.height * editorPreview.activeMaskCenterY - y
+                    const rx = Math.max(12, root.width * editorPreview.activeMaskRadiusX)
+                    const ry = Math.max(12, root.height * editorPreview.activeMaskRadiusY)
                     ctx.beginPath()
                     ctx.ellipse(cx, cy, rx, ry, editorPreview.activeMaskRotation * Math.PI / 180.0, 0, Math.PI * 2)
                     ctx.fill()
                     ctx.stroke()
                 } else if (editorPreview.activeMaskKind === "linear") {
-                    const position = height * editorPreview.activeMaskPosition
-                    const feather = Math.max(18, height * editorPreview.activeMaskFeather)
-                    ctx.fillRect(0, root.clamp(position - feather / 2, 0, height), width, Math.min(feather, height))
+                    const position = root.height * editorPreview.activeMaskPosition - y
+                    const feather = Math.max(18, root.height * editorPreview.activeMaskFeather)
+                    ctx.fillRect(-x, position - feather / 2, root.width, Math.min(feather, root.height))
                     ctx.beginPath()
-                    ctx.moveTo(0, position)
-                    ctx.lineTo(width, position)
+                    ctx.moveTo(-x, position)
+                    ctx.lineTo(root.width - x, position)
                     ctx.stroke()
-                } else {
-                    ctx.strokeRect(1, 1, Math.max(0, width - 2), Math.max(0, height - 2))
                 }
             }
         }
@@ -922,7 +984,10 @@ Item {
     Canvas {
         id: activeSelectionOutline
         objectName: root.overlayObjectName("SharedActiveSelectionOutline", "sharedActiveSelectionOutline")
-        anchors.fill: parent
+        x: root.visibleCanvasWindow.x
+        y: root.visibleCanvasWindow.y
+        width: root.visibleCanvasWindow.width
+        height: root.visibleCanvasWindow.height
         antialiasing: true
         readonly property string outlineRenderContract: root.outlineRenderContract
         readonly property string outlineAnimationContract: root.outlineAnimationContract
@@ -955,6 +1020,7 @@ Item {
                  editorPreview.maskPreviewMode !== "none" &&
                  !root.compareMode &&
                  !root.activeBrushPainting &&
+                 !root.deepZoomCanvasMode &&
                  normalizedOutlinePathsCache.length > 0
         z: 6
 
@@ -986,7 +1052,13 @@ Item {
             ctx.clearRect(0, 0, width, height)
             if (!outlinePaths || outlinePaths.length === 0)
                 return
-            root.strokeOutlinePaths(ctx, outlinePaths)
+            if (Math.abs(x) < 0.001 && Math.abs(y) < 0.001) {
+                root.fillOutlinePaths(ctx, outlinePaths)
+                root.strokeOutlinePaths(ctx, outlinePaths)
+            } else {
+                root.fillOutlinePathsWithOffset(ctx, outlinePaths, x, y)
+                root.strokeOutlinePathsWithOffset(ctx, outlinePaths, x, y)
+            }
         }
     }
 

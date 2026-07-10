@@ -17,6 +17,7 @@ using photo_editor::pipeline::ColorAdjustmentState;
 using photo_editor::pipeline::ColorPixel;
 using photo_editor::pipeline::CurvePoint;
 using photo_editor::pipeline::LutAdjustment;
+using photo_editor::pipeline::PhotoLayer;
 
 constexpr double kEpsilon = 1.0e-6;
 constexpr double kToneChromaRelationshipTolerance = 5.0e-4;
@@ -834,23 +835,72 @@ int main() {
     };
     cases.push_back(NeutralRampCase{"luma point curve", state});
 
-    state = base;
-    state.master_curve_points = {
-        CurvePoint{0.0, 0.0},
-        CurvePoint{0.22, 0.16},
-        CurvePoint{0.64, 0.78},
-        CurvePoint{1.0, 1.0},
-    };
-    cases.push_back(NeutralRampCase{"master point curve", state});
-
     check(
-        cases.size() == 9,
-        "tone-only chroma registry should cover global light, levels, zone, luma curve, and master curve tools",
+        cases.size() == 8,
+        "tone-only chroma registry should cover global light, levels, zone, and luma curve tools",
         &failures);
     for (const auto& tone_case : cases) {
       const auto output = apply_pixels(input, static_cast<int>(input.size()), 1, tone_case.state);
       require_chroma_relationships_preserved(tone_case.name, input, output, &failures);
     }
+  }
+
+  {
+    const auto curve_points = std::vector<CurvePoint>{
+        CurvePoint{0.0, 0.0},
+        CurvePoint{0.25, 0.18},
+        CurvePoint{0.50, 0.68},
+        CurvePoint{0.75, 0.84},
+        CurvePoint{1.0, 1.0},
+    };
+    const auto input = ColorPixel{
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.25)),
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.50)),
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.75)),
+        1.0F,
+    };
+
+    auto master_state = base;
+    master_state.master_curve_points = curve_points;
+    const auto master_output = apply_pixel(input, master_state);
+    const auto expected_master = ColorPixel{
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.18)),
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.68)),
+        static_cast<float>(photo_editor::pipeline::srgb_to_linear(0.84)),
+        1.0F,
+    };
+    check(
+        std::abs(master_output.red - expected_master.red) <= 2.0e-5F &&
+            std::abs(master_output.green - expected_master.green) <= 2.0e-5F &&
+            std::abs(master_output.blue - expected_master.blue) <= 2.0e-5F,
+        "RGB point curve should apply the same display-referred transfer independently to each channel",
+        &failures);
+
+    auto luma_state = base;
+    luma_state.luma_curve_points = curve_points;
+    const auto luma_output = apply_pixel(input, luma_state);
+    check(
+        channel_relationship_error(input, luma_output) <= kToneChromaRelationshipTolerance,
+        "Luma point curve should preserve chromatic ratios",
+        &failures);
+    check(
+        channel_relationship_error(master_output, luma_output) > 0.01,
+        "RGB and Luma point curves should have distinct color behavior",
+        &failures);
+
+    auto layer_state = base;
+    PhotoLayer layer;
+    layer.kind = "adjustment";
+    layer.opacity = 1.0;
+    layer.master_curve_points = curve_points;
+    layer_state.photo_layers.push_back(layer);
+    const auto layer_output = apply_pixel(input, layer_state);
+    check(
+        std::abs(layer_output.red - expected_master.red) <= 2.0e-5F &&
+            std::abs(layer_output.green - expected_master.green) <= 2.0e-5F &&
+            std::abs(layer_output.blue - expected_master.blue) <= 2.0e-5F,
+        "adjustment-layer RGB point curve should match the global composite RGB curve",
+        &failures);
   }
 
   {

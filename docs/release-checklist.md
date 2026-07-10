@@ -1,59 +1,52 @@
-# Release Checklist
+# Virel Studio Release Checklist
 
-This is the practical checklist for shipping a user-facing update.
+Use [production-launch-checklist.md](production-launch-checklist.md) for the
+one-time business, certificate, hosting, legal, and clean-machine launch gates.
+Use this checklist for every shipped version.
 
-## Version
+## Prepare
 
-- Update the root [`VERSION`](/Users/bradyreiner/projects/PersonalProjects/photo-editor/VERSION) file.
-- Keep the version in `X.Y.Z` form.
-- Use the same version for release notes and support announcements.
-- Tag releases as `vX.Y.Z`.
+- [ ] Worktree is clean and the release commit is pushed.
+- [ ] `VERSION` contains `X.Y.Z` and release notes exist at `docs/releases/vX.Y.Z-alpha.md`.
+- [ ] User-visible changes, known limitations, migration notes, and backup advice are documented.
+- [ ] Payment, support, privacy, and download configuration remain accurate.
+- [ ] No signing, payment, database, or model secret is present in source or artifacts.
 
-The release workflow now validates that the Git tag matches `VERSION`.
+## Candidate proof
 
-## Development Build
+- [ ] `cargo test --manifest-path rust/Cargo.toml --workspace --locked` passes.
+- [ ] Headless native configure/build/CTest passes.
+- [ ] Mask release gate passes with the materialized real-image corpus.
+- [ ] Apple-silicon, Intel Mac, and Windows x64 packages build.
+- [ ] Managed PostgreSQL runtime contains `initdb`, `pg_ctl`, `pg_dump`, and `pg_restore`.
+- [ ] Import, cull, edit, mask, export, quit, relaunch, and catalog recovery pass on clean machines.
+- [ ] Preview/export parity and target-hardware proof meet the release baseline.
 
-- Use `cmake --preset dev-macos-debug` and `cmake --build --preset build-dev-macos-debug` for local macOS dev builds.
-- Or use [`scripts/run-native.sh`](/Users/bradyreiner/projects/PersonalProjects/photo-editor/scripts/run-native.sh), which now uses the same dev preset.
-- Build Rust helpers from `rust/target/debug` for local development.
+## Publish
 
-## Production Build
+- [ ] Commit the version and notes, then push tag `vX.Y.Z`.
+- [ ] Review and approve the protected `production` environment.
+- [ ] Both DMGs pass Developer ID, Hardened Runtime, notarization, staple, and Gatekeeper assessment.
+- [ ] MSIX passes trusted Authenticode signature and timestamp validation.
+- [ ] Sparkle appcast contains EdDSA signatures for both Mac architectures.
+- [ ] Public release contains installers, appcast, checksums, release manifest, license, notices, and dependency inventory.
+- [ ] Public release repository remains public while the source repository remains private.
+- [ ] Cloudflare Pages deploys the same version, support address, and hosted checkout links.
 
-- Local macOS release script: `./scripts/build-release.sh X.Y.Z`
-- macOS: `cmake --preset release-macos -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD/rust/target/release"`
-- macOS package: `cpack --config build/release-macos/CPackConfig.cmake -B build/release-macos/package`
-- Windows: `cmake --preset release-windows -DPHOTO_EDITOR_RUST_BINARY_DIR="$PWD\\rust\\target\\release"`
-- Windows package: stage install root, then generate `.msix` and optional `.appinstaller`
-- Masking release gate: `PHOTO_EDITOR_REAL_IMAGE_CORPUS_MANIFEST=/path/to/manifest.json ./scripts/run-mask-release-gate.sh --build-dir build/release-macos`
+## Upgrade proof
 
-## Before Tagging
+- [ ] Existing macOS arm64 install updates through Sparkle.
+- [ ] Existing macOS x86_64 install updates through Sparkle.
+- [ ] Existing Windows install updates through App Installer.
+- [ ] Versioned pre-migration dump is created before schema changes.
+- [ ] Updated app retains catalog, recipes, preferences, exports, and update registration.
+- [ ] Failed or unavailable update feed leaves the installed app usable.
 
-- `cargo test --workspace`
-- Relevant native tests pass
-- `./scripts/run-mask-release-gate.sh --build-dir build/release-macos --real-image-manifest /path/to/materialized/manifest.json`
-- Clean-machine smoke test for install, launch, import, edit, export, relaunch
-- Verify Rust helpers are bundled
-- Verify managed local Postgres bootstraps in packaged builds
-- Verify version shown in-app matches `VERSION`
+## Final external check
 
-## How Users Should Upgrade
-
-### macOS
-
-- First install: send users the signed and notarized DMG/app bundle.
-- Ongoing updates: use Sparkle.
-- Build with `PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER=ON`.
-- Publish the Sparkle appcast and hosted archive URLs.
-- Users should upgrade through the in-app updater or Sparkle prompts, not by manually replacing app contents.
-
-### Windows
-
-- First install and ongoing updates: prefer the `.appinstaller` URL, not a raw `.msix`.
-- Publish both the `.msix` and `.appinstaller`.
-- App Installer handles upgrade checks on launch.
-
-## Release Notes
-
-- Publish concise user-facing notes for every `vX.Y.Z`.
-- Include upgrade notes when schema or compatibility behavior changes.
-- Call out any migration, cache reset, or catalog backup recommendations.
+- [ ] Download every platform build from the public website on an external network.
+- [ ] SHA-256 matches `release-manifest.json` and `SHA256SUMS.txt`.
+- [ ] Install dialogs identify the expected Virel publisher without trust warnings.
+- [ ] Release notes, support, privacy, terms, refunds, and licenses links resolve.
+- [ ] Optional support payment completes and produces a receipt/refund path.
+- [ ] Announce only after support intake and updater feeds are live.

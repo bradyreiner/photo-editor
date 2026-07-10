@@ -28,9 +28,9 @@ For real production packaging, these binaries need to be bundled inside the app 
 Current expected packaged layout:
 
 - macOS app bundle:
-  - `PhotoEditor.app/Contents/MacOS/PhotoEditor`
-  - `PhotoEditor.app/Contents/MacOS/catalog_local_db` and the other Rust helpers
-  - `PhotoEditor.app/Contents/Resources/postgres/` for a bundled Postgres runtime root
+  - `VirelStudio.app/Contents/MacOS/VirelStudio`
+  - `VirelStudio.app/Contents/MacOS/catalog_local_db` and the other Rust helpers
+  - `VirelStudio.app/Contents/Resources/postgres/` for a bundled Postgres runtime root
 - Windows install root:
   - `PhotoEditor.exe`
   - helper binaries next to the app executable

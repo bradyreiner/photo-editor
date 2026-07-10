@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -10,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMap>
+#include <QSet>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
@@ -85,6 +87,11 @@ class FakeOllamaServer final {
     responses_.insert(path, response);
   }
 
+  void setChunkedResponse(const QString& path, const QJsonObject& response) {
+    responses_.insert(path, response);
+    chunked_paths_.insert(path);
+  }
+
   [[nodiscard]] QJsonObject lastRequestForPath(const QString& path) const {
     for (auto index = requests_.size() - 1; index >= 0; --index) {
       const auto request = requests_.at(index);
@@ -150,7 +157,31 @@ class FakeOllamaServer final {
       writeResponse(socket, 404, QJsonObject{{QStringLiteral("error"), QStringLiteral("missing fake response")}});
       return;
     }
+    if (chunked_paths_.contains(path)) {
+      writeChunkedResponse(socket, responses_.value(path));
+      return;
+    }
     writeResponse(socket, 200, responses_.value(path));
+  }
+
+  static void writeChunkedResponse(QTcpSocket* socket, const QJsonObject& response) {
+    const auto body = QJsonDocument(response).toJson(QJsonDocument::Compact);
+    const auto split = std::max<qsizetype>(1, body.size() / 2);
+    const auto first = body.left(split);
+    const auto second = body.mid(split);
+    socket->write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n");
+    for (const auto& chunk : {first, second}) {
+      if (chunk.isEmpty()) {
+        continue;
+      }
+      socket->write(QByteArray::number(chunk.size(), 16));
+      socket->write("\r\n");
+      socket->write(chunk);
+      socket->write("\r\n");
+    }
+    socket->write("0\r\n\r\n");
+    socket->flush();
+    socket->disconnectFromHost();
   }
 
   static void writeResponse(QTcpSocket* socket, int status_code, const QJsonObject& response) {
@@ -170,6 +201,7 @@ class FakeOllamaServer final {
 
   QTcpServer* server_ = nullptr;
   QMap<QString, QJsonObject> responses_;
+  QSet<QString> chunked_paths_;
   QVector<QJsonObject> requests_;
 };
 
@@ -342,6 +374,9 @@ int main(int argc, char** argv) {
       ollama_model.value(QStringLiteral("requiresCloudOptIn")).toBool()) {
     return fail("configured Ollama models should be discovered as local available backends");
   }
+  if (photo_editor::desktop::default_agent_local_model_id() != QStringLiteral("ollama-qwen-test")) {
+    return fail("the first available configured Ollama model should be the real default instead of the deterministic fallback");
+  }
   if (!fake_ollama_server_available) {
     qputenv(
         "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON",
@@ -370,7 +405,7 @@ int main(int argc, char** argv) {
   }
 
   photo_editor::desktop::AgentLocalModelPlanRequest request;
-  request.model_id = photo_editor::desktop::default_agent_local_model_id();
+  request.model_id = QStringLiteral("rulebook-deterministic");
   request.style = warm_style;
   request.user_instructions = QStringLiteral("Keep it bright and soft but preserve highlights.");
   request.strategy_phase = QStringLiteral("sample");
@@ -508,13 +543,14 @@ int main(int argc, char** argv) {
       {QStringLiteral("message"),
        QJsonObject{
            {QStringLiteral("role"), QStringLiteral("assistant")},
-           {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(model_plan).toJson(QJsonDocument::Compact))},
+           {QStringLiteral("content"), QString()},
+           {QStringLiteral("thinking"), QString::fromUtf8(QJsonDocument(model_plan).toJson(QJsonDocument::Compact))},
        }},
   };
   const auto fake_ollama_request_path =
       QDir(runtime_root.path()).filePath(QStringLiteral("ollama-request.json"));
   if (fake_ollama_server_available) {
-    fake_ollama_server.setResponse(QStringLiteral("/api/chat"), fake_ollama_response);
+    fake_ollama_server.setChunkedResponse(QStringLiteral("/api/chat"), fake_ollama_response);
   } else {
     qputenv(
         "PHOTO_EDITOR_FAKE_OLLAMA_RESPONSE_JSON",
@@ -579,13 +615,29 @@ int main(int argc, char** argv) {
                                 ? fake_ollama_server.lastRequestForPath(QStringLiteral("/api/chat"))
                                 : read_json_file(fake_ollama_request_path);
   const auto fake_messages = fake_request.value(QStringLiteral("messages")).toArray();
+  const auto fake_format = fake_request.value(QStringLiteral("format")).toObject();
+  const auto fake_required_fields = fake_format.value(QStringLiteral("required")).toArray();
+  const auto fake_decision_values = fake_format.value(QStringLiteral("properties"))
+                                        .toObject()
+                                        .value(QStringLiteral("decision"))
+                                        .toObject()
+                                        .value(QStringLiteral("enum"))
+                                        .toArray();
   const auto fake_user_message = fake_messages.size() >= 2 ? fake_messages.at(1).toObject() : QJsonObject{};
   const auto fake_user_prompt = fake_user_message.value(QStringLiteral("content")).toString();
   const auto fake_ollama_request_ok =
       fake_request.value(QStringLiteral("model")).toString() == QStringLiteral("qwen2.5vl:7b") &&
       !fake_request.value(QStringLiteral("stream")).toBool(true) &&
+      !fake_request.value(QStringLiteral("think")).toBool(true) &&
+      fake_request.value(QStringLiteral("keep_alive")).toString() == QStringLiteral("10m") &&
       fake_request.value(QStringLiteral("options")).toObject().value(QStringLiteral("temperature")).toDouble(-1.0) == 0.0 &&
+      fake_request.value(QStringLiteral("options")).toObject().value(QStringLiteral("num_predict")).toInt() == 1024 &&
+      fake_request.value(QStringLiteral("options")).toObject().value(QStringLiteral("num_ctx")).toInt() >= 12288 &&
+      fake_request.value(QStringLiteral("options")).toObject().value(QStringLiteral("num_ctx")).toInt() <= 24576 &&
       fake_request.value(QStringLiteral("format")).isObject() &&
+      fake_required_fields.contains(QStringLiteral("styleConstraintCitations")) &&
+      fake_required_fields.contains(QStringLiteral("recipePatch")) &&
+      fake_decision_values.contains(QStringLiteral("recipe_patch")) &&
       fake_user_prompt.contains(QStringLiteral("Strategy phase: batch")) &&
       fake_user_prompt.contains(QStringLiteral("Phase: batch")) &&
       fake_user_prompt.contains(QStringLiteral("Retrieved memory packet JSON")) &&
@@ -618,13 +670,17 @@ int main(int argc, char** argv) {
       ollama_plan.prompt_audit.value(QStringLiteral("imageByteCount")).toInt() != fake_proof_bytes.size() ||
       ollama_plan.prompt_audit.value(QStringLiteral("imageSourceKind")).toString() != QStringLiteral("proof") ||
       ollama_plan.prompt_audit.value(QStringLiteral("imageSourcePath")).toString() != fake_proof_path ||
+      !ollama_plan.prompt_audit.value(QStringLiteral("transport")).toMap().value(QStringLiteral("ok")).toBool() ||
+      ollama_plan.prompt_audit.value(QStringLiteral("ollamaResponseSource")).toString() != QStringLiteral("message.thinking") ||
+      !ollama_plan.prompt_audit.value(QStringLiteral("responseHasRecipePatch")).toBool() ||
+      ollama_plan.prompt_audit.value(QStringLiteral("responseCitationCount")).toInt() != 2 ||
       ollama_plan.recipe_patch.value(QStringLiteral("globalTone")).toMap().value(QStringLiteral("exposure")).toDouble() != 0.12 ||
       ollama_plan.style_constraint_citations.size() != 2 ||
       !ollama_plan.warnings.contains(QStringLiteral("fake-server-warning")) ||
       !fake_ollama_request_ok ||
       !fake_ollama_saw_image ||
       fake_ollama_image_payload != QString::fromLatin1(fake_proof_bytes.toBase64())) {
-    return fail("Ollama backend should send rendered proof/schema context and parse structured JSON recipe patches");
+    return fail("Ollama backend should send rendered proof/schema context and recover structured JSON from Qwen thinking responses");
   }
   const auto ollama_validation =
       photo_editor::desktop::validate_agent_recipe_patch(ollama_plan.recipe_patch, warm_style);

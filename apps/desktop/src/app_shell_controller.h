@@ -23,6 +23,11 @@ class AppShellController final : public QObject {
   Q_PROPERTY(QString logLocation READ logLocation CONSTANT)
   Q_PROPERTY(QString backupLocation READ backupLocation CONSTANT)
   Q_PROPERTY(QString appVersion READ appVersion CONSTANT)
+  Q_PROPERTY(QString productName READ productName CONSTANT)
+  Q_PROPERTY(QString supportUrl READ supportUrl CONSTANT)
+  Q_PROPERTY(QString privacyUrl READ privacyUrl CONSTANT)
+  Q_PROPERTY(QString termsUrl READ termsUrl CONSTANT)
+  Q_PROPERTY(bool localDiagnosticsEnabled READ localDiagnosticsEnabled CONSTANT)
 
  public:
   explicit AppShellController(QObject* parent = nullptr);
@@ -41,6 +46,11 @@ class AppShellController final : public QObject {
   [[nodiscard]] QString logLocation() const;
   [[nodiscard]] QString backupLocation() const;
   [[nodiscard]] QString appVersion() const;
+  [[nodiscard]] QString productName() const;
+  [[nodiscard]] QString supportUrl() const;
+  [[nodiscard]] QString privacyUrl() const;
+  [[nodiscard]] QString termsUrl() const;
+  [[nodiscard]] bool localDiagnosticsEnabled() const;
 
   void setStartupWorkspace(int workspace_index);
   void setReopenLastWorkspace(bool reopen_last_workspace);
@@ -55,6 +65,10 @@ class AppShellController final : public QObject {
   Q_INVOKABLE bool openCacheFolder() const;
   Q_INVOKABLE bool openLogFolder() const;
   Q_INVOKABLE bool openBackupFolder() const;
+  Q_INVOKABLE bool openSupportPage() const;
+  Q_INVOKABLE bool openPrivacyPage() const;
+  Q_INVOKABLE bool openTermsPage() const;
+  Q_INVOKABLE QString createSupportBundle() const;
   Q_INVOKABLE void resetTimelineWorkspaceSettings();
   Q_INVOKABLE void restoreDefaults();
 

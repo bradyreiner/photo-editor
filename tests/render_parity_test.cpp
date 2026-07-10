@@ -1028,6 +1028,17 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
+  auto rgb_point_curve_state = neutral_state;
+  rgb_point_curve_state.master_curve_points = {
+      QVariantMap{{QStringLiteral("x"), 0.0}, {QStringLiteral("y"), 0.0}},
+      QVariantMap{{QStringLiteral("x"), 0.24}, {QStringLiteral("y"), 0.16}},
+      QVariantMap{{QStringLiteral("x"), 0.68}, {QStringLiteral("y"), 0.80}},
+      QVariantMap{{QStringLiteral("x"), 1.0}, {QStringLiteral("y"), 1.0}},
+  };
+  if (!verify_global_edit_parity("RGB point curve", rgb_point_curve_state, 5)) {
+    return EXIT_FAILURE;
+  }
+
   auto hsl_selective_state = neutral_state;
   hsl_selective_state.color_mixer_model = QStringLiteral("HSV");
   hsl_selective_state.hsl_channel = QStringLiteral("Reds");
@@ -1094,7 +1105,7 @@ int main(int argc, char** argv) {
   if (!verify_global_edit_parity("presence and grading", presence_grading_state, 10)) {
     return EXIT_FAILURE;
   }
-  if (global_parity_case_count != 7) {
+  if (global_parity_case_count != 8) {
     return fail("settled preview/export parity should cover every high-risk global edit group");
   }
 

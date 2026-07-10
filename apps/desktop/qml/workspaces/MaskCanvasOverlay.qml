@@ -38,15 +38,23 @@ Item {
     property bool tabletBrushStrokeActive: false
     property var pendingCanvasPaints: []
     property real outlineVisualScale: 1.0
+    property bool selectionFillVisible: false
+    readonly property int maximumCanvasBackingEdge: 2048
+    readonly property bool canvasBackingAllowed: root.visible &&
+                                                  imageWidth > 1 && imageHeight > 1 &&
+                                                  imageWidth <= maximumCanvasBackingEdge &&
+                                                  imageHeight <= maximumCanvasBackingEdge
+    readonly property string canvasMemorySafetyContract: "mask-canvas-memory:v1|max-backing-edge:2048|hidden-or-oversized:1x1|repaint:visible-safe-only"
     readonly property bool outlineActivationDeferred: editRoot && editRoot.maskOutlineActivationDeferred === true
     readonly property string outlineRenderContract: "anti-aliased|zoom-stable|pixel-aligned:v1"
+    readonly property string outlineScaleBucketContract: "outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale"
     readonly property string outlineAnimationContract: editRoot.selectionOutlineAnimationContract
     readonly property bool outlinePhaseAnimationEnabled: editRoot.selectionOutlineAnimationEnabled === true
     readonly property string brushCursorRepaintContract: "cursor-item-position-binding|no-static-canvas-repaint-on-hover:v1"
     readonly property string handleReadabilityContract: "dual-contrast-halo|large-hit-target|color-independent:v1"
     readonly property string overlayGeometryContract: "image-rect-clipped|crop-rotation-aware:v1"
-    readonly property string maskRasterPreviewPolicy: "editor-canvas-raster-mask-disabled|clean-exterior-vector-outline:v2"
-    readonly property string settledMaskOutlineContract: "outline-only|fragment-filtered|no-fill:v1"
+    readonly property string maskRasterPreviewPolicy: "editor-canvas-vector-mask-preview|final-alpha-contour-fill-and-outline:v3"
+    readonly property string settledMaskOutlineContract: "final-alpha-contour|overlay-fill|marching-ants:v2"
     readonly property string outlineQualityLadderContract: "hidden|live-vector|preview-alpha|vector-path|settled-alpha|unavailable:v1"
     readonly property string pointerCoordinateMappingContract: "mask-canvas-pointer-mapper:v1|CanvasCoordinateMapper|crop-rotation-aware|all-mask-inputs"
     readonly property string activeOutlineQualityTier: editorPreview.activeMaskOutlineQualityTier || "hidden"
@@ -126,6 +134,10 @@ Item {
             canvasPaintTimer.start()
     }
 
+    function canvasBackingExtent(requestedExtent) {
+        return root.canvasBackingAllowed ? Math.max(1, Number(requestedExtent || 1)) : 1
+    }
+
     function smartSelectPreviewPointNear(leftX, leftY, rightX, rightY) {
         if (leftX < 0 || leftY < 0 || rightX < 0 || rightY < 0)
             return false
@@ -175,17 +187,10 @@ Item {
         smartSelectPreviewPauseTimer.restart()
     }
 
-    function previewPointX(normalizedX) {
-        return normalizedX * previewItem.width
-    }
-
-    function previewPointY(normalizedY) {
-        return normalizedY * previewItem.height
-    }
-
     function outlineScaleFactor() {
         const scale = Number(outlineVisualScale || 1.0)
-        return Math.max(0.25, isFinite(scale) ? scale : 1.0)
+        const safeScale = Math.max(1.0, Math.min(256.0, isFinite(scale) ? scale : 1.0))
+        return Math.pow(2.0, Math.ceil(Math.log(safeScale) / Math.LN2))
     }
 
     Binding {
@@ -196,11 +201,11 @@ Item {
     }
 
     function stableOutlineWidth(logicalPixels) {
-        return Math.max(0.75, Number(logicalPixels || 1.0) / root.outlineScaleFactor())
+        return Math.max(0.75, Number(logicalPixels || 1.0))
     }
 
     function stableOutlineDash(logicalPixels) {
-        return Math.max(1.0, Number(logicalPixels || 1.0) / root.outlineScaleFactor())
+        return Math.max(1.0, Number(logicalPixels || 1.0))
     }
 
     function handleOuterHaloColor() {
@@ -220,12 +225,13 @@ Item {
         return (Math.round(Number(value || 0) * ratio) + 0.5) / ratio
     }
 
-    function previewOutlinePointX(normalizedX) {
-        return root.pixelAligned(root.previewPointX(normalizedX))
-    }
-
-    function previewOutlinePointY(normalizedY) {
-        return root.pixelAligned(root.previewPointY(normalizedY))
+    function previewOutlinePoint(normalizedX, normalizedY) {
+        const point = root.viewPointForImage(normalizedX, normalizedY)
+        return {
+            valid: point.valid,
+            x: root.pixelAligned(point.x),
+            y: root.pixelAligned(point.y)
+        }
     }
 
     function overlayGeometrySignature() {
@@ -620,7 +626,8 @@ Item {
     }
 
     function cleanVectorMaskFillVisible() {
-        return editorPreview.maskPreviewMode !== "none" &&
+        return root.selectionFillVisible &&
+               editorPreview.maskPreviewMode !== "none" &&
                editorPreview.maskPreviewMode !== "outline" &&
                editorPreview.maskPreviewMode !== "marching-ants"
     }
@@ -663,12 +670,17 @@ Item {
         const count = points.length
         if (count < 2)
             return false
+        const firstPoint = root.previewOutlinePoint(
+                    root.pointXValue(points[0]),
+                    root.pointYValue(points[0]))
         ctx.beginPath()
-        ctx.moveTo(root.previewOutlinePointX(root.pointXValue(points[0])),
-                   root.previewOutlinePointY(root.pointYValue(points[0])))
-        for (let i = 1; i < count; ++i)
-            ctx.lineTo(root.previewOutlinePointX(root.pointXValue(points[i])),
-                       root.previewOutlinePointY(root.pointYValue(points[i])))
+        ctx.moveTo(firstPoint.x, firstPoint.y)
+        for (let i = 1; i < count; ++i) {
+            const point = root.previewOutlinePoint(
+                        root.pointXValue(points[i]),
+                        root.pointYValue(points[i]))
+            ctx.lineTo(point.x, point.y)
+        }
         if (count >= 3)
             ctx.closePath()
         return true
@@ -677,20 +689,21 @@ Item {
     function displayOutlinePathLargeEnough(points, isCandidate) {
         if (isCandidate || !points || points.length < 2)
             return true
-        let minX = 1.0
-        let minY = 1.0
-        let maxX = 0.0
-        let maxY = 0.0
+        let minX = Number.POSITIVE_INFINITY
+        let minY = Number.POSITIVE_INFINITY
+        let maxX = Number.NEGATIVE_INFINITY
+        let maxY = Number.NEGATIVE_INFINITY
         for (let i = 0; i < points.length; ++i) {
-            const x = root.pointXValue(points[i])
-            const y = root.pointYValue(points[i])
-            minX = Math.min(minX, x)
-            minY = Math.min(minY, y)
-            maxX = Math.max(maxX, x)
-            maxY = Math.max(maxY, y)
+            const point = root.viewPointForImage(
+                        root.pointXValue(points[i]),
+                        root.pointYValue(points[i]))
+            minX = Math.min(minX, point.x)
+            minY = Math.min(minY, point.y)
+            maxX = Math.max(maxX, point.x)
+            maxY = Math.max(maxY, point.y)
         }
-        const pixelWidth = Math.abs(maxX - minX) * previewItem.width
-        const pixelHeight = Math.abs(maxY - minY) * previewItem.height
+        const pixelWidth = Math.abs(maxX - minX)
+        const pixelHeight = Math.abs(maxY - minY)
         return Math.max(pixelWidth, pixelHeight) >= 3.0 && pixelWidth * pixelHeight >= 18.0
     }
 
@@ -766,24 +779,36 @@ Item {
             for (let pointIndex = 1; pointIndex < points.length; ++pointIndex) {
                 const previous = points[pointIndex - 1]
                 const current = points[pointIndex]
+                const previousViewPoint = root.previewOutlinePoint(
+                            root.pointXValue(previous),
+                            root.pointYValue(previous))
+                const currentViewPoint = root.previewOutlinePoint(
+                            root.pointXValue(current),
+                            root.pointYValue(current))
                 if (root.distanceToSegmentPixels(
                             mouseX, mouseY,
-                            root.previewPointX(root.pointXValue(previous)),
-                            root.previewPointY(root.pointYValue(previous)),
-                            root.previewPointX(root.pointXValue(current)),
-                            root.previewPointY(root.pointYValue(current))) <= slop) {
+                            previousViewPoint.x,
+                            previousViewPoint.y,
+                            currentViewPoint.x,
+                            currentViewPoint.y) <= slop) {
                     return true
                 }
             }
             if (points.length >= 3) {
                 const first = points[0]
                 const last = points[points.length - 1]
+                const lastViewPoint = root.previewOutlinePoint(
+                            root.pointXValue(last),
+                            root.pointYValue(last))
+                const firstViewPoint = root.previewOutlinePoint(
+                            root.pointXValue(first),
+                            root.pointYValue(first))
                 if (root.distanceToSegmentPixels(
                             mouseX, mouseY,
-                            root.previewPointX(root.pointXValue(last)),
-                            root.previewPointY(root.pointYValue(last)),
-                            root.previewPointX(root.pointXValue(first)),
-                            root.previewPointY(root.pointYValue(first))) <= slop) {
+                            lastViewPoint.x,
+                            lastViewPoint.y,
+                            firstViewPoint.x,
+                            firstViewPoint.y) <= slop) {
                     return true
                 }
             }
@@ -1010,7 +1035,11 @@ Item {
 
                     Canvas {
                         id: radialCanvas
-                        anchors.fill: parent
+                        x: 0
+                        y: 0
+                        width: root.canvasBackingExtent(parent.width)
+                        height: root.canvasBackingExtent(parent.height)
+                        visible: root.canvasBackingAllowed
 
                         Connections {
                             target: editorPreview
@@ -1169,8 +1198,11 @@ Item {
 
                     Canvas {
                         id: brushCanvas
-                        anchors.fill: parent
-                        visible: brushOverlay.showStrokePoints
+                        x: 0
+                        y: 0
+                        width: root.canvasBackingExtent(parent.width)
+                        height: root.canvasBackingExtent(parent.height)
+                        visible: brushOverlay.showStrokePoints && root.canvasBackingAllowed
 
                         function pointX(point) {
                             return root.pointXValue(point) * brushOverlay.width
@@ -1527,7 +1559,11 @@ Item {
                     Canvas {
                         id: polygonCanvas
                         antialiasing: true
-                        anchors.fill: parent
+                        x: 0
+                        y: 0
+                        width: root.canvasBackingExtent(parent.width)
+                        height: root.canvasBackingExtent(parent.height)
+                        visible: root.canvasBackingAllowed
                         readonly property bool polygonFeatherVisualizationActive:
                             active &&
                             (mask.kind === "polygon" || mask.kind === "lasso") &&
@@ -1971,7 +2007,10 @@ Item {
             id: activeSelectionOutline
             objectName: "activeSelectionOutline"
             antialiasing: true
-            anchors.fill: parent
+            x: 0
+            y: 0
+            width: root.canvasBackingExtent(parent.width)
+            height: root.canvasBackingExtent(parent.height)
             readonly property string outlineQualityTier: root.activeOutlineQualityTier
             readonly property string outlineQualityLadderContract: root.outlineQualityLadderContract
             readonly property string outlineTraceContract: root.outlineTraceContract
@@ -1999,6 +2038,7 @@ Item {
             visible: editorPreview.hasActiveMask &&
                       editorPreview.maskPreviewTemporarilyHidden !== true &&
                       editorPreview.maskPreviewMode !== "none" &&
+                      root.canvasBackingAllowed &&
                       normalizedOutlinePathsCache.length > 0
             z: 96
 
@@ -2038,6 +2078,11 @@ Item {
                 const activeMask = editorPreview.activeMaskIndex >= 0
                                    ? editorPreview.maskStack[editorPreview.activeMaskIndex]
                                    : null
+                root.fillOutlinePaths(
+                            ctx,
+                            outlinePaths,
+                            root.resolvedMaskOverlayColor(),
+                            0.46)
                 root.strokeOutlinePaths(ctx, outlinePaths, root.resolvedMaskOverlayColor(), false)
             }
         }
@@ -2116,13 +2161,16 @@ Item {
         Canvas {
             id: smartPreviewOutline
             objectName: "smartSelectPreviewOutline"
-            anchors.fill: parent
+            x: 0
+            y: 0
+            width: root.canvasBackingExtent(parent.width)
+            height: root.canvasBackingExtent(parent.height)
             readonly property string candidateOutlineRenderContract: "smart-selection-hover|candidate-outline|precommit:v1"
             readonly property string candidatePreviewPipelineSignature: editorPreview.smartSelectPreviewPipelineSignature
             readonly property bool candidateOutlineVisible: editRoot.objectPickArmed &&
                                                             editorPreview.smartSelectPreviewActive &&
                                                             root.normalizedOutlinePath(editorPreview.smartSelectPreviewOutlinePoints).length >= 2
-            visible: candidateOutlineVisible
+            visible: candidateOutlineVisible && root.canvasBackingAllowed
             z: 97
 
             Connections {

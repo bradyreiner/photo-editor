@@ -85,6 +85,12 @@ struct EditorPreviewControllerTestAccess {
     return controller.photo_layer_adjustment_render_within_latency_budget_;
   }
 
+  static bool full_render_requested(const EditorPreviewController& controller) {
+    return controller.full_render_timer_.isActive() ||
+           controller.full_request_pending_ ||
+           controller.full_render_watcher_.isRunning();
+  }
+
   static RenderRequest current_render_request(
       const EditorPreviewController& controller,
       bool full_resolution) {
@@ -316,6 +322,54 @@ QRectF outline_bounds(const QVariantList& outline_paths) {
   return normalized_points_bounds(flattened_points);
 }
 
+int outline_path_count(const QVariantList& outline_paths) {
+  if (outline_paths.isEmpty()) {
+    return 0;
+  }
+  const auto first_point = outline_paths.first().toMap();
+  if (!first_point.isEmpty() && first_point.contains(QStringLiteral("x"))) {
+    return 1;
+  }
+  auto count = 0;
+  for (const auto& path_value : outline_paths) {
+    if (path_value.toList().size() >= 3) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+double max_outline_segment_length(const QVariantList& outline_paths) {
+  auto max_segment = 0.0;
+  const auto point_distance = [](const QVariantMap& left, const QVariantMap& right) {
+    const auto dx = left.value(QStringLiteral("x")).toDouble() -
+                    right.value(QStringLiteral("x")).toDouble();
+    const auto dy = left.value(QStringLiteral("y")).toDouble() -
+                    right.value(QStringLiteral("y")).toDouble();
+    return std::hypot(dx, dy);
+  };
+  const auto accumulate_path = [&](const QVariantList& path) {
+    if (path.size() < 2) {
+      return;
+    }
+    for (auto index = 0; index < path.size(); ++index) {
+      const auto current = path.at(index).toMap();
+      const auto next = path.at((index + 1) % path.size()).toMap();
+      if (current.contains(QStringLiteral("x")) && next.contains(QStringLiteral("x"))) {
+        max_segment = std::max(max_segment, point_distance(current, next));
+      }
+    }
+  };
+  if (!outline_paths.isEmpty() && outline_paths.first().toMap().contains(QStringLiteral("x"))) {
+    accumulate_path(outline_paths);
+    return max_segment;
+  }
+  for (const auto& path_value : outline_paths) {
+    accumulate_path(path_value.toList());
+  }
+  return max_segment;
+}
+
 bool bounds_match(const QRectF& actual, const QRectF& expected, double tolerance) {
   return actual.isValid() && expected.isValid() &&
          std::abs(actual.left() - expected.left()) <= tolerance &&
@@ -384,6 +438,7 @@ bool has_final_alpha_outline_contract(
   const auto source = trace.value(QStringLiteral("outline_trace_source")).toString();
   return (source == QStringLiteral("vector-path") ||
           source == QStringLiteral("clean-canvas") ||
+          source == QStringLiteral("refinement-clean-outline") ||
           source == QStringLiteral("composite-alpha") ||
           source == QStringLiteral("cache-hit")) &&
          trace.value(QStringLiteral("mask_alpha_provider_contract")).toString() ==
@@ -501,6 +556,17 @@ int main(int argc, char** argv) {
       !canvas_overlay_source.contains(QStringLiteral("CanvasCoordinateMapper {\n        id: maskCoordinateMapper")) ||
       !canvas_overlay_source.contains(QStringLiteral("function imagePointFromItem(")) ||
       !canvas_overlay_source.contains(QStringLiteral("maskCoordinateMapper.viewToImagePoint")) ||
+      !canvas_overlay_source.contains(QStringLiteral("function previewOutlinePoint(normalizedX, normalizedY)")) ||
+      !canvas_overlay_source.contains(QStringLiteral("const point = root.viewPointForImage(normalizedX, normalizedY)")) ||
+      !canvas_overlay_source.contains(QStringLiteral("const firstPoint = root.previewOutlinePoint(")) ||
+      !canvas_overlay_source.contains(QStringLiteral("return Math.max(0.75, Number(logicalPixels || 1.0))")) ||
+      !canvas_overlay_source.contains(QStringLiteral("return Math.max(1.0, Number(logicalPixels || 1.0))")) ||
+      !canvas_overlay_source.contains(QStringLiteral("outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale")) ||
+      !canvas_overlay_source.contains(QStringLiteral("Math.pow(2.0, Math.ceil(Math.log(safeScale) / Math.LN2))")) ||
+      !shared_overlay_source.contains(QStringLiteral("outline-scale-buckets:v1|power-of-two-ceil|precision-never-below-display-scale")) ||
+      !shared_overlay_source.contains(QStringLiteral("Math.pow(2.0, Math.ceil(Math.log(safeScale) / Math.LN2))")) ||
+      canvas_overlay_source.contains(QStringLiteral("root.previewPointX(root.pointXValue(")) ||
+      canvas_overlay_source.contains(QStringLiteral("root.previewPointY(root.pointYValue(")) ||
       !canvas_overlay_source.contains(QStringLiteral("function scheduleSmartSelectPreviewFromItem(")) ||
       mask_view_source.isEmpty() ||
       !mask_view_source.contains(QStringLiteral("pointerCoordinateMappingContract")) ||
@@ -525,7 +591,36 @@ int main(int argc, char** argv) {
       mask_view_source.contains(QStringLiteral("point.position.y / Math.max(1, previewItem.height)")) ||
       mask_view_source.contains(QStringLiteral("eventPoint.position.x / Math.max(1, previewItem.width)")) ||
       mask_view_source.contains(QStringLiteral("eventPoint.position.y / Math.max(1, previewItem.height)"))) {
-    return fail("MaskCanvasOverlay and MaskView mask input should use CanvasCoordinateMapper instead of direct local width/height division");
+    return fail("MaskCanvasOverlay and MaskView input and outline drawing should use CanvasCoordinateMapper instead of direct local width/height math");
+  }
+  if (!edit_view_source.contains(QStringLiteral("outlineVisualScale: Math.max(1.0, root.currentZoomLevel())")) ||
+      !studio_workspace_source.contains(QStringLiteral("layer-mask-activation-latency:v2|panel-first:true|outline-trace:next-event-loop|delay-ms:0")) ||
+      !studio_workspace_source.contains(QStringLiteral("id: maskOutlineActivationTimer\n        interval: 0")) ||
+      !studio_workspace_source.contains(QStringLiteral("root.selectedEditTargetMaskSetId().length > 0")) ||
+      !studio_workspace_source.contains(QStringLiteral("masked: editorPreview.hasActiveMask")) ||
+      !controller_header_source.contains(QStringLiteral("activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY maskOverlayChanged")) ||
+      !controller_header_source.contains(QStringLiteral("activeMaskOutlineDisplayScale READ activeMaskOutlineDisplayScale WRITE setActiveMaskOutlineDisplayScale NOTIFY maskOverlayChanged"))) {
+    return fail("Edit and Layers should keep selection outlines visible, zoom-aware, next-tick responsive, and isolated from broad controls notifications");
+  }
+  if (!shared_overlay_source.contains(QStringLiteral("final-alpha-contour|overlay-fill|marching-ants:v2")) ||
+      !shared_overlay_source.contains(QStringLiteral("property bool selectionFillVisible: false")) ||
+      !shared_overlay_source.contains(QStringLiteral("if (!root.selectionFillVisible ||")) ||
+      !shared_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(ctx, outlinePaths)")) ||
+      !canvas_overlay_source.contains(QStringLiteral("final-alpha-contour|overlay-fill|marching-ants:v2")) ||
+      !canvas_overlay_source.contains(QStringLiteral("property bool selectionFillVisible: false")) ||
+      !canvas_overlay_source.contains(QStringLiteral("return root.selectionFillVisible &&")) ||
+      !canvas_overlay_source.contains(QStringLiteral("root.fillOutlinePaths(")) ||
+      !studio_workspace_source.contains(QStringLiteral("selectionFillVisible: root.editInspectorTab === \"layers\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("editorPreview.requestLayerFullResolutionPreview()")) ||
+      !controller_header_source.contains(QStringLiteral("Q_INVOKABLE bool requestLayerFullResolutionPreview();")) ||
+      !studio_workspace_source.contains(QStringLiteral("text: \"Marching\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onClicked: editorPreview.maskPreviewMode = \"marching-ants\"")) ||
+      !studio_workspace_source.contains(QStringLiteral("onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, false)")) ||
+      !studio_workspace_source.contains(QStringLiteral("value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 100.0)")) ||
+      !studio_workspace_source.contains(QStringLiteral("value: root.clamp(editorPreview.activeMaskSelectionFineEdge, 0.0, 100.0)")) ||
+      !controller_source.contains(QStringLiteral("mask_def = mask_with_neutralized_selection_refinement(mask_def);")) ||
+      !controller_source.contains(QStringLiteral("mask_def.insert(QStringLiteral(\"feather\"), 0.0);"))) {
+    return fail("Selection UX should keep fill exclusive to Layers, retain marching ants elsewhere, restore max preview for layer editing, and keep generated masks neutral");
   }
   if (!canvas_overlay_source.contains(QStringLiteral("function scheduleSmartSelectPreviewFromItem(item, itemX, itemY, force) {\n        const point = imagePointFromItem(item, itemX, itemY)")) ||
       !canvas_overlay_source.contains(QStringLiteral("function beginSmartSelectStroke(mouseX, mouseY) {\n        const point = normalizedStrokePoint(mouseX, mouseY)\n        editorPreview.beginSmartSelectStroke(point.x, point.y")) ||
@@ -563,7 +658,7 @@ int main(int argc, char** argv) {
 	      !studio_workspace_source.contains(QStringLiteral("editorPreview.displayPreviewNativeFullResolution")) ||
 	      !studio_workspace_source.contains(QStringLiteral("Number(editorPreview.sourceImageWidth || 0) <= editorPreview.previewTargetEdge")) ||
 	      !studio_workspace_source.contains(QStringLiteral("Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge")) ||
-      !studio_workspace_source.contains(QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\"")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property string pixelGridRenderContract: \"pixel-grid-render:v5|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked\"")) ||
       !studio_workspace_source.contains(QStringLiteral("sourcePixelScreenWidth >= pixelGridThreshold")) ||
       !studio_workspace_source.contains(QStringLiteral("sourcePixelScreenHeight >= pixelGridThreshold")) ||
       !studio_workspace_source.contains(QStringLiteral("readonly property bool pixelGridVisible: pixelInspectionActive")) ||
@@ -590,15 +685,15 @@ int main(int argc, char** argv) {
       !studio_workspace_source.contains(QStringLiteral("crispPixels: viewport.pixelInspectionActive")) ||
       !studio_workspace_source.contains(QStringLiteral("visible: root.loupeEnabled && viewport.loupeEnabled &&\n                     viewport.highCostInspectionOverlaysVisible")) ||
       !studio_workspace_source.contains(QStringLiteral("visible: root.focusPeakingOverlayEnabled && viewport.focusPeakingOverlayEnabled &&\n                     viewport.highCostInspectionOverlaysVisible")) ||
-      !studio_workspace_source.contains(QStringLiteral("id: pixelGridOverlay")) ||
-      !studio_workspace_source.contains(QStringLiteral("anchors.fill: parent")) ||
-      !studio_workspace_source.contains(QStringLiteral("property bool paintPending: false")) ||
-      !studio_workspace_source.contains(QStringLiteral("function schedulePaint()")) ||
-      !studio_workspace_source.contains(QStringLiteral("id: pixelGridPaintTimer")) ||
-      !studio_workspace_source.contains(QStringLiteral("const stepX = viewport.sourcePixelScreenWidth")) ||
-      !studio_workspace_source.contains(QStringLiteral("const visibleLeft = Math.max(0, contentLeft)")) ||
-      !studio_workspace_source.contains(QStringLiteral("const startXIndex = Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))")) ||
-      !studio_workspace_source.contains(QStringLiteral("stepX < viewport.pixelGridThreshold")) ||
+	      !studio_workspace_source.contains(QStringLiteral("id: pixelGridOverlay")) ||
+	      !studio_workspace_source.contains(QStringLiteral("anchors.fill: parent")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property bool gridGeometryValid:")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property int verticalStartIndex:")) ||
+		      studio_workspace_source.contains(QStringLiteral("id: pixelGridPaintTimer")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property real stepX: viewport.sourcePixelScreenWidth")) ||
+	      !studio_workspace_source.contains(QStringLiteral("readonly property real visibleLeft: Math.max(0, contentLeft)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("Math.floor((visibleLeft - contentLeft) / stepX)")) ||
+	      !studio_workspace_source.contains(QStringLiteral("stepX >= viewport.pixelGridThreshold")) ||
       studio_workspace_source.contains(QStringLiteral("id: pixelGridOverlay\n            objectName: viewport.objectName.length > 0 ? viewport.objectName + \"PixelGridOverlay\" : \"pixelGridOverlay\"\n            x: viewport.paintedContentX")) ||
       !studio_workspace_source.contains(QStringLiteral("editorPreview.previewViewportPatchEdgeForInspection(")) ||
       !studio_workspace_source.contains(QStringLiteral("editViewport.nextInspectionZoom()")) ||
@@ -1211,6 +1306,9 @@ int main(int argc, char** argv) {
   if (!wait_for_brush_commit(commit_controller)) {
     return fail("deferred brush stroke commit should settle into stored brush alpha");
   }
+  if (!wait_for_preview_idle(commit_controller, 4000)) {
+    return fail("deferred brush stroke preview should settle before validating refreshed thumbnails");
+  }
   const auto brush_commit_telemetry =
       photo_editor::desktop::EditorPreviewControllerTestAccess::last_mask_work_telemetry(
           commit_controller);
@@ -1297,6 +1395,25 @@ int main(int argc, char** argv) {
       QString(),
       QString());
   layer_coalesce_controller.addMask(QStringLiteral("linear"));
+  auto large_selection_mask =
+      layer_coalesce_controller
+          .maskStack()
+          .at(layer_coalesce_controller.activeMaskIndex())
+          .toMap();
+  constexpr auto large_selection_edge = 2048;
+  large_selection_mask.insert(QStringLiteral("kind"), QStringLiteral("object"));
+  large_selection_mask.insert(
+      QStringLiteral("segmentationData"),
+      QByteArray(large_selection_edge * large_selection_edge, char(0xff)));
+  large_selection_mask.insert(QStringLiteral("segmentationWidth"), large_selection_edge);
+  large_selection_mask.insert(QStringLiteral("segmentationHeight"), large_selection_edge);
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::update_active_mask_definition(
+          layer_coalesce_controller,
+          large_selection_mask) ||
+      !wait_for_preview_idle(layer_coalesce_controller, 5000)) {
+    return fail("large selection latency fixture should install and settle before layer adjustment");
+  }
+  layer_coalesce_controller.beginCoalescedEdit();
   if (layer_coalesce_controller.photoLayerCount() != 1 ||
       !layer_coalesce_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("exposure"), 0.40) ||
       !layer_coalesce_controller.setPhotoLayerAdjustmentValue(0, QStringLiteral("tint"), -12.0) ||
@@ -1310,6 +1427,15 @@ int main(int argc, char** argv) {
       photo_editor::desktop::EditorPreviewControllerTestAccess::
               photo_layer_adjustment_render_budget_ms(layer_coalesce_controller) != 16) {
     return fail("rapid layer-local adjustment writes should enter a 16 ms coalesced slider latency gate");
+  }
+  QElapsedTimer layer_binding_timer;
+  layer_binding_timer.start();
+  for (auto index = 0; index < 8; ++index) {
+    (void)layer_coalesce_controller.photoLayers();
+    (void)layer_coalesce_controller.maskSets();
+  }
+  if (layer_binding_timer.elapsed() > 50) {
+    return fail("layer and mask bindings must not hash or rebuild large selection thumbnails on the slider interaction path");
   }
   const auto coalesced_layer = layer_coalesce_controller.photoLayers().constFirst().toMap();
   if (coalesced_layer.value(QStringLiteral("exposure")).toDouble() != 0.40 ||
@@ -1328,10 +1454,20 @@ int main(int argc, char** argv) {
           photo_layer_adjustment_render_within_latency_budget(layer_coalesce_controller)) {
     return fail("layer-local slider coalescing should flush within the 16 ms latency budget");
   }
+  layer_coalesce_controller.endCoalescedEdit();
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::full_render_requested(
+          layer_coalesce_controller)) {
+    return fail("a completed layer-local adjustment should queue a max-preview restoration after immediate feedback");
+  }
+  QElapsedTimer layer_request_timer;
+  layer_request_timer.start();
   const auto layer_request =
       photo_editor::desktop::EditorPreviewControllerTestAccess::current_render_request(
           layer_coalesce_controller,
           false);
+  if (layer_request_timer.elapsed() > 100) {
+    return fail("large-mask layer render request construction must stay under the 100 ms visible-feedback budget");
+  }
   const auto active_layer = layer_coalesce_controller.photoLayers().constFirst().toMap();
   const auto active_mask =
       layer_coalesce_controller
@@ -1591,6 +1727,209 @@ int main(int argc, char** argv) {
     return fail(detail.constData());
   }
 
+  QVariantMap silhouette_subject_mask = known_alpha_mask;
+  silhouette_subject_mask.insert(QStringLiteral("kind"), QStringLiteral("subject"));
+  constexpr auto silhouette_width = 64;
+  constexpr auto silhouette_height = 96;
+  QByteArray silhouette_data(silhouette_width * silhouette_height, char(0));
+  const auto fill_silhouette_row = [&](int y, int left, int right) {
+    for (auto x = left; x <= right; ++x) {
+      silhouette_data[y * silhouette_width + x] = char(0xff);
+    }
+  };
+  for (auto y = 6; y <= 21; ++y) {
+    const auto inset = std::abs(14 - y) / 3;
+    fill_silhouette_row(y, 22 + inset, 41 - inset);
+  }
+  for (auto y = 22; y <= 29; ++y) {
+    fill_silhouette_row(y, 28, 35);
+  }
+  for (auto y = 30; y <= 70; ++y) {
+    const auto half_width = 10 + std::min(8, (y - 30) / 4);
+    fill_silhouette_row(y, 32 - half_width, 32 + half_width);
+  }
+  for (auto y = 71; y <= 92; ++y) {
+    fill_silhouette_row(y, 16, 28);
+    fill_silhouette_row(y, 36, 48);
+  }
+  silhouette_subject_mask.insert(QStringLiteral("segmentationData"), silhouette_data);
+  silhouette_subject_mask.insert(QStringLiteral("segmentationWidth"), silhouette_width);
+  silhouette_subject_mask.insert(QStringLiteral("segmentationHeight"), silhouette_height);
+  photo_editor::desktop::EditorPreviewController silhouette_controller;
+  silhouette_controller.loadAsset(
+      QStringLiteral("outline-subject-silhouette-no-scanline-boxes"),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  silhouette_controller.addMask(QStringLiteral("linear"));
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::update_active_mask_definition(
+          silhouette_controller,
+          silhouette_subject_mask)) {
+    return fail("subject silhouette fixture should install a raster source mask");
+  }
+  silhouette_controller.setMaskPreviewMode(QStringLiteral("overlay"));
+  const auto silhouette_paths = silhouette_controller.activeMaskOutlinePaths();
+  const auto silhouette_bounds = outline_bounds(silhouette_paths);
+  if (outline_path_count(silhouette_paths) != 1 ||
+      silhouette_bounds.height() < 0.82 ||
+      silhouette_bounds.width() < 0.45) {
+    const auto detail =
+        QStringLiteral(
+            "one connected subject alpha must produce one continuous exterior contour, not scanline rectangles (paths=%1 bounds=%2,%3 %4x%5 maxSegment=%6)")
+            .arg(outline_path_count(silhouette_paths))
+            .arg(silhouette_bounds.x(), 0, 'f', 3)
+            .arg(silhouette_bounds.y(), 0, 'f', 3)
+            .arg(silhouette_bounds.width(), 0, 'f', 3)
+            .arg(silhouette_bounds.height(), 0, 'f', 3)
+            .arg(max_outline_segment_length(silhouette_paths), 0, 'f', 3)
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  QVariantMap corner_touching_subject_mask = known_alpha_mask;
+  corner_touching_subject_mask.insert(QStringLiteral("kind"), QStringLiteral("subject"));
+  constexpr auto corner_touch_width = 24;
+  constexpr auto corner_touch_height = 24;
+  QByteArray corner_touch_data(corner_touch_width * corner_touch_height, char(0));
+  for (auto y = 3; y <= 10; ++y) {
+    for (auto x = 3; x <= 10; ++x) {
+      corner_touch_data[y * corner_touch_width + x] = char(0xff);
+    }
+  }
+  for (auto y = 11; y <= 18; ++y) {
+    for (auto x = 11; x <= 18; ++x) {
+      corner_touch_data[y * corner_touch_width + x] = char(0xff);
+    }
+  }
+  corner_touching_subject_mask.insert(QStringLiteral("segmentationData"), corner_touch_data);
+  corner_touching_subject_mask.insert(QStringLiteral("segmentationWidth"), corner_touch_width);
+  corner_touching_subject_mask.insert(QStringLiteral("segmentationHeight"), corner_touch_height);
+  photo_editor::desktop::EditorPreviewController corner_touch_controller;
+  corner_touch_controller.loadAsset(
+      QStringLiteral("outline-corner-touching-subject"),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  corner_touch_controller.addMask(QStringLiteral("linear"));
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::update_active_mask_definition(
+          corner_touch_controller,
+          corner_touching_subject_mask)) {
+    return fail("corner-touching subject fixture should install a raster source mask");
+  }
+  corner_touch_controller.setMaskPreviewMode(QStringLiteral("overlay"));
+  const auto corner_touch_paths = corner_touch_controller.activeMaskOutlinePaths();
+  const auto corner_touch_trace =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_trace_fields(
+          corner_touch_controller);
+  if (corner_touch_paths.isEmpty() ||
+      max_outline_segment_length(corner_touch_paths) > 0.36 ||
+      corner_touch_trace.value(QStringLiteral("outline_trace_source")).toString() !=
+          QStringLiteral("direct-mask")) {
+    const auto detail =
+        QStringLiteral(
+            "corner-touching subject alpha should trace without long stitched chords "
+            "(paths=%1 maxSegment=%2 source=%3 simplify=%4 in=%5 out=%6)")
+            .arg(outline_path_count(corner_touch_paths))
+            .arg(max_outline_segment_length(corner_touch_paths), 0, 'f', 4)
+            .arg(corner_touch_trace.value(QStringLiteral("outline_trace_source")).toString())
+            .arg(corner_touch_trace.value(QStringLiteral("outline_simplification_contract")).toString())
+            .arg(corner_touch_trace.value(QStringLiteral("outline_simplification_input_point_count")).toInt())
+            .arg(corner_touch_trace.value(QStringLiteral("outline_simplification_output_point_count")).toInt())
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  QVariantMap untraceable_subject_mask = known_alpha_mask;
+  untraceable_subject_mask.insert(QStringLiteral("kind"), QStringLiteral("subject"));
+  untraceable_subject_mask.insert(QStringLiteral("segmentationData"), QByteArray(16, char(0xff)));
+  untraceable_subject_mask.insert(QStringLiteral("segmentationWidth"), 16);
+  untraceable_subject_mask.insert(QStringLiteral("segmentationHeight"), 1);
+  photo_editor::desktop::EditorPreviewController untraceable_subject_controller;
+  untraceable_subject_controller.loadAsset(
+      QStringLiteral("outline-untraceable-subject-no-rectangle"),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  untraceable_subject_controller.addMask(QStringLiteral("linear"));
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::update_active_mask_definition(
+          untraceable_subject_controller,
+          untraceable_subject_mask)) {
+    return fail("untraceable subject fixture should install a raster source mask");
+  }
+  untraceable_subject_controller.setMaskPreviewMode(QStringLiteral("overlay"));
+  const auto untraceable_subject_paths =
+      untraceable_subject_controller.activeMaskOutlinePaths();
+  const auto untraceable_subject_trace =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_trace_fields(
+          untraceable_subject_controller);
+  if (!untraceable_subject_paths.isEmpty() ||
+      untraceable_subject_trace.value(QStringLiteral("outline_trace_source")).toString() !=
+          QStringLiteral("direct-mask")) {
+    const auto detail =
+        QStringLiteral(
+            "semantic masks should not fabricate a rectangle when alpha tracing is unavailable "
+            "(paths=%1 source=%2)")
+            .arg(outline_path_count(untraceable_subject_paths))
+            .arg(untraceable_subject_trace.value(QStringLiteral("outline_trace_source")).toString())
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
+  QVariantMap refined_subject_outline_mask = corner_touching_subject_mask;
+  refined_subject_outline_mask.insert(QStringLiteral("selectionFineEdge"), 100.0);
+  refined_subject_outline_mask.insert(QStringLiteral("selectionEdgeContrast"), 65.0);
+  photo_editor::desktop::EditorPreviewController refined_subject_outline_controller;
+  refined_subject_outline_controller.loadAsset(
+      QStringLiteral("outline-refined-subject-source-free"),
+      source_path,
+      QString(),
+      QString(),
+      QString(),
+      QString(),
+      QString());
+  refined_subject_outline_controller.addMask(QStringLiteral("linear"));
+  if (!photo_editor::desktop::EditorPreviewControllerTestAccess::update_active_mask_definition(
+          refined_subject_outline_controller,
+          refined_subject_outline_mask)) {
+    return fail("refined subject outline fixture should install a raster source mask");
+  }
+  refined_subject_outline_controller.setMaskRefinementHighQualityPreview(true);
+  refined_subject_outline_controller.setMaskFullResolutionPreview(true);
+  refined_subject_outline_controller.setMaskPreviewMode(QStringLiteral("overlay"));
+  const auto refined_subject_paths =
+      refined_subject_outline_controller.activeMaskOutlinePaths();
+  const auto refined_subject_trace =
+      photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_trace_fields(
+          refined_subject_outline_controller);
+  if (refined_subject_paths.isEmpty() ||
+      refined_subject_trace.value(QStringLiteral("outline_trace_source")).toString() !=
+          QStringLiteral("refinement-clean-outline") ||
+      photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_full_key_count(
+          refined_subject_outline_controller) != 0 ||
+      max_outline_segment_length(refined_subject_paths) > 0.36) {
+    const auto detail =
+        QStringLiteral(
+            "refined subject outlines should stay source-free for overlay and zoom "
+            "(source=%1 fullKey=%2 paths=%3 maxSegment=%4 elapsed=%5)")
+            .arg(refined_subject_trace.value(QStringLiteral("outline_trace_source")).toString())
+            .arg(photo_editor::desktop::EditorPreviewControllerTestAccess::
+                     active_mask_outline_full_key_count(refined_subject_outline_controller))
+            .arg(outline_path_count(refined_subject_paths))
+            .arg(max_outline_segment_length(refined_subject_paths), 0, 'f', 4)
+            .arg(refined_subject_trace.value(QStringLiteral("outline_trace_elapsed_ms")).toLongLong())
+            .toUtf8();
+    return fail(detail.constData());
+  }
+
   QVariantMap jagged_alpha_mask = known_alpha_mask;
   constexpr auto jagged_alpha_width = 64;
   constexpr auto jagged_alpha_height = 64;
@@ -1625,7 +1964,20 @@ int main(int argc, char** argv) {
   const auto base_jagged_trace =
       photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_trace_fields(
           jagged_alpha_controller);
+  auto outline_scale_controls_notifications = 0;
+  auto outline_scale_overlay_notifications = 0;
+  QObject::connect(
+      &jagged_alpha_controller,
+      &photo_editor::desktop::EditorPreviewController::controlsChanged,
+      [&outline_scale_controls_notifications]() { ++outline_scale_controls_notifications; });
+  QObject::connect(
+      &jagged_alpha_controller,
+      &photo_editor::desktop::EditorPreviewController::maskOverlayChanged,
+      [&outline_scale_overlay_notifications]() { ++outline_scale_overlay_notifications; });
   jagged_alpha_controller.setActiveMaskOutlineDisplayScale(4.0);
+  if (outline_scale_controls_notifications != 0 || outline_scale_overlay_notifications != 1) {
+    return fail("outline zoom changes should repaint only the mask overlay without invalidating broad layer/control bindings");
+  }
   const auto zoomed_jagged_paths = jagged_alpha_controller.activeMaskOutlinePaths();
   const auto zoomed_jagged_trace =
       photo_editor::desktop::EditorPreviewControllerTestAccess::active_mask_outline_trace_fields(
@@ -2055,7 +2407,7 @@ int main(int argc, char** argv) {
           smart_alpha_trace,
           QStringLiteral("raster-payload")) ||
       smart_alpha_trace.value(QStringLiteral("outline_trace_source")).toString() !=
-          QStringLiteral("composite-alpha") ||
+          QStringLiteral("clean-canvas") ||
       smart_mask.value(QStringLiteral("segmentationData")).toByteArray().isEmpty() ||
       smart_mask.value(QStringLiteral("segmentationWidth")).toInt() != smart_source.width() ||
       smart_mask.value(QStringLiteral("segmentationHeight")).toInt() != smart_source.height() ||
@@ -2063,6 +2415,10 @@ int main(int argc, char** argv) {
           smart_source.width() ||
       smart_alpha_trace.value(QStringLiteral("mask_alpha_raster_height")).toInt() !=
           smart_source.height() ||
+      std::abs(smart_mask.value(QStringLiteral("feather")).toDouble()) > 1e-9 ||
+      std::abs(smart_mask.value(QStringLiteral("selectionSmooth")).toDouble()) > 1e-9 ||
+      std::abs(smart_mask.value(QStringLiteral("selectionFineEdge")).toDouble()) > 1e-9 ||
+      std::abs(smart_mask.value(QStringLiteral("selectionFeather")).toDouble()) > 1e-9 ||
       smart_mask.value(QStringLiteral("generatedAlphaSourceContract")).toString() !=
           QStringLiteral("generated-alpha-plus-metadata-v1") ||
       smart_mask.value(QStringLiteral("generatedAlphaTargetType")).toString() !=
@@ -2110,6 +2466,35 @@ int main(int argc, char** argv) {
             .arg(smart_alpha_trace.value(QStringLiteral("outline_trace_tolerance_normalized")).toDouble())
             .toUtf8();
     return fail(detail.constData());
+  }
+
+  const auto smart_layer_index = smart_controller.ensureActiveSelectionAdjustmentLayer();
+  const auto smart_curve_points = QVariantList{
+      normalized_point(0.0, 0.0),
+      normalized_point(0.45, 0.58),
+      normalized_point(1.0, 1.0),
+  };
+  if (smart_layer_index < 0 || smart_layer_index >= smart_controller.photoLayers().size()) {
+    return fail("a committed smart selection should expose its linked adjustment layer immediately");
+  }
+  const auto smart_linked_layer = smart_controller.photoLayers().at(smart_layer_index).toMap();
+  if (!smart_linked_layer.value(QStringLiteral("selectionScoped")).toBool() ||
+      smart_linked_layer.value(QStringLiteral("selectionMaskSetId")).toString() !=
+          smart_mask.value(QStringLiteral("maskSetId")).toString() ||
+      !smart_controller.setPhotoLayerCurvePoints(
+          smart_layer_index,
+          QStringLiteral("RGB"),
+          smart_curve_points) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          photo_layer_adjustment_render_timer_active(smart_controller)) {
+    return fail("Smart Select -> Edit Layer -> tone curve should route to the selection-scoped layer and schedule immediate visible feedback");
+  }
+  const auto smart_curve_layer = smart_controller.photoLayers().at(smart_layer_index).toMap();
+  if (smart_curve_layer.value(QStringLiteral("masterCurvePoints")).toList().size() != 3 ||
+      !wait_for_layer_adjustment_flush(smart_controller, 1) ||
+      !photo_editor::desktop::EditorPreviewControllerTestAccess::
+          photo_layer_adjustment_render_within_latency_budget(smart_controller)) {
+    return fail("selection-scoped tone curves should persist and flush inside the 16 ms adjustment scheduling budget");
   }
 
   const auto range_source_path = runtime_root.filePath(QStringLiteral("outline-range-source.png"));

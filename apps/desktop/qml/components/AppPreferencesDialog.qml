@@ -15,7 +15,7 @@ Dialog {
     standardButtons: Dialog.NoButton
 
     property int currentPage: 0
-    readonly property var pageTitles: ["General", "Timeline", "Storage"]
+    readonly property var pageTitles: ["General", "Timeline", "Storage", "Privacy & Support"]
     readonly property string dialogVisibilityContract: "dialog-visibility:v1|preferences|always:nav-current-page-close-by-escape|contextual:page-settings-storage-paths-backend-status|one-expansion:workspace-picker-backend-picker-folder-open|hover-focus:preference-navigation-controls|diagnostic:backend-availability-storage-paths|preserve:functionality"
     readonly property string dialogSurfaceContract: "dialog-surface:v1|preferences|nav:fixed-left|page:dominant|sections:scrollable|toggles:stable|paths:copyable-wrap|no-elide:true|no-overlap:true"
     readonly property string functionPreservationMap: "function-preservation:v1|dark-mode:general-toggle|startup-workspace:general-combo|reopen-workspace:general-toggle|preview-backend:general-combo|timeline-defaults:timeline-page|storage-folders:storage-open-actions"
@@ -238,7 +238,9 @@ Dialog {
             return theme.accentWarm400
         if (index === 1)
             return theme.warning
-        return theme.accentCool400
+        if (index === 2)
+            return theme.accentCool400
+        return theme.success
     }
 
     function pageEyebrow(index) {
@@ -246,7 +248,9 @@ Dialog {
             return "Shell"
         if (index === 1)
             return "Editing"
-        return "Runtime"
+        if (index === 2)
+            return "Runtime"
+        return "Trust"
     }
 
     function pageSubtitle(index) {
@@ -254,7 +258,9 @@ Dialog {
             return "Tune launch behavior, preview acceleration, and default workspace routing."
         if (index === 1)
             return "Set timeline defaults and restore workspace controls."
-        return "Review the folders Virel Studio uses for application data, cache, logs, and backups."
+        if (index === 2)
+            return "Review the folders Virel Studio uses for application data, cache, logs, and backups."
+        return "Control what leaves this device, create a reviewable support bundle, and read the product policies."
     }
 
     parent: Overlay.overlay
@@ -669,6 +675,76 @@ Dialog {
                             }
                         }
                     }
+
+                    ScrollView {
+                        clip: true
+                        contentWidth: availableWidth
+
+                        ColumnLayout {
+                            width: Math.max(0, parent.width)
+                            spacing: theme.space16
+
+                            PreferenceSection {
+                                title: "Private by default"
+                                subtitle: "Virel Studio does not upload photos, catalogs, or diagnostic logs. Local diagnostics stay on this device until you deliberately share them."
+
+                                PreferenceToggleRow {
+                                    title: "Local diagnostic history"
+                                    description: appShell.localDiagnosticsEnabled
+                                                 ? "Enabled for this build. The latest sessions are retained locally for troubleshooting."
+                                                 : "Disabled for this build."
+                                    checked: appShell.localDiagnosticsEnabled
+                                    enabled: false
+                                }
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space10
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: "Create a support folder containing system metadata and up to three recent text-log sessions. Photo bytes are never included. Review the folder before sending it."
+                                        color: theme.textMuted
+                                        font.family: theme.fontUi
+                                        font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
+                                    }
+
+                                    ActionButton {
+                                        text: "Create Support Bundle"
+                                        onClicked: appShell.createSupportBundle()
+                                    }
+                                }
+                            }
+
+                            PreferenceSection {
+                                title: "Policies and help"
+                                subtitle: "These links open the current public policies in your browser."
+
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    spacing: theme.space10
+
+                                    ActionButton {
+                                        text: "Support"
+                                        onClicked: appShell.openSupportPage()
+                                    }
+
+                                    ActionButton {
+                                        text: "Privacy"
+                                        onClicked: appShell.openPrivacyPage()
+                                    }
+
+                                    ActionButton {
+                                        text: "Terms"
+                                        onClicked: appShell.openTermsPage()
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 Rectangle {
@@ -689,6 +765,8 @@ Dialog {
                             Layout.fillWidth: true
                             text: root.currentPage === 2
                                   ? "Storage locations are read-only here; use Open to reveal them in Finder."
+                                  : root.currentPage === 3
+                                    ? "Nothing is uploaded unless you choose to share a support bundle."
                                   : "Preference changes are saved immediately."
                             color: theme.textFaint
                             font.family: theme.fontUi

@@ -831,10 +831,10 @@ class EditorPreviewController final : public QObject {
   Q_PROPERTY(QVariantList activeMaskPolygonPoints READ activeMaskPolygonPoints NOTIFY controlsChanged)
   Q_PROPERTY(int activeMaskPolygonPointCount READ activeMaskPolygonPointCount NOTIFY controlsChanged)
   Q_PROPERTY(bool activeMaskPolygonSelfIntersecting READ activeMaskPolygonSelfIntersecting NOTIFY controlsChanged)
-  Q_PROPERTY(QVariantList activeMaskOutlinePoints READ activeMaskOutlinePoints NOTIFY controlsChanged)
-  Q_PROPERTY(QVariantList activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY controlsChanged)
-  Q_PROPERTY(QVariantMap activeMaskOutlineTrace READ activeMaskOutlineTrace NOTIFY controlsChanged)
-  Q_PROPERTY(double activeMaskOutlineDisplayScale READ activeMaskOutlineDisplayScale WRITE setActiveMaskOutlineDisplayScale NOTIFY controlsChanged)
+  Q_PROPERTY(QVariantList activeMaskOutlinePoints READ activeMaskOutlinePoints NOTIFY maskOverlayChanged)
+  Q_PROPERTY(QVariantList activeMaskOutlinePaths READ activeMaskOutlinePaths NOTIFY maskOverlayChanged)
+  Q_PROPERTY(QVariantMap activeMaskOutlineTrace READ activeMaskOutlineTrace NOTIFY maskOverlayChanged)
+  Q_PROPERTY(double activeMaskOutlineDisplayScale READ activeMaskOutlineDisplayScale WRITE setActiveMaskOutlineDisplayScale NOTIFY maskOverlayChanged)
   Q_PROPERTY(QString activeMaskOutlineQualityTier READ activeMaskOutlineQualityTier NOTIFY activeBrushStrokeChanged)
   Q_PROPERTY(QString activeMaskPreviewQualityTier READ activeMaskPreviewQualityTier NOTIFY controlsChanged)
   Q_PROPERTY(QString activeMaskPreviewSource READ activeMaskPreviewSource NOTIFY controlsChanged)
@@ -1702,6 +1702,7 @@ class EditorPreviewController final : public QObject {
       const QString& recipe_json);
   Q_INVOKABLE bool retryPreviewRender();
   Q_INVOKABLE bool retryThumbnailRender();
+  Q_INVOKABLE bool requestLayerFullResolutionPreview();
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
   Q_INVOKABLE void beginCoalescedEdit();
@@ -2179,6 +2180,10 @@ signals:
       const QString& operation = {},
       bool debounce_render = false,
       const QString& undo_label = {});
+  bool applyPhotoLayerMetadataChange(
+      const QVariantList& layers,
+      const QStringList& changed_keys,
+      const QString& undo_label);
   bool duplicate_photo_layer(int index, bool preserve_masks);
   bool updateMaskAt(
       int index,

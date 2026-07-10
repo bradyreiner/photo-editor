@@ -2,6 +2,8 @@
 #include <iostream>
 
 #include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -30,6 +32,13 @@ int main(int argc, char** argv) {
   clear_settings();
 
   photo_editor::desktop::AppShellController controller;
+  if (controller.productName() != QStringLiteral("Virel Studio") ||
+      controller.appVersion().isEmpty() ||
+      !controller.supportUrl().startsWith(QStringLiteral("https://")) ||
+      !controller.privacyUrl().startsWith(QStringLiteral("https://")) ||
+      !controller.termsUrl().startsWith(QStringLiteral("https://"))) {
+    return fail("production product and support metadata should be available to the shell");
+  }
   if (controller.startupWorkspace() != 0) {
     return fail("default startup workspace should be Library");
   }
@@ -88,6 +97,12 @@ int main(int argc, char** argv) {
       !persisted_controller.defaultTimelineSnapping() || !persisted_controller.defaultTimelineRipple() ||
       !persisted_controller.cullingAutoAdvance()) {
     return fail("restore defaults should restore the built-in preference values");
+  }
+
+  const auto support_bundle = persisted_controller.createSupportBundle();
+  if (support_bundle.isEmpty() ||
+      !QFileInfo::exists(QDir(support_bundle).filePath(QStringLiteral("support-manifest.json")))) {
+    return fail("support bundle should contain a privacy-scoped manifest");
   }
 
   clear_settings();

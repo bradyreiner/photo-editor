@@ -1,63 +1,78 @@
-# Release Process
+# Virel Studio Release Process
 
-## Current foundation
+The tagged release workflow is fail closed. It tests, packages, signs, verifies,
+promotes immutable public assets, and then deploys the download site. The private
+source repository is never used as the anonymous download host.
 
-- GitHub Actions CI for headless validation
-- GitHub Actions security checks for dependency audit and secret scanning
-- GitHub Actions release packaging for macOS and Windows
-- app-owned runtime directories for local support files
-- Git-tracked catalog migrations
-- app-managed local Postgres helper for default desktop startup
-- install rules for bundling Rust helpers beside the packaged desktop app
-- optional packaging hook for bundling a Postgres runtime root
+## Release topology
 
-## Required secrets for real signed releases
+1. Private source repository receives tag `vX.Y.Z` matching `VERSION`.
+2. `quality-gate` runs Rust and headless native tests and exports dependency evidence.
+3. Platform jobs build:
+   - macOS arm64 on `macos-14`
+   - macOS x86_64 on `macos-15-intel`
+   - Windows x64 on `windows-2022`
+4. macOS jobs sign with Hardened Runtime, notarize, staple, and assess each DMG.
+5. Windows signs, timestamps, and validates the MSIX.
+6. A macOS job creates one EdDSA-signed appcast from both notarized DMGs.
+7. `publish` promotes only verified artifacts into the configured public binary repository.
+8. `deploy-site` materializes public configuration and deploys `site/` to Cloudflare Pages.
 
-- `APPLE_TEAM_ID`
+## Required secrets
+
+- `APPLE_DEVELOPER_ID_P12_BASE64`
+- `APPLE_DEVELOPER_ID_P12_PASSWORD`
 - `APPLE_DEVELOPER_ID_APP`
-- `APPLE_DEVELOPER_ID_INSTALLER`
 - `APPLE_NOTARY_APPLE_ID`
 - `APPLE_NOTARY_TEAM_ID`
 - `APPLE_NOTARY_PASSWORD`
+- `SPARKLE_ED_PRIVATE_KEY_BASE64`
 - `WINDOWS_SIGNING_CERT_BASE64`
 - `WINDOWS_SIGNING_CERT_PASSWORD`
+- `PUBLIC_RELEASES_TOKEN`
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
 
-## Recommended repository variables
+Store signing and Sparkle private keys as production-environment secrets. Keep
+offline backups. `PUBLIC_RELEASES_TOKEN` should have access only to the public
+binary repository.
 
-- `PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE`
-- `PHOTO_EDITOR_MACOS_SPARKLE_URL`
+## Required variables
+
+- `VIREL_PUBLIC_RELEASE_REPOSITORY`
+- `VIREL_WEBSITE_URL`
+- `VIREL_SUPPORT_EMAIL`
+- `VIREL_SUPPORT_PAYMENT_URL`
+- `VIREL_PURCHASE_URL` (optional for the free alpha)
+- `VIREL_CLOUDFLARE_PAGES_PROJECT`
+- `PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE` or `PHOTO_EDITOR_MACOS_SPARKLE_URL`
 - `PHOTO_EDITOR_MACOS_APPCAST_URL`
 - `PHOTO_EDITOR_MACOS_SPARKLE_PUBLIC_KEY`
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE`
-- `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`
-- `PHOTO_EDITOR_WINDOWS_PACKAGE_NAME`
-- `PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME`
-- `PHOTO_EDITOR_WINDOWS_PACKAGE_PUBLISHER`
-- `PHOTO_EDITOR_WINDOWS_PUBLISHER_DISPLAY_NAME`
-- `PHOTO_EDITOR_WINDOWS_DESCRIPTION`
-- `PHOTO_EDITOR_WINDOWS_TIMESTAMP_URL`
-- `PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI`
-- `PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI`
-
-## Recommended release flow
-
-1. Merge into `main` only through reviewed pull requests.
-2. Update the root `VERSION` file to `X.Y.Z`.
-3. Tag a release as `vX.Y.Z`.
-4. Let GitHub Actions build artifacts for macOS and Windows.
-5. Bundle the Rust helper binaries from `rust/target/release`.
-6. Bundle a PostgreSQL runtime root where available.
-   macOS currently uses `brew --prefix postgresql@16` in CI.
-   Windows uses either `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_ARCHIVE` or `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`.
-7. When Sparkle is configured, bundle `Sparkle.framework` into the macOS app and generate an appcast from the packaged artifacts.
-8. Build an `.msix` from the staged Windows install root and generate an `.appinstaller` file when the update URIs are configured.
-9. Sign and notarize macOS artifacts.
-10. Sign Windows artifacts and publish the installer/update metadata.
-11. Publish release notes plus migration compatibility notes.
+- Windows PostgreSQL, package publisher, timestamp, App Installer, and package-base values listed in [production-launch-checklist.md](production-launch-checklist.md)
 
 ## Version contracts
 
-- App version: root `VERSION` file, CMake project version, bundle version, and Git tag
-- Catalog schema version: `sqlx` migration history
-- Edit recipe version: application-controlled JSON contract
-- Release channel: alpha, beta, stable
+- `VERSION`, CMake version, bundle version, MSIX version, release notes, and Git tag must agree.
+- macOS and Windows package identities must never change after the first public build.
+- Release assets are immutable. Correct a release with a new patch version.
+- Catalog schema changes are forward migrations. A versioned database dump is created before migration.
+- Alpha is the current product channel, but GitHub marks the release as `latest` so stable `/latest/download/` updater URLs work.
+
+## Public release gate
+
+Run locally for structural validation:
+
+```sh
+python3 scripts/release-preflight.py --mode candidate --allow-dirty
+python3 scripts/validate-release-site.py site
+```
+
+The public CI gate additionally requires the repository variables above and a
+clean tag. The protected `production` environment should require manual review.
+
+## Recovery rules
+
+- Never replace a published asset in place after users install it.
+- Stop promotion if either architecture, signature, notarization, appcast signature, MSIX signature, checksum, or legal inventory is missing.
+- If an update is bad, publish a higher patch version and update the appcast; do not instruct users to downgrade a migrated catalog.
+- Preserve the matching pre-migration dump until the user confirms the new version is healthy.

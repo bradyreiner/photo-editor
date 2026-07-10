@@ -1,62 +1,54 @@
-# PhotoEditor Download Site
+# Virel Studio Public Download Site
 
-This folder is a static Cloudflare Pages site for the PhotoEditor download page.
+This is the static Cloudflare Pages surface for signed Virel Studio downloads,
+optional support payments, release notes, product policies, and support.
 
-## Configure Downloads
+## Configuration
 
-Edit `download-config.js`.
+Do not hand-edit production URLs into `download-config.js`. The release workflow
+materializes it with:
 
-For a public GitHub repository, or a private repository where every tester has
-GitHub access, set:
-
-```js
-githubOwner: "your-github-user",
-githubRepo: "photo-editor",
+```sh
+python3 scripts/configure-release-site.py
+python3 scripts/validate-release-site.py site
 ```
 
-The page will read the latest GitHub Release and link matching release assets.
-Adjust `macAssetPattern` and `windowsAssetPattern` if your packaged filenames do
-not match the defaults.
+Relevant deployment values:
 
-For outside testers while the repository is private, leave the GitHub fields
-blank and set direct URLs:
+- `VIREL_PUBLIC_RELEASE_REPOSITORY` — public binary-only GitHub repository
+- `VIREL_SUPPORT_EMAIL`
+- `VIREL_SUPPORT_PAYMENT_URL` — hosted checkout/payment link
+- `VIREL_PURCHASE_URL` — optional supporter-license checkout
+- `VIREL_RELEASE_CHANNEL`
+- `VIREL_ACCESS_MODE`
 
-```js
-directDownloads: {
-  mac: "https://github.com/OWNER/REPO/releases/latest/download/PhotoEditor-0.1.0-Darwin.dmg",
-  windows: "https://github.com/OWNER/REPO/releases/latest/download/PhotoEditor-0.1.0-x64.msix"
-}
-```
+The source repository may remain private. Anonymous downloads come from the
+separate public release repository.
 
-Private GitHub Release URLs still require GitHub access. If testers do not have
-repository access, use a public release repo, a public object store link, or a
-temporary file link for the installer binaries.
+## Commerce model
 
-Optional fields worth filling before sharing:
+The public alpha uses `free-support`: installers are public and activation-free,
+while a hosted payment link accepts optional support. No payment secret is
+placed in the site. If mandatory paid access is introduced later, it needs a
+separate webhook-backed license and fulfillment system; hiding a static URL is
+not access control.
 
-```js
-updatedAt: "2026-04-28",
-checksums: {
-  mac: "SHA256_WITHOUT_THE_SHA256_PREFIX",
-  windows: "SHA256_WITHOUT_THE_SHA256_PREFIX"
-},
-releaseNotesUrl: "https://github.com/OWNER/REPO/releases/tag/v0.1.0",
-supportEmail: "you@example.com"
-```
+## Deployment
 
-## Deploy To Cloudflare Pages
+Tagged production releases deploy automatically after installers, update feeds,
+checksums, and notices are promoted. Required Cloudflare values:
 
-1. Push this repo to GitHub.
-2. In Cloudflare, create a Pages project from the GitHub repository.
-3. Set the build command to blank.
-4. Set the output directory to `site`.
-5. Deploy.
+- secret `CLOUDFLARE_API_TOKEN`
+- secret `CLOUDFLARE_ACCOUNT_ID`
+- variable `VIREL_CLOUDFLARE_PAGES_PROJECT`
 
-Cloudflare will provide a free `*.pages.dev` URL. Add a custom domain later if
-you want one.
+Cloudflare Pages hosts only the website. Large installers remain immutable
+GitHub Release assets.
 
-## Release Asset Hosting
+## Security and cache behavior
 
-Do not upload the DMG or Windows installer into this folder. Cloudflare Pages
-has a small per-file static asset limit. Use GitHub Releases for binaries and
-let this page link to those release assets.
+- `download-config.js` is served without caching so a release switch is immediate.
+- Versioned visual assets are immutable.
+- The Content Security Policy permits only same-origin resources and the public GitHub API.
+- Payment happens on the configured provider's hosted page.
+- `.appinstaller`, `.msix`, DMG, appcast, manifest, and checksums are released together.

@@ -3,317 +3,162 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
-  <meta
-    name="description"
-    content="Download the latest private alpha build of PhotoEditor for macOS or Windows.">
-  <meta property="og:title" content="Download PhotoEditor">
-  <meta property="og:description" content="Private alpha downloads for PhotoEditor on macOS and Windows.">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Download Virel Studio, a local-first native photo editor for macOS and Windows.">
+  <meta property="og:title" content="Virel Studio — native, local-first photo editing">
+  <meta property="og:description" content="Import, cull, edit, mask, and export without sending your photo library to a cloud service.">
   <meta property="og:type" content="website">
-  <meta name="theme-color" content="#111418">
-  <title>Download PhotoEditor</title>
-  <link rel="icon" href="./favicon.svg?v=4" type="image/svg+xml">
-  <link rel="stylesheet" href="./styles.css?v=4">
-  <script defer src="./download-config.js?v=4"></script>
-  <script defer src="./download-page.js?v=4"></script>
+  <meta property="og:image" content="./assets/og-virel.png">
+  <meta name="theme-color" content="#090a0b">
+  <title>Virel Studio — Download</title>
+  <link rel="icon" href="./assets/virel-icon.png?v=1" type="image/png">
+  <link rel="stylesheet" href="./styles.css?v=5">
+  <script defer src="./download-config.js?v=5"></script>
+  <script defer src="./download-page.js?v=5"></script>
 </head>
 <body>
   <header class="topbar" aria-label="Site header">
-    <a class="brand-mark" href="./" aria-label="PhotoEditor download home">
-      <span class="brand-icon" aria-hidden="true"></span>
-      <span>PhotoEditor</span>
+    <a class="brand-mark" href="./" aria-label="Virel Studio home">
+      <img class="brand-image" src="./assets/virel-icon.png" alt="">
+      <span>Virel Studio</span>
     </a>
     <nav class="topnav" aria-label="Page sections">
-      <a href="#downloads">Downloads</a>
-      <a href="#install">Install</a>
+      <a href="#downloads">Download</a>
+      <a href="#support-development">Support</a>
       <a href="#included">Included</a>
-      <a href="#testing">Testing</a>
+      <a href="./support.html">Help</a>
     </nav>
   </header>
 
   <main class="page-shell">
     <section class="hero" aria-labelledby="page-title">
       <div class="hero-copy">
-        <div class="release-pill" id="channel-pill">Private alpha</div>
-        <h1 id="page-title">PhotoEditor</h1>
+        <div class="release-pill" id="channel-pill">Public alpha</div>
+        <h1 id="page-title">Your photos.<br>Your machine.</h1>
         <p class="lede">
-          A native desktop workflow for importing, culling, editing, and
-          exporting photo libraries on macOS and Windows.
+          Virel Studio is a native, local-first workspace for importing, culling,
+          editing, masking, and exporting photo libraries on macOS and Windows.
         </p>
 
         <div class="hero-proof" aria-label="Release qualities">
           <span>Native desktop app</span>
-          <span>Local-first catalog</span>
-          <span>Mask and tone workflow</span>
+          <span>Local catalog</span>
+          <span>Non-destructive edits</span>
+          <span>No photo upload required</span>
         </div>
 
-        <div id="downloads" class="download-grid" aria-label="Download installers">
-          <a
-            id="mac-download"
-            class="download-card primary disabled"
-            href="#"
-            aria-disabled="true"
-            tabindex="-1"
-            data-platform-card="mac">
-            <span class="download-kicker">macOS</span>
-            <span class="download-title">Download for Mac</span>
-            <span class="download-meta" id="mac-label">DMG not configured</span>
-            <span class="download-checksum" id="mac-checksum"></span>
+        <div id="downloads" class="download-grid three-up" aria-label="Download installers">
+          <a id="mac-arm-download" class="download-card primary disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-arm">
+            <span class="download-kicker">macOS · Apple silicon</span>
+            <span class="download-title">Download for M-series Mac</span>
+            <span class="download-meta" id="mac-arm-label">DMG not published</span>
           </a>
-
-          <a
-            id="windows-download"
-            class="download-card disabled"
-            href="#"
-            aria-disabled="true"
-            tabindex="-1"
-            data-platform-card="windows">
-            <span class="download-kicker">Windows</span>
+          <a id="mac-intel-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="mac-intel">
+            <span class="download-kicker">macOS · Intel</span>
+            <span class="download-title">Download for Intel Mac</span>
+            <span class="download-meta" id="mac-intel-label">DMG not published</span>
+          </a>
+          <a id="windows-download" class="download-card disabled" href="#" aria-disabled="true" tabindex="-1" data-platform-card="windows">
+            <span class="download-kicker">Windows · x64</span>
             <span class="download-title">Download for Windows</span>
-            <span class="download-meta" id="windows-label">Installer not configured</span>
-            <span class="download-checksum" id="windows-checksum"></span>
+            <span class="download-meta" id="windows-label">Installer not published</span>
           </a>
         </div>
 
-        <p id="release-status" class="release-status" role="status">
-          Checking available builds...
-        </p>
+        <p id="release-status" class="release-status" role="status">Checking the signed release…</p>
         <p class="tester-note">
-          Private builds are for invited testers. Keep installer links off public
-          forums until code signing and public release hosting are finalized.
+          Alpha software can change quickly. Keep backups of important catalogs and original media.
         </p>
       </div>
 
-      <div class="product-panel app-preview" aria-label="PhotoEditor interface preview">
+      <div class="product-panel app-preview" aria-label="Virel Studio interface preview">
         <div class="window-chrome">
-          <div class="traffic-lights" aria-hidden="true">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span class="window-title">Edited · Masks · sRGB</span>
+          <div class="traffic-lights" aria-hidden="true"><span></span><span></span><span></span></div>
+          <span class="window-title">Virel Studio · Edited · sRGB</span>
         </div>
-        <img
-          id="app-screenshot"
-          class="app-screenshot"
-          src="./assets/app-preview.png?v=1"
-          alt="PhotoEditor edit workspace with image preview, filmstrip, histogram, and tone controls.">
-        <div class="workspace-preview css-preview">
-          <aside class="preview-sidebar" aria-hidden="true">
-            <div class="tool-button grid-tool"></div>
-            <div class="tool-button library-tool"></div>
-            <div class="tool-button active brush-tool"></div>
-            <div class="tool-button stack-tool"></div>
-            <div class="tool-button export-tool"></div>
-          </aside>
-          <section class="preview-stage">
-            <div class="preview-toolbar" aria-hidden="true">
-              <span class="toolbar-chip active-tool">Edit</span>
-              <span class="toolbar-chip">Mask</span>
-              <span class="toolbar-chip">Sync</span>
-            </div>
-            <div class="image-preview" aria-hidden="true">
-              <div class="sky-band"></div>
-              <div class="cloud cloud-a"></div>
-              <div class="cloud cloud-b"></div>
-              <div class="cloud cloud-c"></div>
-              <div class="ridge ridge-back"></div>
-              <div class="ridge ridge-front"></div>
-              <div class="forest"></div>
-              <div class="road"></div>
-              <div class="mask-outline"></div>
-            </div>
-            <div class="filmstrip-wrap" aria-hidden="true">
-              <span class="filmstrip-status">Edit recipe save is unavailable.</span>
-              <div class="filmstrip">
-                <span></span>
-                <span></span>
-                <span class="selected"></span>
-                <span></span>
-                <span></span>
-              </div>
-            </div>
-          </section>
-          <aside class="preview-controls" aria-hidden="true">
-            <div class="panel-actions">
-              <span></span>
-              <span class="active"></span>
-              <span></span>
-            </div>
-            <div class="mode-row">
-              <span>Output</span>
-              <strong>sRGB</strong>
-            </div>
-            <section class="inspector-block">
-              <div class="inspector-title">
-                <strong>Histogram</strong>
-                <span>RGB</span>
-              </div>
-              <div class="histogram">
-                <i class="hist-r"></i>
-                <i class="hist-g"></i>
-                <i class="hist-b"></i>
-              </div>
-            </section>
-            <section class="inspector-block">
-              <div class="inspector-title">
-                <strong>Light</strong>
-                <span>0.00 EV</span>
-              </div>
-              <div class="slider-row val-54"><b>Exposure</b><i></i></div>
-              <div class="slider-row val-49"><b>Contrast</b><i></i></div>
-              <div class="slider-row val-47"><b>Highlights</b><i></i></div>
-              <div class="slider-row val-52"><b>Shadows</b><i></i></div>
-            </section>
-            <section class="inspector-block tone-block">
-              <div class="inspector-title">
-                <strong>Tone Curve</strong>
-                <span>IN / OUT</span>
-              </div>
-              <div class="curve-grid"></div>
-            </section>
-          </aside>
-        </div>
+        <img class="app-screenshot public-preview" src="./assets/app-preview.png?v=1" alt="Virel Studio edit workspace with image preview, filmstrip, histogram, and tone controls.">
       </div>
     </section>
 
     <section class="release-summary" aria-label="Release summary">
-      <div>
-        <span class="summary-label">Version</span>
-        <strong id="version-value">0.1.0</strong>
-      </div>
-      <div>
-        <span class="summary-label">Updated</span>
-        <strong id="updated-value">Not published</strong>
-      </div>
-      <div>
-        <span class="summary-label">Access</span>
-        <strong id="access-value">Invited testers</strong>
-      </div>
-      <div>
-        <span class="summary-label">Channel</span>
-        <strong id="channel-value">Alpha</strong>
-      </div>
+      <div><span class="summary-label">Version</span><strong id="version-value">0.1.0</strong></div>
+      <div><span class="summary-label">Updated</span><strong id="updated-value">Not published</strong></div>
+      <div><span class="summary-label">Access</span><strong id="access-value">Public alpha</strong></div>
+      <div><span class="summary-label">Updates</span><strong>Built in</strong></div>
     </section>
 
     <section id="install" class="content-grid" aria-label="Download details">
       <article>
-        <h2>Install Notes</h2>
+        <h2>System requirements</h2>
         <ul>
-          <li id="mac-requirement">macOS 14 or newer recommended.</li>
-          <li id="windows-requirement">Windows 10 22H2 or newer recommended.</li>
-          <li>
-            Early builds may show Gatekeeper or SmartScreen warnings until
-            signing and notarization are finalized.
-          </li>
+          <li id="mac-requirement">macOS 13 or newer.</li>
+          <li id="windows-requirement">Windows 10 22H2 or Windows 11, 64-bit.</li>
+          <li>Install only signed builds published from this page.</li>
         </ul>
       </article>
-
       <article>
-        <h2>Private Alpha</h2>
-        <p id="access-note">
-          This page can be public, but private GitHub Release assets only work
-          for testers who have repository access. Use direct installer links
-          while the repository stays private.
-        </p>
+        <h2>Private by default</h2>
+        <p>Photos, catalogs, and diagnostic logs remain on your computer. Support bundles are created locally and shared only when you choose.</p>
       </article>
-
       <article>
-        <h2>Release Notes</h2>
+        <h2>Release notes</h2>
+        <p><a id="release-notes" href="#" aria-disabled="true">Release notes are not published yet</a></p>
+      </article>
+      <article>
+        <h2>Need help?</h2>
+        <p><a id="support-link" href="./support.html">Installation, updates, and support</a></p>
+      </article>
+    </section>
+
+    <section id="support-development" class="commerce-section" aria-labelledby="commerce-title">
+      <div class="commerce-copy">
+        <p class="section-kicker">Independent software</p>
+        <h2 id="commerce-title">Use the alpha freely. Support the work if it earns it.</h2>
         <p>
-          <a id="release-notes" href="#" aria-disabled="true">Release notes are not configured yet</a>
+          The public alpha does not require an activation server. Optional support helps fund signing,
+          hardware testing, camera coverage, and the unglamorous work of making catalogs and exports dependable.
         </p>
-      </article>
-
-      <article>
-        <h2>Need Help?</h2>
-        <p>
-          <a id="support-link" href="#" aria-disabled="true">Support contact is not configured yet</a>
-        </p>
-      </article>
+      </div>
+      <div class="commerce-actions">
+        <a id="support-payment" class="commerce-button primary disabled" href="#" aria-disabled="true">Support development</a>
+        <a id="purchase-button" class="commerce-button disabled" href="#" aria-disabled="true">Buy a supporter license</a>
+        <small>Payments are not represented as tax-deductible charitable donations.</small>
+      </div>
     </section>
 
     <section id="included" class="feature-section" aria-labelledby="included-title">
       <div class="section-heading">
         <p class="section-kicker">Alpha scope</p>
-        <h2 id="included-title">What is included</h2>
+        <h2 id="included-title">A complete photo workflow is the product.</h2>
       </div>
       <div class="feature-grid">
-        <article>
-          <h3>Import and browse</h3>
-          <p>Bring in a small photo folder and move through the library, carousel, and edit workspace.</p>
-        </article>
-        <article>
-          <h3>Tone controls</h3>
-          <p>Exercise exposure, contrast, highlights, shadows, whites, blacks, and the point curve.</p>
-        </article>
-        <article>
-          <h3>Mask workflow</h3>
-          <p>Try brush, object, and selection paths enough to surface rough edges and missing interactions.</p>
-        </article>
-        <article>
-          <h3>Export path</h3>
-          <p>Run edited images through export and compare the output with the preview you saw in the app.</p>
-        </article>
+        <article><h3>Import and cull</h3><p>Bring in focused libraries, review photographs quickly, and keep catalog state local.</p></article>
+        <article><h3>Tone and color</h3><p>Work with exposure, tonal controls, curves, profiles, and non-destructive recipes.</p></article>
+        <article><h3>Masks and layers</h3><p>Refine edits through selection-aware masks, local adjustments, and a visible active target.</p></article>
+        <article><h3>Export and recover</h3><p>Queue exports, preserve edits across relaunches, and create backups before catalog migrations.</p></article>
       </div>
     </section>
 
-    <section class="limits-section" aria-labelledby="limits-title">
-      <div class="section-heading">
-        <p class="section-kicker">Known rough edges</p>
-        <h2 id="limits-title">What to expect</h2>
+    <section class="trust-section" aria-labelledby="trust-title">
+      <div>
+        <p class="section-kicker">Release trust</p>
+        <h2 id="trust-title">Signed installers. Verified updates. Human-readable policies.</h2>
       </div>
-      <div class="limits-grid">
-        <article>
-          <h3>Installer trust warnings</h3>
-          <p>Gatekeeper and SmartScreen warnings are expected until signing and notarization are finished.</p>
-        </article>
-        <article>
-          <h3>Small test libraries</h3>
-          <p>Use focused folders first. Large production catalogs are not the goal for this private alpha.</p>
-        </article>
-        <article>
-          <h3>Feature gaps</h3>
-          <p>Some controls may be present before every edge case is wired, especially around masks and batch flows.</p>
-        </article>
+      <div class="trust-links">
+        <a href="./privacy.html">Privacy</a>
+        <a href="./terms.html">Terms</a>
+        <a href="./refunds.html">Refunds</a>
+        <a href="./licenses.html">Third-party licenses</a>
+        <a href="./support.html">Support</a>
       </div>
     </section>
 
-    <section id="testing" class="tester-section" aria-labelledby="testing-title">
-      <div class="section-heading">
-        <p class="section-kicker">Tester workflow</p>
-        <h2 id="testing-title">What to try first</h2>
-      </div>
-      <div class="test-grid">
-        <article>
-          <span>01</span>
-          <h3>Install cleanly</h3>
-          <p>Download the build for your platform and confirm the app opens from a normal install location.</p>
-        </article>
-        <article>
-          <span>02</span>
-          <h3>Import a folder</h3>
-          <p>Point PhotoEditor at a small photo folder and check that catalog browsing feels stable.</p>
-        </article>
-        <article>
-          <span>03</span>
-          <h3>Edit and export</h3>
-          <p>Make a few basic adjustments, export images, and compare the output with the preview.</p>
-        </article>
-        <article>
-          <span>04</span>
-          <h3>Report friction</h3>
-          <p>Send crashes, confusing moments, missing files, and installer warnings with your OS version.</p>
-        </article>
-      </div>
-    </section>
-
-    <noscript>
-      <p class="noscript">
-        JavaScript is required to load the latest release links. Direct download
-        links can also be added manually in `download-config.js`.
-      </p>
-    </noscript>
+    <noscript><p class="noscript">JavaScript is required to resolve the latest signed installer links.</p></noscript>
   </main>
+
+  <footer class="site-footer">
+    <span>© 2026 Virel</span>
+    <span>Virel Studio public alpha</span>
+  </footer>
 </body>
 </html>

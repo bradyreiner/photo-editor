@@ -61,7 +61,7 @@ if(APPLE)
   list(REMOVE_ITEM photo_editor_desktop_sources src/vision_segmentation_stub.cpp)
   list(APPEND photo_editor_desktop_sources src/vision_segmentation.mm)
 
-  set(PHOTO_EDITOR_MACOS_BUNDLE_IDENTIFIER "com.photoeditor.desktop")
+  set(PHOTO_EDITOR_MACOS_BUNDLE_IDENTIFIER "${VIREL_MACOS_BUNDLE_IDENTIFIER}")
   set(PHOTO_EDITOR_MACOS_SPARKLE_PLIST_KEYS "")
 
   if(PHOTO_EDITOR_ENABLE_MACOS_SPARKLE_UPDATER)
@@ -114,10 +114,30 @@ qt_add_executable(photo_editor_app
   ${photo_editor_desktop_sources}
 )
 
+if(APPLE)
+  set_source_files_properties(
+    assets/macos/VirelStudio.icns
+    PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+  target_sources(photo_editor_app PRIVATE assets/macos/VirelStudio.icns)
+elseif(WIN32)
+  target_sources(photo_editor_app PRIVATE assets/windows/VirelStudio.rc)
+endif()
+
+set(photo_editor_default_agent_model_manifest
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/agent-models/models.json")
+set_source_files_properties(
+  "${photo_editor_default_agent_model_manifest}"
+  PROPERTIES QT_RESOURCE_ALIAS models.json)
+qt_add_resources(
+  photo_editor_app
+  "agent_model_defaults"
+  PREFIX "/photo-editor/agent-models"
+  FILES "${photo_editor_default_agent_model_manifest}")
+
 set_target_properties(
   photo_editor_app
   PROPERTIES
-    OUTPUT_NAME "PhotoEditor"
+    OUTPUT_NAME "${VIREL_PRODUCT_SLUG}"
     MACOSX_BUNDLE TRUE
     WIN32_EXECUTABLE TRUE)
 
@@ -126,10 +146,23 @@ if(APPLE)
     photo_editor_app
     PROPERTIES
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_BINARY_DIR}/Info.plist"
-      MACOSX_BUNDLE_BUNDLE_NAME "PhotoEditor"
+      MACOSX_BUNDLE_BUNDLE_NAME "${VIREL_PRODUCT_NAME}"
       MACOSX_BUNDLE_GUI_IDENTIFIER "${PHOTO_EDITOR_MACOS_BUNDLE_IDENTIFIER}"
       MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
       MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
+endif()
+
+target_compile_definitions(photo_editor_app PRIVATE
+  VIREL_PRODUCT_NAME="${VIREL_PRODUCT_NAME}"
+  VIREL_VENDOR_NAME="${VIREL_VENDOR_NAME}"
+  VIREL_SUPPORT_URL="${VIREL_SUPPORT_URL}"
+  VIREL_PRIVACY_URL="${VIREL_PRIVACY_URL}"
+  VIREL_TERMS_URL="${VIREL_TERMS_URL}")
+
+if(PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS)
+  target_compile_definitions(photo_editor_app PRIVATE PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS=1)
+else()
+  target_compile_definitions(photo_editor_app PRIVATE PHOTO_EDITOR_ENABLE_LOCAL_DIAGNOSTICS=0)
 endif()
 
 qt_add_qml_module(photo_editor_app

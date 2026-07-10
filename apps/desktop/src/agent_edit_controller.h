@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+
 #include <QObject>
 #include <QHash>
 #include <QProcess>
@@ -46,6 +48,7 @@ class AgentEditController final : public QObject {
   Q_PROPERTY(QString modelInstallOutput READ modelInstallOutput NOTIFY modelInstallChanged)
   Q_PROPERTY(QVariantMap modelInstallProgress READ modelInstallProgress NOTIFY modelInstallChanged)
   Q_PROPERTY(QVariantMap lastRunReport READ lastRunReport NOTIFY lastRunReportChanged)
+  Q_PROPERTY(QVariantList runEvents READ runEvents NOTIFY runEventsChanged)
   Q_PROPERTY(QVariantList runHistory READ runHistory NOTIFY runHistoryChanged)
   Q_PROPERTY(bool awaitingUserInput READ awaitingUserInput NOTIFY pendingAgentInputChanged)
   Q_PROPERTY(QVariantList pendingUserQuestions READ pendingUserQuestions NOTIFY pendingAgentInputChanged)
@@ -88,6 +91,7 @@ class AgentEditController final : public QObject {
   [[nodiscard]] QString modelInstallOutput() const;
   [[nodiscard]] QVariantMap modelInstallProgress() const;
   [[nodiscard]] QVariantMap lastRunReport() const;
+  [[nodiscard]] QVariantList runEvents() const;
   [[nodiscard]] QVariantList runHistory() const;
   [[nodiscard]] bool awaitingUserInput() const;
   [[nodiscard]] QVariantList pendingUserQuestions() const;
@@ -210,6 +214,7 @@ class AgentEditController final : public QObject {
   void mcpStatusChanged();
   void modelInstallChanged();
   void lastRunReportChanged();
+  void runEventsChanged();
   void runHistoryChanged();
   void pendingAgentInputChanged();
 
@@ -218,6 +223,13 @@ class AgentEditController final : public QObject {
   void setErrorMessage(const QString& error_message);
   void setRunning(bool running);
   void setLastRunReport(const QVariantMap& report);
+  void beginRunEvents(const QString& scope);
+  void appendRunEvent(
+      const QString& stage,
+      const QString& label,
+      const QString& status,
+      const QString& detail = QString(),
+      const QVariantMap& evidence = QVariantMap());
   void setMcpStatusState(
       const QString& status,
       const QStringList& tool_names,
@@ -259,11 +271,11 @@ class AgentEditController final : public QObject {
   QString status_ = QStringLiteral("Idle");
   QString error_message_;
   bool running_ = false;
-  bool cancellation_requested_ = false;
+  std::atomic_bool cancellation_requested_ = false;
   bool rollback_on_cancel_ = false;
   bool manual_editing_active_ = false;
   QString cancellation_reason_;
-  int run_timeout_ms_ = 300000;
+  int run_timeout_ms_ = 600000;
   QString selected_style_id_;
   QString selected_model_id_;
   QString user_instructions_;
@@ -292,6 +304,7 @@ class AgentEditController final : public QObject {
   QString model_install_output_;
   QVariantMap model_install_progress_;
   QVariantMap last_run_report_;
+  QVariantList run_events_;
   QVariantList run_history_;
   QVariantMap pending_agent_input_;
   mutable bool memory_vault_snapshot_initialized_ = false;

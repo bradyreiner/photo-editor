@@ -18,7 +18,7 @@ push_tag=0
 
 usage() {
   cat <<'EOF'
-Build a production release package for PhotoEditor.
+Build a production release package for Virel Studio.
 
 Usage:
   scripts/build-release.sh [version] [options]
@@ -91,7 +91,10 @@ detect_postgres_runtime_dir() {
 postgres_runtime_has_required_tools() {
   local runtime_root="$1"
 
-  [ -x "${runtime_root}/bin/initdb" ] && [ -x "${runtime_root}/bin/pg_ctl" ]
+  [ -x "${runtime_root}/bin/initdb" ] &&
+    [ -x "${runtime_root}/bin/pg_ctl" ] &&
+    [ -x "${runtime_root}/bin/pg_dump" ] &&
+    [ -x "${runtime_root}/bin/pg_restore" ]
 }
 
 while [ "$#" -gt 0 ]; do
@@ -272,7 +275,7 @@ fi
 
 log "Packaging release artifacts into ${package_dir}"
 mkdir -p "${package_dir}"
-find "${package_dir}" -maxdepth 1 -type f -name "PhotoEditor-${release_version}-*" -delete
+find "${package_dir}" -maxdepth 1 -type f -name "VirelStudio-${release_version}-*" -delete
 rm -f "${package_dir}/SHA256SUMS.txt"
 cpack --config "${build_dir}/CPackConfig.cmake" -B "${package_dir}"
 

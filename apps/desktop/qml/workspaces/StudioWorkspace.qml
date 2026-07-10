@@ -27,11 +27,14 @@ Rectangle {
     property int selectedMaskSetIndex: 0
     property int activePhotoLayerIndex: 0
     property var selectedPhotoLayerIndices: []
+    property int photoLayerSelectionAnchorIndex: -1
+    property int inlineRenamingPhotoLayerIndex: -1
+    property string inlinePhotoLayerRenameOriginal: ""
     property bool baseImageTargetActive: false
     property var selectedEditTarget: ({ scope: "base-image", layerIndex: -1, maskSetId: "", maskSetName: "", sourceIndex: -1 })
     readonly property string selectedEditTargetContract: selectedEditTargetSignature()
-    readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v2|first-glance:justified-grid-dominant-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:compact-import-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved"
-    readonly property string libraryPageCompletionContract: "page-completion:v2|library|sidebar:compact-import-status|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-source-batch|toolbar:search-filters-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline"
+    readonly property string libraryWorkflowPolishContract: "library-workflow-polish:v3|first-glance:justified-grid-dominant-toolbar-import-filters-inspector|close-inspection:search-filter-selection-review-import|clutter:no-empty-sources-rail-contextual-selection-actions|interaction:search-filter-select-review-edit-import-compare-export|text:filenames-sidebar-only|functionality:preserved"
+    readonly property string libraryPageCompletionContract: "page-completion:v3|library|sidebar:none|content:justified-grid-survey-empty-import|inspector:preview-filename-metadata-review-batch|toolbar:search-filters-import-view-panel-toggles|actions:edit-import-compare-export-select|states:default-selected-multi-filtered-import-empty-offline"
     readonly property string libraryStudioVisibilityContract: "library-studio-visibility:v1|always:sources-search-filters-grid-inspector|contextual:selection-review-import-browser-batch-actions-empty-offline|one-expansion:project-assignment-import-actions-export-compare-panel-toggles|hover-focus:gallery-actions-review-keyboard|diagnostic:import-progress-offline-state|preserve:functionality"
     readonly property string librarySearchBehaviorContract: "library-search:v1|draft-state:true|debounce-ms:180|active-state:field-and-chip|clear-visible-only-when-text:true|enter-applies:true|external-sync:true|no-elide:true|functionality:preserved"
     readonly property string importWorkflowPolishContract: "import-workflow-polish:v1|first-glance:library-routed-import-source-browser|close-inspection:source-folder-media-destination-progress|clutter:library-chrome-quiet-import-dominant|interaction:back-source-select-import-refresh|text:no-elide-no-overlap|functionality:preserved"
@@ -278,7 +281,7 @@ Rectangle {
     property bool maskOutlineActivationDeferred: false
     readonly property int selectionOutlineAnimationPointBudget: 1800
     readonly property string selectionOutlineAnimationContract: "visibility-gated|motion-budgeted|point-budgeted:v1"
-    readonly property string layerMaskActivationLatencyContract: "layer-mask-activation-latency:v1|panel-first:true|outline-trace:deferred|delay-ms:120|no-click-frame-outline-getter:true"
+    readonly property string layerMaskActivationLatencyContract: "layer-mask-activation-latency:v2|panel-first:true|outline-trace:next-event-loop|delay-ms:0|no-click-frame-outline-getter:true"
     readonly property bool selectionOutlineAnimationEnabled: selectionOutlineAnimationShouldRun()
     property string editInspectorTab: "adjust"
     property bool layersOnlyFocusMode: false
@@ -332,7 +335,7 @@ Rectangle {
 
     Timer {
         id: maskOutlineActivationTimer
-        interval: 120
+        interval: 0
         repeat: false
         onTriggered: root.maskOutlineActivationDeferred = false
     }
@@ -431,7 +434,7 @@ Rectangle {
     readonly property int libraryGalleryScrollbarGutter: 14
     readonly property int librarySourcesPanelWidth: width > 0 && width < 1180 ? 156 : (compactMode ? 168 : 184)
     readonly property int libraryInspectorPanelWidth: {
-        const sourceWidth = librarySourcesPanelVisible && !importModeOpen ? librarySourcesPanelWidth : 0
+        const sourceWidth = 0
         const centerChrome = 36
         const availableForInspector = width - sourceWidth - centerChrome - libraryMainMinimumWidth
         const preferred = compactMode ? 278 : (libraryToolbarTight ? 286 : 316)
@@ -770,18 +773,23 @@ Rectangle {
         let row = []
         let rowAspect = 0
 
-        function flushRow() {
+        function flushRow(justified) {
             if (row.length === 0)
                 return
 
-            const height = Math.max(92, Math.round(width / Math.max(0.1, rowAspect)))
+            const rowJustified = justified === true
+            const height = rowJustified
+                           ? Math.max(92, Math.round(width / Math.max(0.1, rowAspect)))
+                           : idealHeight
             const items = []
             let consumed = 0
             for (let position = 0; position < row.length; ++position) {
                 const entry = row[position]
                 const isLast = position === row.length - 1
-                const itemWidth = isLast ? Math.max(1, width - consumed)
-                                         : Math.max(1, Math.round(height * entry.aspect))
+                const naturalWidth = Math.max(1, Math.round(height * entry.aspect))
+                const remainingWidth = Math.max(1, width - consumed)
+                const itemWidth = rowJustified && isLast ? remainingWidth
+                                                         : Math.min(naturalWidth, remainingWidth)
                 consumed += itemWidth
                 items.push({
                     index: entry.index,
@@ -796,7 +804,7 @@ Rectangle {
                 })
             }
 
-            rows.push({ height: height, items: items })
+            rows.push({ height: height, width: consumed, justified: rowJustified, items: items })
             row = []
             rowAspect = 0
         }
@@ -818,9 +826,9 @@ Rectangle {
             })
             rowAspect += aspect
             if (row.length > 0 && rowAspect * idealHeight >= width)
-                flushRow()
+                flushRow(true)
         }
-        flushRow()
+        flushRow(false)
 
         return rows
     }
@@ -831,18 +839,26 @@ Rectangle {
         const viewportWidth = root.libraryGalleryViewportWidth(rawWidth, gutter)
         const rows = root.libraryGalleryRows(viewportWidth)
         let maxRowWidth = 0
+        let lastRowHeight = 0
+        let lastRowJustified = false
         for (let rowIndex = 0; rowIndex < rows.length; ++rowIndex) {
             const items = rows[rowIndex].items || []
             let rowWidth = 0
             for (let itemIndex = 0; itemIndex < items.length; ++itemIndex)
                 rowWidth += Math.max(0, Number(items[itemIndex].width || 0))
             maxRowWidth = Math.max(maxRowWidth, rowWidth)
+            if (rowIndex === rows.length - 1) {
+                lastRowHeight = Math.round(Number(rows[rowIndex].height || 0))
+                lastRowJustified = rows[rowIndex].justified === true
+            }
         }
         return "library-gallery-layout:v1|raw:" + rawWidth +
                "|gutter:" + gutter +
                "|viewport:" + viewportWidth +
                "|rows:" + rows.length +
                "|max-row:" + maxRowWidth +
+               "|last-height:" + lastRowHeight +
+               "|last-justified:" + String(lastRowJustified) +
                "|overflow:" + String(maxRowWidth > viewportWidth)
     }
 
@@ -2701,7 +2717,7 @@ Rectangle {
             return
         const key = root.agentWorkflowPrimaryKey()
         if (key === "create_draft" || key === "create_samples") {
-            root.agentEditController.applyEditForScope(
+            root.agentEditController.runDraftForScope(
                         root.agentScopeMode,
                         root.agentEditController.userInstructions)
         } else if (key === "learn_style") {
@@ -2730,7 +2746,7 @@ Rectangle {
         } else if (root.agentRunMode === "export-preflight") {
             root.agentEditController.exportPreflightForScope(root.agentScopeMode)
         } else {
-            root.agentEditController.applyEditForScope(
+            root.agentEditController.runDraftForScope(
                         root.agentScopeMode,
                         root.agentEditController.userInstructions)
         }
@@ -2785,10 +2801,18 @@ Rectangle {
         const key = String(keyName || "")
         if (report && report[key] !== undefined && String(report[key] || "").length > 0)
             return String(report[key])
+        const draft = report && report.draftReport !== undefined ? report.draftReport : ({})
+        if (draft && draft[key] !== undefined && String(draft[key] || "").length > 0)
+            return String(draft[key])
         const validation = report && report.validationReport !== undefined ? report.validationReport : ({})
         const artifacts = validation && validation.artifacts !== undefined ? validation.artifacts : ({})
         if (artifacts && artifacts[key] !== undefined && String(artifacts[key] || "").length > 0)
             return String(artifacts[key])
+        const draftValidation = draft && draft.validationReport !== undefined ? draft.validationReport : ({})
+        const draftArtifacts = draftValidation && draftValidation.artifacts !== undefined
+                               ? draftValidation.artifacts : ({})
+        if (draftArtifacts && draftArtifacts[key] !== undefined && String(draftArtifacts[key] || "").length > 0)
+            return String(draftArtifacts[key])
         return ""
     }
 
@@ -2806,14 +2830,12 @@ Rectangle {
         const current = root.agentArtifactPath("currentProofPath")
         const before = root.agentArtifactPath("beforeProofPath")
         const after = root.agentArtifactPath("afterProofPath")
-        if (current.length > 0) {
-            images.push({ label: "Current", source: root.agentFileSource(current) })
-            return images
-        }
         if (before.length > 0)
             images.push({ label: "Before", source: root.agentFileSource(before) })
         if (after.length > 0)
             images.push({ label: "After", source: root.agentFileSource(after) })
+        if (images.length === 0 && current.length > 0)
+            images.push({ label: "Current", source: root.agentFileSource(current) })
         return images
     }
 
@@ -3219,6 +3241,57 @@ Rectangle {
         const cropHeight = Math.max(0, Number(editorPreview.cropRectHeight || 0))
         const aspect = root.aspectRatioText(sourceWidth * cropWidth, sourceHeight * cropHeight)
         return aspect.length > 0 ? "Aspect " + aspect : "Aspect Original"
+    }
+
+    function cropSummaryText() {
+        const sourceWidth = Math.max(0, Number(editorPreview.sourceImageWidth || 0))
+        const sourceHeight = Math.max(0, Number(editorPreview.sourceImageHeight || 0))
+        const width = Math.max(0, Math.round(sourceWidth * Number(editorPreview.cropRectWidth || 0)))
+        const height = Math.max(0, Math.round(sourceHeight * Number(editorPreview.cropRectHeight || 0)))
+        if (width <= 0 || height <= 0)
+            return "Drag on the photo to create a crop."
+        return width + " x " + height + " px  /  " + root.cropHudAspectText()
+    }
+
+    function cropInstructionText() {
+        if (root.cropToolMode === "horizon")
+            return "Drag along a line that should be level."
+        if (root.cropToolMode === "transform")
+            return "Drag the canvas handles to scale or rotate."
+        return "Drag an edge or corner to resize. Drag inside to reposition."
+    }
+
+    function swappedCropAspectPreset(presetName) {
+        const preset = String(presetName || "")
+        const pairs = {
+            "4:5": "5:4", "5:4": "4:5",
+            "3:2": "2:3", "2:3": "3:2",
+            "4:3": "3:4", "3:4": "4:3",
+            "16:9": "9:16", "9:16": "16:9",
+            "4x6 in": "6x4 in", "6x4 in": "4x6 in",
+            "5x7 in": "7x5 in", "7x5 in": "5x7 in",
+            "8x10 in": "10x8 in", "10x8 in": "8x10 in",
+            "11x14 in": "14x11 in", "14x11 in": "11x14 in",
+            "A4": "A4 Landscape", "A4 Landscape": "A4"
+        }
+        if (pairs[preset] !== undefined)
+            return pairs[preset]
+        const parts = preset.split(":")
+        if (parts.length === 2 && Number(parts[0]) > 0 && Number(parts[1]) > 0)
+            return parts[1].trim() + ":" + parts[0].trim()
+        return preset
+    }
+
+    function swapCropAspectOrientation() {
+        const current = String(editorPreview.cropPreset || "Original")
+        const swapped = root.swappedCropAspectPreset(current)
+        if (swapped === current)
+            return false
+        if (editorPreview.cropAspectPresets().indexOf(swapped) < 0 &&
+                !editorPreview.addCustomCropAspectPreset(swapped))
+            return false
+        editorPreview.cropPreset = swapped
+        return true
     }
 
     function cropHudModeLabel() {
@@ -4385,7 +4458,7 @@ Rectangle {
                "|selection-mode:" + String(root.selectionMode) +
                "|selected:" + selectedCount.toString() +
                "|view:" + root.catalogViewMode +
-               "|sources:" + String(root.librarySourcesPanelVisible) +
+               "|sources:false" +
                "|inspector:" + String(root.libraryInspectorPanelVisible) +
                "|inspector-state:" + (selectedCount > 1 ? "batch" : (singleSelection ? "single" : "empty")) +
                "|import:" + String(root.importModeOpen) +
@@ -4757,7 +4830,10 @@ Rectangle {
     }
 
     function maskToolKeepsActiveMask(toolName) {
-        return toolName === "masks" || toolName === "brush" || toolName === "retouch"
+        if (toolName === "masks" || toolName === "brush" || toolName === "retouch")
+            return true
+        return (toolName === "adjust" || toolName === "layers") &&
+                root.selectedEditTargetMaskSetId().length > 0
     }
 
     function clearTransientToolStateFor(toolName) {
@@ -6130,7 +6206,9 @@ Rectangle {
     function toggleMaskOutlineFromShortcut() {
         if (!root.maskShortcutContextActive(true))
             return false
-        editorPreview.maskPreviewMode = editorPreview.maskPreviewDisplayMode === "outline" ? "overlay" : "outline"
+        editorPreview.maskPreviewMode = editorPreview.maskPreviewDisplayMode === "marching-ants"
+                ? "overlay"
+                : "marching-ants"
         return true
     }
 
@@ -8219,10 +8297,10 @@ Rectangle {
     }
 
     function layerStackAcceptanceSignature() {
-        return "layer-stack-acceptance:v1" +
-               "|select:true" +
-               "|rename:properties" +
-               "|reorder:move-buttons-menu" +
+        return "layer-stack-acceptance:v2" +
+               "|select:pointer-modifiers-keyboard" +
+               "|rename:inline-f2-properties" +
+               "|reorder:drag-keyboard-menu" +
                "|visibility:toggle-and-state" +
                "|opacity:fixed-readout" +
                "|mask-select:inspector-context" +
@@ -8741,8 +8819,70 @@ Rectangle {
         return true
     }
 
+    function selectPhotoLayerWithModifiers(index, modifiers) {
+        const layerIndex = Math.floor(Number(index))
+        if (layerIndex < 0 || layerIndex >= editorPreview.photoLayerCount)
+            return false
+        const flags = Number(modifiers || 0)
+        const extendRange = (flags & Qt.ShiftModifier) !== 0
+        const toggle = (flags & Qt.ControlModifier) !== 0 ||
+                       (flags & Qt.MetaModifier) !== 0
+        if (extendRange) {
+            const anchor = root.photoLayerSelectionAnchorIndex >= 0 &&
+                           root.photoLayerSelectionAnchorIndex < editorPreview.photoLayerCount
+                    ? root.photoLayerSelectionAnchorIndex
+                    : root.normalizedActivePhotoLayerIndex()
+            const first = Math.min(anchor, layerIndex)
+            const last = Math.max(anchor, layerIndex)
+            const next = toggle ? root.normalizedPhotoLayerSelection().slice() : []
+            for (let candidate = first; candidate <= last; ++candidate) {
+                if (next.indexOf(candidate) < 0)
+                    next.push(candidate)
+            }
+            root.selectedPhotoLayerIndices = next
+            root.setSelectedEditTarget(root.selectedLayerTargetScope(layerIndex), layerIndex, ({}), -1)
+            return true
+        }
+        root.photoLayerSelectionAnchorIndex = layerIndex
+        return root.setActivePhotoLayerSelection(layerIndex, toggle)
+    }
+
+    function beginInlinePhotoLayerRename(index) {
+        const layerIndex = Math.floor(Number(index))
+        if (layerIndex < 0 || layerIndex >= editorPreview.photoLayerCount)
+            return false
+        const layer = editorPreview.photoLayers[layerIndex] || ({})
+        if (layer.locked === true)
+            return false
+        root.inlineRenamingPhotoLayerIndex = layerIndex
+        root.inlinePhotoLayerRenameOriginal = String(layer.displayName || layer.name || "Layer")
+        return true
+    }
+
+    function commitInlinePhotoLayerRename(index, name) {
+        const layerIndex = Math.floor(Number(index))
+        if (root.inlineRenamingPhotoLayerIndex !== layerIndex)
+            return false
+        const nextName = String(name || "").trim()
+        root.inlineRenamingPhotoLayerIndex = -1
+        root.inlinePhotoLayerRenameOriginal = ""
+        if (nextName.length === 0)
+            return false
+        const layer = editorPreview.photoLayers[layerIndex] || ({})
+        const currentName = String(layer.displayName || layer.name || "Layer").trim()
+        return nextName === currentName || editorPreview.renamePhotoLayer(layerIndex, nextName)
+    }
+
+    function cancelInlinePhotoLayerRename(index) {
+        if (root.inlineRenamingPhotoLayerIndex !== Math.floor(Number(index)))
+            return false
+        root.inlineRenamingPhotoLayerIndex = -1
+        root.inlinePhotoLayerRenameOriginal = ""
+        return true
+    }
+
     function layerKeyboardNavigationSignature() {
-        return "layer-keyboard-navigation:v1|up-down:select|enter:edit|space:visibility|shift:multi-select|modifier-up-down:reorder|escape:base-focus"
+        return "layer-keyboard-navigation:v2|up-down:select|enter:edit|f2:rename|space:visibility|shift:range-select|modifier-up-down:reorder|escape:base-focus"
     }
 
     function handlePhotoLayerRowKey(event, layerIndex, layer) {
@@ -8769,6 +8909,11 @@ Rectangle {
 	            event.accepted = true
 	            return true
 	        }
+        if (key === Qt.Key_F2) {
+            root.beginInlinePhotoLayerRename(index)
+            event.accepted = true
+            return true
+        }
         if (key === Qt.Key_Space) {
             editorPreview.setPhotoLayerEnabled(index, !(layer && layer.enabled !== false))
             event.accepted = true
@@ -9221,7 +9366,12 @@ Rectangle {
 
     function photoLayerMaskSectionCollapsed(layerIndex, layer) {
         const key = root.photoLayerMaskSectionKey(layerIndex, layer)
-        return root.collapsedLayerMaskSections[key] === true
+        const stored = root.collapsedLayerMaskSections[key]
+        if (stored !== undefined)
+            return stored === true
+        return !root.photoLayerSelected(layerIndex) &&
+               !root.photoLayerHasSelectedMask(layerIndex) &&
+               layerIndex !== root.normalizedActivePhotoLayerIndex()
     }
 
     function setPhotoLayerMaskSectionCollapsed(layerIndex, layer, collapsed) {
@@ -9339,6 +9489,7 @@ Rectangle {
             root.activateEditTool("adjust")
             if (preserveInspectorTab === true)
                 root.editInspectorTab = previousInspectorTab
+            editorPreview.requestLayerFullResolutionPreview()
         } else {
             root.editTool = "masks"
             if (preserveInspectorTab !== true)
@@ -10683,7 +10834,10 @@ Rectangle {
         readonly property string tinyInputContract: "tiny-input:v1|active-highlight:true|enter-accepted:true|right-inset:true|no-elide:true"
         function forceInputFocus() { input.forceActiveFocus() }
         function clearInputFocus() { input.focus = false }
+        function selectAllText() { input.selectAll() }
         signal accepted()
+        signal cancelled()
+        signal editingFinished()
         Layout.preferredHeight: 34
         color: field.highlighted ? theme.alpha(field.accent, 0.08) : "#0A0D0F"
         border.width: input.activeFocus ? 2 : theme.chromeBorderWidth
@@ -10708,6 +10862,11 @@ Rectangle {
             clip: true
             Keys.onReturnPressed: field.accepted()
             Keys.onEnterPressed: field.accepted()
+            Keys.onEscapePressed: function(event) {
+                field.cancelled()
+                event.accepted = true
+            }
+            onEditingFinished: field.editingFinished()
         }
 
         Label {
@@ -11047,7 +11206,7 @@ Rectangle {
                                                               Number(editorPreview.sourceImageHeight || 0) <= editorPreview.previewTargetEdge)
         readonly property bool pixelGridVisible: pixelInspectionActive
         readonly property bool highCostInspectionOverlaysVisible: true
-        readonly property string pixelGridRenderContract: "pixel-grid-render:v4|canvas:viewport-bounded|visible-lines-only:true|repaint:coalesced|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked"
+        readonly property string pixelGridRenderContract: "pixel-grid-render:v5|scenegraph-lines:true|viewport-bounded:true|visible-lines-only:true|no-raster-canvas:true|content-aligned:true|immediate-grid:true|source-backed-flag:true|full-resolution-backed:pixelGridFullResolutionBacked"
         readonly property string pixelInspectionPerformanceContract: "pixel-inspection-performance:v3|allow-loupe-and-analysis-overlays-while-source-pixels-visible:true|viewport-publish-signature-dedup:true|callLater-coalesced:true|deferred-source-patch-refresh:520ms"
         readonly property string mediaSurfaceContract: "media-surface:v1|canvas-stage:dominant|image-corners:consistent|empty-loading-failure:same-bounds|chrome:quiet|badges:corner-stacked|toolbar-baseline:single"
         readonly property string previewChromeContract: "preview-chrome:v1|status:corner-badge|diagnostics:overlay-menu|top-controls:baseline|failure:retry-in-badge|content-dominant:true"
@@ -11650,89 +11809,68 @@ Rectangle {
             crispPixels: viewport.pixelInspectionActive
         }
 
-        Canvas {
+        Item {
             id: pixelGridOverlay
             objectName: viewport.objectName.length > 0 ? viewport.objectName + "PixelGridOverlay" : "pixelGridOverlay"
             anchors.fill: parent
             visible: viewport.pixelGridVisible
             z: 16.8
-            property bool paintPending: false
+            readonly property int sourceWidth: Math.max(1, Number(editorPreview.sourceImageWidth || 1))
+            readonly property int sourceHeight: Math.max(1, Number(editorPreview.sourceImageHeight || 1))
+            readonly property real stepX: viewport.sourcePixelScreenWidth
+            readonly property real stepY: viewport.sourcePixelScreenHeight
+            readonly property real contentLeft: viewport.paintedContentX
+            readonly property real contentTop: viewport.paintedContentY
+            readonly property real visibleLeft: Math.max(0, contentLeft)
+            readonly property real visibleTop: Math.max(0, contentTop)
+            readonly property real visibleRight: Math.min(width, contentLeft + viewport.paintedContentWidth)
+            readonly property real visibleBottom: Math.min(height, contentTop + viewport.paintedContentHeight)
+            readonly property bool gridGeometryValid: visible &&
+                                                       stepX >= viewport.pixelGridThreshold &&
+                                                       stepY >= viewport.pixelGridThreshold &&
+                                                       visibleRight > visibleLeft &&
+                                                       visibleBottom > visibleTop
+            readonly property int verticalStartIndex: gridGeometryValid
+                ? Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))
+                : 0
+            readonly property int verticalEndIndex: gridGeometryValid
+                ? Math.min(sourceWidth, Math.ceil((visibleRight - contentLeft) / stepX))
+                : -1
+            readonly property int horizontalStartIndex: gridGeometryValid
+                ? Math.max(0, Math.floor((visibleTop - contentTop) / stepY))
+                : 0
+            readonly property int horizontalEndIndex: gridGeometryValid
+                ? Math.min(sourceHeight, Math.ceil((visibleBottom - contentTop) / stepY))
+                : -1
 
-            function schedulePaint() {
-                if (paintPending)
-                    return
-                paintPending = true
-                pixelGridPaintTimer.restart()
-            }
+            Repeater {
+                model: Math.max(0, pixelGridOverlay.verticalEndIndex - pixelGridOverlay.verticalStartIndex + 1)
 
-            Timer {
-                id: pixelGridPaintTimer
-                interval: 16
-                repeat: false
-                onTriggered: {
-                    pixelGridOverlay.paintPending = false
-                    pixelGridOverlay.requestPaint()
+                delegate: Rectangle {
+                    required property int index
+                    readonly property int sourceIndex: pixelGridOverlay.verticalStartIndex + index
+                    x: Math.round(pixelGridOverlay.contentLeft + sourceIndex * pixelGridOverlay.stepX)
+                    y: pixelGridOverlay.visibleTop
+                    width: Math.max(0.5, 1.0 / Math.max(1.0, Number(Screen.devicePixelRatio || 1.0)))
+                    height: Math.max(0, pixelGridOverlay.visibleBottom - pixelGridOverlay.visibleTop)
+                    color: theme.alpha(theme.polar, 0.22)
+                    antialiasing: false
                 }
             }
 
-            onPaint: {
-                const ctx = getContext("2d")
-                ctx.clearRect(0, 0, width, height)
-                if (!viewport.pixelGridVisible)
-                    return
-                const sourceWidth = Math.max(1, Number(editorPreview.sourceImageWidth || 1))
-                const sourceHeight = Math.max(1, Number(editorPreview.sourceImageHeight || 1))
-                const stepX = viewport.sourcePixelScreenWidth
-                const stepY = viewport.sourcePixelScreenHeight
-                if (stepX < viewport.pixelGridThreshold || stepY < viewport.pixelGridThreshold)
-                    return
-                const contentLeft = viewport.paintedContentX
-                const contentTop = viewport.paintedContentY
-                const contentRight = contentLeft + viewport.paintedContentWidth
-                const contentBottom = contentTop + viewport.paintedContentHeight
-                const visibleLeft = Math.max(0, contentLeft)
-                const visibleTop = Math.max(0, contentTop)
-                const visibleRight = Math.min(width, contentRight)
-                const visibleBottom = Math.min(height, contentBottom)
-                if (visibleRight <= visibleLeft || visibleBottom <= visibleTop)
-                    return
-                const startXIndex = Math.max(0, Math.floor((visibleLeft - contentLeft) / stepX))
-                const endXIndex = Math.min(sourceWidth, Math.ceil((visibleRight - contentLeft) / stepX))
-                const startYIndex = Math.max(0, Math.floor((visibleTop - contentTop) / stepY))
-                const endYIndex = Math.min(sourceHeight, Math.ceil((visibleBottom - contentTop) / stepY))
-                ctx.save()
-                ctx.lineWidth = 1
-                ctx.strokeStyle = theme.alpha(theme.polar, 0.22)
-                ctx.beginPath()
-                for (let xIndex = startXIndex; xIndex <= endXIndex; ++xIndex) {
-                    const lineX = Math.round(contentLeft + xIndex * stepX) + 0.5
-                    if (lineX >= visibleLeft - 1 && lineX <= visibleRight + 1) {
-                        ctx.moveTo(lineX, visibleTop)
-                        ctx.lineTo(lineX, visibleBottom)
-                    }
-                }
-                for (let yIndex = startYIndex; yIndex <= endYIndex; ++yIndex) {
-                    const lineY = Math.round(contentTop + yIndex * stepY) + 0.5
-                    if (lineY >= visibleTop - 1 && lineY <= visibleBottom + 1) {
-                        ctx.moveTo(visibleLeft, lineY)
-                        ctx.lineTo(visibleRight, lineY)
-                    }
-                }
-                ctx.stroke()
-                ctx.restore()
-            }
+            Repeater {
+                model: Math.max(0, pixelGridOverlay.horizontalEndIndex - pixelGridOverlay.horizontalStartIndex + 1)
 
-            onVisibleChanged: schedulePaint()
-            onWidthChanged: schedulePaint()
-            onHeightChanged: schedulePaint()
-
-            Connections {
-                target: viewport
-                function onPaintedContentXChanged() { pixelGridOverlay.schedulePaint() }
-                function onPaintedContentYChanged() { pixelGridOverlay.schedulePaint() }
-                function onPaintedContentWidthChanged() { pixelGridOverlay.schedulePaint() }
-                function onPaintedContentHeightChanged() { pixelGridOverlay.schedulePaint() }
-                function onPixelGridVisibleChanged() { pixelGridOverlay.schedulePaint() }
+                delegate: Rectangle {
+                    required property int index
+                    readonly property int sourceIndex: pixelGridOverlay.horizontalStartIndex + index
+                    x: pixelGridOverlay.visibleLeft
+                    y: Math.round(pixelGridOverlay.contentTop + sourceIndex * pixelGridOverlay.stepY)
+                    width: Math.max(0, pixelGridOverlay.visibleRight - pixelGridOverlay.visibleLeft)
+                    height: Math.max(0.5, 1.0 / Math.max(1.0, Number(Screen.devicePixelRatio || 1.0)))
+                    color: theme.alpha(theme.polar, 0.22)
+                    antialiasing: false
+                }
             }
         }
 
@@ -12087,6 +12225,7 @@ Rectangle {
             outlineAnimationEnabled: root.selectionOutlineAnimationEnabled
             outlineVisualScale: viewport.zoom
             outlineActivationDeferred: root.maskOutlineActivationDeferred
+            selectionFillVisible: root.editInspectorTab === "layers"
             cropX: editorPreview.cropRectX
             cropY: editorPreview.cropRectY
             cropWidth: editorPreview.cropRectWidth
@@ -12876,9 +13015,9 @@ Rectangle {
         border.width: 0
         clip: true
 
-        function valueFromPoint(mouseX, mouseY) {
-            const localX = Math.max(0, Math.min(field.width, mouseX - field.x))
-            const localY = Math.max(0, Math.min(field.height, mouseY - field.y))
+        function valueFromFieldPoint(mouseX, mouseY) {
+            const localX = Math.max(0, Math.min(field.width, mouseX))
+            const localY = Math.max(0, Math.min(field.height, mouseY))
             return {
                 x: (localX / Math.max(1, field.width)) * 200 - 100,
                 y: 100 - (localY / Math.max(1, field.height)) * 200
@@ -13045,33 +13184,33 @@ Rectangle {
                     font.capitalization: Font.AllUppercase
                     font.letterSpacing: 0
                 }
-            }
-        }
 
-        MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.CrossCursor
-            onPressed: function(mouse) {
-                pad.interactionStarted()
-                const next = pad.valueFromPoint(mouse.x, mouse.y)
-                pad.queueValueEdited(next.x, next.y)
+                MouseArea {
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.CrossCursor
+                    onPressed: function(mouse) {
+                        pad.interactionStarted()
+                        const next = pad.valueFromFieldPoint(mouse.x, mouse.y)
+                        pad.queueValueEdited(next.x, next.y)
+                    }
+                    onPositionChanged: function(mouse) {
+                        if (!pressed)
+                            return
+                        const next = pad.valueFromFieldPoint(mouse.x, mouse.y)
+                        pad.queueValueEdited(next.x, next.y)
+                    }
+                    onReleased: {
+                        pad.flushValueEdited()
+                        pad.interactionFinished()
+                    }
+                    onCanceled: {
+                        pad.flushValueEdited()
+                        pad.interactionFinished()
+                    }
+                    onDoubleClicked: pad.valueEdited(0, 0)
+                }
             }
-            onPositionChanged: function(mouse) {
-                if (!pressed)
-                    return
-                const next = pad.valueFromPoint(mouse.x, mouse.y)
-                pad.queueValueEdited(next.x, next.y)
-            }
-            onReleased: {
-                pad.flushValueEdited()
-                pad.interactionFinished()
-            }
-            onCanceled: {
-                pad.flushValueEdited()
-                pad.interactionFinished()
-            }
-            onDoubleClicked: pad.valueEdited(0, 0)
         }
     }
 
@@ -13108,13 +13247,17 @@ Rectangle {
             return Math.max(minimum, Math.min(maximum, value))
         }
 
-        function hueLumaFromPoint(mouseX, mouseY) {
-            const localX = clamp(mouseX - padField.x, 0, padField.width)
-            const localY = clamp(mouseY - padField.y, 0, padField.height)
+        function hueLumaFromPadPoint(mouseX, mouseY) {
+            const localX = clamp(mouseX, 0, padField.width)
+            const localY = clamp(mouseY, 0, padField.height)
             return {
                 hue: localX / Math.max(1, padField.width) * 200 - 100,
                 luma: 100 - localY / Math.max(1, padField.height) * 200
             }
+        }
+
+        function saturationFromRailY(mouseY) {
+            return clamp(100 - mouseY / Math.max(1, saturationRail.height) * 200, -100, 100)
         }
 
         ColumnLayout {
@@ -13236,6 +13379,32 @@ Rectangle {
                         font.weight: Font.Bold
                         font.letterSpacing: 0
                     }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.CrossCursor
+                        onPressed: function(mouse) {
+                            channelPad.interactionStarted()
+                            const next = channelPad.hueLumaFromPadPoint(mouse.x, mouse.y)
+                            channelPad.queueHueLuminanceEdited(next.hue, next.luma)
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (!pressed)
+                                return
+                            const next = channelPad.hueLumaFromPadPoint(mouse.x, mouse.y)
+                            channelPad.queueHueLuminanceEdited(next.hue, next.luma)
+                        }
+                        onReleased: {
+                            channelPad.flushQueuedEdits()
+                            channelPad.interactionFinished()
+                        }
+                        onCanceled: {
+                            channelPad.flushQueuedEdits()
+                            channelPad.interactionFinished()
+                        }
+                        onDoubleClicked: channelPad.hueLuminanceEdited(0, 0)
+                    }
                 }
 
                 Item {
@@ -13275,6 +13444,29 @@ Rectangle {
                         font.pixelSize: 8
                         font.weight: Font.Bold
                         font.letterSpacing: 0
+                    }
+
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.SizeVerCursor
+                        onPressed: function(mouse) {
+                            channelPad.interactionStarted()
+                            channelPad.queueSaturationEdited(channelPad.saturationFromRailY(mouse.y))
+                        }
+                        onPositionChanged: function(mouse) {
+                            if (pressed)
+                                channelPad.queueSaturationEdited(channelPad.saturationFromRailY(mouse.y))
+                        }
+                        onReleased: {
+                            channelPad.flushQueuedEdits()
+                            channelPad.interactionFinished()
+                        }
+                        onCanceled: {
+                            channelPad.flushQueuedEdits()
+                            channelPad.interactionFinished()
+                        }
+                        onDoubleClicked: channelPad.saturationEdited(0)
                     }
                 }
             }
@@ -13331,69 +13523,6 @@ Rectangle {
             onTriggered: channelPad.flushQueuedEdits()
         }
 
-        MouseArea {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.rightMargin: 50
-            anchors.topMargin: 31
-            anchors.leftMargin: 10
-            anchors.bottomMargin: 10
-            hoverEnabled: true
-            cursorShape: Qt.CrossCursor
-            onPressed: function(mouse) {
-                channelPad.interactionStarted()
-                const mapped = mapToItem(channelPad, mouse.x, mouse.y)
-                const next = channelPad.hueLumaFromPoint(mapped.x, mapped.y)
-                channelPad.queueHueLuminanceEdited(next.hue, next.luma)
-            }
-            onPositionChanged: function(mouse) {
-                if (!pressed)
-                    return
-                const mapped = mapToItem(channelPad, mouse.x, mouse.y)
-                const next = channelPad.hueLumaFromPoint(mapped.x, mapped.y)
-                channelPad.queueHueLuminanceEdited(next.hue, next.luma)
-            }
-            onReleased: {
-                channelPad.flushQueuedEdits()
-                channelPad.interactionFinished()
-            }
-            onCanceled: {
-                channelPad.flushQueuedEdits()
-                channelPad.interactionFinished()
-            }
-            onDoubleClicked: channelPad.hueLuminanceEdited(0, 0)
-        }
-
-        MouseArea {
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.rightMargin: 10
-            anchors.topMargin: 31
-            anchors.bottomMargin: 10
-            width: 36
-            hoverEnabled: true
-            cursorShape: Qt.SizeVerCursor
-            onPressed: function(mouse) {
-                channelPad.interactionStarted()
-                channelPad.queueSaturationEdited(channelPad.clamp(100 - (mouse.y / Math.max(1, height)) * 200, -100, 100))
-            }
-            onPositionChanged: function(mouse) {
-                if (pressed)
-                    channelPad.queueSaturationEdited(channelPad.clamp(100 - (mouse.y / Math.max(1, height)) * 200, -100, 100))
-            }
-            onReleased: {
-                channelPad.flushQueuedEdits()
-                channelPad.interactionFinished()
-            }
-            onCanceled: {
-                channelPad.flushQueuedEdits()
-                channelPad.interactionFinished()
-            }
-            onDoubleClicked: channelPad.saturationEdited(0)
-        }
     }
 
     component RgbMixerMatrix: Rectangle {
@@ -15762,7 +15891,7 @@ Rectangle {
             MiniButton {
                 objectName: "agentDetailsToggleButton"
                 Layout.fillWidth: true
-                visible: false
+                visible: true
                 text: root.agentDetailsExpanded ? "Hide Details" : "Show Details"
                 iconName: root.agentDetailsExpanded ? "chevron-right" : "menu"
                 role: "secondary"
@@ -16523,59 +16652,6 @@ Rectangle {
         RowLayout {
             spacing: 0
 
-            Panel {
-                objectName: "librarySourcesPanel"
-                visible: root.librarySourcesPanelVisible && !root.importModeOpen
-                Layout.preferredWidth: visible ? root.librarySourcesPanelWidth : 0
-                Layout.minimumWidth: visible ? root.librarySourcesPanelWidth : 0
-                Layout.maximumWidth: visible ? root.librarySourcesPanelWidth : 0
-                Layout.fillHeight: true
-                title: "Sources"
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 8
-
-                    MiniButton {
-                        Layout.fillWidth: true
-                        role: "primary"
-                        text: catalogAssets.importing ? "Importing" : "Import"
-                        iconName: "folder"
-                        active: root.importModeOpen
-                        enabled: !catalogAssets.busy || catalogAssets.importing
-                        onClicked: root.startVaultImport()
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.importStatusText()
-                        color: catalogAssets.errorMessage.length > 0 ? theme.error : root.dimText
-                        font.family: theme.fontUi
-                        font.pixelSize: 10
-                        wrapMode: Text.WordWrap
-                    }
-                    Item { Layout.fillHeight: true }
-                    Label { text: "Catalog"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
-                    ProgressBar {
-                        Layout.fillWidth: true
-                        value: catalogAssets.totalAssetCount > 0
-                               ? Math.max(0.02, Math.min(1, catalogAssets.assetCount / catalogAssets.totalAssetCount))
-                               : 0
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.formatInt(catalogAssets.assetCount) + " visible / "
-                              + root.formatInt(catalogAssets.totalAssetCount) + " total  -  "
-                              + root.formatInt(catalogAssets.driveCount) + " drives"
-                        color: root.dimText
-                        font.pixelSize: 10
-                        font.family: theme.fontUi
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    }
-                }
-            }
-
-            Rectangle { Layout.preferredWidth: 0; Layout.fillHeight: true; color: "transparent" }
-
             ColumnLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -16748,6 +16824,17 @@ Rectangle {
                         elide: Text.ElideNone
                     }
                     MiniButton {
+                        objectName: "studioLibraryImportButton"
+                        visible: !root.importModeOpen
+                        role: "primary"
+                        text: catalogAssets.importing ? "Importing" : "Import"
+                        iconName: "folder"
+                        active: root.importModeOpen
+                        enabled: !catalogAssets.busy || catalogAssets.importing
+                        tooltip: root.importStatusText()
+                        onClicked: root.startVaultImport()
+                    }
+                    MiniButton {
                         objectName: "libraryAgentButton"
                         visible: !root.importModeOpen
                         square: true
@@ -16766,7 +16853,6 @@ Rectangle {
                     }
                     MiniButton { visible: !root.importModeOpen; square: true; iconName: "grid"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "grid"; tooltip: "Grid"; onClicked: root.catalogViewMode = "grid" }
                     MiniButton { visible: !root.importModeOpen; square: true; iconName: "survey"; role: "icon"; accent: root.dimText; active: root.catalogViewMode === "survey"; tooltip: "Survey"; onClicked: root.catalogViewMode = "survey" }
-                    MiniButton { visible: !root.importModeOpen; square: true; iconName: "panel-left"; role: "icon"; accent: root.dimText; active: root.librarySourcesPanelVisible; tooltip: "Sources"; onClicked: root.librarySourcesPanelVisible = !root.librarySourcesPanelVisible }
                     MiniButton { visible: !root.importModeOpen; square: true; iconName: "panel-right"; role: "icon"; accent: root.dimText; active: root.libraryInspectorPanelVisible; tooltip: "Inspector"; onClicked: root.libraryInspectorPanelVisible = !root.libraryInspectorPanelVisible }
                     MiniButton {
                         visible: !root.importModeOpen
@@ -16806,7 +16892,7 @@ Rectangle {
                     boundsBehavior: Flickable.StopAtBounds
                     flickableDirection: Flickable.VerticalFlick
                     contentWidth: galleryViewportWidth
-	                    contentHeight: libraryGalleryRowsColumn.implicitHeight
+                    contentHeight: libraryGalleryRowsColumn.implicitHeight
                     readonly property int galleryScrollbarGutter: Math.max(root.libraryGalleryScrollbarGutter,
                                                                             Math.ceil(Number(galleryVerticalScrollBar.implicitWidth || galleryVerticalScrollBar.width || 0)) + 2)
                     readonly property int galleryViewportWidth: root.libraryGalleryViewportWidth(width, galleryScrollbarGutter)
@@ -16816,18 +16902,18 @@ Rectangle {
                         policy: ScrollBar.AsNeeded
                     }
 
-	                    function scheduleGalleryRowsRefresh() {
-	                        libraryGalleryRowsRefreshTimer.restart()
-	                    }
+                    function scheduleGalleryRowsRefresh() {
+                        libraryGalleryRowsRefreshTimer.restart()
+                    }
 
-	                    function refreshGalleryRows() {
+                    function refreshGalleryRows() {
                         galleryRows = root.libraryGalleryRows(galleryViewportWidth)
-	                        updateVisibleAssetRange()
-	                    }
+                        updateVisibleAssetRange()
+                    }
 
-	                    function updateVisibleAssetRange() {
-	                        if (!catalogAssets)
-	                            return
+                    function updateVisibleAssetRange() {
+                        if (!catalogAssets)
+                            return
                         if (!visible || root.assetCount() <= 0) {
                             catalogAssets.setVisibleAssetRange(-1, -1)
                             return
@@ -16854,35 +16940,35 @@ Rectangle {
                             catalogAssets.setVisibleAssetRange(first, last)
                     }
 
-	                    Timer {
-	                        id: libraryGalleryRowsRefreshTimer
-	                        interval: 0
-	                        repeat: false
-	                        onTriggered: studioLibraryGalleryGrid.refreshGalleryRows()
-	                    }
+                    Timer {
+                        id: libraryGalleryRowsRefreshTimer
+                        interval: 0
+                        repeat: false
+                        onTriggered: studioLibraryGalleryGrid.refreshGalleryRows()
+                    }
 
-	                    Connections {
-	                        target: root
-	                        function onLibraryGalleryAspectRevisionChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                        function onCatalogViewModeChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                    }
+                    Connections {
+                        target: root
+                        function onLibraryGalleryAspectRevisionChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                        function onCatalogViewModeChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                    }
 
-	                    Connections {
-	                        target: catalogAssets
-	                        function onAssetCountChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                        function onDataChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                        function onModelReset() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                        function onRowsInserted() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                        function onRowsRemoved() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
-	                    }
+                    Connections {
+                        target: catalogAssets
+                        function onAssetCountChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                        function onDataChanged() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                        function onModelReset() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                        function onRowsInserted() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                        function onRowsRemoved() { studioLibraryGalleryGrid.scheduleGalleryRowsRefresh() }
+                    }
 
-	                    Component.onCompleted: refreshGalleryRows()
-	                    onContentYChanged: updateVisibleAssetRange()
-	                    onHeightChanged: updateVisibleAssetRange()
-	                    onWidthChanged: scheduleGalleryRowsRefresh()
+                    Component.onCompleted: refreshGalleryRows()
+                    onContentYChanged: updateVisibleAssetRange()
+                    onHeightChanged: updateVisibleAssetRange()
+                    onWidthChanged: scheduleGalleryRowsRefresh()
                     onGalleryViewportWidthChanged: scheduleGalleryRowsRefresh()
-	                    onVisibleChanged: scheduleGalleryRowsRefresh()
-	                    onGalleryRowsChanged: updateVisibleAssetRange()
+                    onVisibleChanged: scheduleGalleryRowsRefresh()
+                    onGalleryRowsChanged: updateVisibleAssetRange()
 
                     Column {
                         id: libraryGalleryRowsColumn
@@ -17951,7 +18037,10 @@ Rectangle {
                     Layout.fillHeight: true
                     source: root.displayImageSource(0)
                     resetKey: catalogAssets.selectedAssetId
-                    masked: root.editTool === "masks" || root.editTool === "brush"
+                    masked: editorPreview.hasActiveMask &&
+                            (root.editTool === "masks" || root.editTool === "brush" ||
+                             root.editTool === "retouch" ||
+                             root.selectedEditTargetMaskSetId().length > 0)
                     publishPreviewViewport: true
                     loupeEnabled: true
                     focusCheckOverlayEnabled: true
@@ -18125,12 +18214,15 @@ Rectangle {
                         imageY: editViewport.paintedContentY
                         imageWidth: editViewport.paintedContentWidth
                         imageHeight: editViewport.paintedContentHeight
+                        sourceWidth: editorPreview.sourceImageWidth
+                        sourceHeight: editorPreview.sourceImageHeight
                         cropX: editorPreview.cropRectX
                         cropY: editorPreview.cropRectY
                         cropWidth: editorPreview.cropRectWidth
                         cropHeight: editorPreview.cropRectHeight
                         aspectRatio: editorPreview.cropAspectRatio
                         guideMode: root.cropGuideMode
+                        accentColor: root.mint
                         onRectEdited: function(x, y, width, height) {
                             editorPreview.updateCropRect(x, y, width, height)
                         }
@@ -18272,7 +18364,7 @@ Rectangle {
                         y: editViewport.paintedContentHeight > 1 ? editViewport.paintedContentY : 0
                         width: editViewport.paintedContentWidth > 1 ? editViewport.paintedContentWidth : parent.width
                         height: editViewport.paintedContentHeight > 1 ? editViewport.paintedContentHeight : parent.height
-                        visible: root.editTool === "crop" && !editorPreview.compareMode
+                        visible: false
                         color: "transparent"
                         border.width: 2
                         border.color: root.mint
@@ -18282,7 +18374,7 @@ Rectangle {
 
                     Rectangle {
                         objectName: "cropToolHud"
-                        readonly property string hudContract: "specialized-tool-hud:v1|tool:crop|mode-switch:true|status-visible:true|commit-action:true|subdued-chrome:true|no-elide:true|no-overlap:true"
+                        readonly property string hudContract: "specialized-tool-hud:v2|tool:crop|modes:visible|status:dimensions-and-aspect|commit-action:true|subdued-chrome:true|no-elide:true|no-overlap:true"
                         readonly property string commandPlacementContract: "canvas-command-placement:v1|slot:top-center|top-margin:12|safe-width:true|consistent:true|image-overlap:minimized"
                         anchors.horizontalCenter: parent.horizontalCenter
                         anchors.top: parent.top
@@ -18304,9 +18396,7 @@ Rectangle {
 
                             Label {
                                 objectName: "cropToolHeaderLabel"
-                                text: root.cropToolMode === "transform" ? "CROP / TRANSFORM"
-                                      : root.cropToolMode === "horizon" ? "CROP / HORIZON"
-                                      : "CROP / BOX"
+                                text: "CROP"
                                 color: root.mint
                                 font.family: theme.fontMono
                                 font.pixelSize: 10
@@ -18327,27 +18417,32 @@ Rectangle {
                                 minimumPixelSize: 8
                                 elide: Text.ElideNone
                             }
-                            MenuButton {
-                                objectName: "cropHudModeMenuButton"
-                                Layout.preferredWidth: Math.max(128, implicitWidth)
-                                text: root.cropHudModeLabel()
-                                iconName: root.cropHudModeIcon()
-                                compact: true
-                                active: true
-                                accent: root.mint
-                                menuWidth: 236
-                                menuItems: root.cropHudModeMenuItems()
-                                tooltipText: "Choose crop box, transform, horizon, or reset crop."
-                                menuTooltipText: "Crop modes"
-                                onClicked: {
-                                    if (root.cropToolMode === "transform")
-                                        root.setCropToolMode("transform")
-                                    else if (root.cropToolMode === "horizon")
-                                        root.setCropToolMode("horizon")
-                                    else
-                                        root.setCropToolMode("crop")
-                                }
-                                onMenuItemTriggered: function(key) { root.handleEditRailMenuAction("crop", key) }
+                            MiniButton {
+                                objectName: "cropHudCropButton"
+                                text: "Crop"
+                                iconName: "crop"
+                                role: "segmented"
+                                active: root.cropToolMode === "crop"
+                                tooltip: "Resize or reposition the crop box."
+                                onClicked: root.setCropToolMode("crop")
+                            }
+                            MiniButton {
+                                objectName: "cropHudHorizonButton"
+                                text: "Straighten"
+                                iconName: "geometry"
+                                role: "segmented"
+                                active: root.cropToolMode === "horizon"
+                                tooltip: "Draw along a line that should be level."
+                                onClicked: root.setCropToolMode("horizon")
+                            }
+                            MiniButton {
+                                objectName: "cropHudTransformButton"
+                                text: "Transform"
+                                iconName: "geometry"
+                                role: "segmented"
+                                active: root.cropToolMode === "transform"
+                                tooltip: "Scale, rotate, and correct perspective."
+                                onClicked: root.setCropToolMode("transform")
                             }
                             MiniButton {
                                 objectName: "cropHudDoneButton"
@@ -19958,11 +20053,11 @@ Rectangle {
                                         MiniButton {
                                             objectName: "maskFirstOutlineButton"
                                             Layout.fillWidth: true
-                                            text: "Outline"
+                                            text: "Marching"
                                             role: "segmented"
-                                            active: editorPreview.maskPreviewDisplayMode === "outline"
-                                            tooltip: "Show only the current selection outline."
-                                            onClicked: editorPreview.maskPreviewMode = "outline"
+                                            active: editorPreview.maskPreviewDisplayMode === "marching-ants"
+                                            tooltip: "Show the exact selection boundary as marching ants."
+                                            onClicked: editorPreview.maskPreviewMode = "marching-ants"
                                         }
 
                                         MiniButton {
@@ -19987,8 +20082,8 @@ Rectangle {
                                             text: "Edit Layer"
                                             role: "segmented"
                                             visible: root.activeMaskAdjustmentLayerIndex() >= 0
-                                            tooltip: "Switch to the linked layer without leaving this panel."
-                                            onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, true)
+                                            tooltip: "Open the linked layer adjustments."
+                                            onClicked: root.selectMaskSetAndLayer(root.activeMaskSetData(), true, false)
                                         }
 
                                         MiniButton {
@@ -20068,11 +20163,11 @@ Rectangle {
                                             targetSupport: "mask"
                                             label: "Smooth"
                                             from: 0
-                                            to: 1
-                                            stepSize: 0.01
+                                            to: 100
+                                            stepSize: 1
                                             defaultValue: 0
-                                            value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 1.0)
-                                            valueText: Math.round(value * 100) + "%"
+                                            value: root.clamp(editorPreview.activeMaskSelectionSmooth, 0.0, 100.0)
+                                            valueText: Math.round(value) + "%"
                                             onValueDragged: function(value) { editorPreview.activeMaskSelectionSmooth = value }
                                         }
 
@@ -20081,11 +20176,11 @@ Rectangle {
                                             targetSupport: "mask"
                                             label: "Fine Edge"
                                             from: 0
-                                            to: 1
-                                            stepSize: 0.01
+                                            to: 100
+                                            stepSize: 1
                                             defaultValue: 0
-                                            value: root.clamp(editorPreview.activeMaskSelectionFineEdge, 0.0, 1.0)
-                                            valueText: Math.round(value * 100) + "%"
+                                            value: root.clamp(editorPreview.activeMaskSelectionFineEdge, 0.0, 100.0)
+                                            valueText: Math.round(value) + "%"
                                             onValueDragged: function(value) { editorPreview.activeMaskSelectionFineEdge = value }
                                         }
                                     }
@@ -20146,7 +20241,7 @@ Rectangle {
                                         readonly property bool inspectorActive: root.editInspectorTab === "layers"
                                         readonly property string layerStackAcceptanceContract: root.layerStackAcceptanceSignature()
                                         readonly property string layerDuplicatePolicyContract: root.layerDuplicatePolicySignature()
-                                        readonly property string sparseLayerUiContract: "layer-sparse-ui:v2|stack:identity-only|properties:progressive|row-height:48|inline-controls:false|selected-header:false|visibility-states:menu|rename:properties"
+                                        readonly property string sparseLayerUiContract: "layer-sparse-ui:v3|stack:identity-only|properties:progressive|row-height:48|inline-controls:rename|selected-header:false|visibility-states:menu|selection:pointer-modifiers|reorder:drag-release|mask-children:lazy"
                                         visible: inspectorActive
                                         title: "Layers"
 
@@ -20703,6 +20798,7 @@ Rectangle {
                                                             opacity: parent.thumbnailStale ? 0.44 : 1.0
                                                             fillMode: Image.PreserveAspectCrop
                                                             smooth: true
+                                                            asynchronous: true
                                                             cache: false
                                                         }
 
@@ -21029,11 +21125,14 @@ Rectangle {
                                                                                                       thumbnailDisplayState)
                                             readonly property bool activeLayerTarget: layerIndex === root.normalizedActivePhotoLayerIndex()
                                             readonly property bool rowAccentVisible: layerSelected || layerMaskSelected || layerSoloed || activeLayerTarget
+                                            property bool reorderDragActive: false
                                             readonly property bool layoutFits: true
                                             readonly property string layoutSignature: "height:" + Math.round(height) + "|content:" + Math.round(layerContent.implicitHeight) + "|fits:" + String(layoutFits)
 
                                             Layout.fillWidth: true
                                             Layout.preferredHeight: 48
+                                            z: reorderDragActive ? 20 : 0
+                                            scale: reorderDragActive ? 1.015 : 1.0
                                             rowKind: "photo-layer"
                                             targetKind: String(layerData.kind || "photo")
                                             accent: root.mint
@@ -21057,9 +21156,7 @@ Rectangle {
                                                 anchors.top: parent.top
                                                 height: 4
                                                 radius: 2
-                                                visible: !root.brushToolReady() &&
-                                                         photoLayerRowRoot.contextualActionsVisible &&
-                                                         layerIndex > 0 && !layerLocked
+                                                visible: false
                                                 color: root.mint
                                                 opacity: beforeDropHover.hovered ? 0.95 : 0.42
                                                 z: 4
@@ -21084,10 +21181,7 @@ Rectangle {
                                                 anchors.bottom: parent.bottom
                                                 height: 4
                                                 radius: 2
-                                                visible: !root.brushToolReady() &&
-                                                         photoLayerRowRoot.contextualActionsVisible &&
-                                                         layerIndex < editorPreview.photoLayerCount - 1 &&
-                                                         !layerLocked
+                                                visible: false
                                                 color: root.mint
                                                 opacity: afterDropHover.hovered ? 0.95 : 0.42
                                                 z: 4
@@ -21118,7 +21212,9 @@ Rectangle {
                                             MouseArea {
                                                 objectName: "photoLayerRowEditTargetArea"
                                                 anchors.fill: parent
-                                                onClicked: root.editPhotoLayerInspectorTarget(parent.layerIndex)
+                                                onClicked: function(mouse) {
+                                                    root.selectPhotoLayerWithModifiers(parent.layerIndex, mouse.modifiers)
+                                                }
                                             }
 
                                             RowLayout {
@@ -21128,16 +21224,17 @@ Rectangle {
 
                                                 Rectangle {
                                                     objectName: "photoLayerReorderHandle"
-                                                    readonly property string reorderContract: "layer-reorder:v1|drag-affordance:true|keyboard-buttons:true|menu-actions:true|disabled-reasons:true"
+                                                    readonly property string reorderContract: "layer-reorder:v2|drag-release:any-distance:true|keyboard:true|menu:true|selection-preserved:true|locked:blocked"
+                                                    readonly property bool dragActive: photoLayerReorderDragArea.drag.active
                                                     visible: !root.brushToolReady()
-                                                    Layout.preferredWidth: visible ? 6 : 0
+                                                    Layout.preferredWidth: visible ? 14 : 0
                                                     Layout.fillHeight: true
                                                     radius: 3
                                                     color: "transparent"
                                                     opacity: photoLayerRowRoot.contextualActionsVisible ? 0.62 : 0.18
                                                     ToolTip.visible: photoLayerReorderHandleHover.hovered
                                                     ToolTip.delay: 350
-                                                    ToolTip.text: "Reorder with Move Up, Move Down, or the layer action menu."
+                                                    ToolTip.text: layerLocked ? "Unlock this layer before reordering." : "Drag to reorder the layer."
 
                                                     HoverHandler { id: photoLayerReorderHandleHover }
 
@@ -21154,6 +21251,40 @@ Rectangle {
                                                                 radius: 1.5
                                                                 color: theme.alpha(theme.textMuted, 0.82)
                                                             }
+                                                        }
+                                                    }
+
+                                                    Item {
+                                                        id: photoLayerReorderDragProxy
+                                                        width: 1
+                                                        height: 1
+                                                    }
+
+                                                    MouseArea {
+                                                        id: photoLayerReorderDragArea
+                                                        anchors.fill: parent
+                                                        enabled: !layerLocked
+                                                        cursorShape: drag.active ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                                        drag.target: photoLayerReorderDragProxy
+                                                        drag.axis: Drag.YAxis
+                                                        drag.minimumY: -layerIndex * photoLayerRowRoot.height
+                                                        drag.maximumY: (editorPreview.photoLayerCount - layerIndex - 1) * photoLayerRowRoot.height
+                                                        onPressed: function(mouse) {
+                                                            photoLayerRowRoot.reorderDragActive = true
+                                                            photoLayerReorderDragProxy.y = 0
+                                                            root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
+                                                        }
+                                                        onReleased: {
+                                                            const offset = Math.round(photoLayerReorderDragProxy.y /
+                                                                                      Math.max(1, photoLayerRowRoot.height))
+                                                            photoLayerReorderDragProxy.y = 0
+                                                            photoLayerRowRoot.reorderDragActive = false
+                                                            if (offset !== 0)
+                                                                root.movePhotoLayerPreservingSelection(layerIndex, offset)
+                                                        }
+                                                        onCanceled: {
+                                                            photoLayerReorderDragProxy.y = 0
+                                                            photoLayerRowRoot.reorderDragActive = false
                                                         }
                                                     }
                                                 }
@@ -21233,6 +21364,7 @@ Rectangle {
                                                         opacity: parent.thumbnailStale ? 0.44 : 1.0
                                                         fillMode: Image.PreserveAspectCrop
                                                         smooth: true
+                                                        asynchronous: true
                                                         cache: false
                                                     }
 
@@ -21284,6 +21416,7 @@ Rectangle {
                                                         Label {
                                                             objectName: "photoLayerNameLabel"
                                                             Layout.fillWidth: true
+                                                            visible: root.inlineRenamingPhotoLayerIndex !== layerIndex
                                                             text: String(layerData.displayName || layerData.name || "Layer")
                                                             color: layerHidden ? root.dimText : theme.textMain
                                                             font.family: theme.fontUi
@@ -21293,6 +21426,42 @@ Rectangle {
                                                             fontSizeMode: Text.HorizontalFit
                                                             minimumPixelSize: 8
                                                             elide: Text.ElideNone
+
+                                                            MouseArea {
+                                                                anchors.fill: parent
+                                                                acceptedButtons: Qt.LeftButton
+                                                                onClicked: function(mouse) {
+                                                                    root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
+                                                                }
+                                                                onDoubleClicked: function(mouse) {
+                                                                    root.selectPhotoLayerWithModifiers(layerIndex, mouse.modifiers)
+                                                                    root.beginInlinePhotoLayerRename(layerIndex)
+                                                                }
+                                                            }
+                                                        }
+
+                                                        TinyInput {
+                                                            id: photoLayerInlineNameField
+                                                            objectName: "photoLayerInlineNameField"
+                                                            Layout.fillWidth: true
+                                                            Layout.preferredHeight: 22
+                                                            visible: root.inlineRenamingPhotoLayerIndex === layerIndex
+                                                            text: root.inlineRenamingPhotoLayerIndex === layerIndex
+                                                                  ? root.inlinePhotoLayerRenameOriginal
+                                                                  : ""
+                                                            highlighted: true
+                                                            onVisibleChanged: {
+                                                                if (visible) {
+                                                                    text = root.inlinePhotoLayerRenameOriginal
+                                                                    Qt.callLater(function() {
+                                                                        photoLayerInlineNameField.forceInputFocus()
+                                                                        photoLayerInlineNameField.selectAllText()
+                                                                    })
+                                                                }
+                                                            }
+                                                            onAccepted: root.commitInlinePhotoLayerRename(layerIndex, text)
+                                                            onEditingFinished: root.commitInlinePhotoLayerRename(layerIndex, text)
+                                                            onCancelled: root.cancelInlinePhotoLayerRename(layerIndex)
                                                         }
 
                                                         LayerRowActionZone {
@@ -21359,7 +21528,7 @@ Rectangle {
                                                         spacing: 4
 
                                                         Repeater {
-                                                            model: photoLayerRowRoot.layerStateBadges
+                                                            model: []
 
                                                             delegate: Rectangle {
                                                                 objectName: "photoLayerStateBadge"
@@ -21424,7 +21593,7 @@ Rectangle {
                                                         spacing: 4
 
                                                         Repeater {
-                                                            model: photoLayerRowRoot.changedAdjustmentGroups
+                                                            model: []
 
                                                             delegate: Rectangle {
                                                                 objectName: "photoLayerChangedGroupBadge"
@@ -22048,6 +22217,7 @@ Rectangle {
                                                                             opacity: parent.thumbnailStale ? 0.44 : 1.0
                                                                             fillMode: Image.PreserveAspectCrop
                                                                             smooth: true
+                                                                            asynchronous: true
                                                                             cache: false
                                                                         }
 
@@ -22470,7 +22640,7 @@ Rectangle {
                                         readonly property int activeAdjustmentIndex: root.activeAdjustmentLayerIndex()
                                         readonly property var syncTargets: root.selectedAdjustmentLayerIndices(activeAdjustmentIndex)
                                         property bool detailsExpanded: false
-                                        readonly property string sparsePropertiesContract: "layer-properties:v1|source:active-layer|sliders:single-instance|batch:contextual|text:active-only|row-controls:menu|progressive:true"
+                                        readonly property string sparsePropertiesContract: "layer-properties:v2|source:active-layer|sliders:single-instance|batch:contextual|text:active-only|quick-actions:mask-lock-duplicate-delete|advanced:clip-transform-isolate-reorder|progressive:true"
                                         Layout.fillWidth: true
                                         visible: layerValid && !root.brushToolReady()
                                         spacing: 6
@@ -22595,15 +22765,15 @@ Rectangle {
                                                          "Layer")
                                             enabled: !photoLayerPropertiesPanel.layerLocked
                                             placeholder: "Layer name"
-                                            onTextChanged: {
-                                                if (!userEditing)
-                                                    return
+                                            onAccepted: {
                                                 const nextName = String(text || "").trim()
                                                 const currentName = String(photoLayerPropertiesPanel.layerData.name || "").trim()
                                                 const currentDisplayName = String(photoLayerPropertiesPanel.layerData.displayName || currentName).trim()
                                                 if (nextName.length > 0 && nextName !== currentName && nextName !== currentDisplayName)
                                                     editorPreview.renamePhotoLayer(photoLayerPropertiesPanel.layerIndex, nextName)
+                                                clearInputFocus()
                                             }
+                                            onEditingFinished: accepted()
                                         }
 
                                         Flow {
@@ -22719,11 +22889,12 @@ Rectangle {
                                         Flow {
                                             objectName: "photoLayerPropertiesActionRow"
                                             Layout.fillWidth: true
-                                            visible: photoLayerPropertiesPanel.detailsExpanded
+                                            visible: true
                                             spacing: 6
 
                                             Components.ToolButton {
                                                 objectName: "photoLayerClippingMaskButton"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded
                                                 iconName: "link"
                                                 compact: true
                                                 label: photoLayerPropertiesPanel.layerData.clippingMask === true ? "Release clipping mask" : "Clip to below"
@@ -22754,6 +22925,7 @@ Rectangle {
 
                                             Components.ToolButton {
                                                 objectName: "photoLayerTransformButton"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded
                                                 iconName: "geometry"
                                                 compact: true
                                                 label: "Transform"
@@ -22765,6 +22937,7 @@ Rectangle {
 
                                             Components.ToolButton {
                                                 objectName: "photoLayerRowSoloButton"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded
                                                 iconName: "select"
                                                 compact: true
                                                 label: photoLayerPropertiesPanel.layerData.solo === true ? "Clear isolate" : "Isolate"
@@ -22793,6 +22966,7 @@ Rectangle {
 
                                             Components.ToolButton {
                                                 objectName: "photoLayerMoveUpButton"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded
                                                 iconName: "move-up"
                                                 compact: true
                                                 label: "Move up"
@@ -22804,6 +22978,7 @@ Rectangle {
 
                                             Components.ToolButton {
                                                 objectName: "photoLayerMoveDownButton"
+                                                visible: photoLayerPropertiesPanel.detailsExpanded
                                                 iconName: "move-down"
                                                 compact: true
                                                 label: "Move down"
@@ -24608,26 +24783,48 @@ Rectangle {
                                     title: "Crop"
                                     CollapsibleGroup {
                                         objectName: "cropBoxGroup"
-                                        title: "Crop Box"
+                                        title: "Crop & Composition"
                                         expanded: true
                                         onToggled: expanded = !expanded
-                                        AdjustSlider { objectName: "cropZoomSlider"; label: "Zoom"; from: 0.5; to: 4; stepSize: 0.01; defaultValue: 1; value: editorPreview.cropZoom; valueText: editorPreview.cropZoom.toFixed(2) + "x"; onValueDragged: function(value) { editorPreview.cropZoom = value } }
-                                        AdjustSlider { objectName: "cropRectXSlider"; label: "Crop X"; from: 0; to: 100; stepSize: 0.1; value: editorPreview.cropRectX * 100; valueText: (editorPreview.cropRectX * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(value / 100, editorPreview.cropRectY, editorPreview.cropRectWidth, editorPreview.cropRectHeight) } }
-                                        AdjustSlider { objectName: "cropRectYSlider"; label: "Crop Y"; from: 0; to: 100; stepSize: 0.1; value: editorPreview.cropRectY * 100; valueText: (editorPreview.cropRectY * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, value / 100, editorPreview.cropRectWidth, editorPreview.cropRectHeight) } }
-                                        AdjustSlider { objectName: "cropRectWidthSlider"; label: "Crop W"; from: 5; to: 100; stepSize: 0.1; defaultValue: 100; value: editorPreview.cropRectWidth * 100; valueText: (editorPreview.cropRectWidth * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, editorPreview.cropRectY, value / 100, editorPreview.cropRectHeight) } }
-                                        AdjustSlider { objectName: "cropRectHeightSlider"; label: "Crop H"; from: 5; to: 100; stepSize: 0.1; defaultValue: 100; value: editorPreview.cropRectHeight * 100; valueText: (editorPreview.cropRectHeight * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, editorPreview.cropRectY, editorPreview.cropRectWidth, value / 100) } }
+                                        Label {
+                                            objectName: "cropInteractionHintLabel"
+                                            Layout.fillWidth: true
+                                            text: root.cropInstructionText()
+                                            color: theme.textMain
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 11
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        }
+                                        Label {
+                                            objectName: "cropSummaryLabel"
+                                            Layout.fillWidth: true
+                                            text: root.cropSummaryText()
+                                            color: root.mint
+                                            font.family: theme.fontMono
+                                            font.pixelSize: 10
+                                        }
+                                        Label { text: "Aspect ratio"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
                                         RowLayout {
                                             Layout.fillWidth: true
-                                            MiniButton { objectName: "resetCropRectButton"; Layout.fillWidth: true; text: "Reset Crop"; role: "secondary"; onClicked: editorPreview.resetCropRect() }
-                                            MiniButton { objectName: "resetTransformButton"; Layout.fillWidth: true; text: "Reset Transform"; role: "secondary"; onClicked: editorPreview.resetTransform() }
+                                            spacing: 8
+                                            ToneComboBox {
+                                                objectName: "cropAspectPresetComboBox"
+                                                Layout.fillWidth: true
+                                                model: editorPreview.cropAspectPresets()
+                                                currentIndex: model.indexOf(editorPreview.cropPreset)
+                                                onActivated: editorPreview.cropPreset = currentText
+                                            }
+                                            MiniButton {
+                                                objectName: "swapCropAspectButton"
+                                                text: "Flip"
+                                                iconName: "geometry"
+                                                role: "secondary"
+                                                enabled: root.swappedCropAspectPreset(editorPreview.cropPreset) !== editorPreview.cropPreset
+                                                tooltip: "Swap portrait and landscape orientation."
+                                                onClicked: root.swapCropAspectOrientation()
+                                            }
                                         }
-                                    }
-                                    CollapsibleGroup {
-                                        objectName: "cropGuideAspectGroup"
-                                        title: "Guides & Aspect"
-                                        expanded: true
-                                        onToggled: expanded = !expanded
-                                        Label { text: "Guide"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
+                                        Label { text: "Overlay guide"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
                                         ToneComboBox {
                                             objectName: "cropGuideModeComboBox"
                                             Layout.fillWidth: true
@@ -24635,13 +24832,43 @@ Rectangle {
                                             currentIndex: root.cropGuideModeIndex()
                                             onActivated: root.setCropGuideMode(currentText)
                                         }
-                                        Label { text: "Aspect"; color: root.dimText; font.family: theme.fontUi; font.pixelSize: 10; font.letterSpacing: 0 }
-                                        ToneComboBox {
-                                            objectName: "cropAspectPresetComboBox"
+                                        AdjustSlider { objectName: "transformRotationSlider"; label: "Straighten"; from: -45; to: 45; stepSize: 0.1; value: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation); valueText: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation).toFixed(1) + " deg"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformRotation", value) } }
+                                        RowLayout {
                                             Layout.fillWidth: true
-                                            model: editorPreview.cropAspectPresets()
-                                            currentIndex: model.indexOf(editorPreview.cropPreset)
-                                            onActivated: editorPreview.cropPreset = currentText
+                                            MiniButton { objectName: "drawHorizonButton"; Layout.fillWidth: true; text: "Draw Horizon"; iconName: "geometry"; role: "secondary"; active: root.cropToolMode === "horizon"; onClicked: root.setCropToolMode("horizon") }
+                                            MiniButton { objectName: "resetCropRectButton"; Layout.fillWidth: true; text: "Reset Crop"; iconName: "reset"; role: "secondary"; onClicked: editorPreview.resetCropRect() }
+                                        }
+                                    }
+                                    CollapsibleGroup {
+                                        objectName: "cropPrecisionGroup"
+                                        title: "Position & Size"
+                                        expanded: false
+                                        onToggled: expanded = !expanded
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Use these values only when exact numeric placement is required."
+                                            color: root.dimText
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                                        }
+                                        AdjustSlider { objectName: "cropZoomSlider"; label: "Crop tighter"; from: 1; to: 3; stepSize: 0.01; defaultValue: 1; value: editorPreview.cropZoom; valueText: editorPreview.cropZoom.toFixed(2) + "x"; onValueDragged: function(value) { editorPreview.cropZoom = value } }
+                                        AdjustSlider { objectName: "cropRectXSlider"; label: "Left"; from: 0; to: 100; stepSize: 0.1; value: editorPreview.cropRectX * 100; valueText: (editorPreview.cropRectX * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(value / 100, editorPreview.cropRectY, editorPreview.cropRectWidth, editorPreview.cropRectHeight) } }
+                                        AdjustSlider { objectName: "cropRectYSlider"; label: "Top"; from: 0; to: 100; stepSize: 0.1; value: editorPreview.cropRectY * 100; valueText: (editorPreview.cropRectY * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, value / 100, editorPreview.cropRectWidth, editorPreview.cropRectHeight) } }
+                                        AdjustSlider { objectName: "cropRectWidthSlider"; label: "Width"; from: 5; to: 100; stepSize: 0.1; defaultValue: 100; value: editorPreview.cropRectWidth * 100; valueText: (editorPreview.cropRectWidth * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, editorPreview.cropRectY, value / 100, editorPreview.cropRectHeight) } }
+                                        AdjustSlider { objectName: "cropRectHeightSlider"; label: "Height"; from: 5; to: 100; stepSize: 0.1; defaultValue: 100; value: editorPreview.cropRectHeight * 100; valueText: (editorPreview.cropRectHeight * 100).toFixed(1) + "%"; onValueDragged: function(value) { editorPreview.updateCropRect(editorPreview.cropRectX, editorPreview.cropRectY, editorPreview.cropRectWidth, value / 100) } }
+                                    }
+                                    CollapsibleGroup {
+                                        objectName: "cropGuideAspectGroup"
+                                        title: "Custom Aspect Ratio"
+                                        expanded: false
+                                        onToggled: expanded = !expanded
+                                        Label {
+                                            Layout.fillWidth: true
+                                            text: "Add a reusable ratio such as 2.39:1."
+                                            color: root.dimText
+                                            font.family: theme.fontUi
+                                            font.pixelSize: 10
                                         }
                                         RowLayout {
                                             Layout.fillWidth: true
@@ -24678,9 +24905,14 @@ Rectangle {
                                     }
                                     CollapsibleGroup {
                                         objectName: "cropTransformGroup"
-                                        title: "Transform & Upright"
+                                        title: "Perspective & Transform"
                                         expanded: root.cropTransformExpanded
                                         onToggled: root.cropTransformExpanded = !root.cropTransformExpanded
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            MiniButton { Layout.fillWidth: true; text: "Canvas Handles"; iconName: "geometry"; role: "segmented"; active: root.cropToolMode === "transform"; onClicked: root.setCropToolMode("transform") }
+                                            MiniButton { objectName: "resetTransformButton"; Layout.fillWidth: true; text: "Reset Transform"; role: "secondary"; onClicked: editorPreview.resetTransform() }
+                                        }
                                         RowLayout {
                                             Layout.fillWidth: true
                                             MiniButton { Layout.fillWidth: true; text: "Off"; role: "segmented"; active: editorPreview.uprightMode === "Off"; onClicked: editorPreview.uprightMode = "Off" }
@@ -24691,7 +24923,6 @@ Rectangle {
                                         MiniButton { Layout.fillWidth: true; text: "Straighten Horizon"; role: "secondary"; enabled: editorPreview.hasAsset && Math.abs(editorPreview.uprightHorizontalGuideAngle) > 0.05; onClicked: editorPreview.straightenFromHorizonAngle(editorPreview.uprightHorizontalGuideAngle) }
                                         MiniButton { Layout.fillWidth: true; text: "Apply Upright"; role: "secondary"; onClicked: editorPreview.applyGuidedUpright() }
                                         MiniButton { objectName: "contentAwareCropFillButton"; Layout.fillWidth: true; text: "Crop Fill"; role: "segmented"; active: root.primaryBoolAdjustmentValue("contentAwareCropFill", editorPreview.contentAwareCropFill); onClicked: root.setPrimaryBoolAdjustmentValue("contentAwareCropFill", !root.primaryBoolAdjustmentValue("contentAwareCropFill", editorPreview.contentAwareCropFill)) }
-                                        AdjustSlider { objectName: "transformRotationSlider"; label: "Rotate"; from: -45; to: 45; stepSize: 0.1; value: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation); valueText: root.primaryAdjustmentValue("transformRotation", editorPreview.transformRotation).toFixed(1) + " deg"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformRotation", value) } }
                                         AdjustSlider { objectName: "transformScaleSlider"; label: "Scale"; from: 0.25; to: 4; stepSize: 0.01; defaultValue: 1; value: root.primaryAdjustmentValue("transformScale", editorPreview.transformScale); valueText: root.primaryAdjustmentValue("transformScale", editorPreview.transformScale).toFixed(2) + "x"; onValueDragged: function(value) { root.setPrimaryAdjustmentValue("transformScale", value) } }
                                         AdjustSlider { objectName: "perspectiveVerticalSlider"; label: "Vertical"; from: -100; to: 100; value: root.primaryAdjustmentValue("perspectiveVertical", editorPreview.perspectiveVertical); valueText: root.signedPercent(root.primaryAdjustmentValue("perspectiveVertical", editorPreview.perspectiveVertical)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("perspectiveVertical", value) } }
                                         AdjustSlider { objectName: "perspectiveHorizontalSlider"; label: "Horizontal"; from: -100; to: 100; value: root.primaryAdjustmentValue("perspectiveHorizontal", editorPreview.perspectiveHorizontal); valueText: root.signedPercent(root.primaryAdjustmentValue("perspectiveHorizontal", editorPreview.perspectiveHorizontal)); onValueDragged: function(value) { root.setPrimaryAdjustmentValue("perspectiveHorizontal", value) } }

@@ -1,6 +1,10 @@
 # Shipping Guide
 
-This document explains how to ship the current `PhotoEditor` codebase as a downloadable desktop app.
+This document explains how to ship the current `Virel Studio` codebase as a downloadable desktop app.
+
+The authoritative public-launch contract is now
+[production-launch-checklist.md](production-launch-checklist.md). This guide
+remains the detailed packaging reference.
 
 It is written for the repository in its current state:
 
@@ -30,14 +34,14 @@ A real release currently has these parts:
 
 The repo is set up to produce:
 
-- `PhotoEditor.app`
+- `VirelStudio.app`
 - packaged artifacts through `cpack`
 - optional bundled PostgreSQL runtime under:
-  - `PhotoEditor.app/Contents/Resources/postgres`
+  - `VirelStudio.app/Contents/Resources/postgres`
 
 Rust helper binaries are installed beside the app binary under:
 
-- `PhotoEditor.app/Contents/MacOS`
+- `VirelStudio.app/Contents/MacOS`
 
 ### Windows
 
@@ -80,13 +84,18 @@ This managed mode is what downloadable releases are currently built around.
 Set these in the repository before making signed releases:
 
 - `APPLE_TEAM_ID`
+- `APPLE_DEVELOPER_ID_P12_BASE64`
+- `APPLE_DEVELOPER_ID_P12_PASSWORD`
 - `APPLE_DEVELOPER_ID_APP`
-- `APPLE_DEVELOPER_ID_INSTALLER`
 - `APPLE_NOTARY_APPLE_ID`
 - `APPLE_NOTARY_TEAM_ID`
 - `APPLE_NOTARY_PASSWORD`
+- `SPARKLE_ED_PRIVATE_KEY_BASE64`
 - `WINDOWS_SIGNING_CERT_BASE64`
 - `WINDOWS_SIGNING_CERT_PASSWORD`
+- `PUBLIC_RELEASES_TOKEN`
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
 
 ### GitHub variables
 
@@ -96,7 +105,11 @@ Set these for the Windows packaging path:
   or
 - `PHOTO_EDITOR_WINDOWS_POSTGRES_RUNTIME_URL`
 
-Optional Windows package metadata:
+Required public release, website, and package metadata are listed in
+[production-launch-checklist.md](production-launch-checklist.md). In particular,
+the Windows publisher must exactly match the production certificate subject.
+
+Windows package metadata:
 
 - `PHOTO_EDITOR_WINDOWS_PACKAGE_NAME`
 - `PHOTO_EDITOR_WINDOWS_PACKAGE_DISPLAY_NAME`
@@ -107,7 +120,7 @@ Optional Windows package metadata:
 - `PHOTO_EDITOR_WINDOWS_APPINSTALLER_URI`
 - `PHOTO_EDITOR_WINDOWS_PACKAGE_BASE_URI`
 
-Optional macOS updater metadata:
+macOS updater metadata:
 
 - `PHOTO_EDITOR_MACOS_SPARKLE_ARCHIVE`
 - `PHOTO_EDITOR_MACOS_SPARKLE_URL`
@@ -311,7 +324,7 @@ git push origin v0.1.0
 
 Check that:
 
-- macOS artifact contains `PhotoEditor.app`
+- macOS artifact contains `VirelStudio.app`
 - Rust helpers are bundled beside the app binary
 - Windows artifact contains an `.msix`
 - Windows artifact contains an `.appinstaller` if update URIs were configured
@@ -388,13 +401,17 @@ The Windows path is set up for App Installer style updates. To use that:
 - Windows MSIX generation script
 - Windows App Installer metadata generation
 
-### Not fully finished
+### Implemented but awaiting real credentials and clean-machine proof
 
-- Apple signing/notarization automation inside the workflow
-- Windows signing validation on a real runner with a real cert
-- production-quality icons/assets for Windows package branding
+- Apple signing/notarization automation inside the protected release workflow
+- Windows signing validation using the production certificate
+- production-quality macOS and Windows package art
 - Keychain/Credential Manager storage for generated database credentials
-- a fully tested updater publish pipeline
+- signed Sparkle appcast generation and App Installer publishing
+- public binary-repository promotion and Cloudflare Pages deployment
+
+The workflow intentionally refuses a public release until the real certificate,
+publisher, updater, website, support, payment, and hosting values are configured.
 
 ## Minimum release checklist
 
@@ -418,7 +435,7 @@ Check:
 - Windows SDK is installed
 - `makeappx.exe` is available
 - `signtool.exe` is available if signing is enabled
-- the install root actually contains `bin\PhotoEditor.exe`
+- the install root actually contains `bin\VirelStudio.exe`
 
 ### Local database does not start in a packaged build
 

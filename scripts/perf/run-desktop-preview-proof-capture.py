@@ -14,7 +14,7 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_APP = REPO_ROOT / "build/dev-macos-debug/apps/desktop/PhotoEditor.app/Contents/MacOS/PhotoEditor"
+DEFAULT_APP = REPO_ROOT / "build/dev-macos-debug/apps/desktop/VirelStudio.app/Contents/MacOS/VirelStudio"
 DEFAULT_PREVIEW_APP = REPO_ROOT / "build/dev-macos-debug/tests/preview_benchmark_driver"
 DEFAULT_PREVIEW_CORPUS = REPO_ROOT / "perf-corpora/preview-synthetic-v1/manifest.json"
 DEFAULT_COLOR_APP = REPO_ROOT / "build/dev-macos-debug/tests/color_adjustment_benchmark_driver"

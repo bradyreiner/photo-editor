@@ -115,6 +115,18 @@ struct EditorPreviewControllerTestAccess {
       const EditorPreviewController& controller) {
     return controller.photo_layer_adjustment_render_timer_.isActive();
   }
+
+  static int render_generation(const EditorPreviewController& controller) {
+    return controller.render_generation_;
+  }
+
+  static int edit_intent_count(const EditorPreviewController& controller) {
+    return controller.edit_intent_count_;
+  }
+
+  static bool photo_layer_thumbnail_cache_dirty(const EditorPreviewController& controller) {
+    return controller.photo_layer_thumbnail_cache_dirty_;
+  }
 };
 
 class TestImageSink final : public EditorPreviewImageSink {
@@ -744,6 +756,51 @@ int main(int argc, char** argv) {
       image_sink.image(QStringLiteral("edited")).isNull()) {
     return fail("thumbnail parity controller should publish an initial edited preview");
   }
+
+  {
+    photo_editor::desktop::EditorPreviewController metadata_controller;
+    photo_editor::desktop::TestImageSink metadata_image_sink;
+    metadata_controller.setImageProvider(&metadata_image_sink);
+    metadata_controller.loadAsset(
+        QStringLiteral("layer-metadata-performance-asset"),
+        thumbnail_fixture_path,
+        QString(),
+        QString(),
+        QString(),
+        QString(),
+        QString());
+    if (!wait_for_preview_idle(metadata_controller) ||
+        !metadata_controller.addFillLayer(
+            QStringLiteral("#456789"),
+            QStringLiteral("Metadata Proof")) ||
+        !wait_for_preview_idle(metadata_controller)) {
+      return fail("layer metadata performance proof should create a settled fill layer");
+    }
+    (void)metadata_controller.photoLayers();
+    const auto generation_before =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+            metadata_controller);
+    const auto intent_count_before =
+        photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+            metadata_controller);
+    if (!metadata_controller.renamePhotoLayer(0, QStringLiteral("Renamed Metadata Proof")) ||
+        !metadata_controller.setPhotoLayerLocked(0, true) ||
+        !metadata_controller.setPhotoLayerLocked(0, false) ||
+        metadata_controller.photoLayers()
+                .at(0)
+                .toMap()
+                .value(QStringLiteral("displayName"))
+                .toString() != QStringLiteral("Renamed Metadata Proof") ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::render_generation(
+            metadata_controller) != generation_before ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::edit_intent_count(
+            metadata_controller) != intent_count_before ||
+        photo_editor::desktop::EditorPreviewControllerTestAccess::
+            photo_layer_thumbnail_cache_dirty(metadata_controller)) {
+      return fail("rename and lock metadata should not submit pixel or thumbnail renders");
+    }
+  }
+
   controller.addMask(QStringLiteral("linear"));
   if (controller.photoLayerCount() != 1) {
     return fail("creating a mask should create one adjustment layer");

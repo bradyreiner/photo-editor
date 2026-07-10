@@ -374,6 +374,7 @@ int main(int argc, char** argv) {
   photo_editor::desktop::ExportJobController export_jobs;
   agent_edit.setCatalogModel(&catalog_model);
   agent_edit.setExportJobController(&export_jobs);
+  agent_edit.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
 
   photo_editor::desktop::PhotoAutomationBridge bridge(&agent_edit, &catalog_model);
   photo_editor::desktop::PhotoMcpServer mcp_server(&bridge);
@@ -777,6 +778,7 @@ int main(int argc, char** argv) {
     if (!mcp_draft_rollback.value(QStringLiteral("ok")).toBool() || agent_edit.draftActive()) {
       return fail("MCP-audited draft run should remain rollbackable");
     }
+    agent_edit.setSelectedModelId(QStringLiteral("rulebook-deterministic"));
   }
 
   const auto mcp_tools = mcp_server.handleJsonRpc(QJsonObject{

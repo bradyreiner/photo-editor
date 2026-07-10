@@ -23,7 +23,8 @@ const LOCAL_POSTGRES_DATA_DIR: &str = "data";
 const LOCAL_POSTGRES_LOG_DIR: &str = "logs";
 const LOCAL_POSTGRES_LOG_FILE: &str = "postgres.log";
 const LOCAL_POSTGRES_STATE_FILE: &str = "state.json";
-const LOCAL_POSTGRES_STATE_VERSION: u32 = 1;
+const LOCAL_POSTGRES_STATE_VERSION: u32 = 2;
+const LOCAL_POSTGRES_KEYRING_SERVICE: &str = "com.virel.studio.local-postgres";
 const LOCAL_DATABASE_HEALTHCHECK_TIMEOUT: Duration = Duration::from_millis(750);
 
 type LocalDatabaseResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -35,6 +36,7 @@ pub struct LocalPostgresState {
     pub port: u16,
     pub database_name: String,
     pub user_name: String,
+    #[serde(default)]
     pub password: String,
     pub initialized_at: String,
 }
@@ -203,10 +205,99 @@ impl LocalCatalogDatabaseManager {
             max_connections: 2,
         };
         let catalog = CatalogService::connect(&config).await?;
+        self.backup_before_schema_migration(&state, &catalog).await?;
         catalog.initialize_schema().await?;
         catalog.healthcheck().await?;
 
         Ok(state)
+    }
+
+    async fn backup_before_schema_migration(
+        &self,
+        state: &LocalPostgresState,
+        catalog: &CatalogService,
+    ) -> LocalDatabaseResult<()> {
+        if std::env::var("PHOTO_EDITOR_REQUIRE_PRE_MIGRATION_BACKUP")
+            .map(|value| value == "0" || value.eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let has_existing_schema: bool = query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '_sqlx_migrations')",
+        )
+        .fetch_one(catalog.pool())
+        .await?;
+        if !has_existing_schema {
+            return Ok(());
+        }
+
+        let app_version = std::env::var("PHOTO_EDITOR_APP_VERSION")
+            .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || character == '.' || character == '-' {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        let backup_prefix = format!("pre-migration-v{app_version}-");
+        fs::create_dir_all(&self.runtime_paths.backup_dir)?;
+        if fs::read_dir(&self.runtime_paths.backup_dir)?.any(|entry| {
+            entry
+                .ok()
+                .and_then(|value| value.file_name().into_string().ok())
+                .is_some_and(|name| name.starts_with(&backup_prefix) && name.ends_with(".dump"))
+        }) {
+            return Ok(());
+        }
+
+        let timestamp = OffsetDateTime::now_utc()
+            .format(&time::macros::format_description!(
+                "[year][month][day]T[hour][minute][second]Z"
+            ))?;
+        let final_path = self
+            .runtime_paths
+            .backup_dir
+            .join(format!("{backup_prefix}{timestamp}.dump"));
+        let partial_path = final_path.with_extension("dump.partial");
+        let mut command = Command::new(self.postgres_executable("pg_dump"));
+        command
+            .arg("--format=custom")
+            .arg("--no-owner")
+            .arg("--no-privileges")
+            .arg("--host")
+            .arg(&state.host)
+            .arg("--port")
+            .arg(state.port.to_string())
+            .arg("--username")
+            .arg(&state.user_name)
+            .arg("--dbname")
+            .arg(&state.database_name)
+            .arg("--file")
+            .arg(&partial_path)
+            .env("PGPASSWORD", &state.password);
+        apply_runtime_environment(&mut command);
+        let output = command.output()?;
+        if !output.status.success() {
+            let _ = fs::remove_file(&partial_path);
+            return Err(io::Error::other(format!(
+                "pg_dump failed before catalog migration: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))
+            .into());
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&partial_path, fs::Permissions::from_mode(0o600))?;
+        }
+        fs::rename(partial_path, final_path)?;
+        Ok(())
     }
 
     async fn ensure_database_exists(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
@@ -308,11 +399,33 @@ impl LocalCatalogDatabaseManager {
 
     fn load_state(&self) -> LocalDatabaseResult<LocalPostgresState> {
         let contents = fs::read_to_string(self.state_file_path())?;
-        Ok(serde_json::from_str(&contents)?)
+        let mut state: LocalPostgresState = serde_json::from_str(&contents)?;
+        if state.password.is_empty() {
+            state.password = keyring::Entry::new(
+                LOCAL_POSTGRES_KEYRING_SERVICE,
+                &state.database_name,
+            )?
+            .get_password()?;
+            if state.version < LOCAL_POSTGRES_STATE_VERSION {
+                state.version = LOCAL_POSTGRES_STATE_VERSION;
+                self.save_state(&state)?;
+            }
+        } else {
+            // One-time migration from private-alpha state files. Move the
+            // credential into the platform keychain and immediately rewrite
+            // the file without the secret.
+            state.version = LOCAL_POSTGRES_STATE_VERSION;
+            self.save_state(&state)?;
+        }
+        Ok(state)
     }
 
     fn save_state(&self, state: &LocalPostgresState) -> LocalDatabaseResult<()> {
-        let json = serde_json::to_string_pretty(state)?;
+        keyring::Entry::new(LOCAL_POSTGRES_KEYRING_SERVICE, &state.database_name)?
+            .set_password(&state.password)?;
+        let mut persisted_state = state.clone();
+        persisted_state.password.clear();
+        let json = serde_json::to_string_pretty(&persisted_state)?;
         write_secret_file(&self.state_file_path(), &json)?;
         Ok(())
     }

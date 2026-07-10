@@ -1293,6 +1293,23 @@ int main(int argc, char** argv) {
       !controller.draftActive()) {
     return fail("agent draft should run a scored edit-verify loop and revise unsafe patches before applying");
   }
+  const auto live_run_events = controller.runEvents();
+  auto saw_render_event = false;
+  auto saw_validation_event = false;
+  auto saw_review_ready_event = false;
+  for (const auto& event_value : live_run_events) {
+    const auto event = event_value.toMap();
+    const auto stage = event.value(QStringLiteral("stage")).toString();
+    const auto status = event.value(QStringLiteral("status")).toString();
+    saw_render_event = saw_render_event || stage == QStringLiteral("render");
+    saw_validation_event = saw_validation_event || stage == QStringLiteral("validate");
+    saw_review_ready_event = saw_review_ready_event ||
+                             (stage == QStringLiteral("review") && status == QStringLiteral("ready"));
+  }
+  if (!saw_render_event || !saw_validation_event || !saw_review_ready_event ||
+      controller.lastRunReport().value(QStringLiteral("runEvents")).toList().isEmpty()) {
+    return fail("agent drafts should publish live render, validation, and review-ready events into the final report");
+  }
   const auto revised_rollback = controller.rollbackDraft();
   if (!revised_rollback.value(QStringLiteral("ok")).toBool() || controller.draftActive()) {
     return fail("revised validation-feedback draft should remain rollbackable");

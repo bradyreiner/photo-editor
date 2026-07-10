@@ -14,22 +14,33 @@ Popup {
     property var thinkingLines: []
     property var proofImages: []
     property int currentPage: 0
+    property bool detailsExpanded: false
+    property int runElapsedSeconds: 0
     property string styleGalleryFilter: "all"
     property string styleGalleryQuery: ""
-    readonly property real availableDialogHeight: parent ? Math.max(430, parent.height - 160) : 600
-    readonly property real targetDialogHeight: currentPage === 0 ? 640
-                                            : currentPage === 1 ? 540
-                                            : 600
+    readonly property real availableDialogHeight: parent ? Math.max(500, parent.height - 80) : 760
+    readonly property real targetDialogHeight: currentPage === 0 ? 560
+                                            : currentPage === 1 ? 590
+                                            : detailsExpanded ? 780 : 720
 
     signal scopeModeRequested(string scopeMode)
     signal runRequested()
 
     Theme { id: theme }
 
+    Timer {
+        interval: 1000
+        repeat: true
+        running: root.agentRunning()
+        onTriggered: root.runElapsedSeconds += 1
+    }
+
     modal: true
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    closePolicy: root.agentRunning()
+                 ? Popup.NoAutoClose
+                 : Popup.CloseOnEscape | Popup.CloseOnPressOutside
     padding: 0
-    width: Math.min(720, Math.max(410, parent ? parent.width - 192 : 660))
+    width: Math.min(880, Math.max(460, parent ? parent.width - 120 : 820))
     height: Math.min(availableDialogHeight, targetDialogHeight)
     implicitHeight: height
 
@@ -67,6 +78,7 @@ Popup {
     }
 
     onOpened: {
+        root.detailsExpanded = false
         root.scopeMode = root.bestScope(root.initialScopeMode)
         root.scopeModeRequested(root.scopeMode)
         root.setPage(root.agentRunning() ? 2 : 0)
@@ -75,8 +87,10 @@ Popup {
     Connections {
         target: root.agentEditController
         function onRunningChanged() {
-            if (root.agentRunning())
+            if (root.agentRunning()) {
+                root.runElapsedSeconds = 0
                 root.setPage(2)
+            }
         }
     }
 
@@ -378,19 +392,141 @@ Popup {
                     "Edit selected photos consistently in my demonstrated style.",
                     String(root.agentEditController.userInstructions || ""))
         if (Boolean((result || ({})).ok))
-            root.setPage(2)
+            root.setPage(1)
     }
 
     function runAgent() {
         if (!root.hasController())
             return
-        root.setPage(3)
+        root.setPage(2)
         root.runRequested()
+    }
+
+    function activeModel() {
+        const models = root.hasController() ? root.agentEditController.availableModels || [] : []
+        const selected = root.hasController() ? String(root.agentEditController.selectedModelId || "") : ""
+        for (let index = 0; index < models.length; ++index) {
+            if (String((models[index] || ({})).id || "") === selected)
+                return models[index] || ({})
+        }
+        return ({})
+    }
+
+    function activeModelLabel() {
+        const model = root.activeModel()
+        const name = String(model.name || model.id || "No model")
+        const backend = String(model.backend || "local")
+        return backend === "ollama" ? name + " · Local LLM" : name + " · deterministic fallback"
+    }
+
+    function runEvents() {
+        return root.hasController() ? root.agentEditController.runEvents || [] : []
+    }
+
+    function toolCalls() {
+        if (!root.hasController())
+            return []
+        const report = root.agentEditController.lastRunReport || ({})
+        const draft = report.draftReport || ({})
+        return report.toolCalls || draft.toolCalls || []
+    }
+
+    function toolCallTitle(call) {
+        const item = call || ({})
+        return String(item.name || "tool") + " · " + String(item.status || "recorded")
+    }
+
+    function toolCallDetail(call) {
+        const item = call || ({})
+        const outcome = item.outcome || ({})
+        const parts = []
+        if (Number(item.durationMs || outcome.durationMs || 0) > 0)
+            parts.push(Number(item.durationMs || outcome.durationMs) + " ms")
+        if (String(outcome.assetId || "").length > 0)
+            parts.push(String(outcome.assetId))
+        if (Number(outcome.warningCount || 0) > 0)
+            parts.push(Number(outcome.warningCount) + " warning" + (Number(outcome.warningCount) === 1 ? "" : "s"))
+        if (String(outcome.error || item.error || "").length > 0)
+            parts.push(String(outcome.error || item.error))
+        return parts.length > 0 ? parts.join(" · ") : "Completed"
+    }
+
+    function runWarnings() {
+        if (!root.hasController())
+            return []
+        const report = root.agentEditController.lastRunReport || ({})
+        const draft = report.draftReport || ({})
+        const validation = report.validationReport || draft.validationReport || ({})
+        const warnings = []
+        const add = function(items) {
+            for (let index = 0; items && index < items.length; ++index) {
+                const value = String(items[index] || "")
+                if (value.length > 0 && warnings.indexOf(value) < 0)
+                    warnings.push(value)
+            }
+        }
+        add(report.warnings || draft.warnings || [])
+        add(validation.warnings || [])
+        return warnings
+    }
+
+    function validationLabel() {
+        if (!root.hasController())
+            return "Not checked"
+        if (root.agentRunning())
+            return "Working · " + root.elapsedLabel()
+        if (root.hasRunFailure())
+            return "Run failed"
+        if (root.wasRunCanceled())
+            return "Canceled safely"
+        const report = root.agentEditController.lastRunReport || ({})
+        const draft = report.draftReport || ({})
+        const validation = report.validationReport || draft.validationReport || ({})
+        if (validation.ok === undefined)
+            return "Not checked"
+        const score = Number(validation.qualityScorePercent ||
+                             Math.round(Number(validation.qualityScore || 0) * 100))
+        return Boolean(validation.ok)
+                ? "Verified" + (score > 0 ? " · " + score + "%" : "")
+                : "Needs review"
+    }
+
+    function eventStatusColor(status) {
+        const value = String(status || "").toLowerCase()
+        if (value === "failed" || value === "rejected")
+            return theme.error
+        if (value === "warning" || value === "canceled")
+            return theme.warning
+        if (value === "complete" || value === "ready")
+            return theme.success
+        return theme.textMuted
+    }
+
+    function canReviewDraft() {
+        return root.hasController() && root.agentEditController.draftActive && !root.agentRunning()
+    }
+
+    function acceptDraft() {
+        if (root.canReviewDraft())
+            root.agentEditController.commitDraft(true)
+    }
+
+    function rejectDraft() {
+        if (root.canReviewDraft())
+            root.agentEditController.rollbackDraft()
+    }
+
+    function reviseDraft() {
+        if (!root.agentRunning())
+            root.setPage(1)
     }
 
     function runButtonLabel() {
         const state = root.workflowState()
         const action = state.primaryAction || ({})
+        const key = String(action.key || state.primaryActionKey || "")
+        if (key === "create_draft" || key === "create_samples")
+            return "Create Draft"
         return String(action.label || "Run Agent")
     }
 
@@ -404,9 +540,98 @@ Popup {
 
     function statusLine() {
         const state = root.workflowState()
+        if (root.agentRunning()) {
+            const events = root.runEvents()
+            if (events.length > 0) {
+                const detail = String((events[events.length - 1] || ({})).detail || "")
+                if (detail.length > 0)
+                    return detail
+            }
+            return String(state.statusLine || "Working")
+        }
         if (root.hasController() && String(root.agentEditController.errorMessage || "").length > 0)
             return String(root.agentEditController.errorMessage)
         return String(state.statusLine || (root.agentRunning() ? "Working" : "Ready"))
+    }
+
+    function lastReport() {
+        return root.hasController() ? root.agentEditController.lastRunReport || ({}) : ({})
+    }
+
+    function hasRunFailure() {
+        const report = root.lastReport()
+        return !root.agentRunning() && !root.canReviewDraft() && report.ok === false &&
+                String(report.mode || "") !== "cancel" &&
+                String(report.cancellationReason || "").length === 0
+    }
+
+    function wasRunCanceled() {
+        const report = root.lastReport()
+        return !root.agentRunning() && String(report.cancellationReason || "").length > 0
+    }
+
+    function failureDetail() {
+        const report = root.lastReport()
+        const errors = report.errors || []
+        return String(report.failureReason || (errors.length > 0 ? errors[0] : root.statusLine()))
+    }
+
+    function friendlyFailureMessage() {
+        const code = String(root.lastReport().errorCode || "")
+        const detail = root.failureDetail().toLowerCase()
+        if (code === "response_timeout" || detail.indexOf("longer than") >= 0 || detail.indexOf("timed out") >= 0)
+            return "The local model needed more time than expected. Nothing was applied."
+        if (code === "connection_failed" || detail.indexOf("could not reach ollama") >= 0)
+            return "The local model service is not reachable yet. Start Ollama, then retry."
+        if (code === "http_status" || detail.indexOf("http ") >= 0)
+            return "The local model rejected the request. The server detail is available below."
+        if (detail.indexOf("recipe_patch response") >= 0 || detail.indexOf("valid json") >= 0)
+            return "The local model returned an incomplete draft. Retry or use the fast fallback."
+        if (root.wasRunCanceled())
+            return "The run was canceled safely. Nothing was committed."
+        return "The draft could not be completed. Nothing was committed."
+    }
+
+    function elapsedLabel() {
+        const minutes = Math.floor(root.runElapsedSeconds / 60)
+        const seconds = root.runElapsedSeconds % 60
+        return minutes > 0 ? minutes + "m " + (seconds < 10 ? "0" : "") + seconds + "s"
+                           : seconds + "s"
+    }
+
+    function resultStateColor() {
+        if (root.agentRunning())
+            return theme.focusRing
+        if (root.hasRunFailure())
+            return theme.error
+        if (root.wasRunCanceled() || root.runWarnings().length > 0)
+            return theme.warning
+        return theme.success
+    }
+
+    function resultTitle() {
+        if (root.agentRunning())
+            return "Agent is editing"
+        if (root.hasRunFailure())
+            return "Run needs attention"
+        if (root.wasRunCanceled())
+            return "Run canceled"
+        return root.canReviewDraft() ? "Review your draft" : "Run complete"
+    }
+
+    function retryAgent() {
+        if (root.agentRunning())
+            return
+        root.setPage(2)
+        root.runRequested()
+    }
+
+    function useFastFallback() {
+        if (!root.hasController() || root.agentRunning())
+            return
+        root.agentEditController.selectedModelId = "rulebook-deterministic"
+        root.setPage(2)
+        root.runRequested()
     }
 
     function selectedTargetText() {
@@ -419,25 +644,38 @@ Popup {
     }
 
     function activityRows() {
-        const status = root.statusLine().toLowerCase()
-        const rows = [
-            { label: "Looking at photos", active: status.indexOf("prepar") >= 0 || status.indexOf("creating") >= 0 },
-            { label: "Reading histogram and color", active: status.indexOf("valid") >= 0 || status.indexOf("proof") >= 0 },
-            { label: "Planning the edit", active: status.indexOf("planning") >= 0 || status.indexOf("sample") >= 0 },
-            { label: "Applying adjustments", active: status.indexOf("applying") >= 0 || status.indexOf("commit") >= 0 },
-            { label: "Reviewing result", active: status.indexOf("review") >= 0 || status.indexOf("ready") >= 0 }
-        ]
-        if (!root.agentRunning()) {
-            for (let index = 0; index < rows.length; ++index)
-                rows[index].active = index === rows.length - 1
+        const events = root.runEvents()
+        if (events.length === 0)
+            return [{ label: "Ready", status: "pending", detail: "Waiting to start." }]
+        const latestByStage = ({})
+        const stageOrder = []
+        for (let index = 0; index < events.length; ++index) {
+            const event = events[index] || ({})
+            const stage = String(event.stage || event.label || index)
+            if (latestByStage[stage] === undefined)
+                stageOrder.push(stage)
+            latestByStage[stage] = event
         }
-        return rows
+        return stageOrder.slice(Math.max(0, stageOrder.length - 8)).map(function(stage) {
+            return latestByStage[stage]
+        })
     }
 
     function displayThinkingLines() {
+        if (root.hasRunFailure())
+            return [root.friendlyFailureMessage(), root.failureDetail()]
+        if (root.wasRunCanceled())
+            return [root.friendlyFailureMessage()]
+        const events = root.runEvents()
+        if (events.length > 0) {
+            const event = events[events.length - 1] || ({})
+            const detail = String(event.detail || "")
+            if (detail.length > 0)
+                return [detail]
+        }
         const lines = root.thinkingLines || []
         if (lines.length > 0)
-            return lines
+            return lines.slice(0, 3)
         const status = root.statusLine()
         return [status.length > 0 ? status : "Ready to run the photo agent."]
     }
@@ -871,7 +1109,9 @@ Popup {
 
                     Label {
                         Layout.fillWidth: true
-                        text: root.currentPage === 2 ? "Agent is editing" : "Welcome to your photo agent"
+                        text: root.currentPage === 2
+                              ? root.resultTitle()
+                              : root.currentPage === 1 ? "Describe the result" : "Choose the look"
                         color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 26
@@ -884,9 +1124,9 @@ Popup {
                     Label {
                         Layout.fillWidth: true
                         text: root.currentPage === 0
-                              ? "Pick reference images from your library or save the selection as a reusable style."
+                              ? "Select edited references to learn from, or continue with a built-in style."
                               : root.currentPage === 1
-                                ? "Add any final requests before the agent starts."
+                                ? "Choose a style, add instructions, and create a reversible draft."
                                   : root.statusLine()
                         color: theme.textMuted
                         font.family: theme.fontUi
@@ -898,8 +1138,20 @@ Popup {
                 }
 
                 ColumnLayout {
-                    Layout.preferredWidth: 92
+                    Layout.preferredWidth: 188
                     spacing: 8
+
+                    Label {
+                        Layout.fillWidth: true
+                        text: root.activeModelLabel()
+                        color: theme.textMain
+                        font.family: theme.fontMono
+                        font.pixelSize: 10
+                        horizontalAlignment: Text.AlignRight
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        maximumLineCount: 2
+                        elide: Text.ElideNone
+                    }
 
                     Label {
                         Layout.fillWidth: true
@@ -929,6 +1181,8 @@ Popup {
 
                 ColumnLayout {
                     anchors.fill: parent
+                    visible: root.currentPage === 0
+                    Accessible.ignored: root.currentPage !== 0
                     enabled: root.currentPage === 0
                     opacity: root.currentPage === 0 ? 1 : 0
                     x: root.currentPage === 0 ? 0 : -22
@@ -990,7 +1244,7 @@ Popup {
 
                         MiniButton {
                             Layout.preferredWidth: 142
-                            text: "Save Style"
+                            text: "Learn Style"
                             iconName: "star"
                             role: "primary"
                             accent: theme.textStrong
@@ -1069,6 +1323,8 @@ Popup {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    visible: false
+                    Accessible.ignored: true
                     enabled: false
                     opacity: 0
                     x: root.currentPage < 1 ? 22 : root.currentPage > 1 ? -22 : 0
@@ -1106,6 +1362,8 @@ Popup {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    visible: root.currentPage === 1
+                    Accessible.ignored: root.currentPage !== 1
                     enabled: root.currentPage === 1
                     opacity: root.currentPage === 1 ? 1 : 0
                     x: root.currentPage < 1 ? 22 : root.currentPage > 1 ? -22 : 0
@@ -1121,7 +1379,7 @@ Popup {
 
                     Label {
                         Layout.fillWidth: true
-                        text: "Prompt your agent"
+                        text: "What should change?"
                         color: theme.textStrong
                         font.family: theme.fontUi
                         font.pixelSize: 21
@@ -1129,6 +1387,31 @@ Popup {
                         wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                         maximumLineCount: 2
                         elide: Text.ElideNone
+                    }
+
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Repeater {
+                            model: root.availableStyles()
+
+                            MiniButton {
+                                required property var modelData
+                                minimumReadableWidth: 132
+                                maximumReadableWidth: 220
+                                text: String(modelData.name || modelData.id || "Style")
+                                iconName: "star"
+                                role: "segmented"
+                                active: root.selectedStyleId() === String(modelData.id || "")
+                                enabled: !root.agentRunning()
+                                tooltip: String(modelData.goal || modelData.description || text)
+                                onClicked: {
+                                    if (root.hasController())
+                                        root.agentEditController.selectedStyleId = String(modelData.id || "")
+                                }
+                            }
+                        }
                     }
 
                     Rectangle {
@@ -1191,6 +1474,8 @@ Popup {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
+                    visible: root.currentPage === 2
+                    Accessible.ignored: root.currentPage !== 2
                     enabled: root.currentPage === 2
                     opacity: root.currentPage === 2 ? 1 : 0
                     x: root.currentPage < 2 ? 22 : 0
@@ -1204,16 +1489,42 @@ Popup {
                         NumberAnimation { duration: theme.durationMedium; easing.type: Easing.OutCubic }
                     }
 
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: root.agentRunning() ? "Watching the edit happen" : "Agent activity"
-                        color: theme.textStrong
-                        font.family: theme.fontUi
-                        font.pixelSize: 21
-                        font.weight: Font.DemiBold
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        maximumLineCount: 2
-                        elide: Text.ElideNone
+                        spacing: 10
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.agentRunning() ? "Watching the edit happen"
+                                                      : root.hasRunFailure() ? "The edit was not applied"
+                                                                             : "Result and verification"
+                            color: theme.textStrong
+                            font.family: theme.fontUi
+                            font.pixelSize: 21
+                            font.weight: Font.DemiBold
+                            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                            maximumLineCount: 2
+                            elide: Text.ElideNone
+                        }
+
+                        Rectangle {
+                            implicitWidth: verificationLabel.implicitWidth + 20
+                            implicitHeight: 30
+                            radius: 15
+                            color: theme.alpha(root.resultStateColor(), 0.14)
+                            border.width: 1
+                            border.color: theme.alpha(root.resultStateColor(), 0.42)
+
+                            Label {
+                                id: verificationLabel
+                                anchors.centerIn: parent
+                                text: root.validationLabel()
+                                color: root.resultStateColor()
+                                font.family: theme.fontUi
+                                font.pixelSize: 12
+                                font.weight: Font.DemiBold
+                            }
+                        }
                     }
 
                     Flow {
@@ -1229,18 +1540,21 @@ Popup {
                                 width: activityLabel.implicitWidth + 28
                                 height: 34
                                 radius: 17
-                                color: Boolean(activityChip.modelData.active) ? theme.alpha(theme.polar, 0.13) : theme.alpha(theme.polar, 0.055)
+                                readonly property string eventStatus: String(activityChip.modelData.status || "pending")
+                                readonly property color eventColor: root.eventStatusColor(eventStatus)
+                                color: theme.alpha(eventColor, eventStatus === "running" ? 0.18 : 0.10)
                                 border.width: 1
-                                border.color: Boolean(activityChip.modelData.active) ? theme.alpha(theme.polar, 0.28) : theme.alpha(theme.polar, 0.10)
+                                border.color: theme.alpha(eventColor, eventStatus === "running" ? 0.56 : 0.30)
 
                                 Label {
                                     id: activityLabel
                                     anchors.centerIn: parent
-                                    text: String(activityChip.modelData.label || "")
-                                    color: Boolean(activityChip.modelData.active) ? theme.textStrong : theme.textMuted
+                                    text: String(activityChip.modelData.label || "") +
+                                          (activityChip.eventStatus === "running" ? "…" : "")
+                                    color: activityChip.eventStatus === "running" ? theme.textStrong : activityChip.eventColor
                                     font.family: theme.fontUi
                                     font.pixelSize: 13
-                                    font.weight: Boolean(activityChip.modelData.active) ? Font.DemiBold : Font.Medium
+                                    font.weight: activityChip.eventStatus === "running" ? Font.DemiBold : Font.Medium
                                 }
                             }
                         }
@@ -1262,7 +1576,9 @@ Popup {
 
                             Label {
                                 Layout.fillWidth: true
-                                text: "What the agent is doing"
+                                text: root.agentRunning() ? "What the agent is doing"
+                                                          : root.hasRunFailure() ? "What happened"
+                                                                                 : "Why this result"
                                 color: theme.textStrong
                                 font.family: theme.fontUi
                                 font.pixelSize: 15
@@ -1302,7 +1618,7 @@ Popup {
                                 id: proofCard
                                 required property var modelData
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 112
+                                Layout.preferredHeight: 210
                                 radius: 16
                                 color: theme.alpha(theme.polar, 0.06)
                                 border.width: 1
@@ -1312,8 +1628,9 @@ Popup {
                                 Image {
                                     anchors.fill: parent
                                     source: String(proofCard.modelData.source || "")
-                                    fillMode: Image.PreserveAspectCrop
+                                    fillMode: Image.PreserveAspectFit
                                     asynchronous: true
+                                    cache: false
                                 }
 
                                 Label {
@@ -1330,6 +1647,105 @@ Popup {
                             }
                         }
                     }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 170
+                        visible: root.proofImages.length === 0
+                        radius: 18
+                        color: theme.alpha(theme.polar, 0.045)
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.10)
+
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: 8
+
+                            AppIcon {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 26
+                                height: 26
+                                name: root.agentRunning() ? "adjust" : "image"
+                                color: theme.textMuted
+                            }
+
+                            Label {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: root.agentRunning() ? "Proof will appear after the first render" : "No rendered proof was produced"
+                                color: theme.textMuted
+                                font.family: theme.fontUi
+                                font.pixelSize: 14
+                            }
+                        }
+                    }
+
+                    MiniButton {
+                        Layout.alignment: Qt.AlignHCenter
+                        minimumReadableWidth: 154
+                        visible: !root.agentRunning()
+                        text: root.detailsExpanded ? "Hide run details" : "Show run details"
+                        iconName: root.detailsExpanded ? "chevron-left" : "menu"
+                        role: "secondary"
+                        onClicked: root.detailsExpanded = !root.detailsExpanded
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        visible: root.detailsExpanded
+                        implicitHeight: visible ? Math.min(180, detailsColumn.implicitHeight + 24) : 0
+                        radius: 18
+                        color: theme.alpha(theme.polar, 0.05)
+                        border.width: 1
+                        border.color: theme.alpha(theme.polar, 0.12)
+                        clip: true
+
+                        Flickable {
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            contentWidth: width
+                            contentHeight: detailsColumn.implicitHeight
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+
+                            ColumnLayout {
+                                id: detailsColumn
+                                width: parent.width
+                                spacing: 7
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: root.toolCalls().length + " recorded tool call" + (root.toolCalls().length === 1 ? "" : "s")
+                                    color: theme.textStrong
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Repeater {
+                                    model: root.toolCalls().slice(0, 8)
+
+                                    AgentToolCallRow {
+                                        required property var modelData
+                                        title: root.toolCallTitle(modelData)
+                                        detail: root.toolCallDetail(modelData)
+                                        statusColor: root.eventStatusColor(String(modelData.status || "complete"))
+                                    }
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    visible: root.runWarnings().length > 0
+                                    text: root.runWarnings().join("\n")
+                                    color: theme.warning
+                                    font.family: theme.fontUi
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+
+                            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                        }
+                    }
                 }
             }
 
@@ -1339,7 +1755,7 @@ Popup {
 
                 MiniButton {
                     Layout.preferredWidth: 104
-                    visible: root.currentPage > 0
+                    visible: root.currentPage === 1
                     text: "Back"
                     iconName: "chevron-left"
                     role: "secondary"
@@ -1348,6 +1764,15 @@ Popup {
                 }
 
                 Item { Layout.fillWidth: true }
+
+                MiniButton {
+                    Layout.preferredWidth: 96
+                    visible: root.currentPage === 0
+                    text: "Close"
+                    iconName: "close"
+                    role: "secondary"
+                    onClicked: root.close()
+                }
 
                 MiniButton {
                     Layout.preferredWidth: root.currentPage === 0 ? 132 : 124
@@ -1361,8 +1786,77 @@ Popup {
                 }
 
                 MiniButton {
+                    Layout.preferredWidth: 112
+                    visible: root.currentPage === 2 && root.agentRunning()
+                    text: "Cancel run"
+                    iconName: "close"
+                    role: "secondary"
+                    onClicked: {
+                        if (root.hasController())
+                            root.agentEditController.cancelRun("user_cancelled")
+                    }
+                }
+
+                MiniButton {
                     Layout.preferredWidth: 108
-                    visible: root.currentPage === 2 && !root.agentRunning()
+                    visible: root.currentPage === 2 && root.canReviewDraft()
+                    text: "Reject"
+                    iconName: "reset"
+                    role: "secondary"
+                    onClicked: root.rejectDraft()
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 142
+                    visible: root.currentPage === 2 && root.canReviewDraft()
+                    text: "Make changes"
+                    iconName: "adjust"
+                    role: "secondary"
+                    onClicked: root.reviseDraft()
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 132
+                    visible: root.currentPage === 2 && root.canReviewDraft()
+                    text: "Apply edit"
+                    iconName: "check"
+                    role: "primary"
+                    accent: theme.textStrong
+                    onClicked: root.acceptDraft()
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 124
+                    visible: root.currentPage === 2 && root.hasRunFailure()
+                    text: "Edit prompt"
+                    iconName: "adjust"
+                    role: "secondary"
+                    onClicked: root.setPage(1)
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 152
+                    visible: root.currentPage === 2 && root.hasRunFailure() &&
+                             String((root.activeModel() || ({})).backend || "") === "ollama"
+                    text: "Use fast fallback"
+                    iconName: "adjust"
+                    role: "secondary"
+                    onClicked: root.useFastFallback()
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 108
+                    visible: root.currentPage === 2 && (root.hasRunFailure() || root.wasRunCanceled())
+                    text: "Retry"
+                    iconName: "reset"
+                    role: "primary"
+                    accent: theme.textStrong
+                    onClicked: root.retryAgent()
+                }
+
+                MiniButton {
+                    Layout.preferredWidth: 108
+                    visible: root.currentPage === 2 && !root.agentRunning() && !root.canReviewDraft()
                     text: "Close"
                     iconName: "close"
                     role: "secondary"

@@ -15,7 +15,7 @@ skip_app_notarize=0
 
 usage() {
   cat <<'EOF'
-Sign, notarize, staple, and package a macOS PhotoEditor release.
+Sign, notarize, staple, and package a macOS Virel Studio release.
 
 Usage:
   scripts/sign-notarize-macos.sh --identity "Developer ID Application: Name (TEAMID)" --notary-profile PROFILE [options]
@@ -23,7 +23,7 @@ Usage:
 Options:
   --version X.Y.Z          Release version. Defaults to VERSION.
   --package-dir PATH       Output directory. Defaults to build/release-macos/package.
-  --app PATH               Staged PhotoEditor.app to sign. Defaults to CPack staging path.
+  --app PATH               Staged VirelStudio.app to sign. Defaults to CPack staging path.
   --identity NAME          Developer ID Application signing identity.
   --notary-profile NAME    notarytool keychain profile created with xcrun notarytool store-credentials.
   --skip-notarize          Sign and create a signed DMG without notarization.
@@ -99,7 +99,7 @@ if [ "${skip_notarize}" -eq 0 ]; then
 fi
 
 if [ -z "${source_app}" ]; then
-  source_app="${package_dir}/_CPack_Packages/Darwin/DragNDrop/PhotoEditor-${version}-Darwin/PhotoEditor.app"
+  source_app="$(find "${package_dir}/_CPack_Packages" -type d -path "*/VirelStudio-${version}-Darwin-*/VirelStudio.app" | head -n 1)"
 fi
 
 [ -d "${source_app}" ] || fail "staged app not found: ${source_app}"
@@ -110,9 +110,10 @@ fi
 
 work_root="${package_dir}/signed-macos-${version}"
 signed_root="${work_root}/dmg-root"
-signed_app="${signed_root}/PhotoEditor.app"
-app_zip="${work_root}/PhotoEditor-${version}-Darwin.app.zip"
-signed_dmg="${work_root}/PhotoEditor-${version}-Darwin.dmg"
+architecture="$(uname -m)"
+signed_app="${signed_root}/VirelStudio.app"
+app_zip="${work_root}/VirelStudio-${version}-Darwin-${architecture}.app.zip"
+signed_dmg="${work_root}/VirelStudio-${version}-Darwin-${architecture}.dmg"
 
 rm -rf "${work_root}"
 mkdir -p "${signed_root}"
@@ -156,7 +157,7 @@ if [ "${skip_notarize}" -eq 0 ] && [ "${skip_app_notarize}" -eq 0 ]; then
 fi
 
 log "Creating signed DMG"
-hdiutil create -ov -srcfolder "${signed_root}" -volname "PhotoEditor ${version}" -fs HFS+ -format UDZO "${signed_dmg}"
+hdiutil create -ov -srcfolder "${signed_root}" -volname "Virel Studio ${version}" -fs HFS+ -format UDZO "${signed_dmg}"
 
 log "Signing DMG"
 codesign --force --timestamp --sign "${identity}" "${signed_dmg}"

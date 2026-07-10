@@ -1451,7 +1451,7 @@ Rectangle {
             return
         const key = agentWorkflowPrimaryKey()
         if (key === "create_draft" || key === "create_samples") {
-            root.agentEditController.applyEditForScope("", root.agentEditController.userInstructions)
+            root.agentEditController.runDraftForScope("", root.agentEditController.userInstructions)
         } else if (key === "learn_style") {
             learnAgentStyleFromSelection()
         } else if (key === "choose_style") {
@@ -3980,6 +3980,7 @@ Rectangle {
                         cropWidth: editorPreview.cropRectWidth
                         cropHeight: editorPreview.cropRectHeight
                         transformRotation: editorPreview.transformRotation
+                        outlineVisualScale: 1.0
                     }
                 }
 
@@ -4217,6 +4218,7 @@ Rectangle {
                             cropWidth: editorPreview.cropRectWidth
                             cropHeight: editorPreview.cropRectHeight
                             transformRotation: editorPreview.transformRotation
+                            outlineVisualScale: Math.max(1.0, root.currentZoomLevel())
                         }
                     }
                 }
